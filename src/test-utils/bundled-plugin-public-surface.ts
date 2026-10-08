@@ -1,12 +1,11 @@
 // Test helper for asserting bundled plugin public surface files.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { loadBundledPluginPublicSurfaceModule } from "../plugin-sdk/facade-loader.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
-import { normalizeBundledPluginArtifactSubpath } from "../plugins/public-surface-runtime.js";
+import { resolveBundledPluginSourcePublicSurfacePath } from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
@@ -70,12 +69,15 @@ type AsyncBundledPluginPublicSurfaceLoader = <T extends object>(params: {
   artifactBasename: string;
 }) => Promise<T>;
 
-export const loadBundledPluginFacade: AsyncBundledPluginPublicSurfaceLoader = (params) => {
-  const metadata = findBundledPluginMetadata(params.pluginId);
-  return loadBundledPluginPublicSurfaceModule({
-    dirName: metadata.dirName,
-    artifactBasename: normalizeBundledPluginArtifactSubpath(params.artifactBasename),
-  });
+export const loadBundledPluginFacade: AsyncBundledPluginPublicSurfaceLoader = async (params) => {
+  const modulePath = resolveBundledPluginPublicModulePath(params);
+  if (!fs.existsSync(modulePath)) {
+    throw new Error(
+      `Unable to resolve bundled plugin public surface ${params.pluginId}/${params.artifactBasename}`,
+    );
+  }
+  // Fixture imports must share the test runner's SDK state and mocks.
+  return import(pathToFileURL(modulePath).href);
 };
 
 export function resolveBundledPluginPublicModulePath(params: {
@@ -83,28 +85,14 @@ export function resolveBundledPluginPublicModulePath(params: {
   artifactBasename: string;
 }): string {
   const metadata = findBundledPluginMetadata(params.pluginId);
-  return path.resolve(
-    OPENCLAW_PACKAGE_ROOT,
-    "extensions",
-    metadata.dirName,
-    normalizeBundledPluginArtifactSubpath(params.artifactBasename),
-  );
-}
-
-function resolveVitestSourceModulePath(targetPath: string): string {
-  if (!targetPath.endsWith(".js")) {
-    return targetPath;
-  }
-  const sourcePath = `${targetPath.slice(0, -".js".length)}.ts`;
-  return pathExists(sourcePath) ? sourcePath : targetPath;
-}
-
-function pathExists(filePath: string): boolean {
-  try {
-    return Boolean(filePath) && path.isAbsolute(filePath) && fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
+  const sourceRoot = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
+  const sourcePath = resolveBundledPluginSourcePublicSurfacePath({
+    sourceRoot,
+    dirName: metadata.dirName,
+    artifactBasename: params.artifactBasename,
+  });
+  // Optional contract callers need the validated path even when no artifact exists.
+  return sourcePath ?? path.resolve(sourceRoot, metadata.dirName, params.artifactBasename);
 }
 
 export function resolveRelativeBundledPluginPublicModuleId(params: {
@@ -113,12 +101,10 @@ export function resolveRelativeBundledPluginPublicModuleId(params: {
   artifactBasename: string;
 }): string {
   const fromFilePath = fileURLToPath(params.fromModuleUrl);
-  const targetPath = resolveVitestSourceModulePath(
-    resolveBundledPluginPublicModulePath({
-      pluginId: params.pluginId,
-      artifactBasename: params.artifactBasename,
-    }),
-  );
+  const targetPath = resolveBundledPluginPublicModulePath({
+    pluginId: params.pluginId,
+    artifactBasename: params.artifactBasename,
+  });
   const relativePath = path
     .relative(path.dirname(fromFilePath), targetPath)
     .replaceAll(path.sep, "/");

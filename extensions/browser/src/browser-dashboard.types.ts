@@ -1,0 +1,45 @@
+import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
+import type { PlaywrightOwnedPage } from "./browser/pw-session-page.types.js";
+
+export type BrowserDashboardRequest = {
+  sessionKey: string;
+  agentId?: string;
+  name: string;
+  instanceId?: string;
+};
+
+export type BrowserDashboardIdentity = {
+  sessionKey: string;
+  agentId: string;
+  name: string;
+  instanceId: string;
+  url: string;
+  profile: string;
+};
+
+export type BrowserDashboardDefinition = BrowserDashboardIdentity & {
+  revision: number;
+  title?: string;
+};
+
+export type BrowserDashboardResponse = Omit<BrowserDashboardDefinition, "agentId" | "profile"> & {
+  paused: boolean;
+  stopping: boolean;
+  browserTab?: { target: "host"; profile: string; targetId: string };
+};
+
+export type SessionBrowserAuthority = NonNullable<
+  Parameters<GatewayRequestHandlers[string]>[0]["sessionAccessAuthority"]
+>;
+/** One isolated context belongs to one exact session incarnation and board instance. */
+export type SessionBrowserDashboard = {
+  definition: BrowserDashboardDefinition;
+  session: SessionBrowserAuthority["target"];
+  paused: boolean;
+  page?: PlaywrightOwnedPage;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+  assertDefinitionCurrent: () => Promise<void>;
+  definitionChanged: () => void;
+  close: () => Promise<void>;
+};

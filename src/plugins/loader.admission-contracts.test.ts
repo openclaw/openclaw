@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, expect, it } from "vitest";
+import { afterAll, afterEach, expect, it, onTestFinished } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { drainSystemEvents } from "../infra/system-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { activatePluginRegistry } from "./loader-shared.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -12,69 +15,71 @@ import {
   writePlugin,
   writePluginMetadata,
 } from "./loader.test-fixtures.js";
+import { withPluginRegistryPreparationScope } from "./registry-lifecycle.js";
+import { createEmptyPluginRegistry } from "./registry.js";
+import {
+  disposePluginRegistryInstances,
+  getActivePluginRegistry,
+  setActivePluginRegistry,
+} from "./runtime.js";
+import { startPluginServices } from "./services.test-support.js";
 
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it.each(["runtime", "cli"] as const)(
-  "keeps effective enablement separate from reason-only activation (%s)",
-  async (surface) => {
-    const imported = path.join(makePluginLoaderTempDir(), "imported");
-    const plugin = writePlugin({
-      id: "admission-contract",
-      filename: "index.cjs",
-      body: `require("node:fs").writeFileSync(${JSON.stringify(imported)}, "imported");
+it("keeps effective enablement separate from reason-only CLI activation", async () => {
+  const imported = path.join(makePluginLoaderTempDir(), "imported");
+  const plugin = writePlugin({
+    id: "admission-contract",
+    filename: "index.cjs",
+    body: `require("node:fs").writeFileSync(${JSON.stringify(imported)}, "imported");
 module.exports = { id: "admission-contract", register() {} };`,
-    });
-    const config: OpenClawConfig = {
-      plugins: { enabled: true, slots: { memory: "none" } },
-    };
-    const options = {
-      config,
-      manifestRegistry: {
-        plugins: [
-          {
-            id: plugin.id,
-            origin: "bundled" as const,
-            rootDir: plugin.dir,
-            source: plugin.file,
-            manifestPath: path.join(plugin.dir, "openclaw.plugin.json"),
-            channels: [],
-            providers: [],
-            cliBackends: [],
-            skills: [],
-            hooks: [],
-            configSchema: EMPTY_PLUGIN_SCHEMA,
-          },
-        ],
-        diagnostics: [],
-      },
-      installRecords: {},
-      onlyPluginIds: [plugin.id],
-      activate: false,
-      cache: false,
-      autoEnabledReasons: { [plugin.id]: ["reason without effective enablement"] },
-    };
-    const registry =
-      surface === "runtime"
-        ? loadOpenClawPlugins(options)
-        : await loadOpenClawPluginCliRegistry(options);
-    expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]).toMatchObject({
-      id: plugin.id,
-      enabled: false,
-      activated: false,
-      status: "disabled",
-      activationSource: "disabled",
-      activationReason: "bundled (disabled by default)",
-      error: "bundled (disabled by default)",
-    });
-    expect(registry.cliRegistrars).toHaveLength(0);
-    expect(fs.existsSync(imported)).toBe(false);
-  },
-);
+  });
+  const config: OpenClawConfig = {
+    plugins: { enabled: true, slots: { memory: "none" } },
+  };
+  const options = {
+    config,
+    manifestRegistry: {
+      plugins: [
+        {
+          id: plugin.id,
+          origin: "bundled" as const,
+          rootDir: plugin.dir,
+          source: plugin.file,
+          manifestPath: path.join(plugin.dir, "openclaw.plugin.json"),
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+      ],
+      diagnostics: [],
+    },
+    installRecords: {},
+    onlyPluginIds: [plugin.id],
+    activate: false,
+    cache: false,
+    autoEnabledReasons: { [plugin.id]: ["reason without effective enablement"] },
+  };
+  const registry = await loadOpenClawPluginCliRegistry(options);
+  expect(registry.plugins).toHaveLength(1);
+  expect(registry.plugins[0]).toMatchObject({
+    id: plugin.id,
+    enabled: false,
+    activated: false,
+    status: "disabled",
+    activationSource: "disabled",
+    activationReason: "bundled (disabled by default)",
+    error: "bundled (disabled by default)",
+  });
+  expect(registry.cliRegistrars).toHaveLength(0);
+  expect(fs.existsSync(imported)).toBe(false);
+});
 
-it.each([false, true])("keeps scoped forced setup selection with setupEntry=%s", (setupEntry) => {
+it("keeps scoped forced setup selection with a setup entry", () => {
   useNoBundledPlugins();
   const markers = makePluginLoaderTempDir();
   const fullMarker = path.join(markers, "full-imported");
@@ -92,16 +97,14 @@ it.each([false, true])("keeps scoped forced setup selection with setupEntry=%s",
 ${channelSource}
 module.exports = { id: "admission-setup", register(api) { api.registerChannel({ plugin: channel }); } };`,
   });
-  if (setupEntry) {
-    writePlugin({
-      id: plugin.id,
-      dir: plugin.dir,
-      filename: "setup.cjs",
-      body: `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "imported");
+  writePlugin({
+    id: plugin.id,
+    dir: plugin.dir,
+    filename: "setup.cjs",
+    body: `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "imported");
 ${channelSource}
 module.exports = { plugin: channel };`,
-    });
-  }
+  });
   writePluginMetadata({
     dir: plugin.dir,
     id: plugin.id,
@@ -111,7 +114,7 @@ module.exports = { plugin: channel };`,
       version: "1.0.0",
       openclaw: {
         extensions: ["./index.cjs"],
-        ...(setupEntry ? { setupEntry: "./setup.cjs" } : {}),
+        setupEntry: "./setup.cjs",
       },
     },
   });
@@ -130,6 +133,140 @@ module.exports = { plugin: channel };`,
     "admission-channel",
   ]);
   expect(registry.channels).toHaveLength(0);
-  expect(fs.existsSync(setupMarker)).toBe(setupEntry);
-  expect(fs.existsSync(fullMarker)).toBe(!setupEntry);
+  expect(fs.existsSync(setupMarker)).toBe(true);
+  expect(fs.existsSync(fullMarker)).toBe(false);
 });
+
+it("keeps system routing bound to the replacement lifecycle owner", async () => {
+  useNoBundledPlugins();
+  const sessionKey = "preparation-replacement";
+  const queueKey = `agent:main:${sessionKey}`;
+  const event = "plugin-preparation-replacement";
+  const late = createDeferredCore<Array<{ phase: string; ok: boolean }>>();
+  const receive = (observed: Array<{ phase: string; ok: boolean }>) => late.resolve(observed);
+  process.once(event, receive);
+  onTestFinished(() => {
+    process.off(event, receive);
+    drainSystemEvents(queueKey);
+  });
+  const plugin = writePlugin({
+    id: "preparation-probe",
+    body: `module.exports = { id: "preparation-probe", register(api) {
+        const observed = [];
+        const route = (phase) => {
+          try {
+            api.runtime.system.enqueueSystemEvent(phase, { sessionKey: ${JSON.stringify(sessionKey)} });
+            observed.push({ phase, ok: true });
+          } catch { observed.push({ phase, ok: false }); }
+        };
+        route("registration");
+        api.registerService({ id: "preparation-probe", start() { route("service"); } });
+        api.registerTool({ name: "preparation_probe", description: "Exercise published routing",
+          parameters: { type: "object", properties: {} },
+          execute() { route("published"); return { content: [{ type: "text", text: "done" }] }; }
+        });
+        setImmediate(() => { route("late"); process.emit(${JSON.stringify(event)}, observed); });
+      } };`,
+  });
+  const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  fs.writeFileSync(
+    manifestPath,
+    JSON.stringify({ ...manifest, contracts: { tools: ["preparation_probe"] } }),
+  );
+  const config = {
+    plugins: { allow: [plugin.id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
+  };
+  const previous = createEmptyPluginRegistry();
+  setActivePluginRegistry(previous);
+  const registry = loadOpenClawPlugins({
+    config,
+    cache: false,
+    activate: false,
+    previousRegistry: previous,
+    runtimeSideEffects: true,
+  });
+  expect(registry.plugins).toContainEqual(
+    expect.objectContaining({ id: plugin.id, status: "loaded" }),
+  );
+  const start = () => startPluginServices({ registry, config });
+  const services = await withPluginRegistryPreparationScope(registry, start);
+  try {
+    const observed = await late.promise;
+    expect(observed).toEqual([
+      { phase: "registration", ok: false },
+      { phase: "service", ok: false },
+      { phase: "late", ok: false },
+    ]);
+    expect(drainSystemEvents(queueKey)).toEqual([]);
+    expect(getActivePluginRegistry()).toBe(previous);
+    activatePluginRegistry(registry, null, "gateway-bindable", undefined, previous);
+    const tool = registry.tools[0]!.factory({ config });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("Expected the registered preparation probe");
+    }
+    await tool.execute("published", {});
+    expect(drainSystemEvents(queueKey)).toEqual(["published"]);
+  } finally {
+    await services.stop();
+    await disposePluginRegistryInstances(registry);
+  }
+});
+
+it.each(["cached-discovery", "retained-discovery"] as const)(
+  "prepares full context-engine registration without publication after %s",
+  async (mode) => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "runtime-intent",
+      registration: `if (api.registrationMode !== "full") return;
+      api.registerContextEngine("runtime-intent", () => ({
+        info: { id: "runtime-intent", name: "Runtime Intent" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async () => ({ messages: [], estimatedTokens: 0, systemPromptAddition: "runtime-ready" }),
+        compact: async () => ({ ok: true, compacted: false }),
+      }));`,
+    });
+    const config: OpenClawConfig = {
+      plugins: {
+        allow: [plugin.id],
+        load: { paths: [plugin.file] },
+        slots: { memory: "none", contextEngine: plugin.id },
+      },
+    };
+    const options = { config, activate: false };
+    const published = createEmptyPluginRegistry();
+    setActivePluginRegistry(published);
+    const discovery = loadOpenClawPlugins(options);
+    expect(discovery.contextEngines.has(plugin.id)).toBe(false);
+    const prepared = loadOpenClawPlugins({
+      ...options,
+      runtimeSideEffects: true,
+      ...(mode === "retained-discovery" ? { previousRegistry: discovery } : {}),
+    });
+    try {
+      expect(getActivePluginRegistry()).toBe(published);
+      const registration = prepared.contextEngines.get(plugin.id);
+      expect(registration?.lifecycle).toBe("runtime");
+      if (!registration) {
+        throw new Error("Full-only context engine was not registered");
+      }
+      const engine = await withPluginRegistryPreparationScope(prepared, () =>
+        registration.factory({ config }),
+      );
+      expect(await engine.assemble({ sessionId: "runtime-intent", messages: [] })).toMatchObject({
+        systemPromptAddition: "runtime-ready",
+      });
+      if (mode === "cached-discovery") {
+        expect(loadOpenClawPlugins(options)).toBe(discovery);
+        expect(loadOpenClawPlugins({ ...options, runtimeSideEffects: false })).toBe(discovery);
+        expect(loadOpenClawPlugins({ ...options, runtimeSideEffects: true })).toBe(prepared);
+      }
+      expect(getActivePluginRegistry()).toBe(published);
+    } finally {
+      await Promise.all(
+        [prepared, discovery].map((registry) => disposePluginRegistryInstances(registry)),
+      );
+    }
+  },
+);

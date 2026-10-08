@@ -7,6 +7,51 @@ import {
 } from "./tool-allowlist-guard.js";
 
 describe("tool allowlist guard", () => {
+  it.each([
+    {
+      entries: ["skill_workshop"],
+      toolsEnabled: true,
+      disableTools: false,
+      expected: "sandboxed run without library-authoring authority",
+    },
+    {
+      entries: ["skill_*"],
+      toolsEnabled: true,
+      disableTools: false,
+      expected: "sandboxed run without library-authoring authority",
+    },
+    {
+      entries: ["query_db"],
+      toolsEnabled: true,
+      disableTools: false,
+      expected: "no registered tools matched",
+    },
+    {
+      entries: ["skill_workshop"],
+      toolsEnabled: false,
+      disableTools: false,
+      expected: "selected model does not support tools",
+    },
+    {
+      entries: ["skill_workshop"],
+      toolsEnabled: true,
+      disableTools: true,
+      expected: "tools are disabled for this run",
+    },
+  ])(
+    "reports the relevant gate for $entries (enabled=$toolsEnabled, disabled=$disableTools)",
+    ({ entries, toolsEnabled, disableTools, expected }) => {
+      const input = {
+        sources: [{ label: "runtime toolsAllow", entries, enforceWhenToolsDisabled: true }],
+        hasCallableTools: false,
+        toolsEnabled,
+        disableTools,
+        skillWorkshop: { sandboxed: true },
+      };
+      expect(buildEmptyExplicitToolAllowlistError(input)?.message).toContain(expected);
+    },
+  );
+
   it("fails closed when explicit allowlists resolve to no callable tools", () => {
     const error = buildEmptyExplicitToolAllowlistError({
       sources: [{ label: "tools.allow", entries: [" query_db "] }],

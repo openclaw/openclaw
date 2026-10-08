@@ -1,14 +1,16 @@
+import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   hashSkillProposalContent,
+  importLegacySkillProposal,
   readSkillProposalRecord as readSkillProposalRecordImpl,
 } from "../skills/workshop/store.js";
 import { SKILL_WORKSHOP_SCHEMA, type SkillProposalRecord } from "../skills/workshop/types.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { migrateLegacySkillWorkshopProposals } from "./doctor-skill-workshop-sqlite.js";
@@ -52,6 +54,21 @@ export function createAppliedLegacyProposal(
   };
 }
 
+export async function seedAppliedLegacyProposal(
+  params: Parameters<typeof createAppliedLegacyProposal>[0] & {
+    env: NodeJS.ProcessEnv;
+    ownerAgentId: string;
+    targetContent: string;
+  },
+): Promise<ReturnType<typeof createAppliedLegacyProposal>> {
+  const { env, ownerAgentId, targetContent, ...proposal } = params;
+  const record = createAppliedLegacyProposal(proposal);
+  fs.mkdirSync(proposal.target.skillDir, { recursive: true });
+  fs.writeFileSync(record.target.skillFile, targetContent);
+  await importLegacySkillProposal({ record, ownerAgentId, store: { env } });
+  return record;
+}
+
 export async function expectWorkshopMigrationConverged(params: {
   env: NodeJS.ProcessEnv;
   config?: OpenClawConfig;
@@ -89,7 +106,7 @@ export async function expectRelocationWriteFailure(params: {
   }
 }
 
-export function seedLegacyV15ProposalRows(
+export async function seedLegacyV15ProposalRows(
   env: NodeJS.ProcessEnv,
   rows: readonly {
     record: SkillProposalRecord;
@@ -97,9 +114,9 @@ export function seedLegacyV15ProposalRows(
     claimReleasedTime: number | null;
     ownerAgentId?: string | null;
   }[],
-): void {
+): Promise<void> {
   const databasePath = openOpenClawStateDatabase({ env }).path;
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawStateDatabaseAsync();
   const legacy = openNodeSqliteDatabase(databasePath);
   legacy.exec(`
     ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';

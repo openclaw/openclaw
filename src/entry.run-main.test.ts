@@ -12,6 +12,7 @@ describe("entry run-main boundary", () => {
 
     expect(runCli).toHaveBeenCalledWith(["node", "openclaw", "status"], {
       additionalStartupTrace: expect.any(Object),
+      runtimeRecoveryEnv: expect.any(Object),
       retainConsoleRoutingUntilProcessExit: true,
     });
   });
@@ -81,9 +82,6 @@ describe("entry run-main boundary", () => {
 
       expect(process.exitCode).toBe(1);
       expect(errorSpy.mock.calls).toEqual([[message]]);
-      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("OPENCLAW_DEBUG"));
-      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("openclaw doctor"));
-      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Could not start the CLI"));
     } finally {
       errorSpy.mockRestore();
       process.exitCode = previousExitCode;

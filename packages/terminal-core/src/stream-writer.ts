@@ -1,17 +1,9 @@
-// Safe terminal stream writer that treats broken pipes as closed output.
-
-/** Hooks for safe stream writes. */
-export type SafeStreamWriterOptions = {
-  beforeWrite?: () => void;
-  onBrokenPipe?: (err: NodeJS.ErrnoException, stream: NodeJS.WriteStream) => void;
-};
+import { clearActiveProgressLine } from "./progress-line.js";
 
 /** Writer facade that tracks closed/broken-pipe state. */
 export type SafeStreamWriter = {
   write: (stream: NodeJS.WriteStream, text: string) => boolean;
   writeLine: (stream: NodeJS.WriteStream, text: string) => boolean;
-  reset: () => void;
-  isClosed: () => boolean;
 };
 
 /** Detect broken pipe style stream errors. */
@@ -21,7 +13,9 @@ function isBrokenPipeError(err: unknown): err is NodeJS.ErrnoException {
 }
 
 /** Create a stream writer that stops writing after EPIPE/EIO. */
-export function createSafeStreamWriter(options: SafeStreamWriterOptions = {}): SafeStreamWriter {
+export function createSafeStreamWriter(
+  onBrokenPipe?: (err: NodeJS.ErrnoException, stream: NodeJS.WriteStream) => void,
+): SafeStreamWriter {
   let closed = false;
 
   const handleError = (err: unknown, stream: NodeJS.WriteStream): boolean => {
@@ -30,7 +24,7 @@ export function createSafeStreamWriter(options: SafeStreamWriterOptions = {}): S
     }
     if (!closed) {
       closed = true;
-      options.onBrokenPipe?.(err, stream);
+      onBrokenPipe?.(err, stream);
     }
     return false;
   };
@@ -40,7 +34,7 @@ export function createSafeStreamWriter(options: SafeStreamWriterOptions = {}): S
       return false;
     }
     try {
-      options.beforeWrite?.();
+      clearActiveProgressLine();
     } catch (err) {
       return handleError(err, process.stderr);
     }
@@ -52,15 +46,8 @@ export function createSafeStreamWriter(options: SafeStreamWriterOptions = {}): S
     }
   };
 
-  const writeLine = (stream: NodeJS.WriteStream, text: string): boolean =>
-    write(stream, `${text}\n`);
-
   return {
     write,
-    writeLine,
-    reset: () => {
-      closed = false;
-    },
-    isClosed: () => closed,
+    writeLine: (stream, text) => write(stream, `${text}\n`),
   };
 }

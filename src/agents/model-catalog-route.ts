@@ -1,13 +1,17 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-/** Projects one physical donor into separate public and private runtime metadata. */
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
+  createConfiguredProviderModelResolver,
   resolveMergedModelProviderConfig,
-  resolveMergedModelProviderModels,
 } from "../config/model-provider-config.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
+import {
+  resolveProviderModelCatalogId,
+  resolveProviderModelPolicySurface,
+} from "../plugins/provider-model-routes.js";
 import {
   PREPARED_THINKING_POLICY,
   type ThinkingCatalogPolicyCarrier,
@@ -52,42 +56,56 @@ type ModelCatalogLogicalOverrides = Partial<
   >
 >;
 
-/** Reads explicit logical capability overrides without re-resolving auth. */
-export function resolveConfiguredModelCatalogOverrides(params: {
+/** Prepares configured-row indexes for one stable catalog config and policy projection. */
+export function createConfiguredModelCatalogOverridesResolver(params: {
   cfg: OpenClawConfig;
-  entry: Pick<ModelCatalogEntry, "provider" | "id">;
   policy?: ModelCatalogRoutePolicy;
-}): ModelCatalogLogicalOverrides | undefined {
-  const provider = normalizeProviderId(params.entry.provider);
-  const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
-  if (!providerConfig) {
-    return undefined;
-  }
-  const normalizeConfiguredModelId = (modelId: string) =>
-    params.policy?.resolveIdentity({ provider: params.entry.provider, id: modelId })?.key ??
-    modelId.trim();
-  const model = resolveMergedModelProviderModels({
-    models: providerConfig.models,
-    normalizeModelId: normalizeConfiguredModelId,
-  }).get(normalizeConfiguredModelId(params.entry.id));
-  const overrides: ModelCatalogLogicalOverrides = {
-    ...(model?.name ? { name: model.name } : {}),
-    ...(model?.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
-    ...(model?.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
-    ...(model?.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
-    ...(model?.reasoning !== undefined ? { configuredReasoning: model.reasoning } : {}),
-    ...(model?.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
-    ...(model?.input !== undefined ? { input: model.input } : {}),
+}): (
+  entry: Pick<ModelCatalogEntry, "provider" | "id">,
+) => ModelCatalogLogicalOverrides | undefined {
+  const modelsByProvider = new Map<
+    string,
+    ((modelId: string) => ModelDefinitionConfig | undefined) | null
+  >();
+  return (entry) => {
+    const providerId = entry.provider;
+    let findModel = modelsByProvider.get(providerId);
+    if (findModel === undefined) {
+      const provider = normalizeProviderId(providerId);
+      const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
+      if (!providerConfig?.models?.length) {
+        modelsByProvider.set(providerId, null);
+        return undefined;
+      }
+      const surface = resolveProviderModelPolicySurface(provider);
+      const normalizeConfiguredModelId = (modelId: string) =>
+        params.policy?.resolveIdentity({ provider: providerId, id: modelId })?.id ??
+        resolveProviderModelCatalogId({ provider, modelId, surface }) ??
+        modelId.trim();
+      const resolveModel = createConfiguredProviderModelResolver(
+        providerConfig,
+        provider,
+        normalizeConfiguredModelId,
+      );
+      findModel = (modelId) => resolveModel(normalizeConfiguredModelId(modelId));
+      // Policy callbacks receive the original spelling, even when config keys normalize alike.
+      modelsByProvider.set(providerId, findModel);
+    }
+    if (findModel === null) {
+      return undefined;
+    }
+    const model = findModel(entry.id);
+    const overrides: ModelCatalogLogicalOverrides = {
+      ...(model?.name ? { name: model.name } : {}),
+      ...(model?.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+      ...(model?.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
+      ...(model?.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
+      ...(model?.reasoning !== undefined ? { configuredReasoning: model.reasoning } : {}),
+      ...(model?.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+      ...(model?.input !== undefined ? { input: model.input } : {}),
+    };
+    return Object.keys(overrides).length > 0 ? overrides : undefined;
   };
-  return Object.keys(overrides).length > 0 ? overrides : undefined;
-}
-
-function sameLogicalModel(
-  a: ModelCatalogEntry,
-  identity: ModelCatalogLogicalIdentity,
-  policy: ModelCatalogRoutePolicy,
-): boolean {
-  return policy.resolveIdentity(a)?.key === identity.key;
 }
 
 function logicalIdentity(
@@ -118,27 +136,6 @@ function applyLogicalOverrides(
   return overrides ? { ...entry, ...overrides } : entry;
 }
 
-/** Finds the exact physical row that supplied a selected provider route. */
-function findModelCatalogRouteDonor(params: {
-  entry: ModelCatalogEntry;
-  route: ProviderModelRouteCandidate;
-  policy: ModelCatalogRoutePolicy;
-  catalog?: readonly ModelCatalogEntry[];
-}): ModelCatalogEntry | undefined {
-  const identity = params.policy.resolveIdentity(params.entry);
-  const physicalDonor = identity
-    ? params.catalog?.find(
-        (candidate) =>
-          sameLogicalModel(candidate, identity, params.policy) &&
-          params.policy.matchesRoute(candidate, params.route),
-      )
-    : undefined;
-  if (physicalDonor) {
-    return physicalDonor;
-  }
-  return params.policy.matchesRoute(params.entry, params.route) ? params.entry : undefined;
-}
-
 /**
  * Builds public and private runtime rows from one selected physical donor.
  *
@@ -154,9 +151,17 @@ export function projectModelCatalogEntryForRoute(params: {
   overrides?: ModelCatalogLogicalOverrides;
 }): { entry: ModelCatalogEntry; runtimeEntry: ModelCatalogEntry } {
   if (params.projection.kind === "unmanaged") {
-    const entry = applyLogicalOverrides(params.entry, params.overrides);
+    const provider = normalizeProviderId(params.entry.provider);
+    const surface = resolveProviderModelPolicySurface(provider);
+    // Route-capable owners project identity only with their route facts.
+    const id = surface?.resolveModelRoutes
+      ? null
+      : resolveProviderModelCatalogId({ provider, modelId: params.entry.id, surface });
+    const logicalEntry = id && id !== params.entry.id ? { ...params.entry, id } : params.entry;
+    const entry = applyLogicalOverrides(logicalEntry, params.overrides);
     return { entry, runtimeEntry: entry };
   }
+
   const id =
     params.projection.policy.resolveIdentity(params.entry)?.id ??
     splitTrailingAuthProfile(params.entry.id).model;
@@ -169,13 +174,15 @@ export function projectModelCatalogEntryForRoute(params: {
   }
 
   const { policy, route } = params.projection;
+  const identity = policy.resolveIdentity(params.entry);
   const donor: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier) | undefined =
-    findModelCatalogRouteDonor({
-      entry: params.entry,
-      route,
-      policy,
-      catalog: params.catalog,
-    });
+    (identity
+      ? params.catalog?.find(
+          (candidate) =>
+            policy.resolveIdentity(candidate)?.key === identity.key &&
+            policy.matchesRoute(candidate, route),
+        )
+      : undefined) ?? (policy.matchesRoute(params.entry, route) ? params.entry : undefined);
   const projected = logicalIdentity(
     params.entry,
     id,
@@ -191,6 +198,10 @@ export function projectModelCatalogEntryForRoute(params: {
       baseUrl: route.baseUrl,
       ...(donor?.contextWindow !== undefined ? { contextWindow: donor.contextWindow } : {}),
       ...(donor?.contextTokens !== undefined ? { contextTokens: donor.contextTokens } : {}),
+      ...(donor?.contextWindows !== undefined ? { contextWindows: donor.contextWindows } : {}),
+      ...(donor?.contextWindowDefault !== undefined
+        ? { contextWindowDefault: donor.contextWindowDefault }
+        : {}),
       ...(donor?.reasoning !== undefined ? { reasoning: donor.reasoning } : {}),
       ...(donor?.thinkingLevelMap ? { thinkingLevelMap: donor.thinkingLevelMap } : {}),
       ...(donor?.thinkingPolicyProvider
@@ -215,18 +226,17 @@ export function projectModelCatalogEntryForRoute(params: {
 
 /** Returns true for loopback, wildcard, and mDNS local base URLs. */
 export const isLocalBaseUrl = (baseUrl: string) => {
-  try {
-    const url = new URL(baseUrl);
-    const host = normalizeLowercaseStringOrEmpty(url.hostname).replace(/^\[|\]$/g, "");
-    return (
-      host === "localhost" ||
-      (isCanonicalDottedDecimalIPv4(host) && isLoopbackIpAddress(host)) ||
-      host === "0.0.0.0" ||
-      host === "::" ||
-      host === "::1" ||
-      host.endsWith(".local")
-    );
-  } catch {
+  const url = URL.parse(baseUrl);
+  if (!url) {
     return false;
   }
+  const host = normalizeLowercaseStringOrEmpty(url.hostname).replace(/^\[|\]$/g, "");
+  return (
+    host === "localhost" ||
+    (isCanonicalDottedDecimalIPv4(host) && isLoopbackIpAddress(host)) ||
+    host === "0.0.0.0" ||
+    host === "::" ||
+    host === "::1" ||
+    host.endsWith(".local")
+  );
 };

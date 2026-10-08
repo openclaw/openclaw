@@ -1,11 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  IncognitoSessionEndedError,
+  IncognitoSessionSyncAccessError,
+} from "../../../state/incognito-session-error.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { createEventBus } from "../event-bus.js";
 import type { ModelRegistry } from "../model-registry.js";
+import { SessionMetadataCommittedError } from "../session-manager-metadata-error.js";
 import type { SessionManager } from "../session-manager.js";
-import { createExtensionRuntime } from "./loader.js";
+import { createExtensionRuntime, loadExtensionFromFactory } from "./loader.js";
 import { ExtensionRunner } from "./runner.js";
 import type {
   Extension,
+  ExtensionAPI,
   ExtensionActions,
   ExtensionContext,
   ExtensionContextActions,
@@ -144,6 +151,100 @@ const catchAndContinueCases: Array<
 ];
 
 describe("ExtensionRunner handler dispatch", () => {
+  it.each([
+    { method: "appendEntry", invoke: (api: ExtensionAPI) => api.appendEntry("fixture", {}) },
+    { method: "setSessionName", invoke: (api: ExtensionAPI) => api.setSessionName("fixture") },
+    { method: "setLabel", invoke: (api: ExtensionAPI) => api.setLabel("fixture", "label") },
+  ] as const)(
+    "propagates incognito errors from legacy $method before continuing",
+    async ({ method, invoke }) => {
+      for (const failure of [
+        new IncognitoSessionSyncAccessError(method, `${method}Async`),
+        new IncognitoSessionEndedError(),
+      ]) {
+        const runtime = createExtensionRuntime();
+        runtime[method] = () => {
+          throw failure;
+        };
+        const extension = await loadExtensionFromFactory(
+          (api) => api.on("session_before_switch", () => invoke(api)),
+          "/tmp",
+          createEventBus(),
+          runtime,
+        );
+        const later = vi.fn(async () => undefined);
+        const runner = buildRunner([
+          extension,
+          buildExtension({ session_before_switch: [later] }, "/tmp/later.ts"),
+        ]);
+        const report = vi.fn();
+        runner.onError(report);
+
+        await expect(runner.emit({ type: "session_before_switch", reason: "new" })).rejects.toBe(
+          failure,
+        );
+        expect(later).not.toHaveBeenCalled();
+        expect(report).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("preserves discovery order and source ownership across partial resource contributions", async () => {
+    const runner = buildRunner([
+      buildExtension(
+        { resources_discover: [async () => ({ skillPaths: ["one", "two"], themePaths: [] })] },
+        "/tmp/first.ts",
+      ),
+      buildExtension(
+        {
+          resources_discover: [
+            async () => undefined,
+            async () => ({ skillPaths: ["three"], promptPaths: ["prompt"], themePaths: ["theme"] }),
+          ],
+        },
+        "/tmp/second.ts",
+      ),
+    ]);
+
+    expect(await runner.emitResourcesDiscover("/tmp", "reload")).toEqual({
+      skillPaths: [
+        { path: "one", extensionPath: "/tmp/first.ts" },
+        { path: "two", extensionPath: "/tmp/first.ts" },
+        { path: "three", extensionPath: "/tmp/second.ts" },
+      ],
+      promptPaths: [{ path: "prompt", extensionPath: "/tmp/second.ts" }],
+      themePaths: [{ path: "theme", extensionPath: "/tmp/second.ts" }],
+    });
+  });
+
+  it.each(catchAndContinueCases)(
+    "propagates committed metadata view loss from %s before another handler runs",
+    async (event, invoke) => {
+      const failure = new SessionMetadataCommittedError(
+        {
+          type: "thinking_level_change",
+          id: "committed-thinking",
+          parentId: null,
+          timestamp: "2026-01-01T00:00:00.000Z",
+          thinkingLevel: "high",
+        },
+        { generation: "fixture", rawSeq: 1, updatedAt: 1 },
+        new Error("view read failed"),
+      );
+      const later = vi.fn(async () => undefined);
+      const runner = buildRunner([
+        buildExtension({ [event]: [() => reject(failure)] }),
+        buildExtension({ [event]: [later] }, "/tmp/later.ts"),
+      ]);
+      const report = vi.fn();
+      runner.onError(report);
+
+      await expect(invoke(runner)).rejects.toBe(failure);
+      expect(later).not.toHaveBeenCalled();
+      expect(report).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(catchAndContinueCases)(
     "isolates %s handler failures and reports their extension",
     async (event, invoke) => {

@@ -2,8 +2,11 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+
+registerSkillWorkshopEnglish();
 
 export type SkillWorkshopSelfLearning = {
   enabled: boolean;
@@ -74,9 +77,6 @@ export async function setSelfLearningEnabled(
     return runtimeConfig.state.lastError ?? t("skillWorkshop.selfLearning.updateError");
   }
   await runtimeConfig.refresh();
-  if (!isCurrent()) {
-    return null;
-  }
   return null;
 }
 
@@ -124,7 +124,9 @@ export function renderSelfLearningPitch(
       <p>${t("skillWorkshop.selfLearning.pitchBody")}</p>
       <button
         type="button"
-        class="sw-btn sw-btn--primary ${selfLearning.busy ? "is-busy" : ""}"
+        class="sw-btn sw-btn--primary oc-action oc-action-primary ${
+          selfLearning.busy ? "is-busy" : ""
+        }"
         ?disabled=${selfLearning.busy || !selfLearning.canUpdate}
         @click=${() => onToggle(true)}
       >
@@ -142,5 +144,7 @@ export function renderSelfLearningError(selfLearning: SkillWorkshopSelfLearning 
   if (!selfLearning?.error) {
     return nothing;
   }
-  return html`<div class="sw-error" role="status"><span>${selfLearning.error}</span></div>`;
+  return html`<div class="sw-error oc-banner oc-banner-error" role="status">
+    <span>${selfLearning.error}</span>
+  </div>`;
 }

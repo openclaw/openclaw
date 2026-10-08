@@ -13,6 +13,8 @@ export type PluginToolMcpMeta = {
   operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
   excludedFromOpenClawCatalog?: true;
   deniedBySession?: true;
+  /** Trusted requester OAuth sign-in bootstrap; exempt from per-call MCP approval. */
+  oauthConnectBootstrap?: true;
   codexApproval?: {
     mode?: McpCodexToolApprovalMode;
     annotations?: McpCodexToolAnnotations;

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { buildAuthHealthSummary } from "../../../src/agents/auth-health.js";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -10,6 +11,107 @@ const suite = createControlUiE2eSuite({ name: "Control UI model provider profile
 const NOW = Date.now();
 
 suite.define(() => {
+  it("explains saved account health separately from catalog availability", async () => {
+    const health = buildAuthHealthSummary({
+      store: {
+        version: 1,
+        profiles: {
+          "xai:opaque-account": {
+            type: "oauth",
+            provider: "xai",
+            access: "synthetic-access",
+            refresh: "synthetic-refresh",
+            expires: Date.now() + 60 * 60_000,
+          },
+        },
+      },
+    });
+    const xai = health.providers[0]!;
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 1000, width: 1280 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "config.get": {
+              config: {},
+              sourceConfig: {},
+              hash: "accounts",
+              raw: "{}",
+              valid: true,
+              issues: [],
+            },
+            "models.authStatus": {
+              ts: NOW,
+              providers: [
+                {
+                  ...xai,
+                  displayName: "xAI",
+                  profiles: xai.profiles.map((profile) =>
+                    Object.assign({}, profile, { source: "saved" }),
+                  ),
+                },
+                {
+                  provider: "minimax",
+                  displayName: "MiniMax",
+                  status: "ok",
+                  profiles: [
+                    {
+                      profileId: "minimax:opaque-account",
+                      type: "oauth",
+                      status: "ok",
+                      source: "saved",
+                      displayName: "Work account",
+                    },
+                  ],
+                },
+              ],
+            },
+            "models.list": {
+              models: [{ id: "test-model", name: "Test model", provider: "xai", available: true }],
+              providerOutcomes: [
+                { provider: "xai", status: "ready" },
+                { provider: "minimax", status: "unavailable" },
+              ],
+            },
+            "usage.status": { updatedAt: NOW, providers: [] },
+            "sessions.usage": { aggregates: { byProvider: [] } },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+        const xaiCard = page.locator('[data-provider-id="xai"]');
+        const minimaxCard = page.locator('[data-provider-id="minimax"]');
+        await xaiCard.waitFor();
+        await minimaxCard.waitFor();
+        await xaiCard.screenshot({ path: path.join(suite.artifactDir, "account-status.png") });
+        await minimaxCard.screenshot({ path: path.join(suite.artifactDir, "catalog-status.png") });
+        await expect
+          .poll(async () =>
+            (
+              await xaiCard.locator(".model-providers__head .settings-status").textContent()
+            )?.trim(),
+          )
+          .toBe("Ready");
+        expect(await xaiCard.locator(".model-providers__profile-copy strong").textContent()).toBe(
+          "Account 1",
+        );
+        expect(await xaiCard.locator(".model-providers__profile-status").textContent()).toContain(
+          "Signed in",
+        );
+        expect(
+          await minimaxCard.locator(".model-providers__head .settings-status").textContent(),
+        ).toContain("Models unavailable");
+        expect(
+          await minimaxCard.locator(".model-providers__profile-copy strong").textContent(),
+        ).toBe("Work account");
+        const details = xaiCard.locator("details");
+        expect(await details.locator("summary").textContent()).toBe("Details");
+        expect(await details.getAttribute("open")).toBeNull();
+        await details.locator("summary").click();
+        expect(await details.textContent()).toContain("xai:opaque-account");
+      },
+    );
+  });
+
   it("lifts an account, makes room during dragging, and saves its dropped priority", async () => {
     const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     await suite.withPage(
@@ -190,6 +292,7 @@ suite.define(() => {
                         provider: "openai",
                         displayName: "OpenAI",
                         status: "ok",
+                        apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
                         profiles: [
                           { profileId: "openai:rejected", type: "oauth", status: "ok" },
                           { profileId: "openai:ready", type: "oauth", status: "ok" },
@@ -209,7 +312,7 @@ suite.define(() => {
         const response = await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         expect(response?.status()).toBe(200);
         await gateway.waitForRequest("agents.list");
-        const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
+        const pageScope = page.locator(".settings-sidebar__agent openclaw-agent-select");
         await pageScope.locator(".agent-select__trigger").click();
         await pageScope
           .locator("wa-dropdown-item[data-agent-option]")
@@ -243,7 +346,11 @@ suite.define(() => {
             });
             return request?.params;
           })
-          .toEqual({ view: "configured", agentId: "writer", refresh: true });
+          .toEqual({
+            view: "configured",
+            agentId: "writer",
+            refresh: true,
+          });
         await expect
           .poll(async () =>
             (
@@ -251,6 +358,16 @@ suite.define(() => {
             )?.trim(),
           )
           .toBe(status);
+        if (!available) {
+          await openaiCard.screenshot({
+            path: path.join(suite.artifactDir, "provider-auth-rejected.png"),
+          });
+        }
+        expect(
+          await openaiCard
+            .locator('[data-profile-id="openai:ready"] .model-providers__profile-status')
+            .textContent(),
+        ).toContain(available ? "Signed in" : "Credentials configured");
       },
     );
   });

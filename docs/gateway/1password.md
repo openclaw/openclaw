@@ -25,7 +25,10 @@ OpenClaw pairs with **1Password** in four independent ways:
 
 ## Resolve config secrets with the plugin
 
-Enable the bundled plugin and create its service-account token file:
+Enable the bundled plugin and create its service-account token file. Export the
+service account's token as `OP_SERVICE_ACCOUNT_TOKEN` in the shell you run this
+in first — the block writes that value to disk and then clears it from the
+environment, so without it you get an empty token file:
 
 ```bash
 openclaw plugins enable onepassword

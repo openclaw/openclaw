@@ -1,6 +1,13 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
+import { assert, readJson, write, writeJson } from "../fixtures/common.mjs";
 import {
   assertUpgradeVolumeSharedState,
   seedUpgradeVolumeSharedState,
@@ -26,27 +33,8 @@ const PREEXISTING_SESSION_FIXTURES = [
   },
 ];
 
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
 function assertJsonEqual(actual, expected, message) {
   assert(JSON.stringify(actual) === JSON.stringify(expected), message);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function write(file, contents) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-}
-
-function writeJson(file, value) {
-  write(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function readPositiveIntegerEnv(name, fallback) {
@@ -135,6 +123,8 @@ function getVolumeCronJob(index) {
   const paddedIndex = String(index).padStart(6, "0");
   return {
     id: `volume-cron-${paddedIndex}`,
+    agentId: "main",
+    owner: { agentId: "main" },
     name: index === 0 ? "Archive crawl — 東京" : `Archive crawl ${paddedIndex}`,
     enabled: index % 5 !== 0,
     createdAtMs: VOLUME_CRON_CREATED_AT_MS + index,
@@ -152,18 +142,13 @@ function getVolumeCronJob(index) {
       message: `crawl archive partition ${paddedIndex} ${"z".repeat((index % 5) * 128)}`.trimEnd(),
     },
     state: {
-      nextRunAtMs: VOLUME_CRON_CREATED_AT_MS + 365 * 86_400_000 + index,
+      ...(index % 5 !== 0
+        ? { nextRunAtMs: VOLUME_CRON_CREATED_AT_MS + 365 * 86_400_000 + index }
+        : {}),
       ...(index % 11 === 0 ? { lastStatus: "error", lastError: "stale crawl lease" } : {}),
       crawlCursor: { partition: paddedIndex, offset: index * 1000 },
     },
   };
-}
-
-function getVolumeSessionFixtures(spec) {
-  return Array.from({ length: spec.sessions }, (_, index) => ({
-    index,
-    ...getVolumeSessionFixture(index),
-  }));
 }
 
 function assertVolumeSessionStores(stores, fixtures, context) {
@@ -234,7 +219,7 @@ function seedUpgradeVolumeSessions(stateDir) {
     store[sessionKey] = {
       sessionId,
       ...(metadataOnly ? {} : { sessionFile: path.join(sessionsDir, `${sessionId}.jsonl`) }),
-      provider: "openai",
+      modelProvider: "openai",
       model: "gpt-5.5",
       updatedAt: baseUpdatedAt + index,
       label,
@@ -262,15 +247,30 @@ function seedUpgradeVolumeSessions(stateDir) {
   }
 }
 
-function seedUpgradeVolumeCronJobs(stateDir) {
+async function seedUpgradeVolumeCronJobs(stateDir, packageRoot) {
+  assert(packageRoot, "volume cron fixture requires the installed baseline package root");
+  const packageJsonPath = path.join(path.resolve(packageRoot), "package.json");
+  const manifest = readJson(packageJsonPath);
+  assert(manifest.name === "openclaw", "volume cron SDK must belong to the installed package");
+  assert(
+    manifest.version === process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION,
+    "volume cron SDK version differs from the installed CLI",
+  );
+  const installedRequire = createRequire(packageJsonPath);
+  // Use the published writer so the fixture cannot initialize candidate schema or codecs.
+  const sdkUrl = pathToFileURL(installedRequire.resolve("openclaw/plugin-sdk/cron-store-runtime"));
+  const { loadCronStore, saveCronStore } = await import(sdkUrl.href);
   const spec = getVolumeSpec();
   const jobs = Array.from({ length: spec.cronJobs }, (_, index) => getVolumeCronJob(index));
-  writeJson(path.join(stateDir, "cron", "jobs.json"), { version: 1, jobs });
+  const storePath = path.join(stateDir, "cron", "jobs.json");
+  await saveCronStore(storePath, { version: 1, jobs });
+  assertVolumeCronJobs((await loadCronStore(storePath)).jobs, spec, "published SDK round-trip");
+  assert(!fs.existsSync(storePath), "published cron writer created a retired JSON store");
 }
 
-export function seedUpgradeVolume(stateDir) {
+export async function seedUpgradeVolume(stateDir, packageRoot) {
   seedUpgradeVolumeSessions(stateDir);
-  seedUpgradeVolumeCronJobs(stateDir);
+  await seedUpgradeVolumeCronJobs(stateDir, packageRoot);
   seedUpgradeVolumeSharedState(stateDir);
 }
 
@@ -309,126 +309,14 @@ function assertHealthySqlite(databasePath, assertContents) {
 export function assertUpgradeVolumeMigrated(stateDir, stage) {
   assertUpgradeVolumeSharedState(stateDir, stage);
   const spec = getVolumeSpec();
-  const fixtures = getVolumeSessionFixtures(spec);
-  const legacyCronPath = path.join(stateDir, "cron", "jobs.json");
-  if (stage === "baseline") {
-    const stores = new Map(
-      VOLUME_AGENT_IDS.map((agentId) => [
-        agentId,
-        readJson(path.join(getVolumeSessionsDir(stateDir, agentId), "sessions.json")),
-      ]),
-    );
-    assertVolumeSessionStores(stores, fixtures, "volume baseline");
-    for (const fixture of fixtures) {
-      if (fixture.missingTranscript) {
-        assert(
-          !fs.existsSync(
-            path.join(
-              getVolumeSessionsDir(stateDir, fixture.agentId),
-              `${fixture.sessionId}.jsonl`,
-            ),
-          ),
-          `volume missing transcript fixture unexpectedly exists: ${fixture.index}`,
-        );
-      }
-    }
-    assertVolumeCronJobs(readJson(legacyCronPath).jobs ?? [], spec, "volume baseline");
-    return;
-  }
-
-  for (const agentId of VOLUME_AGENT_IDS) {
-    assert(
-      !fs.existsSync(path.join(getVolumeSessionsDir(stateDir, agentId), "sessions.json")),
-      `${agentId} volume legacy session store remained active`,
-    );
-  }
-  assert(!fs.existsSync(legacyCronPath), "volume legacy cron store remained active");
-  let migratedSessions = 0;
-  let migratedEvents = 0;
-  for (const agentId of VOLUME_AGENT_IDS) {
-    const agentFixtures = fixtures.filter((fixture) => fixture.agentId === agentId);
-    const expectedEvents =
-      agentFixtures.filter((fixture) => !fixture.metadataOnly && !fixture.missingTranscript)
-        .length * spec.eventsPerSession;
-    const databasePath = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
-    const counts = assertHealthySqlite(databasePath, (db) => {
-      const sessionRows = db
-        .prepare(
-          "SELECT session_key, current_session_id, entry_json FROM session_nodes WHERE current_session_id LIKE 'volume-%'",
-        )
-        .all();
-      const windowRows = db
-        .prepare(
-          "SELECT session_id, session_key FROM session_windows WHERE session_id LIKE 'volume-%'",
-        )
-        .all();
-      const eventRows = db
-        .prepare(
-          "SELECT session_id, seq, event_json FROM transcript_events WHERE session_id LIKE 'volume-%'",
-        )
-        .all();
-      const sessionsByKey = new Map(sessionRows.map((row) => [row.session_key, row]));
-      const windowsById = new Map(windowRows.map((row) => [row.session_id, row]));
-      const missingSessions = agentFixtures
-        .filter((fixture) => !sessionsByKey.has(fixture.sessionKey))
-        .map((fixture) => fixture.index);
-      assert(
-        sessionRows.length === agentFixtures.length,
-        `${agentId} volume session count changed: ${sessionRows.length}; missing indexes: ${missingSessions.join(", ")}`,
-      );
-      assert(
-        windowRows.length === agentFixtures.length,
-        `${agentId} volume session window count changed: ${windowRows.length}`,
-      );
-      assert(
-        eventRows.length === expectedEvents,
-        `${agentId} volume event count changed: ${eventRows.length}`,
-      );
-      const eventsByIdAndSequence = new Map(
-        eventRows.map((row) => [`${row.session_id}\0${row.seq}`, row]),
-      );
-      for (const fixture of agentFixtures) {
-        const row = sessionsByKey.get(fixture.sessionKey);
-        assert(
-          row?.current_session_id === fixture.sessionId,
-          `volume session changed: ${fixture.index}`,
-        );
-        const entry = JSON.parse(row?.entry_json ?? "null");
-        assert(entry?.sessionId === fixture.sessionId, `volume entry changed: ${fixture.index}`);
-        assert(entry?.label === fixture.label, `volume label changed: ${fixture.index}`);
-        assert(
-          entry?.provider === "openai" || entry?.delivery?.origin?.provider === "openai",
-          `volume provider changed: ${fixture.index}`,
-        );
-        assert(entry?.model === "gpt-5.5", `volume model changed: ${fixture.index}`);
-        assert(
-          !Object.hasOwn(entry, "sessionFile"),
-          `volume session retained retired sessionFile metadata: ${fixture.index}`,
-        );
-        assert(
-          windowsById.get(fixture.sessionId)?.session_key === fixture.sessionKey,
-          `volume session window changed: ${fixture.index}`,
-        );
-        if (fixture.metadataOnly || fixture.missingTranscript) {
-          continue;
-        }
-        for (let sequence = 0; sequence < spec.eventsPerSession; sequence += 1) {
-          const event = eventsByIdAndSequence.get(`${fixture.sessionId}\0${sequence}`);
-          const expected = getVolumeTranscriptEvent(fixture.index, fixture.sessionId, sequence);
-          assertJsonEqual(
-            JSON.parse(event?.event_json ?? "null"),
-            expected,
-            `volume transcript event changed: ${fixture.index}:${sequence}`,
-          );
-        }
-      }
-      return { sessions: sessionRows.length, events: eventRows.length };
-    });
-    migratedSessions += counts.sessions;
-    migratedEvents += counts.events;
-  }
-  assert(migratedSessions === spec.sessions, `volume session count changed: ${migratedSessions}`);
-
+  const fixtures = Array.from({ length: spec.sessions }, (_, index) => ({
+    index,
+    ...getVolumeSessionFixture(index),
+  }));
+  assert(
+    !fs.existsSync(path.join(stateDir, "cron", "jobs.json")),
+    "volume cron fixture created a retired JSON store",
+  );
   const stateDatabasePath = path.join(stateDir, "state", "openclaw.sqlite");
   assertHealthySqlite(stateDatabasePath, (db) => {
     const rows = db
@@ -447,6 +335,8 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
       const actual = JSON.parse(row?.job_json ?? "null");
       for (const field of [
         "id",
+        "agentId",
+        "owner",
         "name",
         "enabled",
         "createdAtMs",
@@ -494,6 +384,122 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
       );
     }
   });
+
+  if (stage === "baseline") {
+    const stores = new Map(
+      VOLUME_AGENT_IDS.map((agentId) => [
+        agentId,
+        readJson(path.join(getVolumeSessionsDir(stateDir, agentId), "sessions.json")),
+      ]),
+    );
+    assertVolumeSessionStores(stores, fixtures, "volume baseline");
+    for (const fixture of fixtures) {
+      if (fixture.missingTranscript) {
+        assert(
+          !fs.existsSync(
+            path.join(
+              getVolumeSessionsDir(stateDir, fixture.agentId),
+              `${fixture.sessionId}.jsonl`,
+            ),
+          ),
+          `volume missing transcript fixture unexpectedly exists: ${fixture.index}`,
+        );
+      }
+    }
+    return;
+  }
+
+  for (const agentId of VOLUME_AGENT_IDS) {
+    assert(
+      !fs.existsSync(path.join(getVolumeSessionsDir(stateDir, agentId), "sessions.json")),
+      `${agentId} volume legacy session store remained active`,
+    );
+  }
+  let migratedSessions = 0;
+  let migratedEvents = 0;
+  for (const agentId of VOLUME_AGENT_IDS) {
+    const agentFixtures = fixtures.filter((fixture) => fixture.agentId === agentId);
+    const expectedEvents =
+      agentFixtures.filter((fixture) => !fixture.metadataOnly && !fixture.missingTranscript)
+        .length * spec.eventsPerSession;
+    const databasePath = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
+    const counts = assertHealthySqlite(databasePath, (db) => {
+      const sessionRows = db
+        .prepare(
+          "SELECT session_key, current_session_id, entry_json FROM session_nodes WHERE current_session_id LIKE 'volume-%'",
+        )
+        .all();
+      const windowRows = db
+        .prepare(
+          "SELECT session_id, session_key FROM session_windows WHERE session_id LIKE 'volume-%'",
+        )
+        .all();
+      const eventRows = db
+        .prepare(
+          `SELECT session_id, seq, ${sqliteTranscriptPayloadColumns(db)} FROM transcript_events WHERE session_id LIKE 'volume-%'`,
+        )
+        .all();
+      const sessionsByKey = new Map(sessionRows.map((row) => [row.session_key, row]));
+      const windowsById = new Map(windowRows.map((row) => [row.session_id, row]));
+      const missingSessions = agentFixtures
+        .filter((fixture) => !sessionsByKey.has(fixture.sessionKey))
+        .map((fixture) => fixture.index);
+      assert(
+        sessionRows.length === agentFixtures.length,
+        `${agentId} volume session count changed: ${sessionRows.length}; missing indexes: ${missingSessions.join(", ")}`,
+      );
+      assert(
+        windowRows.length === agentFixtures.length,
+        `${agentId} volume session window count changed: ${windowRows.length}`,
+      );
+      assert(
+        eventRows.length === expectedEvents,
+        `${agentId} volume event count changed: ${eventRows.length}`,
+      );
+      const eventsByIdAndSequence = new Map(
+        eventRows.map((row) => [`${row.session_id}\0${row.seq}`, row]),
+      );
+      for (const fixture of agentFixtures) {
+        const row = sessionsByKey.get(fixture.sessionKey);
+        assert(
+          row?.current_session_id === fixture.sessionId,
+          `volume session changed: ${fixture.index}`,
+        );
+        const entry = JSON.parse(row?.entry_json ?? "null");
+        assert(entry?.sessionId === fixture.sessionId, `volume entry changed: ${fixture.index}`);
+        assert(entry?.label === fixture.label, `volume label changed: ${fixture.index}`);
+        assert(
+          entry?.modelProvider === "openai",
+          `volume model provider changed: ${fixture.index}`,
+        );
+        assert(entry?.model === "gpt-5.5", `volume model changed: ${fixture.index}`);
+        assert(
+          !Object.hasOwn(entry, "sessionFile"),
+          `volume session retained retired sessionFile metadata: ${fixture.index}`,
+        );
+        assert(
+          windowsById.get(fixture.sessionId)?.session_key === fixture.sessionKey,
+          `volume session window changed: ${fixture.index}`,
+        );
+        if (fixture.metadataOnly || fixture.missingTranscript) {
+          continue;
+        }
+        for (let sequence = 0; sequence < spec.eventsPerSession; sequence += 1) {
+          const event = eventsByIdAndSequence.get(`${fixture.sessionId}\0${sequence}`);
+          const expected = getVolumeTranscriptEvent(fixture.index, fixture.sessionId, sequence);
+          assertJsonEqual(
+            event ? JSON.parse(readSqliteTranscriptPayload(event)) : null,
+            expected,
+            `volume transcript event changed: ${fixture.index}:${sequence}`,
+          );
+        }
+      }
+      return { sessions: sessionRows.length, events: eventRows.length };
+    });
+    migratedSessions += counts.sessions;
+    migratedEvents += counts.events;
+  }
+  assert(migratedSessions === spec.sessions, `volume session count changed: ${migratedSessions}`);
 
   const archivedStores = new Map();
   const archivedTranscripts = new Map();
@@ -567,14 +573,6 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
     assertJsonEqual(events, expected, `archived volume transcript changed: ${index}`);
   }
 
-  const cronArchiveEntries = fs
-    .readdirSync(path.dirname(legacyCronPath))
-    .filter((entry) => /^jobs\.json\.migrated(?:\.\d+)?$/u.test(entry));
-  assert(cronArchiveEntries.length === 1, "volume legacy cron archive count changed");
-  const archivedCronJobs = readJson(
-    path.join(path.dirname(legacyCronPath), cronArchiveEntries[0]),
-  ).jobs;
-  assertVolumeCronJobs(archivedCronJobs ?? [], spec, "archived volume");
   process.stdout.write(
     `sqlite-volume sessions=${migratedSessions} events=${migratedEvents} cronJobs=${spec.cronJobs}\n`,
   );

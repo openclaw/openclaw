@@ -67,10 +67,10 @@ function requireFetchInitCall(index: number): {
 }
 
 function mockXaiVideoRequest(requestId: string) {
-  postJsonRequestMock.mockResolvedValue({
-    response: { json: async () => ({ request_id: requestId }) },
+  postJsonRequestMock.mockImplementation(async () => ({
+    response: Response.json({ request_id: requestId }),
     release: vi.fn(async () => {}),
-  });
+  }));
 }
 
 function mockXaiVideoTask(params: {
@@ -81,13 +81,13 @@ function mockXaiVideoTask(params: {
 }) {
   mockXaiVideoRequest(params.requestId);
   fetchWithTimeoutMock
-    .mockResolvedValueOnce({
-      json: async () => ({
+    .mockResolvedValueOnce(
+      Response.json({
         request_id: params.requestId,
         status: "done",
         video: { url: params.videoUrl },
       }),
-    })
+    )
     .mockResolvedValueOnce({
       headers: new Headers({ "content-type": params.mimeType ?? "video/mp4" }),
       arrayBuffer: async () => Buffer.from(params.videoBytes),
@@ -153,17 +153,17 @@ describe("xai video generation provider", () => {
     for (const [index, model] of models.entries()) {
       const requestId = `req_15_${index}`;
       postJsonRequestMock.mockResolvedValueOnce({
-        response: { json: async () => ({ request_id: requestId }) },
+        response: Response.json({ request_id: requestId }),
         release: vi.fn(async () => {}),
       });
       fetchWithTimeoutMock
-        .mockResolvedValueOnce({
-          json: async () => ({
+        .mockResolvedValueOnce(
+          Response.json({
             request_id: requestId,
             status: "done",
             video: { url: `https://cdn.x.ai/${requestId}.mp4` },
           }),
-        })
+        )
         .mockResolvedValueOnce({
           headers: new Headers({ "content-type": "video/mp4" }),
           arrayBuffer: async () => Buffer.from("video-bytes"),
@@ -365,13 +365,13 @@ describe("xai video generation provider", () => {
   it("rejects generated video downloads that exceed the configured media cap", async () => {
     mockXaiVideoRequest("req_too_large");
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           request_id: "req_too_large",
           status: "done",
           video: { url: "https://cdn.x.ai/too-large.mp4" },
         }),
-      })
+      )
       .mockResolvedValueOnce(
         new Response(
           new ReadableStream({
@@ -419,10 +419,10 @@ describe("xai video generation provider", () => {
 
   it("bounds an unbounded successful xAI poll JSON body and cancels the stream", async () => {
     const oversized = oversizedJsonResponse();
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: streamedJsonResponse({ request_id: "req_poll_oversized" }),
       release: vi.fn(async () => {}),
-    });
+    }));
     fetchWithTimeoutMock.mockResolvedValueOnce(oversized.response);
 
     const provider = buildXaiVideoGenerationProvider();
@@ -439,12 +439,10 @@ describe("xai video generation provider", () => {
   });
 
   it("wraps malformed successful xAI create responses", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => [],
-      },
+    postJsonRequestMock.mockImplementation(async () => ({
+      response: Response.json([]),
       release: vi.fn(async () => {}),
-    });
+    }));
 
     const provider = buildXaiVideoGenerationProvider();
     await expect(
@@ -458,12 +456,12 @@ describe("xai video generation provider", () => {
   });
 
   it("wraps non-JSON successful xAI create responses", async () => {
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: new Response("<html>Unexpected token < in JSON</html>", {
         headers: { "content-type": "text/html" },
       }),
       release: vi.fn(async () => {}),
-    });
+    }));
 
     const provider = buildXaiVideoGenerationProvider();
     await expect(
@@ -477,52 +475,65 @@ describe("xai video generation provider", () => {
   });
 
   it("treats unknown xAI poll statuses as continue-polling and returns when terminal", async () => {
-    mockXaiVideoRequest("req_unknown_then_done");
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
-          request_id: "req_unknown_then_done",
-          status: "almost_done",
-        }),
-      })
-      .mockResolvedValueOnce({
-        json: async () => ({
-          request_id: "req_unknown_then_done",
-          status: "submitted",
-        }),
-      })
-      .mockResolvedValueOnce({
-        json: async () => ({
-          request_id: "req_unknown_then_done",
-          status: "done",
-          video: { url: "https://cdn.x.ai/eventual.mp4" },
-        }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4"),
+    vi.useFakeTimers();
+    try {
+      mockXaiVideoRequest("req_unknown_then_done");
+      fetchWithTimeoutMock
+        .mockResolvedValueOnce(
+          Response.json({
+            request_id: "req_unknown_then_done",
+            status: "almost_done",
+          }),
+        )
+        .mockResolvedValueOnce(
+          Response.json({
+            request_id: "req_unknown_then_done",
+            status: "submitted",
+          }),
+        )
+        .mockResolvedValueOnce(
+          Response.json({
+            request_id: "req_unknown_then_done",
+            status: "done",
+            video: { url: "https://cdn.x.ai/eventual.mp4" },
+          }),
+        )
+        .mockResolvedValueOnce({
+          headers: new Headers({ "content-type": "video/mp4" }),
+          arrayBuffer: async () => Buffer.from("mp4"),
+        });
+
+      const provider = buildXaiVideoGenerationProvider();
+      const pending = provider.generateVideo({
+        provider: "xai",
+        model: "grok-imagine-video",
+        prompt: "unknown then done",
+        cfg: {},
       });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
 
-    const provider = buildXaiVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "xai",
-      model: "grok-imagine-video",
-      prompt: "unknown then done",
-      cfg: {},
-    });
-
-    expect(result.metadata?.requestId).toBe("req_unknown_then_done");
-    expect(result.metadata?.status).toBe("done");
+      expect(result.metadata?.requestId).toBe("req_unknown_then_done");
+      expect(result.metadata?.status).toBe("done");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("treats `cancelled` as a terminal failure", async () => {
     mockXaiVideoRequest("req_cancelled");
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      Response.json({
         request_id: "req_cancelled",
         status: "cancelled",
       }),
-    });
+    );
 
     const provider = buildXaiVideoGenerationProvider();
     await expect(
@@ -537,13 +548,13 @@ describe("xai video generation provider", () => {
 
   it("rejects completed xAI poll responses without output URLs as malformed", async () => {
     mockXaiVideoRequest("req_no_video");
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      Response.json({
         request_id: "req_no_video",
         status: "done",
         video: {},
       }),
-    });
+    );
 
     const provider = buildXaiVideoGenerationProvider();
     await expect(
@@ -557,46 +568,56 @@ describe("xai video generation provider", () => {
   });
 
   it("normalizes the xAI 'pending' poll status to 'processing' and keeps polling until done", async () => {
-    mockXaiVideoRequest("req_pending");
-    fetchWithTimeoutMock
-      // First poll: in-progress payload mirroring xAI's real shape
-      .mockResolvedValueOnce({
-        json: async () => ({
-          request_id: "req_pending",
-          status: "pending",
-          progress: 42,
-        }),
-      })
-      // Second poll: complete
-      .mockResolvedValueOnce({
-        json: async () => ({
-          request_id: "req_pending",
-          status: "done",
-          video: { url: "https://cdn.x.ai/video-pending.mp4" },
-          progress: 100,
-        }),
-      })
-      // Download
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+    vi.useFakeTimers();
+    try {
+      mockXaiVideoRequest("req_pending");
+      fetchWithTimeoutMock
+        // First poll: in-progress payload mirroring xAI's real shape
+        .mockResolvedValueOnce(
+          Response.json({
+            request_id: "req_pending",
+            status: "pending",
+            progress: 42,
+          }),
+        )
+        // Second poll: complete
+        .mockResolvedValueOnce(
+          Response.json({
+            request_id: "req_pending",
+            status: "done",
+            video: { url: "https://cdn.x.ai/video-pending.mp4" },
+            progress: 100,
+          }),
+        )
+        // Download
+        .mockResolvedValueOnce({
+          headers: new Headers({ "content-type": "video/mp4" }),
+          arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        });
+
+      const provider = buildXaiVideoGenerationProvider();
+      const pending = provider.generateVideo({
+        provider: "xai",
+        model: "grok-imagine-video",
+        prompt: "Pending then done",
+        cfg: {},
+        durationSeconds: 6,
+        aspectRatio: "9:16",
+        resolution: "720P",
       });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
 
-    const provider = buildXaiVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "xai",
-      model: "grok-imagine-video",
-      prompt: "Pending then done",
-      cfg: {},
-      durationSeconds: 6,
-      aspectRatio: "9:16",
-      resolution: "720P",
-    });
-
-    // Two poll calls (one pending, one done) — not throwing on "pending"
-    expect((fetchWithTimeoutMock.mock.calls as unknown[]).length).toBeGreaterThanOrEqual(2);
-    expect(result.videos[0]?.mimeType).toBe("video/mp4");
-    expect(result.metadata?.requestId).toBe("req_pending");
+      // Two poll calls (one pending, one done) — not throwing on "pending"
+      expect((fetchWithTimeoutMock.mock.calls as unknown[]).length).toBeGreaterThanOrEqual(2);
+      expect(result.videos[0]?.mimeType).toBe("video/mp4");
+      expect(result.metadata?.requestId).toBe("req_pending");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sends a single unroled image as xAI first-frame image-to-video", async () => {

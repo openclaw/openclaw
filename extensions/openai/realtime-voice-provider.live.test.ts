@@ -84,7 +84,7 @@ describeLive("OpenAI realtime voice lifecycle live", () => {
       expect(transcripts.join(" ")).toMatch(/voice recovery verified/i);
       expect(session.bridge.isConnected()).toBe(true);
     } finally {
-      session.close();
+      await session.close();
       harness.close();
     }
   }, 60_000);
@@ -117,12 +117,12 @@ describeLive("OpenAI realtime voice lifecycle live", () => {
     try {
       await bridge.connect();
       expect(bridge.isConnected()).toBe(true);
-      bridge.close();
+      await bridge.close();
 
       await bridge.connect();
       expect(bridge.isConnected()).toBe(true);
     } finally {
-      bridge.close();
+      await bridge.close();
     }
 
     expect(errors).toEqual([]);

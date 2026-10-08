@@ -7,6 +7,7 @@ import {
   nextWebSearchToolOverrides,
   readOwnEntry,
   resolveToolOverrideState,
+  resolveWebSearchToolOverrideState,
 } from "./tool-overrides.ts";
 
 describe("session tool overrides", () => {
@@ -15,6 +16,15 @@ describe("session tool overrides", () => {
     expect(resolveToolOverrideState(false, undefined)).toBe(false);
     expect(resolveToolOverrideState(true, false)).toBe(false);
     expect(resolveToolOverrideState(false, true)).toBe(true);
+  });
+
+  it("treats global web-search disable as a kill switch for effective state", () => {
+    expect(resolveWebSearchToolOverrideState(true, undefined)).toBe(true);
+    expect(resolveWebSearchToolOverrideState(true, true)).toBe(true);
+    expect(resolveWebSearchToolOverrideState(true, false)).toBe(false);
+    expect(resolveWebSearchToolOverrideState(false, undefined)).toBe(false);
+    expect(resolveWebSearchToolOverrideState(false, false)).toBe(false);
+    expect(resolveWebSearchToolOverrideState(false, true)).toBe(false);
   });
 
   it("reads only own dynamic-key entries", () => {
@@ -47,9 +57,32 @@ describe("session tool overrides", () => {
     const off = nextWebSearchToolOverrides({ skills: { docs: true } }, false);
     expect(off).toEqual({ skills: { docs: true }, webSearch: false });
     expect(nextWebSearchToolOverrides(off, true)).toEqual({ skills: { docs: true } });
-    expect(nextWebSearchToolOverrides({}, true, false)).toEqual({ webSearch: true });
-    expect(nextWebSearchToolOverrides({ webSearch: true }, false, false)).toEqual({});
   });
+
+  it.each([
+    { name: "absent", current: {}, expected: {} },
+    { name: "explicit false", current: { webSearch: false }, expected: { webSearch: false } },
+    { name: "stale true", current: { webSearch: true }, expected: {} },
+  ])(
+    "preserves $name intent and sibling overrides while global web search is off",
+    ({ current, expected }) => {
+      const siblings = {
+        skills: { docs: true },
+        mcpServers: { github: false },
+        mcpToolsDeny: { notion: ["delete_page"] },
+      };
+      const overrides = { ...siblings, ...current };
+      const original = structuredClone(overrides);
+      for (const nextEnabled of [false, true]) {
+        expect(nextWebSearchToolOverrides(current, nextEnabled, false)).toEqual(expected);
+        expect(nextWebSearchToolOverrides(overrides, nextEnabled, false)).toEqual({
+          ...siblings,
+          ...expected,
+        });
+        expect(overrides).toEqual(original);
+      }
+    },
+  );
 
   it("adds sorted MCP tool denials without mutating sibling overrides", () => {
     const current = {

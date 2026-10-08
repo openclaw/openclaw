@@ -1,6 +1,7 @@
 import {
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
+  projectAgentActivityItem,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -8,20 +9,23 @@ import {
   asFiniteNumber,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readCodexAppServerWarningMessage } from "./client-notifications.js";
 import {
   isNonSuccessItemStatus,
+  isProjectedNativeToolItem,
   itemKind,
   itemName,
   itemStatus,
   itemTitle,
   matchesCodexSnapshotTurn,
-  shouldSynthesizeToolProgressForItem,
+  unknownItemStatus,
 } from "./event-projector-items.js";
 import {
   itemMeta,
   isCommandBearingToolItem,
   itemToolArgs,
   itemToolResult,
+  projectCodexToolActivity,
   shouldSuppressChannelProgressForItem,
 } from "./event-projector-tool-items.js";
 import {
@@ -94,20 +98,13 @@ function normalizeApprovalReviewStatus(status: string | undefined): string | und
 const GUARDIAN_TIMEOUT_WARNING =
   "Automatic approval review timed out while evaluating the requested approval.";
 
-// These routine Codex diagnostics lack structured codes. Match complete templates so only
-// host-managed notices stay log-only and other actionable warnings still reach chat.
-const LOG_ONLY_CODEX_WARNING_PATTERNS = [
-  /^Configured service tier `[^`\r\n]+` is not advertised as supported for model `[^`\r\n]+` and will be omitted from requests\.$/,
-  /^Code Mode is enabled in configuration, but model `[^`\r\n]+` does not advertise Code Mode support\. This may degrade model performance\. Disable `features\.code_mode` and `features\.code_mode_only`, or select a model whose metadata enables Code Mode\.$/,
-];
-
 export function projectNormalizedToolItem(params: {
   phase: "start" | "result";
   item: CodexThreadItem | undefined;
   detailMode?: ToolProgressDetailMode;
 }): NormalizedToolItemProjection | undefined {
   const { item } = params;
-  if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+  if (!item || !isProjectedNativeToolItem(item)) {
     return undefined;
   }
   const name = itemName(item);
@@ -118,7 +115,9 @@ export function projectNormalizedToolItem(params: {
   const args = itemToolArgs(item);
   const commandBearing = isCommandBearingToolItem(item, args);
   const meta = itemMeta(item, params.detailMode);
-  const event = shouldEmitTranscriptToolProgress(name, args)
+  const emit = shouldEmitTranscriptToolProgress(name);
+  const result = emit && params.phase === "result" ? itemToolResult(item) : undefined;
+  const event = emit
     ? {
         stream: "tool",
         data: {
@@ -133,7 +132,7 @@ export function projectNormalizedToolItem(params: {
             ? {
                 status,
                 isError: isNonSuccessItemStatus(status),
-                ...itemToolResult(item),
+                ...(result ? { result } : {}),
               }
             : {}),
         },
@@ -144,6 +143,9 @@ export function projectNormalizedToolItem(params: {
 
 export class CodexEventProjection {
   private reviewCount = 0;
+  private cyberNoticeState: "buffering" | "blocked" | "fallback" | undefined;
+  private safetyBufferingEnded = false;
+  private responseModel: string | undefined;
   private pendingGuardianWarning: string | undefined;
   private activeGuardianReview:
     | {
@@ -156,6 +158,7 @@ export class CodexEventProjection {
     | undefined;
 
   constructor(
+    private readonly provider: string,
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly emitAgentEvent: (event: AgentEvent) => void,
@@ -280,12 +283,8 @@ export class CodexEventProjection {
   }
 
   handleWarning(params: JsonObject): void {
-    const summary = readString(params, "summary") ?? readString(params, "message");
-    const details = readString(params, "details");
-    const message = [summary, details].filter(Boolean).join("\n");
-    if (LOG_ONLY_CODEX_WARNING_PATTERNS.some((pattern) => pattern.test(message))) {
-      embeddedAgentLog.warn(message);
-    } else if (message) {
+    const message = readCodexAppServerWarningMessage(params);
+    if (message) {
       this.emitAgentEvent({ stream: "notice", data: { phase: "warning", message } });
     }
   }
@@ -294,12 +293,82 @@ export class CodexEventProjection {
     const fromModel = readString(params, "fromModel");
     const toModel = readString(params, "toModel");
     const reason = readString(params, "reason");
+    this.responseModel = toModel ?? this.responseModel;
     if (fromModel && toModel && fromModel !== toModel) {
+      this.emitAgentEvent({
+        stream: "lifecycle",
+        data: { phase: "model", provider: this.provider, model: toModel },
+      });
       this.emitAgentEvent({
         stream: "fallback",
         data: { fromModel, toModel, ...(reason ? { reason } : {}) },
       });
+      if (reason === "highRiskCyberActivity") {
+        this.emitCyberNotice("fallback", { model: fromModel, fallbackModel: toModel });
+      }
     }
+  }
+
+  handleSafetyBuffering(params: JsonObject): void {
+    if (params.showBufferingUi === false) {
+      this.clearSafetyBuffering();
+      return;
+    }
+    if (
+      this.safetyBufferingEnded ||
+      this.cyberNoticeState === "blocked" ||
+      this.cyberNoticeState === "fallback" ||
+      params.showBufferingUi !== true ||
+      !Array.isArray(params.useCases) ||
+      !params.useCases.includes("cyber")
+    ) {
+      return;
+    }
+    const model = readString(params, "model");
+    const fallbackModel = readString(params, "fasterModel");
+    this.emitCyberNotice("buffering", {
+      ...(model ? { model } : {}),
+      ...(fallbackModel ? { fallbackModel } : {}),
+    });
+  }
+
+  handleCyberPolicyError(codexErrorInfo: unknown, model: string): void {
+    if (codexErrorInfo !== "cyberPolicy" || this.cyberNoticeState === "blocked") {
+      return;
+    }
+    this.emitCyberNotice("blocked", { model: this.responseModel ?? model });
+  }
+
+  endSafetyBuffering(): void {
+    this.safetyBufferingEnded = true;
+    this.clearSafetyBuffering();
+  }
+
+  markSafetyBufferingAssistantStarted(): void {
+    if (this.cyberNoticeState === "buffering") {
+      this.endSafetyBuffering();
+    }
+  }
+
+  private clearSafetyBuffering(): void {
+    if (this.cyberNoticeState !== "buffering") {
+      return;
+    }
+    this.emitCyberNotice("cleared");
+  }
+
+  private emitCyberNotice(
+    state: "buffering" | "blocked" | "fallback" | "cleared",
+    models: { model?: string; fallbackModel?: string } = {},
+  ): void {
+    this.cyberNoticeState = state === "cleared" ? undefined : state;
+    if (this.provider !== "openai") {
+      return;
+    }
+    this.emitAgentEvent({
+      stream: "notice",
+      data: { phase: "provider_policy", category: "cyber", state, provider: "openai", ...models },
+    });
   }
 
   handleRetry(params: JsonObject): void {
@@ -407,7 +476,11 @@ export class CodexEventProjection {
             : "running"
           : params.phase === "start"
             ? "running"
-            : itemStatus(item);
+            : kind === "analysis"
+              ? "completed"
+              : unknownItemStatus(item)
+                ? undefined
+                : itemStatus(item);
     const meta = subagent
       ? [
           interaction ? "message sent" : activity ? subagentStatus : status,
@@ -419,20 +492,32 @@ export class CodexEventProjection {
     const suppressChannelProgress = shouldSuppressChannelProgressForItem(item);
     this.emitAgentEvent({
       stream: "item",
-      data: {
-        itemId:
-          activity && !interaction
-            ? `subagent:${readString(item, "agentThreadId") ?? item.id}`
-            : item.id,
-        phase: params.phase,
-        kind,
-        title: itemTitle(item),
-        status,
-        ...(name ? { name } : {}),
-        ...(meta ? { meta } : {}),
-        ...(commandBearing ? { commandBearing: true } : {}),
-        ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
-      },
+      data: projectAgentActivityItem(
+        {
+          itemId:
+            activity && !interaction
+              ? `subagent:${readString(item, "agentThreadId") ?? item.id}`
+              : item.id,
+          phase: params.phase,
+          kind,
+          title: itemTitle(item),
+          ...(status ? { status } : {}),
+          ...(status === undefined
+            ? { summary: "Outcome unknown", title: `${itemTitle(item)} — outcome unknown` }
+            : {}),
+          toolCallId: item.id,
+          ...(name ? { name } : {}),
+          ...(meta ? { meta } : {}),
+          ...(commandBearing ? { commandBearing: true } : {}),
+          ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
+        },
+        {
+          args,
+          ...(item.type === "collabAgentToolCall" && item.tool === "wait"
+            ? { nativeOperation: "wait" as const }
+            : {}),
+        },
+      ),
     });
   }
 
@@ -444,7 +529,7 @@ export class CodexEventProjection {
   }): Promise<void> {
     const { item, activeItemIds, completedItemIds, isActive } = params;
     if (
-      !shouldSynthesizeToolProgressForItem(item) ||
+      !isProjectedNativeToolItem(item) ||
       !matchesCodexSnapshotTurn(item, this.turnId) ||
       completedItemIds.has(item.id) ||
       itemStatus(item) === "running"
@@ -488,14 +573,16 @@ export class CodexEventProjection {
     if (params.phase === "result") {
       this.toolProgress.recordNativeToolError({ item, name, meta, status });
     }
-    if (!event) {
-      if (params.phase === "result") {
-        this.toolTranscript.emitAfterToolCallObservation(item);
-        await this.onNativeToolResultRecorded?.();
+    if (event) {
+      const activity = projectCodexToolActivity(item, params.phase, meta);
+      if (activity && params.phase === "start") {
+        this.emitAgentEvent({ stream: "item", data: activity });
       }
-      return;
+      this.emitAgentEvent(event);
+      if (activity && params.phase !== "start") {
+        this.emitAgentEvent({ stream: "item", data: activity });
+      }
     }
-    this.emitAgentEvent(event);
     if (params.phase === "result") {
       this.toolTranscript.emitAfterToolCallObservation(item);
       await this.onNativeToolResultRecorded?.();

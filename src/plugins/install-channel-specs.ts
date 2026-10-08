@@ -1,4 +1,3 @@
-// Parses channel-oriented plugin install specs from package inputs.
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import {
@@ -107,6 +106,7 @@ export function resolveDefaultNpmSpec(spec: string): ParsedRegistryNpmSpec | nul
 
 type ChannelInstallParams = {
   spec: string;
+  installSpecOverride?: string;
   updateChannel?: UpdateChannel;
   officialPackageName?: string;
   coreVersion?: string;
@@ -141,18 +141,18 @@ function resolveCoreBoundNpmSpec(params: ChannelInstallParams): string | undefin
 export async function resolveNpmInstallSpecsForUpdateChannel(
   params: ChannelInstallParams,
 ): Promise<ChannelInstallSpecs> {
-  const coreBoundSpec = resolveCoreBoundNpmSpec(params);
+  const selectedSpec = params.installSpecOverride ?? resolveCoreBoundNpmSpec(params);
   const target = parseRegistryNpmSpec(params.spec);
   const selector = target?.selector?.toLowerCase();
   if (
-    coreBoundSpec ||
+    selectedSpec ||
     params.updateChannel !== "beta" ||
     !target ||
     (target.selectorKind !== "none" &&
       !(target.selectorKind === "tag" && (selector === "latest" || selector === "beta")))
   ) {
     return {
-      installSpec: coreBoundSpec ?? params.spec,
+      installSpec: selectedSpec ?? params.spec,
       recordSpec: params.spec,
     };
   }

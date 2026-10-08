@@ -38,6 +38,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -67,7 +68,7 @@ internal fun rememberVoiceNoteRecorderController(
         scope = scope,
         outputDirectory = context.cacheDir,
         engine = AndroidVoiceNoteRecordingEngine(context),
-        requestPermission = viewModel::requestVoiceNotePermission,
+        requestPermission = viewModel::requestRecordAudioPermission,
         acquireMic = viewModel::tryAcquireVoiceNoteMic,
         releaseMic = viewModel::releaseVoiceNoteMic,
         onFinished = { recording ->
@@ -172,27 +173,11 @@ internal fun VoiceNoteRecordingControls(
         phase = TalkWaveformPhase.Listening(level = level, speechActive = false),
         modifier = Modifier.weight(1f).height(30.dp),
       )
-      Surface(
-        onClick = onCancel,
-        modifier = Modifier.size(ClawTheme.spacing.touchTarget),
-        shape = CircleShape,
-        color = ClawTheme.colors.canvas,
-        contentColor = ClawTheme.colors.text,
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Cancel voice note"), modifier = Modifier.size(17.dp))
-        }
+      ChatRoundButton(onCancel, contentColor = ClawTheme.colors.text, background = ClawTheme.colors.canvas) {
+        Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Cancel voice note"), modifier = Modifier.size(17.dp))
       }
-      Surface(
-        onClick = onDone,
-        modifier = Modifier.size(ClawTheme.spacing.touchTarget),
-        shape = CircleShape,
-        color = ClawTheme.colors.primary,
-        contentColor = ClawTheme.colors.primaryText,
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Check, contentDescription = nativeString("Finish voice note"), modifier = Modifier.size(17.dp))
-        }
+      ChatRoundButton(onDone, contentColor = ClawTheme.colors.primaryText, background = ClawTheme.colors.primary) {
+        Icon(imageVector = Icons.Default.Check, contentDescription = nativeString("Finish voice note"), modifier = Modifier.size(17.dp))
       }
     }
   }
@@ -205,3 +190,26 @@ internal fun VoiceNoteRecorderError(state: VoiceNoteRecorderState) {
 }
 
 internal fun ChatMessageContent.isAudioAttachment(): Boolean = type == "audio" || mimeType?.startsWith("audio/") == true
+
+@Composable
+internal fun ChatRoundButton(
+  onClick: () -> Unit,
+  contentColor: Color,
+  background: Color,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  content: @Composable () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    enabled = enabled,
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget).then(modifier),
+    shape = CircleShape,
+    color = Color.Transparent,
+    contentColor = contentColor,
+  ) {
+    Box(modifier = Modifier.padding(8.dp).background(background, CircleShape), contentAlignment = Alignment.Center) {
+      content()
+    }
+  }
+}

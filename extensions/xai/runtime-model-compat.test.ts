@@ -24,9 +24,9 @@ describe("xai runtime model compat", () => {
     });
   });
 
-  it("preserves Grok 4.6 xhigh reasoning", () => {
+  it.each(["grok-4.8", "grok-4.7", "grok-4.6"])("preserves %s xhigh reasoning", (id) => {
     const model = applyXaiRuntimeModelCompat({
-      id: "grok-4.6",
+      id,
       provider: "xai",
       reasoning: true,
     });
@@ -74,7 +74,7 @@ describe("xai runtime model compat", () => {
     });
 
     expect(model.thinkingLevelMap).toEqual({
-      off: null,
+      off: undefined,
       minimal: null,
       low: null,
       medium: null,
@@ -92,7 +92,7 @@ describe("xai runtime model compat", () => {
 
     expect(model.compat).toMatchObject({ supportsReasoningEffort: false });
     expect(model.thinkingLevelMap).toEqual({
-      off: null,
+      off: undefined,
       minimal: null,
       low: null,
       medium: null,

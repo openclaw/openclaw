@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements shared parity comparison helpers.
 import { createHash } from "node:crypto";
 
 type ParityToolCallShape = {
@@ -44,6 +43,45 @@ export function compareToolCallShape(
     }
     if (leftCall.tool !== rightCall.tool || leftCall.argsHash !== rightCall.argsHash) {
       return `tool call ${index + 1} differs (${leftCall.tool}/${leftCall.argsHash} vs ${rightCall.tool}/${rightCall.argsHash})`;
+    }
+  }
+  return undefined;
+}
+
+export function normalizeTextForParity(text: string) {
+  return text.replace(/\s+/gu, " ").trim();
+}
+
+type ParityToolResultShape = {
+  tool: string;
+  resultHash: string;
+  errorClass?: string;
+};
+
+export function compareToolResultShape(
+  left: readonly ParityToolResultShape[],
+  right: readonly ParityToolResultShape[],
+  allowedSharedErrorClass?: "tool-result-error",
+): string | undefined {
+  const total = Math.min(left.length, right.length);
+  for (let index = 0; index < total; index += 1) {
+    const leftCall = left[index];
+    const rightCall = right[index];
+    if (!leftCall || !rightCall) {
+      continue;
+    }
+    if (
+      allowedSharedErrorClass &&
+      leftCall.errorClass === allowedSharedErrorClass &&
+      rightCall.errorClass === allowedSharedErrorClass
+    ) {
+      continue;
+    }
+    if (
+      leftCall.resultHash !== rightCall.resultHash ||
+      (leftCall.errorClass ?? "") !== (rightCall.errorClass ?? "")
+    ) {
+      return `tool result ${index + 1} differs (${leftCall.tool})`;
     }
   }
   return undefined;

@@ -1,41 +1,48 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { publishSessionCostUsageUpdated } from "../../infra/session-cost-usage-events.js";
+import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
+import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import { linkEmail, setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   discoverAllSessions: vi.fn(),
-  loadCombinedSessionStoreForGatewayCore: vi.fn(),
+  loadCombinedSessionStoreForGatewayCoreAsync: vi.fn(),
   loadSessionCostSummariesFromCache: vi.fn(),
 }));
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    loadCombinedSessionStoreForGatewayCore: mocks.loadCombinedSessionStoreForGatewayCore,
-  };
-});
-
-vi.mock("../../infra/session-cost-usage.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
+vi.mock("../../config/sessions/combined-store-gateway-read.js", async () => ({
+  ...(await vi.importActual<typeof import("../../config/sessions/combined-store-gateway-read.js")>(
+    "../../config/sessions/combined-store-gateway-read.js",
+  )),
+  loadCombinedSessionStoreForGatewayCoreAsync: mocks.loadCombinedSessionStoreForGatewayCoreAsync,
+}));
+vi.mock("../../infra/session-cost-usage.js", async () => ({
+  ...(await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
     "../../infra/session-cost-usage.js",
-  );
-  return {
-    ...actual,
-    discoverAllSessions: mocks.discoverAllSessions,
-    loadSessionCostSummariesFromCache: mocks.loadSessionCostSummariesFromCache,
-  };
-});
+  )),
+  discoverAllSessions: mocks.discoverAllSessions,
+  loadSessionCostSummariesFromCache: mocks.loadSessionCostSummariesFromCache,
+}));
 
-import { testApi, usageHandlers } from "./usage.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { usageHandlers } from "./usage.js";
 
-const config = {
-  agents: { list: [{ id: "main", default: true }, { id: "opus" }] },
+let config: OpenClawConfig = {
   session: {},
-} as OpenClawConfig;
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
+    entries: { main: {}, opus: {} },
+  },
+};
 
 const baseParams = {
   startDate: "2026-02-01",
@@ -45,17 +52,18 @@ const baseParams = {
 
 function sessionSummary(totalTokens: number) {
   return {
+    ...createEmptyCostUsageTotals(),
     input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
     totalTokens,
     totalCost: totalTokens / 1000,
     inputCost: totalTokens / 1000,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
+  };
+}
+
+function freshSummaries(sessions: unknown[], tokens = 10) {
+  return {
+    summaries: sessions.map(() => sessionSummary(tokens)),
+    cacheStatus: { status: "fresh", cachedFiles: sessions.length, pendingFiles: 0, staleFiles: 0 },
   };
 }
 
@@ -66,10 +74,8 @@ async function runSessionsUsage(
   method: "sessions.usage" | "usage.cost" = "sessions.usage",
 ) {
   const respond = vi.fn();
-  await expectDefined(
-    usageHandlers[method],
-    `usageHandlers["${method}"] test invariant`,
-  )({
+  const handler = expectDefined(usageHandlers[method], "usage handler");
+  await handler({
     respond,
     params,
     client: client ?? null,
@@ -84,20 +90,38 @@ async function runSessionsUsage(
   return expectDefined(respond.mock.calls[0]?.[1], "sessions.usage result");
 }
 
-describe("sessions.usage result cache", () => {
-  let now = 1_000;
+type StoredFixture = { key: string; agentId: string; entry: SessionEntry };
 
+function mockStore(rows: StoredFixture[], stateDir: string) {
+  const store = Object.fromEntries(rows.map(({ key, entry }) => [key, entry]));
+  mocks.loadCombinedSessionStoreForGatewayCoreAsync.mockReturnValue({
+    durableTargets: [],
+    storePath: "(multiple)",
+    store,
+    targetsBySessionKey: new Map(
+      rows.map(({ key, agentId, entry }) => [
+        key,
+        {
+          agentId,
+          entry,
+          readSourceEntry: (sourceKey: string) => store[sourceKey],
+          resolveSourceKey: (sourceKey: string) => sourceKey,
+          storeTarget: {
+            agentId,
+            storePath: path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+          },
+        },
+      ]),
+    ),
+  });
+}
+
+describe("sessions.usage result cache and owner attribution", () => {
   beforeEach(() => {
-    now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
     vi.clearAllMocks();
-    testApi.sessionsUsageCache.clear();
-    mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
-      targetsBySessionKey: new Map(),
-      durableTargets: [],
-      storePath: "(multiple)",
-      store: {},
-    });
+    config = { ...config };
+    mockStore([], "/tmp");
     mocks.discoverAllSessions.mockImplementation(async (params: { agentId?: string }) => [
       {
         sessionId: `session-${params.agentId ?? "unknown"}`,
@@ -106,119 +130,12 @@ describe("sessions.usage result cache", () => {
       },
     ]);
     mocks.loadSessionCostSummariesFromCache.mockImplementation(
-      async (params: { sessions: unknown[] }) => ({
-        summaries: params.sessions.map(() => sessionSummary(10)),
-        cacheStatus: {
-          status: "fresh",
-          cachedFiles: params.sessions.length,
-          pendingFiles: 0,
-          staleFiles: 0,
-        },
-      }),
+      async ({ sessions }: { sessions: unknown[] }) => freshSummaries(sessions),
     );
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("returns a byte-identical cached response without repeating transcript aggregation", async () => {
-    const first = await runSessionsUsage(baseParams);
-    const repeated = await runSessionsUsage(baseParams);
-
-    expect(JSON.stringify(repeated)).toBe(JSON.stringify(first));
-    expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(1);
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps context availability in lightweight rows without caching away requested details", async () => {
-    const contextWeight = {
-      source: "run",
-      generatedAt: 1,
-      systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
-      injectedWorkspaceFiles: [],
-      skills: { promptChars: 0, entries: [] },
-      tools: { listChars: 0, schemaChars: 0, entries: [] },
-    };
-    mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
-      targetsBySessionKey: new Map([
-        [
-          "agent:main:main",
-          {
-            agentId: "main",
-            storeTarget: {
-              agentId: "main",
-              storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
-            },
-          },
-        ],
-      ]),
-      durableTargets: [],
-      storePath: "(multiple)",
-      store: {
-        "agent:main:main": {
-          sessionId: "session-main",
-          updatedAt: 100,
-          systemPromptReport: contextWeight,
-        },
-      },
-    });
-    const lean = await runSessionsUsage({ ...baseParams, agentScope: "all" });
-    expect(lean).toMatchObject({
-      sessions: [
-        { agentId: "main", hasContextWeight: true },
-        { agentId: "opus", hasContextWeight: false },
-      ],
-    });
-    expect(JSON.stringify(lean)).not.toContain('"contextWeight":');
-
-    const detailed = await runSessionsUsage({
-      ...baseParams,
-      agentScope: "all",
-      includeContextWeight: true,
-    });
-    expect(detailed).toMatchObject({
-      sessions: [{ contextWeight }, { contextWeight: null }],
-    });
-    expect(await runSessionsUsage({ ...baseParams, agentScope: "all" })).toEqual(lean);
-  });
-
-  it("does not share entries across result-shaping query parameters", async () => {
-    const variants: Array<Record<string, unknown>> = [
-      baseParams,
-      { ...baseParams, agentId: "opus" },
-      { ...baseParams, agentScope: "all" },
-      { ...baseParams, startDate: "2026-02-02", endDate: "2026-02-03" },
-      { ...baseParams, mode: "specific", utcOffset: "UTC+2" },
-      { ...baseParams, limit: 1 },
-      { ...baseParams, groupBy: "family" },
-      { ...baseParams, includeContextWeight: true },
-    ];
-
-    for (const params of variants) {
-      await runSessionsUsage(params);
-    }
-
-    expect(testApi.sessionsUsageCache.size).toBe(variants.length);
-    // The all-agent variant discovers both configured agents and aggregates
-    // each agent cache once; every other variant has one effective agent.
-    expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(variants.length + 1);
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(variants.length + 1);
-
-    const storeLoads = mocks.loadCombinedSessionStoreForGatewayCore.mock.calls.length;
-    await runSessionsUsage({ ...baseParams, key: "agent:main:missing" });
-    expect(testApi.sessionsUsageCache.size).toBe(variants.length + 1);
-    expect(mocks.loadCombinedSessionStoreForGatewayCore).toHaveBeenCalledTimes(storeLoads + 1);
-  });
-
-  it("does not share entries across runtime config snapshots", async () => {
-    const reloadedConfig = { ...config };
-
-    await runSessionsUsage(baseParams, config);
-    await runSessionsUsage(baseParams, reloadedConfig);
-
-    expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(2);
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
   });
 
   it("partitions usage by role identity and excludes foreign sessions before aggregation", async () => {
@@ -240,114 +157,59 @@ describe("sessions.usage result cache", () => {
           },
         },
       };
-      mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
-        targetsBySessionKey: new Map([
-          [
-            "agent:main:first",
-            {
-              agentId: "main",
-              storeTarget: {
-                agentId: "main",
-                storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
-              },
-            },
-          ],
-          [
-            "agent:main:second",
-            {
-              agentId: "main",
-              storeTarget: {
-                agentId: "main",
-                storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
-              },
-            },
-          ],
-        ]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
-          "agent:main:first": {
-            sessionId: "session-first",
-            updatedAt: 200,
-            createdActor: { type: "human", source: "profile", id: firstProfile.id },
+      mockStore(
+        [firstProfile, secondProfile].map((profile, index) => ({
+          key: `agent:main:${index === 0 ? "first" : "second"}`,
+          agentId: "main",
+          entry: {
+            sessionId: `session-${index === 0 ? "first" : "second"}`,
+            updatedAt: index === 0 ? 200 : 100,
+            createdActor: { type: "human", source: "profile", id: profile.id },
             visibility: "shared",
           },
-          "agent:main:second": {
-            sessionId: "session-second",
-            updatedAt: 100,
-            createdActor: { type: "human", source: "profile", id: secondProfile.id },
-            visibility: "shared",
-          },
-        },
-      });
+        })),
+        "/tmp",
+      );
       mocks.discoverAllSessions.mockResolvedValue([
         { sessionId: "session-first", sessionFile: "/tmp/first.jsonl", mtime: 200 },
         { sessionId: "session-second", sessionFile: "/tmp/second.jsonl", mtime: 100 },
       ]);
-      const identifiedClient = (profileId: string): GatewayClient => ({
+      const clientFor = (profileId?: string): GatewayClient => ({
         connect: {
           minProtocol: 1,
           maxProtocol: 1,
+          role: "operator",
           client: {
-            id: "openclaw-control-ui",
+            id: profileId ? "openclaw-control-ui" : "gateway-client",
             version: "test",
             platform: "test",
-            mode: "webchat",
+            mode: profileId ? "webchat" : "backend",
           },
-          role: "operator",
-          scopes: ["operator.read", "operator.write"],
+          scopes: profileId ? ["operator.read", "operator.write"] : ["operator.read"],
         },
-        authenticatedUserProfile: {
-          profileId,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        authenticatedUserProfile: profileId
+          ? { profileId, displayName: null, hasAvatar: false, updatedAt: 1 }
+          : undefined,
+        // Host-internal dispatch carries system authority; clientless operators are denied.
+        internal: profileId ? undefined : { operatorRoleActor: { kind: "system" } },
       });
-
-      // Host-internal dispatch mints system authority; a clientless call with roles
-      // active is an unidentified operator and correctly resolves to the denied role.
-      const systemClient: GatewayClient = {
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: {
-            id: "gateway-client",
-            version: "test",
-            platform: "test",
-            mode: "backend",
-          },
-          role: "operator",
-          scopes: ["operator.read"],
-        },
-        internal: { operatorRoleActor: { kind: "system" } },
-      };
-      const unrestricted = (await runSessionsUsage(baseParams, roleConfig, systemClient)) as {
-        sessions: Array<{ key: string }>;
-        totals: { totalTokens: number };
-      };
-      const first = (await runSessionsUsage(
-        baseParams,
-        roleConfig,
-        identifiedClient(firstProfile.id),
-      )) as typeof unrestricted;
-      const second = (await runSessionsUsage(
-        baseParams,
-        roleConfig,
-        identifiedClient(secondProfile.id),
-      )) as typeof unrestricted;
-
-      expect(unrestricted.totals.totalTokens).toBe(20);
-      expect(first.sessions.map((session) => session.key)).toEqual(["agent:main:first"]);
-      expect(second.sessions.map((session) => session.key)).toEqual(["agent:main:second"]);
-      expect(first.totals.totalTokens).toBe(10);
-      expect(second.totals.totalTokens).toBe(10);
-      expect(testApi.sessionsUsageCache.size).toBe(3);
+      for (const [profileId, expectedKeys, tokens] of [
+        [undefined, ["agent:main:first", "agent:main:second"], 20],
+        [firstProfile.id, ["agent:main:first"], 10],
+        [secondProfile.id, ["agent:main:second"], 10],
+      ] as const) {
+        const client = clientFor(profileId);
+        const result: SessionsUsageResult = await runSessionsUsage(baseParams, roleConfig, client);
+        expect(await runSessionsUsage(baseParams, roleConfig, client)).toEqual(result);
+        expect(result.sessions.map(({ key }) => key)).toEqual(expectedKeys);
+        expect(result.totals.totalTokens).toBe(tokens);
+      }
+      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(3);
 
       const deniedCost = await runSessionsUsage(
         baseParams,
         roleConfig,
-        identifiedClient(firstProfile.id),
+        clientFor(firstProfile.id),
         "usage.cost",
       );
       expect(deniedCost).toMatchObject({
@@ -357,167 +219,332 @@ describe("sessions.usage result cache", () => {
     });
   });
 
-  it("coalesces concurrent cold misses into one transcript aggregation", async () => {
-    let release!: () => void;
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let started!: () => void;
-    const aggregationStarted = new Promise<void>((resolve) => {
-      started = resolve;
-    });
+  it("coalesces concurrent cold misses into one aggregation", async () => {
+    const held = createDeferred();
+    const started = createDeferred();
     mocks.loadSessionCostSummariesFromCache.mockImplementationOnce(
-      async (params: { sessions: unknown[] }) => {
-        started();
-        await blocked;
-        return {
-          summaries: params.sessions.map(() => sessionSummary(10)),
-          cacheStatus: {
-            status: "fresh",
-            cachedFiles: params.sessions.length,
-            pendingFiles: 0,
-            staleFiles: 0,
-          },
-        };
+      async ({ sessions }: { sessions: unknown[] }) => {
+        started.resolve();
+        await held.promise;
+        return freshSummaries(sessions);
       },
     );
-
     const first = runSessionsUsage(baseParams);
     const second = runSessionsUsage(baseParams);
-    await aggregationStarted;
-
-    expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(1);
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
-    release();
-
-    const [firstResult, secondResult] = await Promise.all([first, second]);
-    expect(JSON.stringify(secondResult)).toBe(JSON.stringify(firstResult));
+    try {
+      await started.promise;
+      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
+      held.resolve();
+      expect(await second).toEqual(await first);
+    } finally {
+      held.resolve();
+      await Promise.allSettled([first, second]);
+    }
   });
 
-  it("does not give a partial lower-cache snapshot the 30s freshness TTL", async () => {
-    mocks.loadSessionCostSummariesFromCache
-      .mockResolvedValueOnce({
-        summaries: [null],
-        cacheStatus: {
-          status: "refreshing",
-          cachedFiles: 0,
-          pendingFiles: 1,
-          staleFiles: 1,
-        },
-      })
-      .mockResolvedValueOnce({
-        summaries: [sessionSummary(20)],
-        cacheStatus: {
-          status: "fresh",
-          cachedFiles: 1,
-          pendingFiles: 0,
-          staleFiles: 0,
-        },
-      });
-
-    const partial = (await runSessionsUsage(baseParams)) as {
-      totals: { totalTokens: number };
-    };
-    const refreshed = (await runSessionsUsage(baseParams)) as {
-      totals: { totalTokens: number };
-    };
-
-    expect(partial.totals.totalTokens).toBe(0);
-    expect(refreshed.totals.totalTokens).toBe(20);
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
-  });
-
-  it("preserves a complete stale result when a refresh is partial", async () => {
-    const first = (await runSessionsUsage(baseParams)) as {
-      totals: { totalTokens: number };
-    };
-    expect(first.totals.totalTokens).toBe(10);
-
-    mocks.loadSessionCostSummariesFromCache.mockResolvedValueOnce({
-      summaries: [null],
-      cacheStatus: {
-        status: "refreshing",
-        cachedFiles: 0,
-        pendingFiles: 1,
-        staleFiles: 1,
-      },
-    });
-    now = 31_000;
-    await runSessionsUsage(baseParams);
-    await vi.waitFor(() => {
-      expect(
-        Array.from(testApi.sessionsUsageCache.values()).every((entry) => !entry.inFlight),
-      ).toBe(true);
-    });
-
-    let release!: () => void;
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let started!: () => void;
-    const aggregationStarted = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    mocks.loadSessionCostSummariesFromCache.mockImplementationOnce(
-      async (params: { sessions: unknown[] }) => {
-        started();
-        await blocked;
-        return {
-          summaries: params.sessions.map(() => sessionSummary(20)),
+  it.each(["cold", "stale"])(
+    "does not give a %s lower-cache snapshot the 30s freshness TTL",
+    async (kind) => {
+      mocks.loadSessionCostSummariesFromCache
+        .mockResolvedValueOnce({
+          summaries: [
+            kind === "cold"
+              ? null
+              : { ...sessionSummary(10), computedAt: 100, staleSince: 200, refreshing: true },
+          ],
           cacheStatus: {
-            status: "fresh",
-            cachedFiles: params.sessions.length,
-            pendingFiles: 0,
-            staleFiles: 0,
+            status: "refreshing",
+            cachedFiles: kind === "cold" ? 0 : 1,
+            pendingFiles: 1,
+            staleFiles: 1,
           },
-        };
-      },
-    );
+        })
+        .mockResolvedValueOnce(freshSummaries([{}], 20));
 
-    let returned = false;
-    const next = runSessionsUsage(baseParams).then((result) => {
-      returned = true;
-      return result as { totals: { totalTokens: number } };
-    });
-    await aggregationStarted;
-    await Promise.resolve();
-    expect(returned).toBe(true);
-    expect((await next).totals.totalTokens).toBe(10);
-    release();
-    await vi.waitFor(() => {
+      const partial: SessionsUsageResult = await runSessionsUsage(baseParams);
+      const refreshed: SessionsUsageResult = await runSessionsUsage(baseParams);
+
+      expect(partial.totals.totalTokens).toBe(kind === "cold" ? 0 : 10);
+      if (kind === "cold") {
+        expect(partial.sessions[0]).toMatchObject({ usage: null, computing: true });
+      } else {
+        expect(partial.sessions[0]?.usage).toMatchObject({
+          computedAt: 100,
+          staleSince: 200,
+          refreshing: true,
+        });
+      }
+      expect(refreshed.totals.totalTokens).toBe(20);
+      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("invalidates a fresh response immediately when a rollup commits", async () => {
+    await runSessionsUsage(baseParams);
+    mocks.loadSessionCostSummariesFromCache.mockResolvedValueOnce(freshSummaries([{}], 20));
+    publishSessionCostUsageUpdated("main");
+    const result = await runSessionsUsage(baseParams);
+    expect(result.totals.totalTokens).toBe(20);
+    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
+  });
+});
+
+function fixture(rows: Record<string, SessionEntry>, tokens: Record<string, number>) {
+  const creatorConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
+  mocks.loadCombinedSessionStoreForGatewayCoreAsync.mockReturnValue({
+    store: rows,
+    targetsBySessionKey: new Map(
+      Object.keys(rows).map((key) => [
+        key,
+        { agentId: "main", storeTarget: { agentId: "main", storePath: "/tmp/usage.sqlite" } },
+      ]),
+    ),
+    durableTargets: [],
+    storePath: "(multiple)",
+  });
+  mocks.discoverAllSessions.mockResolvedValue(
+    Object.keys(tokens).map((sessionId, index) => ({
+      sessionId,
+      sessionFile: `/tmp/${sessionId}.jsonl`,
+      mtime: index + 1,
+    })),
+  );
+  mocks.loadSessionCostSummariesFromCache.mockImplementation(
+    async ({ sessions }: { sessions: Array<{ sessionId: string }> }) => ({
+      summaries: sessions.map(({ sessionId }) => {
+        const totalTokens = tokens[sessionId] ?? 0;
+        const totals = {
+          ...createEmptyCostUsageTotals(),
+          input: totalTokens,
+          totalTokens,
+          totalCost: totalTokens / 100,
+          inputCost: totalTokens / 100,
+        };
+        return {
+          ...totals,
+          firstActivity: Date.UTC(2026, 7, 1),
+          dailyBreakdown: [
+            { date: "2026-08-01", ...totals, tokens: totalTokens, cost: totals.totalCost },
+          ],
+        };
+      }),
+      cacheStatus: {
+        status: "fresh",
+        cachedFiles: sessions.length,
+        pendingFiles: 0,
+        staleFiles: 0,
+      },
+    }),
+  );
+  return async (
+    params: Record<string, unknown> = {},
+    client: GatewayClient | null = null,
+    runtimeConfig = creatorConfig,
+  ) => {
+    const respond = vi.fn();
+    await expectDefined(
+      usageHandlers["sessions.usage"],
+      "usage handler",
+    )({
+      params: { range: "all", agentId: "main", limit: 1, ...params },
+      respond,
+      client,
+      context: { getRuntimeConfig: () => runtimeConfig },
+    } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+    expect(respond).toHaveBeenCalledOnce();
+    const response = expectDefined(respond.mock.calls[0], "usage response");
+    expect(response[0], JSON.stringify(response[2])).toBe(true);
+    return response[1] as SessionsUsageResult;
+  };
+}
+
+const actor = (id: string): SessionEntry["createdActor"] => ({
+  type: "human",
+  source: "profile",
+  id,
+});
+
+describe("usage creator attribution", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("filters before the row cap, attributes retained instances, and keeps daily categories in scope", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const ada = ensureProfileForEmail("ada@example.test");
+      const bob = ensureProfileForEmail("bob@example.test");
+      setDisplayName(ada.id, "Ada");
+      const query = fixture(
+        {
+          "agent:main:ada": {
+            sessionId: "ada",
+            updatedAt: 30,
+            createdActor: actor(ada.id),
+            usageFamilySessionIds: ["ada-old"],
+          },
+          "agent:main:bob": { sessionId: "bob", updatedAt: 40, createdActor: actor(bob.id) },
+        },
+        { "ada-old": 20, ada: 10, bob: 30, orphan: 40 },
+      );
+      const all = await query();
+      expect(all.sessions).toHaveLength(1);
+      expect(all.sessions[0]?.sessionId).toBe("bob");
+      expect(all.totals.totalTokens).toBe(100);
+      const adaGroup = expectDefined(
+        all.aggregates.byCreator?.find((creator) => creator.actor?.label === "Ada"),
+        "Ada creator",
+      );
+      expect(adaGroup).toMatchObject({
+        sessionCount: 2,
+        totals: { totalTokens: 30 },
+        daily: [{ date: "2026-08-01", input: 30, totalTokens: 30 }],
+        sessionActivity: [{ dates: ["2026-08-01"], sessionCount: 2 }],
+      });
+      expect(all.aggregates.costDaily).toMatchObject([
+        { date: "2026-08-01", input: 100, totalTokens: 100, inputCost: 1, totalCost: 1 },
+      ]);
+      const selected = await query({ creatorKey: adaGroup.key });
+      expect(selected.totals.totalTokens).toBe(30);
+      expect(selected.sessions).toMatchObject([
+        { sessionId: "ada", creatorKey: adaGroup.key, createdActor: { label: "Ada" } },
+      ]);
+      expect(selected.creatorOptions).toEqual(all.creatorOptions);
+      expect(selected.aggregates.costDaily).toMatchObject([
+        { input: 30, totalTokens: 30, totalCost: expect.closeTo(0.3) },
+      ]);
       expect(
-        Array.from(testApi.sessionsUsageCache.values()).every((entry) => !entry.inFlight),
-      ).toBe(true);
+        mocks.loadSessionCostSummariesFromCache.mock.lastCall?.[0].sessions.map(
+          (session: { sessionId: string }) => session.sessionId,
+        ),
+      ).toEqual(["ada", "ada-old"]);
+      const bobGroup = expectDefined(
+        all.aggregates.byCreator?.find((creator) => creator.actor?.id === bob.id),
+        "Bob creator",
+      );
+      expect((await query({ creatorKey: bobGroup.key })).totals.totalTokens).toBe(30);
+      expect((await query()).totals.totalTokens).toBe(100);
+      expect(await query({ creatorKey: adaGroup.key })).toEqual(selected);
+      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(3);
     });
   });
 
-  it("serves stale data while one 30s refresh replaces it", async () => {
-    const first = await runSessionsUsage(baseParams);
-    mocks.loadSessionCostSummariesFromCache.mockImplementationOnce(
-      async (params: { sessions: unknown[] }) => ({
-        summaries: params.sessions.map(() => sessionSummary(20)),
-        cacheStatus: {
-          status: "fresh",
-          cachedFiles: params.sessions.length,
-          pendingFiles: 0,
-          staleFiles: 0,
+  it("canonicalizes profile merges without conflating channel senders or mutable owners", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const ada = ensureProfileForEmail("ada@example.test");
+      const former = ensureProfileForEmail("former@example.test");
+      const query = fixture(
+        {
+          "agent:main:ada": {
+            sessionId: "ada",
+            updatedAt: 6,
+            createdActor: actor(ada.id),
+            owner: { actor: { type: "human", id: former.id } },
+          },
+          "agent:main:former": {
+            sessionId: "former",
+            updatedAt: 5,
+            createdActor: actor(former.id),
+          },
+          "agent:main:discord": {
+            sessionId: "discord",
+            updatedAt: 4,
+            createdActor: { type: "human", source: "channel", id: ada.id },
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "discord", to: "fixture", accountId: "one" },
+            }),
+          },
+          "agent:main:telegram": {
+            sessionId: "telegram",
+            updatedAt: 3,
+            createdActor: { type: "human", source: "channel", id: ada.id },
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "telegram", to: "fixture", accountId: "one" },
+            }),
+          },
+          "agent:main:unqualified": {
+            sessionId: "unqualified",
+            updatedAt: 2,
+            createdActor: { type: "human", source: "channel", id: ada.id },
+          },
+          "agent:main:system": {
+            sessionId: "system",
+            updatedAt: 2,
+            createdActor: { type: "system" },
+          },
         },
-      }),
-    );
-
-    now = 31_000;
-    const stale = await runSessionsUsage(baseParams);
-    expect(JSON.stringify(stale)).toBe(JSON.stringify(first));
-    await vi.waitFor(() => {
-      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
+        { ada: 10, former: 20, discord: 30, telegram: 40, system: 50, orphan: 60, unqualified: 5 },
+      );
+      const before = await query({ limit: 20 });
+      expect(before.aggregates.byCreator).toHaveLength(6);
+      linkEmail("former@example.test", ada.id);
+      setDisplayName(ada.id, "Ada merged");
+      const after = await query({ limit: 20 });
+      expect(after.aggregates.byCreator).toHaveLength(5);
+      const merged = expectDefined(
+        after.aggregates.byCreator?.find((creator) => creator.actor?.label === "Ada merged"),
+        "merged creator",
+      );
+      expect(merged).toMatchObject({ sessionCount: 2, totals: { totalTokens: 30 } });
+      expect(after.aggregates.byCreator?.find((creator) => !creator.actor)).toMatchObject({
+        totals: { totalTokens: 65 },
+      });
+      const selected = await query({ limit: 20, creatorKey: merged.key });
+      expect(selected.sessions.map(({ sessionId }) => sessionId)).toEqual(["ada", "former"]);
+      expect(selected.totals.totalTokens).toBe(30);
+      expect(new Set(after.creatorOptions?.map(({ key }) => key)).size).toBe(5);
     });
+  });
 
-    await vi.waitFor(async () => {
-      const refreshed = (await runSessionsUsage(baseParams)) as {
-        totals: { totalTokens: number };
+  it("never exposes hidden creators or counts their spend through the selector", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const ada = ensureProfileForEmail("ada@example.test");
+      const bob = ensureProfileForEmail("bob@example.test");
+      const query = fixture(
+        {
+          "agent:main:ada": {
+            sessionId: "ada",
+            updatedAt: 1,
+            createdActor: actor(ada.id),
+            visibility: "shared",
+          },
+          "agent:main:bob": {
+            sessionId: "bob",
+            updatedAt: 2,
+            createdActor: actor(bob.id),
+            visibility: "shared",
+          },
+        },
+        { ada: 10, bob: 20 },
+      );
+      const all = await query();
+      const hidden = expectDefined(
+        all.creatorOptions?.find((creator) => creator.actor?.id === bob.id),
+        "Bob creator",
+      );
+      const client = {
+        connect: { scopes: ["operator.read", "operator.write"] },
+        authenticatedUserProfile: { profileId: ada.id },
+      } as GatewayClient;
+      const restrictedConfig: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.read", "operator.write"],
+              },
+            },
+          },
+        },
       };
-      expect(refreshed.totals.totalTokens).toBe(20);
+      const restricted = await query({}, client, restrictedConfig);
+      expect(restricted.creatorOptions).toMatchObject([{ actor: { id: ada.id } }]);
+      expect(restricted.totals.totalTokens).toBe(10);
+      const blocked = await query({ creatorKey: hidden.key }, client, restrictedConfig);
+      expect(blocked.sessions).toEqual([]);
+      expect(blocked.totals.totalTokens).toBe(0);
+      expect(blocked.creatorOptions).toEqual(restricted.creatorOptions);
     });
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
   });
 });

@@ -9,8 +9,8 @@ export function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfi
   return isolateMemoryManagerTestConfig(config as OpenClawConfig);
 }
 
-export function createDefaultMemoryToolConfig(): OpenClawConfig {
-  return asOpenClawConfig({ agents: { list: [{ id: "main", default: true }] } });
+function createDefaultMemoryToolConfig(): OpenClawConfig {
+  return asOpenClawConfig({ agents: { entries: { main: {} } } });
 }
 
 export function createMemorySearchToolOrThrow(params?: {
@@ -45,28 +45,20 @@ export function createMemoryGetToolOrThrow(
   return tool;
 }
 
-export function createAutoCitationsMemorySearchTool(agentSessionKey: string) {
-  return createMemorySearchToolOrThrow({
-    config: asOpenClawConfig({
-      memory: { citations: "auto" },
-      agents: { list: [{ id: "main", default: true }] },
-    }),
-    agentSessionKey,
-  });
-}
-
 export function expectUnavailableMemorySearchDetails(
   details: unknown,
   params: {
     error: string;
     warning: string;
     action: string;
+    timeoutMs?: number;
   },
 ) {
   expect(details).toEqual({
     results: [],
     disabled: true,
     unavailable: true,
+    ...(params.timeoutMs === undefined ? {} : { timedOut: true, timeoutMs: params.timeoutMs }),
     error: params.error,
     warning: params.warning,
     action: params.action,

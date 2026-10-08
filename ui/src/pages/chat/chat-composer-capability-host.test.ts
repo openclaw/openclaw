@@ -1,9 +1,14 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SkillsLibraryListResult } from "../../../../packages/gateway-protocol/src/index.ts";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import {
   gatewayHelloForMethods,
   sessionMutationGatewayHello,
@@ -38,193 +43,210 @@ function createState(): ChatPageHost {
   } as ChatPageHost;
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
+function createAddServerHarness(
+  options: {
+    globalError?: string;
+    throwGlobal?: boolean;
+    sessionError?: string;
+    refreshError?: string;
+    navigateAfterSave?: boolean;
+  } = {},
+) {
+  const context = createContext({ runtimeConfig: {} });
+  const state = createState();
+  const session: GatewaySessionRow = {
+    key: "main",
+    kind: "direct",
+    toolOverrides: { skills: { release: false } },
+  };
+  const events: string[] = [];
+  const globalWrites: unknown[] = [];
+  context.runtimeConfig.patchFromSnapshot = vi.fn(
+    async (build: Parameters<ApplicationContext["runtimeConfig"]["patchFromSnapshot"]>[0]) => {
+      events.push("global");
+      if (options.throwGlobal) {
+        throw new Error("config failed");
+      }
+      if (options.globalError) {
+        context.runtimeConfig.state.lastError = options.globalError;
+        return false;
+      }
+      const result = build({});
+      if ("error" in result) {
+        throw new Error(result.error);
+      }
+      globalWrites.push(result.options.raw);
+      if (options.navigateAfterSave) {
+        state.sessionKey = "other";
+      }
+      return true;
+    },
+  );
+  context.runtimeConfig.refresh = vi.fn(async () => undefined);
+  const refresh = vi.fn(async () => {
+    events.push("load");
+    if (options.refreshError) {
+      throw new Error(options.refreshError);
+    }
   });
-  return { promise, resolve };
+  const patch = vi.fn(async () => {
+    events.push("session");
+    if (options.sessionError) {
+      throw new Error(options.sessionError);
+    }
+    return { ok: true as const, key: session.key, path: "", entry: { sessionId: "test-session" } };
+  });
+  state.client = context.gateway.snapshot.client;
+  const { gateway } = createGatewayHarness(state.client!);
+  const sessions = createTestSessionCapability(gateway);
+  Object.assign(sessions.state, {
+    agentId: "main",
+    result: {
+      ts: 1,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [session],
+    },
+  });
+  sessions.refresh = refresh;
+  sessions.patch = patch;
+  state.sessions = sessions;
+  const container = document.createElement("div");
+  const settled = deferred();
+  let submitted = false;
+  const host = new ChatComposerCapabilityHost(() => {
+    render(host.renderAddServerDialog(context, state, session), container);
+    if (
+      submitted &&
+      !container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled
+    ) {
+      settled.resolve();
+    }
+  });
+  host.props(context, state, session, "main").onAddServer?.();
+  return {
+    container,
+    events,
+    globalWrites,
+    refresh,
+    patch,
+    async submit(
+      scope: "session" | "everywhere" = "session",
+      server: { transport: "stdio" | "streamable-http"; target: string } = {
+        transport: "stdio",
+        target: "docs-mcp",
+      },
+    ) {
+      const group = container.querySelector<HTMLElement & { value: string }>("wa-radio-group")!;
+      group.value = scope;
+      group.dispatchEvent(new Event("change", { bubbles: true }));
+      container.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "docs";
+      container.querySelector<HTMLSelectElement>('[name="mcp-transport"]')!.value =
+        server.transport;
+      container.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = server.target;
+      submitted = true;
+      container
+        .querySelector("form")!
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await settled.promise;
+    },
+  };
 }
 
 describe("ChatComposerCapabilityHost", () => {
   it("adds an everywhere server globally without a session patch", async () => {
-    const events: string[] = [];
-    const patchSession = vi.fn(async () => {
-      events.push("session");
-      return { ok: true } as const;
-    });
-    const loadSessionOverrides = vi.fn(async () => {
-      events.push("load");
-      return { ok: true, overrides: undefined } as const;
+    const harness = createAddServerHarness();
+    await harness.submit("everywhere", {
+      transport: "streamable-http",
+      target: "https://mcp.example.test",
     });
 
-    const result = await ChatComposerCapabilityHost.addMcpServer({
-      scope: "everywhere",
-      name: "docs",
-      config: { url: "https://mcp.example.test", transport: "streamable-http" },
-      patchGlobal: async (config) => {
-        events.push("global");
-        expect(config).toEqual({
-          url: "https://mcp.example.test",
-          transport: "streamable-http",
-        });
-        return { ok: true };
+    expect(harness.globalWrites).toEqual([
+      {
+        mcp: {
+          servers: { docs: { url: "https://mcp.example.test", transport: "streamable-http" } },
+        },
       },
-      loadSessionOverrides,
-      patchSession,
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(events).toEqual(["global"]);
-    expect(loadSessionOverrides).not.toHaveBeenCalled();
-    expect(patchSession).not.toHaveBeenCalled();
+    ]);
+    expect(harness.events).toEqual(["global"]);
+    expect(harness.refresh).not.toHaveBeenCalled();
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(harness.container.querySelector("form")).toBeNull();
   });
 
   it("adds a session server disabled globally before enabling its sparse override", async () => {
-    const events: string[] = [];
+    const harness = createAddServerHarness();
+    await harness.submit();
 
-    const result = await ChatComposerCapabilityHost.addMcpServer({
-      scope: "session",
-      name: "docs",
-      config: { command: "docs-mcp" },
-      patchGlobal: async (config) => {
-        events.push("global");
-        expect(config).toEqual({ command: "docs-mcp", enabled: false });
-        return { ok: true };
+    expect(harness.globalWrites).toEqual([
+      { mcp: { servers: { docs: { command: "docs-mcp", enabled: false } } } },
+    ]);
+    expect(harness.patch).toHaveBeenCalledWith(
+      "main",
+      {
+        toolOverrides: { mcpServers: { docs: true }, skills: { release: false } },
       },
-      loadSessionOverrides: async () => {
-        events.push("load");
-        return { ok: true, overrides: { skills: { release: false } } };
-      },
-      patchSession: async (next) => {
-        events.push("session");
-        expect(next).toEqual({
-          mcpServers: { docs: true },
-          skills: { release: false },
-        });
-        return { ok: true };
-      },
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(events).toEqual(["global", "load", "session"]);
+      expect.any(Object),
+    );
+    expect(harness.events).toEqual(["global", "load", "session"]);
+    expect(harness.container.querySelector("form")).toBeNull();
   });
 
   it("does not patch the session when the global add fails", async () => {
-    const patchSession = vi.fn(async () => ({ ok: true }) as const);
-    const loadSessionOverrides = vi.fn(async () => ({ ok: true, overrides: undefined }) as const);
+    const harness = createAddServerHarness({ globalError: "duplicate" });
+    await harness.submit();
 
-    const result = await ChatComposerCapabilityHost.addMcpServer({
-      scope: "session",
-      name: "docs",
-      config: { command: "docs-mcp" },
-      patchGlobal: async () => ({ ok: false, error: "duplicate" }),
-      loadSessionOverrides,
-      patchSession,
-    });
-
-    expect(result).toEqual({ ok: false, error: "duplicate", stage: "config" });
-    expect(patchSession).not.toHaveBeenCalled();
-    expect(loadSessionOverrides).not.toHaveBeenCalled();
+    expect(harness.container.querySelector('[role="alert"]')?.textContent?.trim()).toBe(
+      "duplicate",
+    );
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(harness.refresh).not.toHaveBeenCalled();
   });
 
   it("classifies a thrown global write as a config-stage failure", async () => {
-    const result = await ChatComposerCapabilityHost.addMcpServer({
-      scope: "everywhere",
-      name: "docs",
-      config: { command: "docs-mcp" },
-      patchGlobal: async () => {
-        throw new Error("config failed");
-      },
-      loadSessionOverrides: async () => ({ ok: true, overrides: undefined }),
-      patchSession: async () => ({ ok: true }),
-    });
+    const harness = createAddServerHarness({ throwGlobal: true });
+    await harness.submit("everywhere");
 
-    expect(result).toEqual({ ok: false, error: "config failed", stage: "config" });
+    expect(harness.container.querySelector('[role="alert"]')?.textContent?.trim()).toBe(
+      "config failed",
+    );
+    expect(harness.events).toEqual(["global"]);
   });
 
   it("reports a session-stage failure after retaining the global add", async () => {
-    const events: string[] = [];
+    const harness = createAddServerHarness({ sessionError: "gateway disconnected" });
+    await harness.submit();
 
-    const result = await ChatComposerCapabilityHost.addMcpServer({
-      scope: "session",
-      name: "docs",
-      config: { command: "docs-mcp" },
-      patchGlobal: async () => {
-        events.push("global");
-        return { ok: true };
-      },
-      loadSessionOverrides: async () => {
-        events.push("load");
-        return { ok: true, overrides: undefined };
-      },
-      patchSession: async () => {
-        events.push("session");
-        return { ok: false, error: "gateway disconnected" };
-      },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: "gateway disconnected",
-      stage: "session",
-    });
-    expect(events).toEqual(["global", "load", "session"]);
+    expect(harness.globalWrites).toEqual([
+      { mcp: { servers: { docs: { command: "docs-mcp", enabled: false } } } },
+    ]);
+    expect(harness.container.querySelector('[role="alert"]')?.textContent).toContain(
+      "The server was saved disabled globally, but enabling it for this session failed: gateway disconnected",
+    );
+    expect(harness.events).toEqual(["global", "load", "session", "load"]);
   });
 
   it("aborts the session stage when navigation changes the submitted identity", async () => {
-    const host = new ChatComposerCapabilityHost(vi.fn());
-    const refresh = vi.fn(async () => undefined);
-    const state = {
-      ...createState(),
-      sessionKey: "other",
-      sessions: {
-        refresh,
-        state: { agentId: "main", error: null, result: null },
-      },
-    } as unknown as ChatPageHost;
-    const loadCurrentSessionOverrides = (
-      host as unknown as {
-        loadCurrentSessionOverrides: (
-          state: ChatPageHost,
-          sessionKey: string,
-          agentId: string | undefined,
-        ) => Promise<{ ok: boolean; error?: string }>;
-      }
-    ).loadCurrentSessionOverrides;
+    const harness = createAddServerHarness({ navigateAfterSave: true });
+    await harness.submit();
 
-    expect(await loadCurrentSessionOverrides.call(host, state, "main", "main")).toEqual({
-      ok: false,
-      error: "The active session changed before it could be enabled.",
-    });
-    expect(refresh).not.toHaveBeenCalled();
+    expect(harness.container.querySelector('[role="alert"]')?.textContent).toContain(
+      "The active session changed before it could be enabled.",
+    );
+    expect(harness.refresh).not.toHaveBeenCalled();
+    expect(harness.patch).not.toHaveBeenCalled();
   });
 
   it("returns a session-stage error when refreshing current overrides rejects", async () => {
-    const host = new ChatComposerCapabilityHost(vi.fn());
-    const state = {
-      ...createState(),
-      sessions: {
-        refresh: vi.fn(async () => {
-          throw new Error("refresh failed");
-        }),
-        state: { agentId: "main", error: null, result: null },
-      },
-    } as unknown as ChatPageHost;
-    const loadCurrentSessionOverrides = (
-      host as unknown as {
-        loadCurrentSessionOverrides: (
-          state: ChatPageHost,
-          sessionKey: string,
-          agentId: string | undefined,
-        ) => Promise<{ ok: boolean; error?: string }>;
-      }
-    ).loadCurrentSessionOverrides;
+    const harness = createAddServerHarness({ refreshError: "refresh failed" });
+    await harness.submit();
 
-    expect(await loadCurrentSessionOverrides.call(host, state, "main", "main")).toEqual({
-      ok: false,
-      error: "refresh failed",
-    });
+    expect(harness.container.querySelector('[role="alert"]')?.textContent).toContain(
+      "The server was saved disabled globally, but enabling it for this session failed: refresh failed",
+    );
+    expect(harness.events).toEqual(["global", "load"]);
+    expect(harness.patch).not.toHaveBeenCalled();
   });
 
   it("blocks session mutations until the row and runtime config have loaded", () => {

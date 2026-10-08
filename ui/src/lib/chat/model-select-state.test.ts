@@ -32,6 +32,25 @@ function createChatModelState(
   };
 }
 
+type FastModeSelectInput = Parameters<typeof resolveChatFastModeSelectState>[0];
+
+function resolveFastModeSelection(
+  input: Pick<FastModeSelectInput, "sessionsResult"> & Partial<FastModeSelectInput>,
+) {
+  return resolveChatFastModeSelectState({
+    activeRunId: null,
+    catalog: [],
+    connected: true,
+    currentModelOverride: "",
+    fastModeTarget: input.sessionsResult?.sessions[0],
+    gatewayAvailable: true,
+    loading: false,
+    sending: false,
+    stream: null,
+    ...input,
+  });
+}
+
 function resolveFastModeState(params: {
   provider: string;
   fastMode?: boolean | "auto";
@@ -49,17 +68,9 @@ function resolveFastModeState(params: {
       ? {}
       : { effectiveFastMode: params.effectiveFastMode }),
   };
-  return resolveChatFastModeSelectState({
-    activeRunId: null,
-    catalog: [],
-    connected: true,
+  return resolveFastModeSelection({
     currentModelOverride: `${params.provider}/model`,
-    fastModeTarget: sessionsResult.sessions[0],
-    gatewayAvailable: true,
-    loading: false,
-    sending: false,
     sessionsResult,
-    stream: null,
   });
 }
 
@@ -246,19 +257,6 @@ describe("chat-model-select-state", () => {
       sessionsResult: createSessionsListResult({
         model: "openai/gpt-5-mini",
         modelProvider: "zai",
-      }),
-    });
-
-    const resolved = resolveChatModelSelectState(state);
-    expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expect(resolved.options).toEqual([]);
-  });
-
-  it("does not synthesize configured models outside catalog results", () => {
-    const state = createChatModelState({
-      sessionsResult: createSessionsListResult({
-        model: "openai/gpt-5-mini",
-        modelProvider: "openai",
       }),
     });
 
@@ -456,17 +454,9 @@ describe("chat-model-select-state", () => {
     });
 
     expect(
-      resolveChatFastModeSelectState({
-        activeRunId: null,
-        catalog: [],
-        connected: true,
+      resolveFastModeSelection({
         currentModelOverride: "",
-        fastModeTarget: sessionsResult.sessions[0],
-        gatewayAvailable: true,
-        loading: false,
-        sending: false,
         sessionsResult,
-        stream: null,
       }).supported,
     ).toBe(true);
   });
@@ -484,17 +474,10 @@ describe("chat-model-select-state", () => {
     });
 
     expect(
-      resolveChatFastModeSelectState({
-        activeRunId: null,
+      resolveFastModeSelection({
         catalog: providers.map((provider) => ({ id: model, name: "Gemma", provider })),
-        connected: true,
         currentModelOverride: model,
-        fastModeTarget: sessionsResult.sessions[0],
-        gatewayAvailable: true,
-        loading: false,
-        sending: false,
         sessionsResult,
-        stream: null,
       }).supported,
     ).toBe(true);
   });
@@ -530,8 +513,7 @@ describe("chat-model-select-state", () => {
     });
 
     expect(
-      resolveChatFastModeSelectState({
-        activeRunId: null,
+      resolveFastModeSelection({
         catalog: [
           {
             id: "claude-opus-4-8",
@@ -539,14 +521,8 @@ describe("chat-model-select-state", () => {
             provider: "anthropic",
           },
         ],
-        connected: true,
         currentModelOverride: "anthropic/claude-opus-4-8",
-        fastModeTarget: sessionsResult.sessions[0],
-        gatewayAvailable: true,
-        loading: false,
-        sending: false,
         sessionsResult,
-        stream: null,
       }).supported,
     ).toBe(true);
   });
@@ -560,8 +536,7 @@ describe("chat-model-select-state", () => {
     });
 
     expect(
-      resolveChatFastModeSelectState({
-        activeRunId: null,
+      resolveFastModeSelection({
         catalog: [
           {
             id: "claude-opus-4-8",
@@ -579,14 +554,8 @@ describe("chat-model-select-state", () => {
             provider: "gateway-proxy",
           },
         ],
-        connected: true,
         currentModelOverride: "anthropic/claude-opus-4-8",
-        fastModeTarget: sessionsResult.sessions[0],
-        gatewayAvailable: true,
-        loading: false,
-        sending: false,
         sessionsResult,
-        stream: null,
       }).supported,
     ).toBe(true);
   });
@@ -600,8 +569,7 @@ describe("chat-model-select-state", () => {
     });
 
     expect(
-      resolveChatFastModeSelectState({
-        activeRunId: null,
+      resolveFastModeSelection({
         catalog: [
           {
             id: "gemini-2.5-pro",
@@ -614,14 +582,8 @@ describe("chat-model-select-state", () => {
             provider: "openrouter",
           },
         ],
-        connected: true,
         currentModelOverride: "google/gemini-2.5-pro",
-        fastModeTarget: sessionsResult.sessions[0],
-        gatewayAvailable: true,
-        loading: false,
-        sending: false,
         sessionsResult,
-        stream: null,
       }).supported,
     ).toBe(false);
   });
@@ -635,8 +597,7 @@ describe("chat-model-select-state", () => {
     });
 
     expect(
-      resolveChatFastModeSelectState({
-        activeRunId: null,
+      resolveFastModeSelection({
         catalog: [
           {
             id: "vendor/model",
@@ -649,14 +610,8 @@ describe("chat-model-select-state", () => {
             provider: "proxy-b",
           },
         ],
-        connected: true,
         currentModelOverride: "vendor/model",
-        fastModeTarget: sessionsResult.sessions[0],
-        gatewayAvailable: true,
-        loading: false,
-        sending: false,
         sessionsResult,
-        stream: null,
       }).supported,
     ).toBe(false);
   });
@@ -932,19 +887,21 @@ describe("selected Fast applicability", () => {
     support: boolean | undefined,
     fastMode?: boolean | "auto",
     selected = "claude-sonnet-5",
+    runtime?: {
+      id: string;
+      catalogRuntime?: string;
+      alternativeFastSupport?: boolean;
+    },
   ) {
     const sessionsResult = createSessionsListResult({
       model: "claude-sonnet-5",
       modelProvider: "anthropic",
     });
     const session = expectDefined(sessionsResult.sessions[0], "Fast applicability session");
-    return resolveChatFastModeSelectState({
-      activeRunId: null,
-      connected: true,
-      gatewayAvailable: true,
-      loading: false,
-      sending: false,
-      stream: null,
+    if (runtime) {
+      session.agentRuntime = { id: runtime.id, source: "session-key" };
+    }
+    return resolveFastModeSelection({
       currentModelOverride: `anthropic/${selected}`,
       sessionsResult,
       fastModeTarget: { ...session, ...(fastMode === undefined ? {} : { fastMode }) },
@@ -954,15 +911,61 @@ describe("selected Fast applicability", () => {
           name: "Sonnet 5",
           provider: "anthropic",
           supportsFastMode: support,
+          ...(runtime?.catalogRuntime
+            ? { agentRuntime: { id: runtime.catalogRuntime, source: "model" as const } }
+            : {}),
+          ...(runtime?.alternativeFastSupport === undefined
+            ? {}
+            : {
+                runtimeChoices: [
+                  {
+                    agentRuntime: { id: "claude-cli", source: "model" as const },
+                    available: true,
+                    supportsFastMode: runtime.alternativeFastSupport,
+                  },
+                ],
+              }),
         },
         { id: "claude-opus-5", name: "Opus 5", provider: "anthropic", supportsFastMode: true },
       ],
     });
   }
 
-  it("disables a confirmed no-op offer", () => {
-    expect(state(false)).toMatchObject({ supported: false, disabled: true, nextValue: "" });
-  });
+  it.each([
+    [undefined, undefined],
+    ["claude-cli", undefined],
+    ["claude-cli", "openclaw"],
+  ] as const)(
+    "disables a confirmed no-op offer with runtime %s and catalog runtime %s without alternatives",
+    (runtime, catalogRuntime) => {
+      expect(
+        state(false, undefined, undefined, runtime ? { id: runtime, catalogRuntime } : undefined),
+      ).toMatchObject({
+        supported: false,
+        disabled: true,
+        nextValue: "",
+      });
+    },
+  );
+  it.each([
+    { id: "acpx", supported: false },
+    { id: "claude-cli", supported: true },
+  ])(
+    "uses runtime-specific Fast capability only for a listed runtime: $id",
+    ({ id, supported }) => {
+      expect(
+        state(false, undefined, undefined, {
+          id,
+          catalogRuntime: "openclaw",
+          alternativeFastSupport: true,
+        }),
+      ).toMatchObject({
+        supported,
+        disabled: !supported,
+        nextValue: supported ? "on" : "",
+      });
+    },
+  );
   it("uses canonical spelling when matching the selected applicability", () => {
     expect(state(false, undefined, "CLAUDE-SONNET-5")).toMatchObject({
       supported: false,

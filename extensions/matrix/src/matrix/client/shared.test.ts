@@ -1,4 +1,3 @@
-// Matrix tests cover shared plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { authFor, createMockClient } from "./shared.test-support.js";
@@ -21,6 +20,10 @@ vi.mock("./create-client.js", () => ({
 
 let acquireSharedMatrixClient: typeof import("./shared.js").acquireSharedMatrixClient;
 let stopSharedClientForAccount: typeof import("./shared.js").stopSharedClientForAccount;
+
+function acquireStoppedClient(auth: MatrixAuth, role?: "monitor" | "transient") {
+  return acquireSharedMatrixClient({ auth, role, startClient: false });
+}
 
 function createMonitorRetirement(callOrder: string[]) {
   return {
@@ -93,10 +96,8 @@ describe("shared Matrix client generations", () => {
       accessToken: "shared-token",
       encryption: true,
     } satisfies MatrixAuth;
-    const firstCrypto = { prepare: vi.fn(async () => undefined) };
-    const secondCrypto = { prepare: vi.fn(async () => undefined) };
-    const firstClient = { ...createMockClient("first"), crypto: firstCrypto };
-    const secondClient = { ...createMockClient("second"), crypto: secondCrypto };
+    const firstClient = createMockClient("first");
+    const secondClient = createMockClient("second");
 
     createMatrixClientMock.mockResolvedValueOnce(firstClient).mockResolvedValueOnce(secondClient);
 
@@ -108,8 +109,8 @@ describe("shared Matrix client generations", () => {
     expect(repeatedFirstLease.client).toBe(firstClient);
     expect(secondLease.client).toBe(secondClient);
     expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
-    expect(firstCrypto.prepare).toHaveBeenCalledTimes(1);
-    expect(secondCrypto.prepare).toHaveBeenCalledTimes(1);
+    expect(firstClient.start).toHaveBeenCalledTimes(1);
+    expect(secondClient.start).toHaveBeenCalledTimes(1);
 
     await firstLease.release();
     expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
@@ -178,11 +179,7 @@ describe("shared Matrix client generations", () => {
     const client = createMockClient("main");
     const waitForTasks = createDeferred<void>();
     createMatrixClientMock.mockResolvedValue(client);
-    const monitor = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
+    const monitor = await acquireStoppedClient(auth, "monitor");
     const retirement = createMonitorRetirement([]);
     retirement.waitForTasks.mockReturnValue(waitForTasks.promise);
     monitor.registerMonitorRetirement(retirement);
@@ -210,16 +207,8 @@ describe("shared Matrix client generations", () => {
     const client = createMockClient("main");
     createMatrixClientMock.mockResolvedValue(client);
     const auth = authFor("main");
-    const first = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
-    const second = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
+    const first = await acquireStoppedClient(auth, "monitor");
+    const second = await acquireStoppedClient(auth, "monitor");
     const firstRetirement = createMonitorRetirement([]);
     const secondRetirement = createMonitorRetirement([]);
     first.registerMonitorRetirement(firstRetirement);
@@ -244,16 +233,8 @@ describe("shared Matrix client generations", () => {
     const client = createMockClient("main", callOrder);
     createMatrixClientMock.mockResolvedValue(client);
     const auth = authFor("main");
-    const monitor = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
-    const transient = await acquireSharedMatrixClient({
-      auth,
-      role: "transient",
-      startClient: false,
-    });
+    const monitor = await acquireStoppedClient(auth, "monitor");
+    const transient = await acquireStoppedClient(auth, "transient");
 
     expect(transient.abortSignal.aborted).toBe(false);
     await transient.release({ mode: "stop" });
@@ -282,11 +263,7 @@ describe("shared Matrix client generations", () => {
       .mockResolvedValueOnce(retiringClient)
       .mockResolvedValueOnce(replacementClient);
     const auth = authFor("main");
-    const monitor = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
+    const monitor = await acquireStoppedClient(auth, "monitor");
     monitor.registerMonitorRetirement(createMonitorRetirement([]));
 
     const racingAcquire = acquireSharedMatrixClient({ auth, startClient: false });
@@ -308,16 +285,8 @@ describe("shared Matrix client generations", () => {
     const client = createMockClient("main", callOrder);
     createMatrixClientMock.mockResolvedValue(client);
     const auth = authFor("main");
-    const monitor = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
-    const transient = await acquireSharedMatrixClient({
-      auth,
-      role: "transient",
-      startClient: false,
-    });
+    const monitor = await acquireStoppedClient(auth, "monitor");
+    const transient = await acquireStoppedClient(auth, "transient");
     transient.abortSignal.addEventListener(
       "abort",
       () => {
@@ -357,21 +326,9 @@ describe("shared Matrix client generations", () => {
     const replacementClient = createMockClient("replacement");
     createMatrixClientMock.mockResolvedValueOnce(client).mockResolvedValueOnce(replacementClient);
     const auth = authFor("main");
-    const monitor = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
-    const firstTransient = await acquireSharedMatrixClient({
-      auth,
-      role: "transient",
-      startClient: false,
-    });
-    const finalTransient = await acquireSharedMatrixClient({
-      auth,
-      role: "transient",
-      startClient: false,
-    });
+    const monitor = await acquireStoppedClient(auth, "monitor");
+    const firstTransient = await acquireStoppedClient(auth, "transient");
+    const finalTransient = await acquireStoppedClient(auth, "transient");
 
     monitor.registerMonitorRetirement(createMonitorRetirement(callOrder));
     const retirement = monitor.release({ mode: "persist" });
@@ -436,16 +393,8 @@ describe("shared Matrix client generations", () => {
     const client = createMockClient("main");
     createMatrixClientMock.mockResolvedValue(client);
     const auth = authFor("late-monitor-cleanup");
-    const monitor = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
-    const transient = await acquireSharedMatrixClient({
-      auth,
-      role: "transient",
-      startClient: false,
-    });
+    const monitor = await acquireStoppedClient(auth, "monitor");
+    const transient = await acquireStoppedClient(auth, "transient");
     const monitorRetirement = createMonitorRetirement([]);
     monitorRetirement.cleanup.mockRejectedValue(cause);
     monitor.registerMonitorRetirement(monitorRetirement);
@@ -473,16 +422,8 @@ describe("shared Matrix client generations", () => {
     });
     createMatrixClientMock.mockResolvedValue(client);
     const auth = authFor("poisoned-decryption-drain");
-    const monitor = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
-    const transient = await acquireSharedMatrixClient({
-      auth,
-      role: "transient",
-      startClient: false,
-    });
+    const monitor = await acquireStoppedClient(auth, "monitor");
+    const transient = await acquireStoppedClient(auth, "transient");
     monitor.registerMonitorRetirement(createMonitorRetirement([]));
 
     const retirementError = monitor.release({ mode: "persist" }).then(
@@ -507,16 +448,8 @@ describe("shared Matrix client generations", () => {
     const client = createMockClient("main", callOrder);
     createMatrixClientMock.mockResolvedValue(client);
     const auth = authFor("main");
-    const monitor = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
-    const transient = await acquireSharedMatrixClient({
-      auth,
-      role: "transient",
-      startClient: false,
-    });
+    const monitor = await acquireStoppedClient(auth, "monitor");
+    const transient = await acquireStoppedClient(auth, "transient");
 
     monitor.registerMonitorRetirement(createMonitorRetirement(callOrder));
     const monitorRelease = monitor.release({ mode: "persist" });
@@ -545,16 +478,8 @@ describe("shared Matrix client generations", () => {
     const client = createMockClient("main", callOrder);
     createMatrixClientMock.mockResolvedValue(client);
     const auth = authFor("main");
-    const first = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
-    const final = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
+    const first = await acquireStoppedClient(auth, "monitor");
+    const final = await acquireStoppedClient(auth, "monitor");
     const firstRetirement = createMonitorRetirement(callOrder);
     first.registerMonitorRetirement(firstRetirement);
     final.registerMonitorRetirement(createMonitorRetirement(callOrder));
@@ -612,10 +537,7 @@ describe("shared Matrix client generations", () => {
     const persist = createDeferred<void>();
     client.stopAndPersist.mockReturnValue(persist.promise);
     createMatrixClientMock.mockResolvedValue(client);
-    const lease = await acquireSharedMatrixClient({
-      auth: authFor("main"),
-      startClient: false,
-    });
+    const lease = await acquireStoppedClient(authFor("main"));
 
     const first = lease.release({ mode: "persist" });
     const second = lease.release({ mode: "persist" });
@@ -671,16 +593,8 @@ describe("shared Matrix client generations", () => {
       .mockResolvedValueOnce(timedOutClient)
       .mockResolvedValueOnce(replacementClient);
     const auth = authFor("main");
-    const monitor = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
-    const transient = await acquireSharedMatrixClient({
-      auth,
-      role: "transient",
-      startClient: false,
-    });
+    const monitor = await acquireStoppedClient(auth, "monitor");
+    const transient = await acquireStoppedClient(auth, "transient");
 
     monitor.registerMonitorRetirement(createMonitorRetirement(callOrder));
     const release = monitor.release({ mode: "persist" });
@@ -709,11 +623,7 @@ describe("shared Matrix client generations", () => {
     const client = createMockClient("main");
     createMatrixClientMock.mockResolvedValue(client);
     const auth = authFor("monitor-cleanup-failure");
-    const monitor = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
+    const monitor = await acquireStoppedClient(auth, "monitor");
     const retirement = createMonitorRetirement([]);
     retirement.cleanup.mockRejectedValue(cause);
 
@@ -757,20 +667,6 @@ describe("shared Matrix client generations", () => {
     await replacement.release({ mode: "discard" });
   });
 
-  it("discards without attempting persistence", async () => {
-    const client = createMockClient("main");
-    createMatrixClientMock.mockResolvedValue(client);
-    const lease = await acquireSharedMatrixClient({
-      auth: authFor("main"),
-      startClient: false,
-    });
-
-    await lease.release({ mode: "discard" });
-
-    expect(client.stopAndPersist).not.toHaveBeenCalled();
-    expect(client.stopWithoutPersist).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps a discarded generation unavailable until async cleanup settles", async () => {
     const discard = createDeferred<void>();
     const client = createMockClient("main");
@@ -788,6 +684,7 @@ describe("shared Matrix client generations", () => {
     await Promise.resolve();
     expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
 
+    expect(client.stopAndPersist).not.toHaveBeenCalled();
     discard.resolve();
     await release;
     const replacement = await replacementPromise;
@@ -1003,11 +900,7 @@ describe("shared Matrix client generations", () => {
     client.stopWithoutPersist.mockRejectedValue(discardFailure);
     createMatrixClientMock.mockResolvedValue(client);
     const auth = authFor("late-discard-failure");
-    const monitor = await acquireSharedMatrixClient({
-      auth,
-      role: "monitor",
-      startClient: false,
-    });
+    const monitor = await acquireStoppedClient(auth, "monitor");
     const monitorRetirement = createMonitorRetirement([]);
     monitorRetirement.waitForTasks.mockReturnValue(monitorTasks.promise);
     monitor.registerMonitorRetirement(monitorRetirement);
@@ -1050,10 +943,7 @@ describe("shared Matrix client generations", () => {
     client.start.mockReturnValue(start.promise);
     createMatrixClientMock.mockResolvedValue(client);
     const auth = authFor("main");
-    const owner = await acquireSharedMatrixClient({
-      auth,
-      startClient: false,
-    });
+    const owner = await acquireStoppedClient(auth);
     const ownerStart = owner.start();
     const abortController = new AbortController();
     const waiter = acquireSharedMatrixClient({

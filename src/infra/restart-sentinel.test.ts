@@ -1,17 +1,28 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-// Covers restart sentinel persistence, summaries, and messages.
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
-const { mockWarn, mockThrowOpen, mockThrowWrite } = vi.hoisted(() => ({
-  mockWarn: vi.fn(),
-  mockThrowOpen: vi.fn(),
-  mockThrowWrite: vi.fn(),
-}));
+const { mockWarn, mockThrowOpen, mockThrowWrite, mockThrowWorkerWrite, mockThrowWorkerRead } =
+  vi.hoisted(() => ({
+    mockWarn: vi.fn(),
+    mockThrowOpen: vi.fn(),
+    mockThrowWrite: vi.fn(),
+    mockThrowWorkerWrite: vi.fn(),
+    mockThrowWorkerRead: vi.fn(),
+  }));
+const admission = vi.hoisted((): { beforeGrant?: (stage: string) => void } => ({}));
 
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: mockWarn }),
-}));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      return args[0] === "restart-sentinel" ? { ...logger, warn: mockWarn } : logger;
+    },
+  };
+});
 
 vi.mock("../state/openclaw-state-db.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-state-db.js")>();
@@ -35,12 +46,55 @@ vi.mock("../version.js", async (importOriginal) => {
   return { ...actual, resolveRuntimeServiceCommit: () => "aaaaaaa" };
 });
 
+vi.mock("../state/openclaw-state-worker-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-worker-store.js")>();
+  return {
+    ...actual,
+    runOpenClawStateWorkerOperation: (
+      ...args: Parameters<typeof actual.runOpenClawStateWorkerOperation>
+    ) => {
+      mockThrowWorkerWrite();
+      return actual.runOpenClawStateWorkerOperation(...args);
+    },
+  };
+});
+
+vi.mock("../state/openclaw-state-db-readonly.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-db-readonly.js")>();
+  return {
+    ...actual,
+    executeExistingOpenClawStateRead: (
+      ...args: Parameters<typeof actual.executeExistingOpenClawStateRead>
+    ) => {
+      mockThrowWorkerRead();
+      return actual.executeExistingOpenClawStateRead(...args);
+    },
+  };
+});
+
+vi.mock("./sqlite-worker-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sqlite-worker-store.js")>();
+  return {
+    ...actual,
+    createSqliteWorkerWriteAdmission: (
+      assertCurrent: Parameters<typeof actual.createSqliteWorkerWriteAdmission>[0],
+      nativeLocations: readonly string[],
+    ) =>
+      actual.createSqliteWorkerWriteAdmission((request) => {
+        admission.beforeGrant?.(request.stage);
+        assertCurrent(request);
+      }, nativeLocations),
+  };
+});
+
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   executeSqliteQuerySync,
@@ -48,38 +102,61 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import {
-  buildRestartSuccessContinuation,
-  clearRestartSentinel,
+  readRestartSentinelRowSync,
+  writeRestartSentinelRowSync,
+  writeRestartSentinelRowIfRevisionSync,
+} from "./restart-sentinel-store.js";
+import {
   clearRestartSentinelIfRevision,
   finalizeUpdateRestartSentinelRunningVersion,
-  formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
   hasRestartSentinel,
   markUpdateRestartSentinelFailure,
   readRestartSentinel,
+  readRestartSentinelReadOnly,
+  readRestartSentinelSnapshot,
   readVerifiedGitUpdateReceipt,
-  summarizeRestartSentinel,
-  trimLogTail,
   writeRestartSentinel,
+  writeRestartSentinelIfUnchanged,
 } from "./restart-sentinel.js";
 
 beforeEach(() => {
   mockWarn.mockClear();
   mockThrowOpen.mockReset();
   mockThrowWrite.mockReset();
+  mockThrowWorkerWrite.mockReset();
+  mockThrowWorkerRead.mockReset();
+  admission.beforeGrant = undefined;
 });
 
-async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
-  await withTestDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, run);
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-    }
-  });
-}
-
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
+const stateDir = tempDirs.make("openclaw-sentinel-");
+
+async function withRestartSentinelStateDir(
+  run: () => Promise<void>,
+  options: { fresh?: boolean } = {},
+): Promise<void> {
+  const env = {
+    OPENCLAW_STATE_DIR: options.fresh ? tempDirs.make("openclaw-sentinel-") : stateDir,
+  };
+  if (!options.fresh) {
+    const { db } = openOpenClawStateDatabase({ env });
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db).deleteFrom(
+        "gateway_restart_sentinel",
+      ),
+    );
+  }
+  await withEnvAsync(env, run);
+}
 
 function readSentinelRow() {
   const { db } = openOpenClawStateDatabase();
@@ -137,6 +214,28 @@ function updateSentinelRow(
 }
 
 describe("restart sentinel", () => {
+  it("persists and consumes through workers without caller-thread SQL", async () => {
+    await withRestartSentinelStateDir(
+      async () => {
+        const rejectHostSql = () => {
+          throw new Error("caller-thread SQL");
+        };
+        mockThrowOpen.mockImplementation(rejectHostSql);
+        mockThrowWrite.mockImplementation(rejectHostSql);
+        await expect(readRestartSentinelReadOnly()).resolves.toBeNull();
+        await expect(fs.access(resolveOpenClawStateSqlitePath())).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+        await expect(readRestartSentinel()).resolves.toEqual(written);
+        await expect(readRestartSentinelReadOnly()).resolves.toEqual(written);
+        await expect(clearRestartSentinelIfRevision(written.revision)).resolves.toBe(true);
+        await expect(hasRestartSentinel()).resolves.toBe(false);
+      },
+      { fresh: true },
+    );
+  });
+
   it("writes and reads a sentinel", async () => {
     await withRestartSentinelStateDir(async () => {
       const payload = {
@@ -148,7 +247,24 @@ describe("restart sentinel", () => {
           kind: "agentTurn" as const,
           message: "Reply with exactly: Yay! I did it!",
         },
-        stats: { mode: "git" },
+        stats: {
+          mode: "git",
+          before: null,
+          after: { version: "2026.9.4", detail: { retained: true } },
+          steps: [
+            {
+              name: "install",
+              command: "install",
+              failureFacts: [{ check: "installation", code: "retained" }],
+              cwd: null,
+              durationMs: 0.5,
+              log: { stdoutTail: null, stderrTail: "", exitCode: null },
+              advisory: false,
+            },
+          ],
+          reason: null,
+          durationMs: null,
+        },
       };
       await writeRestartSentinel(payload);
       expect(readSentinelRow()).toMatchObject({
@@ -160,8 +276,7 @@ describe("restart sentinel", () => {
       });
 
       const read = await readRestartSentinel();
-      expect(read?.payload.kind).toBe("update");
-      expect(read?.payload.continuation).toEqual(payload.continuation);
+      expect(read?.payload).toEqual(payload);
     });
   });
 
@@ -187,28 +302,31 @@ describe("restart sentinel", () => {
   });
 
   it("ignores legacy files without mutating them", async () => {
-    await withRestartSentinelStateDir(async () => {
-      const payload = {
-        kind: "update" as const,
-        status: "skipped" as const,
-        ts: Date.now(),
-        sessionKey: "agent:main:webchat:dm:user-123",
-        message: "update restart pending",
-        stats: {
-          mode: "npm",
-          reason: "restart-health-pending",
-        },
-      };
-      const legacyPath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "restart-sentinel.json");
-      const legacyContents = `${JSON.stringify({ version: 1, payload })}\n`;
-      await fs.writeFile(legacyPath, legacyContents, "utf-8");
+    await withRestartSentinelStateDir(
+      async () => {
+        const payload = {
+          kind: "update" as const,
+          status: "skipped" as const,
+          ts: Date.now(),
+          sessionKey: "agent:main:webchat:dm:user-123",
+          message: "update restart pending",
+          stats: {
+            mode: "npm",
+            reason: "restart-health-pending",
+          },
+        };
+        const legacyPath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "restart-sentinel.json");
+        const legacyContents = `${JSON.stringify({ version: 1, payload })}\n`;
+        await fs.writeFile(legacyPath, legacyContents, "utf-8");
 
-      await expect(hasRestartSentinel()).resolves.toBe(false);
-      await expect(readRestartSentinel()).resolves.toBeNull();
-      await writeRestartSentinel({ kind: "restart", status: "ok", ts: 2 });
-      await clearRestartSentinel();
-      await expect(fs.readFile(legacyPath, "utf-8")).resolves.toBe(legacyContents);
-    });
+        await expect(hasRestartSentinel()).resolves.toBe(false);
+        await expect(readRestartSentinel()).resolves.toBeNull();
+        const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 2 });
+        await expect(clearRestartSentinelIfRevision(written.revision)).resolves.toBe(true);
+        await expect(fs.readFile(legacyPath, "utf-8")).resolves.toBe(legacyContents);
+      },
+      { fresh: true },
+    );
   });
 
   it.each([
@@ -262,6 +380,52 @@ describe("restart sentinel", () => {
     });
   });
 
+  it.each(["missing", "current", "invalid"] as const)(
+    "publishes an absent-row fallback only when the sentinel remains missing (%s)",
+    async (state) => {
+      await withRestartSentinelStateDir(async () => {
+        const first = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+        if (state === "missing") {
+          await clearRestartSentinelIfRevision(first.revision);
+        } else if (state === "invalid") {
+          updateSentinelRow({ kind: "not-a-kind" });
+        }
+        const { db } = openOpenClawStateDatabase();
+        const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
+        const rows = () =>
+          executeSqliteQuerySync(
+            db,
+            stateDb.selectFrom("gateway_restart_sentinel").selectAll().orderBy("sentinel_key"),
+          ).rows;
+        const before = rows();
+        const payload = { kind: "update" as const, status: "error" as const, ts: 2 };
+        const clock = vi.spyOn(Date, "now").mockReturnValue(first.revision - 1);
+        try {
+          const written = runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
+            writeRestartSentinelRowIfRevisionSync(transactionDb, payload, null),
+          );
+          if (state === "missing") {
+            expect(written).toMatchObject({ payload, revision: first.revision + 1 });
+            expect(readRestartSentinelRowSync(db)).toEqual({ kind: "valid", sentinel: written });
+            expect(readSentinelRevisionFloor()).toBe(first.revision + 1);
+          } else {
+            expect(written).toBeNull();
+            expect(rows()).toEqual(before);
+          }
+          const settled = rows();
+          expect(
+            runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
+              writeRestartSentinelRowIfRevisionSync(transactionDb, payload, null),
+            ),
+          ).toBeNull();
+          expect(rows()).toEqual(settled);
+        } finally {
+          clock.mockRestore();
+        }
+      });
+    },
+  );
+
   it("leaves malformed typed rows in place and reports them as unreadable", async () => {
     await withRestartSentinelStateDir(async () => {
       await writeRestartSentinel({ kind: "update", status: "ok", ts: 1 });
@@ -274,70 +438,140 @@ describe("restart sentinel", () => {
     });
   });
 
-  it("rejects malformed typed JSON columns even when the shadow payload is valid", async () => {
+  it.each([
+    { continuation_json: JSON.stringify({ kind: "agentTurn", message: 42 }) },
+    { stats_json: JSON.stringify({ mode: null }) },
+    { stats_json: JSON.stringify({ before: [] }) },
+    {
+      stats_json: JSON.stringify({
+        steps: [{ name: "install", command: "install", log: { exitCode: 0.5 } }],
+      }),
+    },
+    {
+      stats_json: JSON.stringify({
+        steps: [{ name: "install", command: "install", advisory: null }],
+      }),
+    },
+  ])("rejects malformed typed JSON columns with a valid shadow payload: %j", async (columns) => {
     await withRestartSentinelStateDir(async () => {
       const payload = { kind: "update" as const, status: "ok" as const, ts: 1 };
       await writeRestartSentinel(payload);
-      updateSentinelRow({
-        continuation_json: JSON.stringify({ kind: "agentTurn", message: 42 }),
-        payload_json: JSON.stringify(payload),
-      });
+      updateSentinelRow({ ...columns, payload_json: JSON.stringify(payload) });
 
       await expect(readRestartSentinel()).resolves.toBeNull();
       await expect(hasRestartSentinel()).resolves.toBe(false);
     });
   });
 
-  it("keeps revisions strictly monotonic within the same millisecond", async () => {
+  it("upgrades pre-floor rows only when the captured revision still exists", async () => {
     await withRestartSentinelStateDir(async () => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(1000);
-      try {
-        const first = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
-        const second = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 2 });
-        expect(second.revision).toBe(first.revision + 1);
-        expect(readSentinelRow()?.updated_at_ms).toBe(second.revision);
-      } finally {
-        now.mockRestore();
-      }
+      const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+      // Persist a future revision so the worker must advance the floor independently of its clock.
+      const first = { ...written, revision: Number.MAX_SAFE_INTEGER - 100 };
+      updateSentinelRow({ updated_at_ms: first.revision });
+      deleteSentinelRevisionFloor();
+      expect(readSentinelRevisionFloor()).toBeUndefined();
+      await expect(clearRestartSentinelIfRevision(first.revision)).resolves.toBe(true);
+
+      await expect(readRestartSentinel()).resolves.toBeNull();
+      await expect(hasRestartSentinel()).resolves.toBe(false);
+      expect(readSentinelRevisionFloor()).toBe(first.revision);
+
+      const second = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 2 });
+      expect(second.revision).toBe(first.revision + 1);
+
+      deleteSentinelRevisionFloor();
+      await expect(clearRestartSentinelIfRevision(second.revision + 1)).resolves.toBe(false);
+      expect(readSentinelRevisionFloor()).toBeUndefined();
+      await expect(readRestartSentinel()).resolves.toEqual(second);
+
+      await expect(clearRestartSentinelIfRevision(second.revision)).resolves.toBe(true);
+      expect(readSentinelRevisionFloor()).toBe(second.revision);
+      const third = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 3 });
+      expect(third.revision).toBe(second.revision + 1);
+
+      await expect(clearRestartSentinelIfRevision(third.revision)).resolves.toBe(true);
+      deleteSentinelRevisionFloor();
+      await expect(clearRestartSentinelIfRevision(third.revision)).resolves.toBe(false);
+      expect(readSentinelRevisionFloor()).toBeUndefined();
     });
   });
 
-  it("upgrades pre-floor rows before unconditional and guarded clears", async () => {
+  it("publishes only the captured sentinel snapshot, including after consumption", async () => {
     await withRestartSentinelStateDir(async () => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(1000);
-      try {
-        const first = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
-        deleteSentinelRevisionFloor();
-        expect(readSentinelRevisionFloor()).toBeUndefined();
-        await expect(clearRestartSentinel()).resolves.toBe(true);
+      const initial = await readRestartSentinelSnapshot();
+      expect(initial).toEqual({ sentinel: null, revision: null });
+      const payload = { kind: "restart" as const, status: "ok" as const, ts: 1 };
+      const first = await writeRestartSentinelIfUnchanged({
+        payload,
+        expectedRevision: initial.revision,
+        isCurrent: () => true,
+      });
+      expect(first).not.toBeNull();
+      const snapshot = await readRestartSentinelSnapshot();
+      expect(snapshot).toEqual({ sentinel: first, revision: first!.revision });
 
-        await expect(readRestartSentinel()).resolves.toBeNull();
-        await expect(hasRestartSentinel()).resolves.toBe(false);
-        expect(readSentinelRevisionFloor()).toBe(first.revision);
+      await expect(clearRestartSentinelIfRevision(first!.revision)).resolves.toBe(true);
+      const consumed = await readRestartSentinelSnapshot();
+      expect(consumed).toEqual({ sentinel: null, revision: first!.revision });
+      await expect(
+        writeRestartSentinelIfUnchanged({
+          payload,
+          expectedRevision: initial.revision,
+          isCurrent: () => true,
+        }),
+      ).resolves.toBeNull();
 
-        now.mockReturnValue(500);
-        const second = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 2 });
-        expect(second.revision).toBe(first.revision + 1);
-
-        deleteSentinelRevisionFloor();
-        await expect(clearRestartSentinelIfRevision(second.revision + 1)).resolves.toBe(false);
-        expect(readSentinelRevisionFloor()).toBeUndefined();
-        await expect(readRestartSentinel()).resolves.toEqual(second);
-
-        await expect(clearRestartSentinelIfRevision(second.revision)).resolves.toBe(true);
-        expect(readSentinelRevisionFloor()).toBe(second.revision);
-        const third = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 3 });
-        expect(third.revision).toBe(second.revision + 1);
-
-        await expect(clearRestartSentinelIfRevision(third.revision)).resolves.toBe(true);
-        deleteSentinelRevisionFloor();
-        await expect(clearRestartSentinel()).resolves.toBe(false);
-        expect(readSentinelRevisionFloor()).toBeUndefined();
-      } finally {
-        now.mockRestore();
-      }
+      const replacement = await writeRestartSentinelIfUnchanged({
+        payload: { ...payload, ts: 2 },
+        expectedRevision: consumed.revision,
+        isCurrent: () => true,
+      });
+      expect(replacement?.revision).toBeGreaterThan(first!.revision);
+      await expect(
+        writeRestartSentinelIfUnchanged({
+          payload,
+          expectedRevision: snapshot.revision,
+          isCurrent: () => true,
+        }),
+      ).resolves.toBeNull();
+      await expect(readRestartSentinel()).resolves.toEqual(replacement);
     });
   });
+
+  it.each(["transaction", "commit"] as const)(
+    "preserves the notification when its producer loses authority at %s admission",
+    async (stage) => {
+      await withRestartSentinelStateDir(async () => {
+        const first = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+        const snapshot = await readRestartSentinelSnapshot();
+        let current = true;
+        const observed: string[] = [];
+        admission.beforeGrant = (requested) => {
+          observed.push(requested);
+          if (requested === stage) {
+            current = false;
+          }
+        };
+        try {
+          await expect(
+            writeRestartSentinelIfUnchanged({
+              payload: { kind: "update", status: "error", ts: 2 },
+              expectedRevision: snapshot.revision,
+              isCurrent: () => current,
+            }),
+          ).resolves.toBeNull();
+        } finally {
+          admission.beforeGrant = undefined;
+        }
+        expect(observed).toContain(stage);
+        await expect(readRestartSentinelSnapshot()).resolves.toEqual({
+          sentinel: first,
+          revision: first.revision,
+        });
+      });
+    },
+  );
 
   it("does not let stale deletes remove a newer sentinel", async () => {
     await withRestartSentinelStateDir(async () => {
@@ -357,156 +591,6 @@ describe("restart sentinel", () => {
       await expect(clearRestartSentinelIfRevision(first.revision)).resolves.toBe(false);
       await expect(readRestartSentinel()).resolves.toEqual(newer);
     });
-  });
-
-  it("formatRestartSentinelMessage uses custom message when present", () => {
-    const payload = {
-      kind: "config-apply" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      message: "Config updated successfully",
-    };
-    expect(formatRestartSentinelMessage(payload)).toBe("Config updated successfully");
-  });
-
-  it("uses the exact auto-recovery message for config recovery notices", () => {
-    const payload = {
-      kind: "config-auto-recovery" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      message:
-        "Gateway recovered automatically after a failed config change and restored the last known good configuration.",
-      stats: { mode: "config-auto-recovery", reason: "gateway-run-invalid-config" },
-    };
-
-    expect(formatRestartSentinelMessage(payload)).toBe(payload.message);
-    expect(summarizeRestartSentinel(payload)).toBe("Gateway auto-recovery");
-  });
-
-  it("formatRestartSentinelMessage falls back to summary when no message", () => {
-    const payload = {
-      kind: "update" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      stats: { mode: "git" },
-    };
-    const result = formatRestartSentinelMessage(payload);
-    expect(result).toContain("Gateway restart");
-    expect(result).toContain("update");
-    expect(result).toContain("ok");
-  });
-
-  it("formatRestartSentinelMessage falls back to summary for blank message", () => {
-    const payload = {
-      kind: "restart" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      message: "   ",
-    };
-    const result = formatRestartSentinelMessage(payload);
-    expect(result).toContain("Gateway restart");
-  });
-
-  it("formats config write success notices as restart required when marked", () => {
-    const payload = {
-      kind: "config-patch" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      message: "Run restart-gateway.ps1 to apply config changes.",
-      doctorHint: "Run openclaw doctor --non-interactive",
-      stats: { mode: "config.patch", requiresRestart: true },
-    };
-
-    expect(formatRestartSentinelMessage(payload)).toBe(
-      [
-        "Gateway restart required (config.patch)",
-        "Run restart-gateway.ps1 to apply config changes.",
-        "Run openclaw doctor --non-interactive",
-      ].join("\n"),
-    );
-    expect(summarizeRestartSentinel(payload)).toBe("Gateway restart required (config.patch)");
-
-    expect(
-      summarizeRestartSentinel({
-        kind: "config-apply",
-        status: "ok",
-        ts: Date.now(),
-        stats: { mode: "config.apply", requiresRestart: true },
-      }),
-    ).toBe("Gateway restart required (config.apply)");
-  });
-
-  it("does not mark hot-reloaded config patch notices as restart required", () => {
-    const payload = {
-      kind: "config-patch" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      stats: { mode: "config.patch", requiresRestart: false },
-    };
-
-    expect(summarizeRestartSentinel(payload)).toBe(
-      "Gateway restart config-patch ok (config.patch)",
-    );
-  });
-
-  it("formats summary, distinct reason, and doctor hint together", () => {
-    const payload = {
-      kind: "config-patch" as const,
-      status: "error" as const,
-      ts: Date.now(),
-      message: "Patch failed",
-      doctorHint: "Run openclaw doctor",
-      stats: { mode: "patch", reason: "validation failed" },
-    };
-
-    expect(formatRestartSentinelMessage(payload)).toBe(
-      [
-        "Gateway restart config-patch error (patch)",
-        "Patch failed",
-        "Reason: validation failed",
-        "Run openclaw doctor",
-      ].join("\n"),
-    );
-  });
-
-  it("trims log tails", () => {
-    const text = "a".repeat(9000);
-    const trimmed = trimLogTail(text, 8000);
-    expect(trimmed?.length).toBeLessThanOrEqual(8001);
-    expect(trimmed?.startsWith("…")).toBe(true);
-  });
-
-  it("keeps trimmed log tails UTF-16 safe", () => {
-    expect(trimLogTail("prefix🤖tail", 5)).toBe("…tail");
-  });
-
-  it("formats restart messages without volatile timestamps", () => {
-    const payloadA = {
-      kind: "restart" as const,
-      status: "ok" as const,
-      ts: 100,
-      message: "Restart requested by /restart",
-      stats: { mode: "gateway.restart", reason: "/restart" },
-    };
-    const payloadB = { ...payloadA, ts: 200 };
-    const textA = formatRestartSentinelMessage(payloadA);
-    const textB = formatRestartSentinelMessage(payloadB);
-    expect(textA).toBe(textB);
-    expect(textA).toContain("Gateway restart ok");
-    expect(textA).not.toContain("Gateway restart restart");
-    expect(textA).not.toContain('"ts"');
-  });
-
-  it("summarizes restart payloads and trims log tails without trailing whitespace", () => {
-    expect(
-      summarizeRestartSentinel({
-        kind: "update",
-        status: "skipped",
-        ts: 1,
-      }),
-    ).toBe("Gateway restart update skipped");
-    expect(trimLogTail("hello\n")).toBe("hello");
-    expect(trimLogTail(undefined)).toBeNull();
   });
 
   it("writes the running version back to update sentinels on startup", async () => {
@@ -536,6 +620,50 @@ describe("restart sentinel", () => {
           },
         },
       });
+    });
+  });
+
+  it("finalizes only the captured database when the environment changes during its read", async () => {
+    const originalEnv = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-sentinel-original-") };
+    const replacementEnv = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-sentinel-replacement-") };
+    openOpenClawStateDatabase({ env: originalEnv });
+    openOpenClawStateDatabase({ env: replacementEnv });
+    const payload = {
+      kind: "update" as const,
+      status: "ok" as const,
+      ts: 1,
+      stats: { after: { version: "before" } },
+    };
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+    let original: ReturnType<typeof writeRestartSentinelRowSync>;
+    let replacement: ReturnType<typeof writeRestartSentinelRowSync>;
+    try {
+      original = runOpenClawStateWriteTransaction(
+        ({ db }) => writeRestartSentinelRowSync(db, { ...payload, message: "original" }),
+        { env: originalEnv },
+      );
+      replacement = runOpenClawStateWriteTransaction(
+        ({ db }) => writeRestartSentinelRowSync(db, { ...payload, message: "replacement" }),
+        { env: replacementEnv },
+      );
+    } finally {
+      clock.mockRestore();
+    }
+    expect(original.revision).toBe(replacement.revision);
+
+    await withEnvAsync(originalEnv, async () => {
+      mockThrowWorkerRead.mockImplementationOnce(() => {
+        process.env.OPENCLAW_STATE_DIR = replacementEnv.OPENCLAW_STATE_DIR;
+      });
+      await expect(
+        finalizeUpdateRestartSentinelRunningVersion("running-version"),
+      ).resolves.toMatchObject({
+        payload: { message: "original", stats: { after: { version: "running-version" } } },
+      });
+      await expect(readRestartSentinel(originalEnv)).resolves.toMatchObject({
+        payload: { message: "original", stats: { after: { version: "running-version" } } },
+      });
+      await expect(readRestartSentinel(replacementEnv)).resolves.toEqual(replacement);
     });
   });
 
@@ -623,13 +751,16 @@ describe("restart sentinel", () => {
           },
         });
 
-        await finalizeUpdateRestartSentinelRunningVersion(
+        const finalized = await finalizeUpdateRestartSentinelRunningVersion(
           "actual-version",
           process.env,
           "bbbbbbbb1234",
           installRoot,
         );
-        await clearRestartSentinel();
+        if (!finalized) {
+          throw new Error("Expected a finalized update sentinel");
+        }
+        await expect(clearRestartSentinelIfRevision(finalized.revision)).resolves.toBe(true);
 
         await expect(readVerifiedGitUpdateReceipt()).resolves.toEqual({
           root: await fs.realpath(installRoot),
@@ -778,21 +909,23 @@ describe("restart sentinel", () => {
 });
 
 describe("restart sentinel error visibility", () => {
-  it("throws when clearRestartSentinel cannot durably delete the row", async () => {
+  it("throws when revision-owned cleanup cannot durably delete the row", async () => {
     await withRestartSentinelStateDir(async () => {
       const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
-      mockThrowWrite.mockImplementationOnce(() => {
+      mockThrowWorkerWrite.mockImplementationOnce(() => {
         throw new Error("SQLITE_IOERR: disk I/O error");
       });
 
-      await expect(clearRestartSentinel()).rejects.toThrow("SQLITE_IOERR: disk I/O error");
+      await expect(clearRestartSentinelIfRevision(written.revision)).rejects.toThrow(
+        "SQLITE_IOERR: disk I/O error",
+      );
       expect(mockWarn).not.toHaveBeenCalled();
       await expect(readRestartSentinel()).resolves.toEqual(written);
     });
   });
 
   it("logs a warning and returns null when readRestartSentinel DB read fails", async () => {
-    mockThrowOpen.mockImplementationOnce(() => {
+    mockThrowWorkerRead.mockImplementationOnce(() => {
       throw new Error("SQLITE_CORRUPT: database disk image is malformed");
     });
 
@@ -807,7 +940,7 @@ describe("restart sentinel error visibility", () => {
   });
 
   it("logs a warning and returns false when hasRestartSentinel DB read fails", async () => {
-    mockThrowOpen.mockImplementationOnce(() => {
+    mockThrowWorkerRead.mockImplementationOnce(() => {
       throw new Error("SQLITE_BUSY: database is locked");
     });
 
@@ -819,74 +952,5 @@ describe("restart sentinel error visibility", () => {
         "Failed to check restart sentinel: SQLITE_BUSY: database is locked",
       );
     });
-  });
-});
-
-describe("restart success continuation", () => {
-  it("does not infer an agent turn from session context alone", () => {
-    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toBeNull();
-  });
-
-  it("keeps explicit continuation messages", () => {
-    expect(
-      buildRestartSuccessContinuation({
-        sessionKey: "agent:main:main",
-        continuationMessage: "wake after restart",
-      }),
-    ).toEqual({
-      kind: "agentTurn",
-      message: "wake after restart",
-    });
-  });
-
-  it("stays silent without session context", () => {
-    expect(buildRestartSuccessContinuation({})).toBeNull();
-  });
-});
-
-describe("restart sentinel message dedup", () => {
-  it("omits duplicate Reason: line when stats.reason matches message", () => {
-    const payload = {
-      kind: "restart" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      message: "Applying config changes",
-      stats: { mode: "gateway.restart", reason: "Applying config changes" },
-    };
-    const result = formatRestartSentinelMessage(payload);
-    // The message text should appear exactly once, not duplicated as "Reason: ..."
-    const occurrences = result.split("Applying config changes").length - 1;
-    expect(occurrences).toBe(1);
-    expect(result).not.toContain("Reason:");
-  });
-
-  it("keeps Reason: line when stats.reason differs from message", () => {
-    const payload = {
-      kind: "restart" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      message: "Restart requested by /restart",
-      stats: { mode: "gateway.restart", reason: "/restart" },
-    };
-    const result = formatRestartSentinelMessage(payload);
-    expect(result).toContain("Restart requested by /restart");
-    expect(result).toContain("Reason: /restart");
-  });
-
-  it("formats the non-interactive doctor command as actionability guidance", () => {
-    expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toBe(
-      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
-    );
-  });
-
-  it("keeps profile-aware doctor guidance actionable outside constrained delivery surfaces", () => {
-    expect(
-      formatDoctorNonInteractiveHint({
-        OPENCLAW_PROFILE: "isolated",
-        PATH: "/usr/bin:/bin",
-      }),
-    ).toBe(
-      "Recommended follow-up: run openclaw --profile isolated doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
-    );
   });
 });

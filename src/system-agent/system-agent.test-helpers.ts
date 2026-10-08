@@ -214,10 +214,6 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
   ].filter((id, index, ids): id is string => Boolean(id) && ids.indexOf(id) === index);
   const deps: SystemAgentVerifiedInferenceDeps = {
     loadAuthProfileStoreForRuntime,
-    ensureAuthProfileStore: (() => ({
-      version: 1,
-      profiles: profileId ? { [profileId]: credential } : {},
-    })) as never,
     resolveApiKeyForProvider: async () => resolvedAuth,
     validateAgentHarnessRuntimeArtifact: async () => true,
     loadPluginRegistrySnapshot: (() => ({

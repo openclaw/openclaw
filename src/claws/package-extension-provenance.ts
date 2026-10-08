@@ -1,5 +1,10 @@
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
-import type { ClawAppliedExtension, ClawPackage } from "./types.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
+import type {
+  ClawAppliedExtension,
+  ClawPackageKind,
+  ClawPackageSource,
+} from "./manifest-contract.js";
 
 export const CLAW_PACKAGE_REF_SCHEMA_VERSION = "openclaw.clawPackageRef.v1" as const;
 export type ClawPackageRefStatus = "pending" | "complete" | "failed" | "rolled_back";
@@ -10,8 +15,8 @@ export type PersistedClawPackageRef = {
   schemaVersion: typeof CLAW_PACKAGE_REF_SCHEMA_VERSION;
   agentId: string;
   clawName: string;
-  kind: ClawPackage["kind"];
-  source: ClawPackage["source"];
+  kind: ClawPackageKind;
+  source: ClawPackageSource;
   ref: string;
   version: string;
   integrity: string;
@@ -24,25 +29,18 @@ export type PersistedClawPackageRef = {
   updatedAtMs: number;
 };
 
-export type PackageRefRow = {
-  schema_version: string;
-  agent_id: string;
-  claw_name: string;
-  package_kind: ClawPackage["kind"];
-  package_source: ClawPackage["source"];
-  package_ref: string;
-  package_version: string;
-  package_integrity: string;
+export type PackageRefRow = Omit<
+  DB["claw_package_refs"],
+  "independent_owner" | "installed_at_ms" | "updated_at_ms"
+> & {
+  package_kind: ClawPackageKind;
+  package_source: ClawPackageSource;
   package_status: ClawPackageRefStatus;
   relationship: ClawPackageRelationship;
   origin: ClawPackageOrigin;
   independent_owner: number | bigint;
-  extension_id: string | null;
   extension_format: ClawAppliedExtension["format"] | null;
   extension_detected_format: ClawAppliedExtension["detectedFormat"] | null;
-  extension_mapped_json: string | null;
-  extension_unavailable_json: string | null;
-  extension_adapter_identity: string | null;
   installed_at_ms: number | bigint;
   updated_at_ms: number | bigint;
 };

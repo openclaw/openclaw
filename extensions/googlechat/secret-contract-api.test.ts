@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 
 describe("googlechat secret contract import boundary", () => {
   it("exposes service-account targets without loading secret setup or resolution", async () => {
-    const stdout = await runDirectImportSmoke(`
+    const stdout = await runDirectImportSmoke(
+      `
 import { realpathSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -38,7 +39,9 @@ try {
 } finally {
   hooks.deregister();
 }
-`);
+`,
+      { runtime: "node" },
+    );
     const result = JSON.parse(stdout);
     expect(result.observed.entry).toBe(true);
     expect(result.collectorCallable).toBe(true);

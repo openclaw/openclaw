@@ -1,29 +1,16 @@
 import { Option, type Command } from "commander";
+import type { ChannelSetupFieldMetadata } from "../channels/plugins/setup-contract.js";
 import { getCommandArgsWithRootOptions } from "../infra/cli-root-options.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 type ChannelSetupFlagArity = "boolean" | "value" | "conflict";
 
-export type ChannelSetupCliOption = {
-  flags: string;
-  negatedFlags?: string;
-  description: string;
-  defaultValue?: boolean | string;
-};
+export type ChannelSetupCliOption = ChannelSetupFieldMetadata["cli"];
 
 const CHANNEL_ADD_SHARED_BOOLEAN_OPTIONS = new Set(["--help", "-h"]);
 const CHANNEL_ADD_SHARED_VALUE_OPTIONS = new Set(["--agent", "--channel", "--account", "--name"]);
-const CHANNEL_ADD_SHARED_VALUE_OPTION_PREFIXES = [...CHANNEL_ADD_SHARED_VALUE_OPTIONS].map(
-  (flag) => `${flag}=`,
-);
 
-export const loadChannelSetupCliOptions = createLazyPromise(
-  () => import("../channels/plugins/cli-add-options.js"),
-);
-
-export function getChannelSetupOptionSwitches(flags: string): string[] {
-  const option = new Option(flags);
+export function getChannelSetupOptionSwitches(option: Option): string[] {
   return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
 }
 
@@ -41,11 +28,11 @@ function buildChannelSetupFlagArityMap(
   };
   for (const option of options) {
     const arity = resolveChannelSetupFlagArity(option.flags);
-    for (const flag of getChannelSetupOptionSwitches(option.flags)) {
+    for (const flag of getChannelSetupOptionSwitches(new Option(option.flags))) {
       addSwitch(flag, arity);
     }
     if (option.negatedFlags) {
-      for (const flag of getChannelSetupOptionSwitches(option.negatedFlags)) {
+      for (const flag of getChannelSetupOptionSwitches(new Option(option.negatedFlags))) {
         addSwitch(flag, "boolean");
       }
     }
@@ -96,7 +83,7 @@ export async function resolveChannelsAddChannelFromArgv(
       index += 1;
       continue;
     }
-    if (CHANNEL_ADD_SHARED_VALUE_OPTION_PREFIXES.some((prefix) => arg.startsWith(prefix))) {
+    if (arg.includes("=") && CHANNEL_ADD_SHARED_VALUE_OPTIONS.has(arg.slice(0, arg.indexOf("=")))) {
       continue;
     }
     if (CHANNEL_ADD_SHARED_BOOLEAN_OPTIONS.has(arg)) {
@@ -107,7 +94,8 @@ export async function resolveChannelsAddChannelFromArgv(
       // channel option. Lazily inspect serialized all-channel metadata for arity only; actual
       // option registration remains scoped to the selected channel.
       if (!channelFlagArities) {
-        const { resolveChannelSetupCliOptionMetadata } = await loadChannelSetupCliOptions();
+        const { resolveChannelSetupCliOptionMetadata } =
+          await import("../channels/plugins/cli-add-options.js");
         const { optionCandidates } = resolveChannelSetupCliOptionMetadata(undefined, {
           includeAll: true,
         });
@@ -132,13 +120,32 @@ export async function resolveChannelsAddChannelFromArgv(
 export function resolveChannelsAddOptions(
   channelArg: string | undefined,
   opts: Record<string, unknown>,
-  command?: Pick<Command, "getOptionValueSource">,
+  command: Pick<Command, "getOptionValueSource">,
+  params?: {
+    preserveLegacyDefaults?: boolean;
+    /** Attribute names whose empty Commander defaults should be dropped (legacy int options). */
+    dropEmptyLegacyDefaultsForAttributeNames?: ReadonlySet<string>;
+  },
 ): Record<string, unknown> {
-  const forwardedOpts = command
-    ? Object.fromEntries(
-        Object.entries(opts).filter(([key]) => command.getOptionValueSource(key) === "cli"),
-      )
-    : opts;
+  const forwardedOpts = Object.fromEntries(
+    Object.entries(opts).filter(([key, value]) => {
+      const source = command.getOptionValueSource(key);
+      if (source === "cli") {
+        return true;
+      }
+      // Legacy plugins still install manifest defaults through Commander.
+      // Keep those values. Drop empty-string defaults only for int options so
+      // omitted ints are not treated as explicitly blank user input, while
+      // empty text defaults remain valid plugin metadata.
+      if (params?.preserveLegacyDefaults !== true || source !== "default" || value === undefined) {
+        return false;
+      }
+      if (value === "") {
+        return !params.dropEmptyLegacyDefaultsForAttributeNames?.has(key);
+      }
+      return true;
+    }),
+  );
   return {
     ...forwardedOpts,
     channel: forwardedOpts.channel ?? channelArg,

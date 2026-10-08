@@ -7,13 +7,10 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { parseSkillProposalRecord } from "./store-record.js";
-import {
-  openSkillWorkshopStore,
-  type SkillProposalRow,
-  type SkillWorkshopDatabase,
-  type SkillWorkshopStoreOptions,
-} from "./store-sqlite-schema.js";
+import type { SkillProposalRow, SkillWorkshopDatabase } from "./store-sqlite-schema.js";
 import type { SkillProposalRecord } from "./types.js";
+
+export type StoredSkillProposal = { record: SkillProposalRecord; row: SkillProposalRow };
 
 export function parseJson(value: string | null): unknown {
   return value === null ? undefined : safeParseJson(value);
@@ -39,13 +36,13 @@ export function parseSkillProposalRow(row: SkillProposalRow): SkillProposalRecor
   return record;
 }
 
-export function readStoredProposal(
+export function readStoredProposalInDatabase(
+  database: DatabaseSync,
   proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-): { record: SkillProposalRecord; row: SkillProposalRow } | null {
-  const { database, kysely } = openSkillWorkshopStore(options);
+): StoredSkillProposal | null {
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const row = executeSqliteQueryTakeFirstSync(
-    database.db,
+    database,
     kysely.selectFrom("skill_workshop_proposals").selectAll().where("proposal_id", "=", proposalId),
   );
   if (!row) {

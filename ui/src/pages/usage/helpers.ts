@@ -1,6 +1,4 @@
-// Control UI module implements usage helpers behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { formatUiError } from "../../lib/format-error.ts";
 
 type UsageQueryTerm = {
   key?: string;
@@ -35,13 +33,14 @@ type UsageSessionQueryTarget = {
   } | null;
 };
 
-export function currentLocalDate(): string {
-  const date = new Date();
+export function currentLocalDate(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-export function toUsageErrorMessage(error: unknown): string {
-  return formatUiError(error, "request failed");
+export function createDefaultUsageDateRange(date = new Date()) {
+  const start = new Date(date);
+  start.setDate(start.getDate() - 29);
+  return { startDate: currentLocalDate(start), endDate: currentLocalDate(date) };
 }
 
 export function toggleUsageRangeSelection<T>(
@@ -84,8 +83,6 @@ export function selectUsageSessionKeys(
   }
   return selected.length === 1 && selected[0] === key ? [] : [key];
 }
-
-const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
 
 const globToRegex = (pattern: string): RegExp => {
   const escaped = pattern
@@ -136,44 +133,24 @@ export const extractQueryTerms = (query: string): UsageQueryTerm[] => {
   });
 };
 
-const getSessionText = (session: UsageSessionQueryTarget): string[] => {
-  const items: Array<string | undefined> = [session.label, session.key, session.sessionId];
-  return items
+const normalizeQueryValues = (items: Array<string | undefined>): string[] =>
+  items
     .filter((item): item is string => Boolean(item))
     .map((item) => normalizeLowercaseStringOrEmpty(item));
-};
 
-const getSessionProviders = (session: UsageSessionQueryTarget): string[] => {
-  const providers = new Set<string>();
-  if (session.modelProvider) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.modelProvider));
-  }
-  if (session.providerOverride) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.providerOverride));
-  }
-  if (session.origin?.provider) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.origin.provider));
-  }
-  for (const entry of session.usage?.modelUsage ?? []) {
-    if (entry.provider) {
-      providers.add(normalizeLowercaseStringOrEmpty(entry.provider));
-    }
-  }
-  return Array.from(providers);
-};
+const getSessionProviders = (session: UsageSessionQueryTarget): string[] =>
+  normalizeQueryValues([
+    session.modelProvider,
+    session.providerOverride,
+    session.origin?.provider,
+    ...(session.usage?.modelUsage ?? []).map((entry) => entry.provider),
+  ]);
 
-const getSessionModels = (session: UsageSessionQueryTarget): string[] => {
-  const models = new Set<string>();
-  if (session.model) {
-    models.add(normalizeLowercaseStringOrEmpty(session.model));
-  }
-  for (const entry of session.usage?.modelUsage ?? []) {
-    if (entry.model) {
-      models.add(normalizeLowercaseStringOrEmpty(entry.model));
-    }
-  }
-  return Array.from(models);
-};
+const getSessionModels = (session: UsageSessionQueryTarget): string[] =>
+  normalizeQueryValues([
+    session.model,
+    ...(session.usage?.modelUsage ?? []).map((entry) => entry.model),
+  ]);
 
 const getSessionTools = (session: UsageSessionQueryTarget): string[] =>
   (session.usage?.toolUsage?.tools ?? []).map((tool) => normalizeLowercaseStringOrEmpty(tool.name));
@@ -236,7 +213,7 @@ const prepareUsageQuery = (
     warnings.push(`Missing value for ${term.key}`);
   }
 
-  const value = normalizeQueryText(term.value ?? "");
+  const value = normalizeLowercaseStringOrEmpty(term.value ?? "");
   const numericSpec = Object.hasOwn(NUMERIC_QUERY_SPECS, key)
     ? NUMERIC_QUERY_SPECS[key]
     : undefined;
@@ -255,7 +232,10 @@ const prepareUsageQuery = (
     return matchesEverySession;
   }
   if (!term.key) {
-    return (session) => getSessionText(session).some((text) => text.includes(value));
+    return (session) =>
+      normalizeQueryValues([session.label, session.key, session.sessionId]).some((text) =>
+        text.includes(value),
+      );
   }
 
   switch (key) {
@@ -310,7 +290,7 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
   const warnings: string[] = [];
   const categoricalTerms = new Map<string, UsageQueryPredicate[]>();
   const predicates = terms.map((term) => {
-    const key = normalizeQueryText(term.key ?? "");
+    const key = normalizeLowercaseStringOrEmpty(term.key ?? "");
     const predicate = prepareUsageQuery(term, key, warnings);
     if (!MULTI_VALUE_QUERY_KEYS.has(key)) {
       return predicate;
@@ -330,10 +310,9 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
 };
 
 export function parseToolSummary(content: string) {
-  const lines = content.split("\n");
   const toolCounts = new Map<string, number>();
   const nonToolLines: string[] = [];
-  for (const line of lines) {
+  for (const line of content.split("\n")) {
     const match = /^\[Tool:\s*([^\]]+)\]/.exec(line.trim());
     const name = match?.[1];
     if (name) {
@@ -345,7 +324,7 @@ export function parseToolSummary(content: string) {
     }
     nonToolLines.push(line);
   }
-  const sortedTools = Array.from(toolCounts.entries()).toSorted((a, b) => b[1] - a[1]);
+  const sortedTools = Array.from(toolCounts).toSorted((a, b) => b[1] - a[1]);
   const totalCalls = sortedTools.reduce((sum, [, count]) => sum + count, 0);
   const summary =
     sortedTools.length > 0

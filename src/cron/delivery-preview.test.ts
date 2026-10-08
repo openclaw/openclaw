@@ -1,5 +1,6 @@
 // Delivery preview tests cover dry-run delivery plan output for cron jobs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import type { CronJob } from "./types.js";
 
@@ -10,6 +11,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./isolated-agent/delivery-target.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./isolated-agent/delivery-target.js")>()),
   resolveDeliveryTarget: mocks.resolveDeliveryTarget,
+  prepareCronDeliveryTargetContexts: async (_cfg: unknown, requests: unknown[]) =>
+    requests.map(() => ({
+      ok: true,
+      value: { mainSessionKey: "agent:main:main", usedSharedMainFallback: false },
+    })),
 }));
 
 const { resolveCronDeliveryPreviews } = await import("./delivery-preview.js");
@@ -48,7 +54,7 @@ describe("resolveCronDeliveryPreview", () => {
         sessionKey: "agent:avery:telegram:direct:direct-123",
         sessionTarget: job.sessionTarget,
       }),
-      { dryRun: true },
+      expect.objectContaining({ dryRun: true }),
     );
     expect(preview.detail).toBe(
       "resolved from last, session agent:avery:telegram:direct:direct-123",
@@ -65,6 +71,35 @@ describe("resolveCronDeliveryPreview", () => {
 
     expect(preview).toEqual({ label: "not requested", detail: "not requested" });
     expect(mocks.resolveDeliveryTarget).not.toHaveBeenCalled();
+  });
+
+  it("lists a refused agent's repair reason beside healthy delivery previews", async () => {
+    const refusal = {
+      agentId: "cleaner",
+      paths: ["/synthetic/cleaner/openclaw-agent.sqlite"],
+      embeddedOwnerId: "main",
+      code: "agent-database-ownership-mismatch" as const,
+      reason: "Refused agent cleaner: its database belongs to main.",
+      repairHint: "Inspect the divergent copy and restart after repair.",
+    };
+    recordAgentDatabaseAdmissions([refusal]);
+    try {
+      const previews = await resolveCronDeliveryPreviews({
+        cfg: {},
+        jobs: [
+          makeCronJob({ id: "healthy", agentId: "main" }),
+          makeCronJob({ id: "refused", agentId: "cleaner" }),
+        ],
+      });
+      expect(previews.healthy?.label).toBe("announce -> telegram:direct-123");
+      expect(previews.refused).toEqual({
+        label: "agent cleaner unavailable",
+        detail: `${refusal.reason}\n${refusal.repairHint}`,
+      });
+      expect(mocks.resolveDeliveryTarget).toHaveBeenCalledTimes(1);
+    } finally {
+      recordAgentDatabaseAdmissions([]);
+    }
   });
 
   it("previews explicit message-tool targets on no-delivery jobs", async () => {
@@ -93,7 +128,7 @@ describe("resolveCronDeliveryPreview", () => {
         sessionKey: undefined,
         sessionTarget: "isolated",
       }),
-      { dryRun: true },
+      expect.objectContaining({ dryRun: true }),
     );
     expect(preview).toEqual({
       label: "none -> telegram:direct-123",
@@ -168,7 +203,7 @@ describe("resolveCronDeliveryPreview", () => {
         sessionKey: undefined,
         sessionTarget: "isolated",
       }),
-      { dryRun: true },
+      expect.objectContaining({ dryRun: true }),
     );
     expect(preview).toEqual({
       label: "none -> last",

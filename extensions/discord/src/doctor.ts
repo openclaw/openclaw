@@ -1,6 +1,5 @@
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Discord plugin module implements doctor behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   asObjectRecord,
@@ -30,53 +29,40 @@ function sanitizeForLog(value: string): string {
 function collectDiscordIdLists(
   prefix: string,
   account: Record<string, unknown>,
+  userAllowlistsOnly = false,
 ): DiscordIdListRef[] {
-  const refs: DiscordIdListRef[] = [
-    { pathLabel: `${prefix}.allowFrom`, holder: account, key: "allowFrom" },
-  ];
+  const refs: DiscordIdListRef[] = [];
+  const addLists = (holder: Record<string, unknown>, path: string, keys: string[]) => {
+    for (const key of keys) {
+      refs.push({ pathLabel: `${path}.${key}`, holder, key });
+    }
+  };
+  addLists(account, prefix, ["allowFrom"]);
   const dm = asObjectRecord(account.dm);
   if (dm) {
-    refs.push({ pathLabel: `${prefix}.dm.allowFrom`, holder: dm, key: "allowFrom" });
-    refs.push({ pathLabel: `${prefix}.dm.groupChannels`, holder: dm, key: "groupChannels" });
+    addLists(
+      dm,
+      `${prefix}.dm`,
+      userAllowlistsOnly ? ["allowFrom"] : ["allowFrom", "groupChannels"],
+    );
   }
   const execApprovals = asObjectRecord(account.execApprovals);
-  if (execApprovals) {
-    refs.push({
-      pathLabel: `${prefix}.execApprovals.approvers`,
-      holder: execApprovals,
-      key: "approvers",
-    });
+  if (execApprovals && !userAllowlistsOnly) {
+    addLists(execApprovals, `${prefix}.execApprovals`, ["approvers"]);
   }
-  const guilds = asObjectRecord(account.guilds);
-  if (!guilds) {
-    return refs;
-  }
-  for (const guildId of Object.keys(guilds)) {
-    const guild = asObjectRecord(guilds[guildId]);
+  const memberKeys = userAllowlistsOnly ? ["users"] : ["users", "roles"];
+  for (const [guildId, guildValue] of Object.entries(asObjectRecord(account.guilds) ?? {})) {
+    const guild = asObjectRecord(guildValue);
     if (!guild) {
       continue;
     }
-    refs.push({ pathLabel: `${prefix}.guilds.${guildId}.users`, holder: guild, key: "users" });
-    refs.push({ pathLabel: `${prefix}.guilds.${guildId}.roles`, holder: guild, key: "roles" });
-    const channels = asObjectRecord(guild.channels);
-    if (!channels) {
-      continue;
-    }
-    for (const channelId of Object.keys(channels)) {
-      const channel = asObjectRecord(channels[channelId]);
-      if (!channel) {
-        continue;
+    const guildPath = `${prefix}.guilds.${guildId}`;
+    addLists(guild, guildPath, memberKeys);
+    for (const [channelId, channelValue] of Object.entries(asObjectRecord(guild.channels) ?? {})) {
+      const channel = asObjectRecord(channelValue);
+      if (channel) {
+        addLists(channel, `${guildPath}.channels.${channelId}`, memberKeys);
       }
-      refs.push({
-        pathLabel: `${prefix}.guilds.${guildId}.channels.${channelId}.users`,
-        holder: channel,
-        key: "users",
-      });
-      refs.push({
-        pathLabel: `${prefix}.guilds.${guildId}.channels.${channelId}.roles`,
-        holder: channel,
-        key: "roles",
-      });
     }
   }
   return refs;
@@ -115,26 +101,10 @@ export function collectDiscordNumericIdWarnings(params: {
   if (params.hits.length === 0) {
     return [];
   }
-  const hitsByListPath = new Map<string, DiscordNumericIdHit[]>();
-  for (const hit of params.hits) {
-    const listPath = hit.path.replace(/\[\d+\]$/, "");
-    const existing = hitsByListPath.get(listPath);
-    if (existing) {
-      existing.push(hit);
-    } else {
-      hitsByListPath.set(listPath, [hit]);
-    }
-  }
-
-  const repairableHits: DiscordNumericIdHit[] = [];
-  const blockedHits: DiscordNumericIdHit[] = [];
-  for (const hits of hitsByListPath.values()) {
-    if (hits.some((hit) => !hit.safe)) {
-      blockedHits.push(...hits);
-    } else {
-      repairableHits.push(...hits);
-    }
-  }
+  const listPath = (hit: DiscordNumericIdHit) => hit.path.replace(/\[\d+\]$/, "");
+  const blockedPaths = new Set(params.hits.filter((hit) => !hit.safe).map(listPath));
+  const repairableHits = params.hits.filter((hit) => !blockedPaths.has(listPath(hit)));
+  const blockedHits = params.hits.filter((hit) => blockedPaths.has(listPath(hit)));
 
   const lines: string[] = [];
   if (repairableHits.length > 0) {
@@ -198,18 +168,12 @@ export function maybeRepairDiscordNumericIds(
     }
   }
 
-  if (changes.length === 0) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: collectDiscordNumericIdWarnings({ hits, doctorFixCommand }),
-    };
-  }
+  const repaired = changes.length > 0;
   return {
-    config: next,
+    config: repaired ? next : cfg,
     changes,
     warnings: collectDiscordNumericIdWarnings({
-      hits: hits.filter((hit) => !hit.safe),
+      hits: repaired ? hits.filter((hit) => !hit.safe) : hits,
       doctorFixCommand,
     }),
   };
@@ -286,31 +250,8 @@ function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
     if (scope.dangerousNameMatchingEnabled) {
       continue;
     }
-    addHits(`${scope.prefix}.allowFrom`, scope.account.allowFrom);
-    const dm = asObjectRecord(scope.account.dm);
-    if (dm) {
-      addHits(`${scope.prefix}.dm.allowFrom`, dm.allowFrom);
-    }
-    const guilds = asObjectRecord(scope.account.guilds);
-    if (!guilds) {
-      continue;
-    }
-    for (const [guildId, guildRaw] of Object.entries(guilds)) {
-      const guild = asObjectRecord(guildRaw);
-      if (!guild) {
-        continue;
-      }
-      addHits(`${scope.prefix}.guilds.${guildId}.users`, guild.users);
-      const channels = asObjectRecord(guild.channels);
-      if (!channels) {
-        continue;
-      }
-      for (const [channelId, channelRaw] of Object.entries(channels)) {
-        const channel = asObjectRecord(channelRaw);
-        if (channel) {
-          addHits(`${scope.prefix}.guilds.${guildId}.channels.${channelId}.users`, channel.users);
-        }
-      }
+    for (const ref of collectDiscordIdLists(scope.prefix, scope.account, true)) {
+      addHits(ref.pathLabel, ref.holder[ref.key]);
     }
   }
 
@@ -326,7 +267,7 @@ function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
     `- Found ${hits.length} mutable allowlist ${hits.length === 1 ? "entry" : "entries"} across discord while name matching is disabled by default.`,
     ...exampleLines,
     ...(remaining ? [remaining] : []),
-    `- Option A (break-glass): enable channels.discord.dangerousNameMatching=true for the affected scope.`,
+    `- Option A (break-glass): enable channels.discord.dangerouslyAllowNameMatching=true for the affected scope.`,
     `- Option B (recommended): resolve names to stable Discord IDs and rewrite the allowlist entries.`,
   ];
 }

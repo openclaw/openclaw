@@ -1,8 +1,8 @@
 // Control UI tests cover agents utils behavior.
 import { describe, expect, it } from "vitest";
+import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../../../../src/shared/avatar-limits.js";
 import {
-  assistantAvatarFallbackUrl,
   isRenderableControlUiAvatarUrl,
   resolveAgentAvatarUrl,
   resolveAssistantTextAvatar,
@@ -12,7 +12,6 @@ import {
   buildAgentContext,
   buildModelOptions,
   createPrimaryModelExclusion,
-  formatAgentRuntimeLabel,
   formatBytes,
   listSelectableAgents,
   normalizeAgentLabel,
@@ -427,13 +426,6 @@ describe("resolveEffectiveModelFallbacks", () => {
   });
 });
 
-describe("assistantAvatarFallbackUrl", () => {
-  it("uses the bundled Molty png for assistant profile fallbacks", () => {
-    expect(assistantAvatarFallbackUrl("/ui")).toBe("/ui/apple-touch-icon.png");
-    expect(assistantAvatarFallbackUrl("")).toBe("/apple-touch-icon.png");
-  });
-});
-
 describe("resolveAssistantTextAvatar", () => {
   it("rejects unsafe invisible controls in assistant text avatars", () => {
     expect(resolveAssistantTextAvatar("VC")).toBe("VC");
@@ -521,7 +513,7 @@ describe("resolveAgentSkillsFilter", () => {
         {
           agents: {
             defaults: { skills: [" github ", "weather"] },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
         },
         "main",
@@ -580,7 +572,7 @@ describe("buildAgentContext", () => {
               fallbacks: ["openai/gpt-5.2-codex"],
             },
           },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       null,
@@ -599,7 +591,7 @@ describe("buildAgentContext", () => {
       {
         agents: {
           defaults: { skills: ["github", "weather"] },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       null,

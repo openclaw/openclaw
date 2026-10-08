@@ -1,4 +1,3 @@
-// Resolves persisted delivery route fields for session-bound replies.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -7,8 +6,8 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
-  deliveryContextFromSession,
   deliveryContextKey,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
@@ -38,10 +37,7 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
 
 function isMainSessionKey(sessionKey?: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return normalizeLowercaseStringOrEmpty(sessionKey) === "main";
-  }
-  return normalizeLowercaseStringOrEmpty(parsed.rest) === "main";
+  return normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey) === "main";
 }
 
 const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);

@@ -13,6 +13,8 @@ How a client proves who it is: the handshake auth paths, device identity and pai
 
 ## Auth
 
+Owner page: [Gateway authentication](/gateway/authentication) — auth modes, token/password setup, and the operator-facing policy this wire contract enforces.
+
 - Shared-secret gateway auth accepts the configured secret in either
   `connect.params.auth.token` or `connect.params.auth.password`.
   `gateway.auth.mode: "token"` selects `gateway.auth.token`; `"password"`
@@ -35,7 +37,7 @@ How a client proves who it is: the handshake auth paths, device identity and pai
   rotated token uses `hello-ok.auth.scopes`; its approved grant matches that
   connection when it is issued.
 - Reconnecting with that stored device token should also reuse the stored
-  approved scope set for that token. This preserves read/probe/status access
+  approved scope set for that token. This preserves read/check/status access
   already granted and avoids silently collapsing reconnects to a narrower
   implicit admin-only scope.
 - Client-side connect auth assembly (`selectConnectAuth` in
@@ -95,21 +97,50 @@ How a client proves who it is: the handshake auth paths, device identity and pai
     `wait_then_retry`, `review_auth_configuration`
     (`packages/gateway-protocol/src/connect-error-details.ts`).
 - Client behavior for `AUTH_TOKEN_MISMATCH`:
-  - Trusted clients may attempt one bounded retry with a cached per-device
-    token.
+  - Native Apple clients require `canRetryWithDeviceToken=true` before one
+    bounded retry with a cached per-device token on a trusted endpoint. A false
+    or missing flag pauses automatic retries and keeps the stored device token
+    out of a later shared-token connection.
   - If that retry fails, stop automatic reconnect loops and surface operator
     action guidance.
 - `AUTH_SCOPE_MISMATCH` means the device token was recognized but does not
   cover the requested role/scopes. Do not present this as a bad token; prompt
   the operator to re-pair or approve the narrower/broader scope contract.
+- `OPERATOR_ACCESS_DENIED` means the person authenticated, but the Gateway's
+  operator access policy (for example, a role bound to an `accessPolicyPlugin`)
+  currently grants no access. This is not a credential problem. Keep reconnecting
+  with backoff so newly granted access applies without user action, and show
+  administrator guidance to assign a role or grant access.
 
 ## Device identity and pairing
+
+Owner page: [Gateway pairing](/gateway/pairing) — the approval flow, device records, and CLI surfaces behind these fields.
 
 - Nodes should include a stable device identity (`device.id`) derived from a
   keypair fingerprint.
 - Gateways issue tokens per device + role.
 - Pairing approvals are required for new device IDs unless local
   auto-approval is enabled.
+- Control UI operator clients can keep their pre-approval socket open. A
+  `NOT_PAIRED` connect response with
+  `details.code: "PAIRING_REQUIRED"` and `details.waitForResolution: true` binds
+  the wait to `details.requestId` and `details.deviceId`. This is not an admitted
+  session: no RPCs, subscriptions, or other clients' pairing events are available.
+  The Gateway sends the existing `device.pair.resolved` event only for that exact
+  request/device, with `decision` set to `approved`, `rejected`, or `expired`,
+  then closes the socket. A superseded request only closes its waiting sockets,
+  without reporting an approval or rejection. Approval or a superseded-request
+  close prompts a fresh authenticated connect; the event itself never grants access. Rejection and
+  expiry stop automatic reconnect until explicit user action. The browser exposes
+  these terminal outcomes as `PAIRING_REJECTED` and `PAIRING_EXPIRED` error detail
+  codes. Waiters are connection-local and removed on disconnect; no denial history
+  is persisted. Clients that do not handle `waitForResolution` can still close
+  after the failed connect response. These are additive details and event
+  semantics, not a protocol version change.
+- If approval overlaps a reconnect, the Gateway checks the current paired device
+  before completing the handshake. The approved key, role, scopes, and pinned
+  client metadata must authorize that connection; a consumed request alone does
+  not grant access.
 - Pairing auto-approval is centered on direct local loopback connects.
 - OpenClaw also has a narrow backend/container-local self-connect path for
   trusted shared-secret helper flows.
@@ -161,6 +192,8 @@ Migration target:
   metadata pinning still controls command policy on reconnect.
 
 ## TLS and pinning
+
+Owner page: [Remote access](/gateway/remote) — configuring `gateway.tls` and obtaining the fingerprint clients pin.
 
 - TLS is supported for WS connections (`gateway.tls` config).
 - Clients may optionally pin the gateway cert fingerprint via

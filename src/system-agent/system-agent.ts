@@ -1,4 +1,3 @@
-// OpenClaw CLI runner selects JSON, one-shot, or interactive setup-helper mode.
 import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
 import { withProgress } from "../cli/progress.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
@@ -23,18 +22,11 @@ import {
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
 
-/**
- * CLI entry point for OpenClaw.
- *
- * This module chooses JSON, one-shot, or interactive TUI mode and delegates all
- * command parsing/execution to dialogue and operation modules.
- */
 type SystemAgentInteractiveRunner = (
   opts: RunSystemAgentOptions,
   runtime: RuntimeEnv,
 ) => Promise<void>;
 
-/** Options accepted by the OpenClaw command runner. */
 export type RunSystemAgentOptions = {
   message?: string;
   yes?: boolean;
@@ -44,7 +36,6 @@ export type RunSystemAgentOptions = {
   welcomeVariant?: "onboarding";
   /** Workspace override for the proposed first-run setup (from --workspace). */
   setupWorkspace?: string;
-  /** Selected first-agent name for the onboarding setup proposal. */
   setupAgentName?: string;
   onReady?: () => void;
   deps?: SystemAgentCommandDeps;
@@ -61,19 +52,6 @@ export type RunSystemAgentOptions = {
 /** User-supplied command options before the inference gate binds the run. */
 export type SystemAgentCommandOptions = Omit<RunSystemAgentOptions, "verifiedInference">;
 
-function systemAgentCommandDepsFromOptions(
-  opts: RunSystemAgentOptions,
-): SystemAgentCommandDeps | undefined {
-  if (!opts.deps && !opts.formatOverview && !opts.loadOverview) {
-    return undefined;
-  }
-  return {
-    ...opts.deps,
-    ...(opts.formatOverview ? { formatOverview: opts.formatOverview } : {}),
-    ...(opts.loadOverview ? { loadOverview: opts.loadOverview } : {}),
-  };
-}
-
 async function requireVerifiedInference(opts: RunSystemAgentOptions): Promise<void> {
   if (!opts.verifiedInference) {
     throw new SystemAgentInferenceUnavailableError("conversation");
@@ -84,9 +62,9 @@ async function requireVerifiedInference(opts: RunSystemAgentOptions): Promise<vo
       return;
     }
   } catch (error) {
-    throw new SystemAgentInferenceUnavailableError("conversation", [error]);
+    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
   }
-  throw new SystemAgentInferenceUnavailableError("conversation");
+  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
 }
 
 async function requirePersistentApplyInference(
@@ -110,9 +88,9 @@ async function requirePersistentApplyInference(
     if (error instanceof SystemAgentInferenceUnavailableError) {
       throw error;
     }
-    throw new SystemAgentInferenceUnavailableError("conversation", [error]);
+    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
   }
-  throw new SystemAgentInferenceUnavailableError("conversation");
+  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
 }
 
 async function runOneShot(
@@ -132,11 +110,17 @@ async function runOneShot(
   }
   await executeSystemAgentOperation(operation, runtime, {
     approved,
-    deps: systemAgentCommandDepsFromOptions(opts),
+    deps:
+      opts.deps || opts.formatOverview || opts.loadOverview
+        ? {
+            ...opts.deps,
+            ...(opts.formatOverview ? { formatOverview: opts.formatOverview } : {}),
+            ...(opts.loadOverview ? { loadOverview: opts.loadOverview } : {}),
+          }
+        : undefined,
   });
 }
 
-/** Run OpenClaw in JSON, one-shot message, or interactive TUI mode. */
 export async function runSystemAgent(
   opts: RunSystemAgentOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -156,8 +140,10 @@ export async function runSystemAgent(
   const { resolveAgentWorkspaceDir } = await import("../agents/agent-scope.js");
   const { loadAgentRuntimePluginRegistryHandle } = await import("../agents/runtime-plugins.js");
   const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  const { createPluginCache, withPluginCache } = await import("../plugins/plugin-cache.js");
   const { withPluginRuntimeRegistryScope } =
     await import("../plugins/runtime/gateway-request-scope.js");
+  await using cache = createPluginCache();
   const readSnapshot =
     boundOpts.deps?.readConfigFileSnapshot ??
     (await import("../config/config.js")).readConfigFileSnapshot;
@@ -168,32 +154,31 @@ export async function runSystemAgent(
       readConfigFileSnapshot: async () => snapshot,
     });
     if (!currentArtifacts) {
-      throw new SystemAgentInferenceUnavailableError("conversation");
+      throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
     }
     const config = snapshot.runtimeConfig ?? snapshot.config;
     const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId);
     // Validate and import under the same lifecycle lease. Frozen probe config could
     // otherwise re-enable a revoked owner or another configured harness during loading.
     lease.assertOwned();
-    return loadAgentRuntimePluginRegistryHandle({
-      basePluginIds: [],
-      config,
-      workspaceDir,
-      selections: [
-        {
-          provider: route.provider,
-          modelId: route.model,
-          runtime: route.agentHarnessRuntimeOverride,
-          agentId: route.agentId,
-        },
-      ],
-    });
+    return withPluginCache(cache, () =>
+      loadAgentRuntimePluginRegistryHandle({
+        basePluginIds: [],
+        config,
+        workspaceDir,
+        selections: [
+          {
+            provider: route.provider,
+            modelId: route.model,
+            runtime: route.agentHarnessRuntimeOverride,
+            agentId: route.agentId,
+          },
+        ],
+      }),
+    );
   });
-  if (!registry) {
-    throw new SystemAgentInferenceUnavailableError("conversation");
-  }
-  // Probe scope has ended; CLI preflight needs its private harness before the first
-  // run prepares an owner. Do not pin metadata or hold the install lease across chat.
+  // Retain the private harness through the conversation, but do not pin metadata
+  // or hold the install lease across chat and its plugin/config mutations.
   await withPluginRuntimeRegistryScope(registry, run);
 }
 

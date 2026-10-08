@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements server behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   type Journal,
@@ -6,31 +5,21 @@ import {
   type ChatCompletionRequest,
   type Fixture,
   getTextContent,
+  isChatCompletionBody,
   type JournalEntry,
   type Mountable,
 } from "@copilotkit/aimock";
-import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
-
-type AimockRequestSnapshot = {
-  raw: string;
-  body: Record<string, unknown>;
-  prompt: string;
-  allInputText: string;
-  toolOutput: string;
-  model: string;
-  providerVariant: "openai" | "anthropic" | "unknown";
-  imageInputCount: number;
-  plannedToolCallId?: string;
-  plannedToolName?: string;
-  toolOutputCallId?: string;
-  toolOutputStructuredError?: true;
-};
+import { resolveMockProviderVariant } from "../shared/mock-provider-variant.js";
+import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.js";
+import type { QaMockRequestSnapshot } from "../shared/types.js";
 
 const AIMOCK_DEBUG_REQUEST_LIMIT = 1_000;
 const AIMOCK_DEBUG_FACTS_MAX_BYTES = 64 * 1024;
 
-type AimockRequestFacts = Omit<AimockRequestSnapshot, "raw" | "body">;
+type AimockRequestFacts = Omit<QaMockRequestSnapshot, "raw" | "body">;
 type AimockRequestProjection =
   | { complete: true; facts: AimockRequestFacts }
   | {
@@ -42,83 +31,19 @@ type AimockToolFacts = Pick<
   AimockRequestFacts,
   "plannedToolName" | "plannedToolCallId" | "toolOutputCallId"
 >;
+type AimockChatJournalEntry = Pick<JournalEntry, "response"> & {
+  body: ChatCompletionRequest;
+};
+type AimockJournalAdd = (
+  entry: Omit<JournalEntry, "id" | "timestamp">,
+  matchedFixture?: Fixture,
+) => JournalEntry;
 type AimockRequestObservation =
-  | { kind: "retained-body"; tools: AimockToolFacts }
+  | { kind: "retained-body"; body: ChatCompletionRequest; tools: AimockToolFacts }
   | { kind: "projected"; projection: AimockRequestProjection };
-
-// Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
-// This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
-const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
-const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
 
 function requestMessages(body: ChatCompletionRequest | null | undefined) {
   return Array.isArray(body?.messages) ? body.messages : [];
-}
-
-function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
-  const messages = requestMessages(body);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "user") {
-      const text = getTextContent(message.content) ?? "";
-      if (!isInternalRuntimeContextCarrierText(text)) {
-        return text;
-      }
-    }
-  }
-  return "";
-}
-
-function isInternalRuntimeContextCarrierText(text: string) {
-  const trimmed = text.trim();
-  return (
-    trimmed.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
-    trimmed.endsWith(INTERNAL_RUNTIME_CONTEXT_END)
-  );
-}
-
-function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
-  return requestMessages(body)
-    .map((message) => getTextContent(message.content) ?? "")
-    .filter(Boolean)
-    .join("\n");
-}
-
-function extractToolOutput(body: ChatCompletionRequest | null | undefined) {
-  const messages = requestMessages(body);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "tool") {
-      return getTextContent(message.content) ?? "";
-    }
-  }
-  return "";
-}
-
-function extractToolOutputCallId(body: ChatCompletionRequest | null | undefined) {
-  const messages = requestMessages(body);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as { role?: unknown; tool_call_id?: unknown };
-    if (message?.role === "tool" && typeof message.tool_call_id === "string") {
-      return message.tool_call_id;
-    }
-  }
-  return "";
-}
-
-function extractToolOutputStructuredError(body: ChatCompletionRequest | null | undefined) {
-  const messages = requestMessages(body);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as {
-      role?: unknown;
-      isError?: unknown;
-      is_error?: unknown;
-    };
-    if (message?.role === "tool") {
-      return message.isError === true || message.is_error === true;
-    }
-  }
-  return false;
 }
 
 function countImageInputs(value: unknown): number {
@@ -139,57 +64,51 @@ function countImageInputs(value: unknown): number {
   return (imageLikeType ? 1 : 0) + nested;
 }
 
-function resolveProviderVariant(model: string): AimockRequestSnapshot["providerVariant"] {
-  const normalized = model.trim().toLowerCase();
-  const provider = /^([^/:]+)[/:]/.exec(normalized)?.[1] ?? normalized;
-  if (provider === "openai" || provider === "aimock") {
-    return "openai";
-  }
-  if (provider === "anthropic" || provider === "claude-cli") {
-    return "anthropic";
-  }
-  if (/^(?:gpt-|o1-|openai-)/.test(normalized)) {
-    return "openai";
-  }
-  if (/^(?:claude-|anthropic-)/.test(normalized)) {
-    return "anthropic";
-  }
-  return "unknown";
-}
-
-function extractPlannedToolName(entry: Pick<JournalEntry, "response">) {
+function extractToolFacts(entry: AimockChatJournalEntry): AimockToolFacts {
   const response = entry.response.fixture?.response as
-    | { toolCalls?: Array<{ name?: unknown }> }
+    | {
+        toolCalls?: Array<{ name?: unknown; id?: unknown; callId?: unknown; toolCallId?: unknown }>;
+      }
     | undefined;
-  const name = response?.toolCalls?.[0]?.name;
-  return typeof name === "string" && name.length > 0 ? name : undefined;
-}
-
-function extractPlannedToolCallId(entry: Pick<JournalEntry, "response">) {
-  const response = entry.response.fixture?.response as
-    | { toolCalls?: Array<{ id?: unknown; callId?: unknown; toolCallId?: unknown }> }
-    | undefined;
-  const candidate =
-    response?.toolCalls?.[0]?.id ??
-    response?.toolCalls?.[0]?.callId ??
-    response?.toolCalls?.[0]?.toolCallId;
-  return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
+  const call = response?.toolCalls?.[0];
+  const callId = call?.id ?? call?.callId ?? call?.toolCallId;
+  const output = requestMessages(entry.body).findLast(
+    (message) => message?.role === "tool" && typeof message.tool_call_id === "string",
+  );
+  return {
+    plannedToolName: typeof call?.name === "string" && call.name.length > 0 ? call.name : undefined,
+    plannedToolCallId: typeof callId === "string" && callId.length > 0 ? callId : undefined,
+    toolOutputCallId: output?.tool_call_id || undefined,
+  };
 }
 
 function extractRequestFacts(
-  body: JournalEntry["body"],
+  body: ChatCompletionRequest,
   tools: AimockToolFacts,
 ): AimockRequestFacts {
   const model = typeof body?.model === "string" ? body.model : "";
+  const messages = requestMessages(body);
+  const user = messages.findLast(
+    (message) =>
+      message?.role === "user" &&
+      !isInternalRuntimeContextCarrierText(getTextContent(message.content) ?? ""),
+  );
+  const output = messages.findLast((message) => message?.role === "tool");
+  const outputRecord = asOptionalObjectRecord(output);
   return {
     ...tools,
     model,
-    prompt: extractLastUserText(body),
-    providerVariant: resolveProviderVariant(model),
-    imageInputCount: countImageInputs(requestMessages(body)),
-    ...(extractToolOutputStructuredError(body) ? { toolOutputStructuredError: true } : {}),
-    toolOutput: extractToolOutput(body),
-    allInputText: extractAllInputText(body),
+    prompt: user ? (getTextContent(user.content) ?? "") : "",
+    providerVariant: resolveMockProviderVariant(model, "aimock"),
+    imageInputCount: countImageInputs(messages),
+    ...(outputRecord?.isError === true || outputRecord?.is_error === true
+      ? { toolOutputStructuredError: true }
+      : {}),
+    toolOutput: output ? (getTextContent(output.content) ?? "") : "",
+    allInputText: messages
+      .map((message) => getTextContent(message.content) ?? "")
+      .filter(Boolean)
+      .join("\n"),
   };
 }
 
@@ -253,27 +172,27 @@ function createDebugMount(): Mountable {
         throw new Error("AIMock debug request cursor journal changed unexpectedly");
       }
       journal = nextJournal;
-      const addJournalEntry = journal.add.bind(journal);
+      const addJournalEntry: AimockJournalAdd = journal.add.bind(journal);
       // AIMock evicts its request journal FIFO. Assign cursors at insertion time
       // so the debug boundary remains monotonic after retained entries rotate.
-      journal.add = (entry) => {
-        const tools: AimockToolFacts = {
-          plannedToolName: extractPlannedToolName(entry),
-          plannedToolCallId: extractPlannedToolCallId(entry),
-          toolOutputCallId: extractToolOutputCallId(entry.body) || undefined,
-        };
-        const recorded = addJournalEntry(entry);
+      journal.add = (entry, matchedFixture?: Fixture) => {
+        const recorded = addJournalEntry(entry, matchedFixture);
+        const body = entry.body;
+        if (!isChatCompletionBody(body)) {
+          return recorded;
+        }
+        const tools = extractToolFacts({ response: entry.response, body });
         // Upstream keeps <=64 KiB bodies intact; only discarded bodies need an
         // extra bounded projection. Weak entry ownership follows eviction/reset.
         observations.set(
           recorded,
           recorded.body === entry.body
-            ? { kind: "retained-body", tools }
+            ? { kind: "retained-body", body, tools }
             : {
                 kind: "projected",
                 projection: boundRequestFacts({
                   complete: true,
-                  facts: extractRequestFacts(entry.body, tools),
+                  facts: extractRequestFacts(body, tools),
                 }),
               },
         );
@@ -306,14 +225,16 @@ function createDebugMount(): Mountable {
       if (pathname !== "/last-request" && pathname !== "/requests") {
         return false;
       }
-      let selected = entries.map((entry, index) => {
-        const cursor = requestCursors.get(entry.id);
-        const observation = observations.get(entry);
-        if (cursor === undefined || observation === undefined) {
-          throw new Error(`AIMock debug request observation missing for ${entry.id}`);
-        }
-        return { cursor, entry, observation, index };
-      });
+      let selected = entries
+        .filter((entry) => observations.has(entry))
+        .map((entry, index) => {
+          const cursor = requestCursors.get(entry.id);
+          const observation = observations.get(entry);
+          if (cursor === undefined || observation === undefined) {
+            throw new Error(`AIMock debug request observation missing for ${entry.id}`);
+          }
+          return { cursor, entry, observation, index };
+        });
       // Pair against retained tool facts before selecting a window: a result
       // inside the window may belong to a plan before its cursor.
       const plannedToolCallIds = resolvePlannedToolCallIds(
@@ -325,28 +246,13 @@ function createDebugMount(): Mountable {
         const url = new URL(req.url ?? "/", "http://127.0.0.1");
         const afterText = url.searchParams.get("after");
         if (afterText !== null) {
-          const after = parseQaDebugRequestCursor(afterText);
-          if (after === null) {
-            writeJson(res, 400, { error: "after must be a non-negative safe integer" });
-            return true;
-          }
-          const latestCursor = nextRequestCursor - 1;
-          const oldestCursor = selected[0]?.cursor ?? nextRequestCursor;
-          if (after > latestCursor) {
-            writeJson(res, 409, {
-              error: "request cursor is ahead of the latest recorded request",
-              after,
-              latestCursor,
-            });
-            return true;
-          }
-          if (after < oldestCursor - 1) {
-            writeJson(res, 409, {
-              error: "request cursor expired",
-              after,
-              oldestCursor,
-              latestCursor,
-            });
+          const after = resolveQaDebugRequestCursor(
+            afterText,
+            selected[0]?.cursor ?? nextRequestCursor,
+            nextRequestCursor - 1,
+          );
+          if (typeof after !== "number") {
+            writeJson(res, after.status, after.body);
             return true;
           }
           selected = selected.filter((request) => request.cursor > after);
@@ -354,7 +260,7 @@ function createDebugMount(): Mountable {
       } else {
         selected = selected.slice(-1);
       }
-      const snapshots: AimockRequestSnapshot[] = [];
+      const snapshots: QaMockRequestSnapshot[] = [];
       const incomplete: Array<
         { cursor: number } & Extract<AimockRequestProjection, { complete: false }>
       > = [];
@@ -362,7 +268,7 @@ function createDebugMount(): Mountable {
         const plannedToolCallId = plannedToolCallIds.get(index);
         let projection: AimockRequestProjection =
           observation.kind === "retained-body"
-            ? { complete: true, facts: extractRequestFacts(entry.body, observation.tools) }
+            ? { complete: true, facts: extractRequestFacts(observation.body, observation.tools) }
             : observation.projection;
         if (plannedToolCallId) {
           projection = projection.complete
@@ -376,7 +282,7 @@ function createDebugMount(): Mountable {
           incomplete.push({ cursor, ...projection });
           continue;
         }
-        const body = entry.body ?? {};
+        const body = observation.kind === "retained-body" ? observation.body : (entry.body ?? {});
         snapshots.push({ raw: JSON.stringify(body), body, ...projection.facts });
       }
       if (incomplete.length > 0) {

@@ -2,7 +2,7 @@ import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtim
 import { escapeHtml, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
-import { parsePostContent } from "./post.js";
+import { renderPostContent } from "./post.js";
 
 export function formatFeishuMediaContent(
   parsed: Record<string, unknown>,
@@ -29,7 +29,7 @@ function formatSubMessageContent(content: string, contentType: string): string {
       case "text":
         return parsed.text || content;
       case "post":
-        return parsePostContent(content).textContent;
+        return renderPostContent(parsed).textContent;
       case "interactive":
         return parseInteractiveCardContent(parsed);
       case "image":
@@ -52,22 +52,16 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
-export function parseMergeForwardContent(params: { content: string }): string {
-  const { content } = params;
-  const maxMessages = 50;
-
-  let items: Array<{
+export function parseMergeForwardContent(
+  items: ReadonlyArray<{
     msg_type?: string;
     body?: { content?: string };
     upper_message_id?: string;
     create_time?: string;
-  }>;
-  try {
-    items = JSON.parse(content);
-  } catch {
-    return "[Merged and Forwarded Message - parse error]";
-  }
-  if (!Array.isArray(items) || items.length === 0) {
+  }>,
+): string {
+  const maxMessages = 50;
+  if (items.length === 0) {
     return "[Merged and Forwarded Message - no sub-messages]";
   }
   const container = items.find(

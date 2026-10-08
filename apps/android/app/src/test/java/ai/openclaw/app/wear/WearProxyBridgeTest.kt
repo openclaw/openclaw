@@ -1,7 +1,7 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.app.WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS
-import ai.openclaw.app.readWearAgentPulseConcurrently
+import ai.openclaw.app.readWearAgentPulseComponent
 import ai.openclaw.wear.shared.WearConnectionFailure
 import ai.openclaw.wear.shared.WearDecodeResult
 import ai.openclaw.wear.shared.WearEventType
@@ -228,16 +228,10 @@ class WearProxyBridgeTest {
         backgroundScope.recordingBridge(
           handleRequest = { _, request ->
             requestStarted.complete(Unit)
-            readWearAgentPulseConcurrently(
-              readTasks = {
-                delay(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS * 2)
-                Unit
-              },
-              readSwarm = {
-                delay(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS * 2)
-                Unit
-              },
-            )
+            readWearAgentPulseComponent(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS) {
+              delay(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS * 2)
+              Unit
+            }
             WearMessage.Response(requestId = request.requestId, ok = true)
           },
         )
@@ -280,6 +274,39 @@ class WearProxyBridgeTest {
     assertEquals("true", continued.getValue("streamTextComplete").jsonPrimitive.content)
     assertEquals("tail", unknownPrefix.getValue("streamText").jsonPrimitive.content)
     assertEquals("false", unknownPrefix.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  @Test
+  fun canonicalMessagesCanShrinkAndClearWithoutLosingCompleteness() {
+    val projector = WearChatStreamProjector()
+    for (text in listOf("Hello world", "Hello", "")) {
+      val event = projectStreamEvent(projector, state = "delta", runId = "run-1", message = text)
+      assertEquals(text, event.getValue("streamText").jsonPrimitive.content)
+      assertEquals("true", event.getValue("streamTextComplete").jsonPrimitive.content)
+    }
+    val continued = projectStreamEvent(projector, state = "delta", runId = "run-1", text = "New")
+    assertEquals("New", continued.getValue("streamText").jsonPrimitive.content)
+  }
+
+  @Test
+  fun explicitReplacementCanClearWhileMissingContentStillAppends() {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", runId = "run-1", message = "Hello world")
+    val cleared =
+      checkNotNull(
+        projector.project(
+          buildJsonObject {
+            put("sessionKey", "main")
+            put("runId", "run-1")
+            put("state", "delta")
+            put("replace", true)
+            put("deltaText", "")
+          },
+        ),
+      )
+    assertEquals("", cleared.getValue("streamText").jsonPrimitive.content)
+    val continued = projectStreamEvent(projector, state = "delta", runId = "run-1", text = "New")
+    assertEquals("New", continued.getValue("streamText").jsonPrimitive.content)
   }
 
   @Test

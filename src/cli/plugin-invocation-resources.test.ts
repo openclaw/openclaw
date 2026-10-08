@@ -143,6 +143,15 @@ module.exports = {
         child.stdin.end("continue\n");
       }
     },
+  }).catch((error: unknown) => {
+    let phaseEvidence: string;
+    try {
+      phaseEvidence = fs.readFileSync(eventsPath, "utf8");
+    } catch (readError) {
+      phaseEvidence = `Resource event file unavailable: ${String(readError)}`;
+    }
+    console.error(`Native plugin resource phases before failure:\n${phaseEvidence}`);
+    throw error;
   });
   const diagnostics = formatCliProcessFailure({ reason: "Native plugin CLI result", ...result });
   expect(result.code, diagnostics).toBe(0);
@@ -152,6 +161,7 @@ module.exports = {
     { value: "action" },
   ]);
   expect(result.stderr).toContain("native-resource diagnostic");
+  expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
 
   const events = readEvents();
   const opened = events.filter((event) => event.event === "opened");

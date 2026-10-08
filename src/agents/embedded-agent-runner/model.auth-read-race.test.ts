@@ -1,0 +1,786 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import * as candidateStores from "../auth-profiles/candidate-stores.js";
+import { OAUTH_REFRESH_CALL_TIMEOUT_MS } from "../auth-profiles/constants.js";
+import { createOAuthManager } from "../auth-profiles/oauth-manager.js";
+import {
+  isPendingOAuthRefreshFence,
+  readPendingOAuthRefreshClaimId,
+} from "../auth-profiles/oauth-refresh-marker.js";
+import * as oauthObservation from "../auth-profiles/oauth-refresh-observation.js";
+import * as authPaths from "../auth-profiles/path-resolve.js";
+import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  noteRuntimeAuthProfileStorePersistedMutation,
+  getRuntimeAuthProfileStoreSnapshotCore,
+  registerRuntimeAuthProfileStoreMutationListener,
+  setRuntimeAuthProfileStoreSnapshot,
+} from "../auth-profiles/runtime-snapshots.js";
+import * as sqliteRead from "../auth-profiles/sqlite-read.js";
+import {
+  readPersistedAuthProfileStateRaw,
+  readPersistedAuthProfileStoreRaw,
+  readPersistedSharedAuthProfileStateRaw,
+  readPersistedSharedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
+  runAuthProfileWriteTransaction,
+  writePersistedAuthProfileStoreRaw,
+} from "../auth-profiles/sqlite.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+  saveAuthProfileStoreIfPersistenceSnapshotMatches,
+} from "../auth-profiles/store-runtime.js";
+import {
+  captureAuthProfileStorePersistenceSnapshot,
+  restoreAuthProfileStorePersistenceSnapshot,
+} from "../auth-profiles/store.js";
+import type {
+  AuthProfileRowRead,
+  AuthProfileStore,
+  OAuthCredential,
+} from "../auth-profiles/types.js";
+import { resolveDynamicModelAuthProfile } from "./model.registry-resolution.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const modelAuthReadScope = new AsyncLocalStorage<boolean>();
+
+afterEach(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
+
+it.each(["one rotation", "cleanup failure", "admission refusal"] as const)(
+  "resolves model auth across %s during its captured read",
+  async (change) => {
+    const root = tempDirs.make("openclaw-model-auth-race-");
+    const agentDir = path.join(root, "agents/main/agent");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    vi.spyOn(authPaths, "resolveSharedAuthStoreOwnershipAsync").mockResolvedValue({
+      location: "legacy-main",
+    });
+    const events: string[] = [];
+    const refusal = new Error("Auth source admission revoked");
+    const cleanupFailure = new Error("Auth child failed to close");
+    let reads = 0;
+    vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(() => ({
+      assertCurrent: () => {},
+      dispose: async () => {
+        events.push("disposed");
+        if (change === "cleanup failure") {
+          throw cleanupFailure;
+        }
+      },
+      read: async (): Promise<AuthProfileRowRead> => {
+        events.push("read");
+        reads += 1;
+        if (change === "admission refusal") {
+          throw refusal;
+        }
+        const profileId = reads === 1 ? "custom:retired" : "custom:current";
+        if (reads === 1) {
+          noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
+            credentialsChanged: true,
+            stateChanged: false,
+            profileIds: [profileId],
+          });
+        }
+        return {
+          store: {
+            status: "readable",
+            raw: {
+              version: 1,
+              profiles: { [profileId]: { type: "api_key", provider: "custom", key: "fixture" } },
+            },
+          },
+          state: { status: "missing", reason: "row" },
+          cacheable: true,
+        };
+      },
+    }));
+
+    const resolution = resolveDynamicModelAuthProfile({
+      provider: "custom",
+      modelId: "fixture",
+      agentDir,
+    });
+    if (change === "one rotation") {
+      await expect(resolution).resolves.toEqual({
+        authProfileId: "custom:current",
+        authProfileMode: "api_key",
+      });
+    } else if (change === "admission refusal") {
+      await expect(resolution).rejects.toBe(refusal);
+    } else {
+      await expect(resolution).rejects.toMatchObject({
+        errors: [expect.any(Error), cleanupFailure],
+      });
+    }
+    expect(events).toEqual(
+      change === "cleanup failure" || change === "admission refusal"
+        ? ["read", "disposed"]
+        : ["read", "disposed", "read", "disposed"],
+    );
+  },
+);
+
+it.for([
+  "inherited",
+  "caller timeout",
+  "unrelated pin",
+  "cold local account override",
+  "reconnected primary with peer",
+  "restored claim",
+  "peer CAS replacement",
+  "already fenced peer",
+  "cold local removed before local read",
+  "cold inherited to local",
+  "foreign local removed",
+  "foreign shared generation",
+  "foreign shared replacement",
+  "foreign shared portable replacement",
+] as const)("resolves model auth across one OAuth claim and settlement: %s", async (scope, ctx) => {
+  const root = tempDirs.make("openclaw-model-auth-refresh-race-");
+  const agentDir = path.join(root, "agents/main/agent");
+  const localOverride = scope === "cold local account override" || scope === "peer CAS replacement";
+  const localRemoved = scope === "cold local removed before local read";
+  const localAdded = scope === "cold inherited to local";
+  const foreignLocalChange =
+    scope === "foreign local removed" || scope === "foreign shared generation";
+  const foreignSharedChange =
+    scope === "foreign shared replacement" || scope === "foreign shared portable replacement";
+  const cold = scope.startsWith("cold ");
+  const startDuringInheritedRead = cold && scope !== "cold local removed before local read";
+  const reconnectedPrimary = scope === "reconnected primary with peer";
+  const copiedPeer =
+    scope === "reconnected primary with peer" ||
+    scope === "peer CAS replacement" ||
+    scope === "already fenced peer";
+  const readAgentDir =
+    scope === "inherited" ||
+    localOverride ||
+    localRemoved ||
+    localAdded ||
+    foreignLocalChange ||
+    foreignSharedChange ||
+    cold ||
+    scope === "reconnected primary with peer" ||
+    scope === "already fenced peer"
+      ? path.join(root, "agents/worker/agent")
+      : agentDir;
+  if (scope === "caller timeout") {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  }
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  vi.stubEnv("OPENCLAW_AGENT_DIR", agentDir);
+  vi.spyOn(authPaths, "resolveSharedAuthStoreOwnershipAsync").mockResolvedValue({
+    location: "legacy-main",
+  });
+  const profileId = "custom:oauth";
+  const credential: OAuthCredential = {
+    type: "oauth",
+    provider: "custom",
+    access: "fixture-access-before",
+    refresh: "fixture-refresh-before",
+    expires: Date.now() + 600_000,
+    accountId: "fixture-account",
+  };
+  const store: AuthProfileStore = {
+    version: 1,
+    profiles: {
+      [profileId]: credential,
+      "custom:other": { type: "api_key", provider: "custom", key: "fixture-key" },
+      "other:key": { type: "api_key", provider: "other", key: "fixture-other-key" },
+    },
+  };
+  const localStore = (overrides: Partial<OAuthCredential> = {}): AuthProfileStore => ({
+    version: 1,
+    profiles: {
+      [profileId]: {
+        ...credential,
+        access: "fixture-local-access",
+        refresh: "fixture-local-refresh",
+        accountId: "fixture-local-account",
+        ...overrides,
+      },
+    },
+  });
+  if (copiedPeer) {
+    saveAuthProfileStore(store, readAgentDir);
+  }
+  saveAuthProfileStore(store, agentDir);
+  if (scope === "inherited" || localAdded) {
+    saveAuthProfileStore({ version: 1, profiles: {} }, readAgentDir);
+    if (cold) {
+      clearRuntimeAuthProfileStoreSnapshots();
+    } else {
+      setRuntimeAuthProfileStoreSnapshot({ ...store, runtimeLocalProfileIds: [] }, readAgentDir);
+    }
+  } else if (copiedPeer) {
+    expect(loadPersistedAuthProfileStore(readAgentDir)?.profiles[profileId]).toEqual(credential);
+    clearRuntimeAuthProfileStoreSnapshots();
+  } else if (localOverride || localRemoved || foreignLocalChange || foreignSharedChange) {
+    const local = localStore(
+      scope === "foreign shared portable replacement" ? { copyToAgents: true } : {},
+    );
+    saveAuthProfileStore(local, readAgentDir);
+    setRuntimeAuthProfileStoreSnapshot(
+      { ...local, runtimeLocalProfileIds: [profileId] },
+      readAgentDir,
+    );
+    if (cold) {
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  }
+  const refreshEntered = createDeferred();
+  let externallyReplacedStore: AuthProfileStore | undefined;
+  let externallyFencedStore: AuthProfileStore | undefined;
+  if (scope === "already fenced peer") {
+    const loadCandidate = candidateStores.loadCandidateAuthProfileStore;
+    vi.spyOn(candidateStores, "loadCandidateAuthProfileStore").mockImplementation((candidate) => {
+      if (
+        candidate.databasePath === resolveAuthProfileDatabasePath(readAgentDir) &&
+        !externallyFencedStore
+      ) {
+        const pending = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
+        if (!pending || !readPendingOAuthRefreshClaimId(pending)) {
+          throw new Error("Expected owner claim before peer discovery");
+        }
+        externallyFencedStore = { version: 1, profiles: { [profileId]: pending } };
+        runAuthProfileWriteTransaction(readAgentDir, (database) => {
+          writePersistedAuthProfileStoreRaw(externallyFencedStore, readAgentDir, database);
+        });
+      }
+      return loadCandidate(candidate);
+    });
+  }
+  if (scope === "peer CAS replacement") {
+    const updateCandidate = candidateStores.updateCandidateAuthProfileStore;
+    vi.spyOn(candidateStores, "updateCandidateAuthProfileStore").mockImplementation((params) => {
+      if (
+        params.candidate.databasePath === resolveAuthProfileDatabasePath(readAgentDir) &&
+        !externallyReplacedStore
+      ) {
+        externallyReplacedStore = localStore();
+        // A foreign writer changes SQLite without publishing into this process's observation registry.
+        runAuthProfileWriteTransaction(readAgentDir, (database) => {
+          writePersistedAuthProfileStoreRaw(externallyReplacedStore, readAgentDir, database);
+        });
+        const result = updateCandidate(params);
+        expect(result.changed).toBe(false);
+        return result;
+      }
+      return updateCandidate(params);
+    });
+  }
+  const releaseRefresh = createDeferred();
+  const retryEntered = createDeferred();
+  const observationEntered = createDeferred();
+  const settled = createDeferred();
+  let derivedSnapshotInvalidated = false;
+  const stopObservingMutations = registerRuntimeAuthProfileStoreMutationListener(() => {
+    if (scope === "inherited" && !getRuntimeAuthProfileStoreSnapshotCore(readAgentDir)) {
+      derivedSnapshotInvalidated = true;
+    }
+  });
+  const refreshCredential = vi.fn(async (current: OAuthCredential) => {
+    refreshEntered.resolve();
+    await releaseRefresh.promise;
+    return {
+      ...current,
+      access: "fixture-access-after",
+      refresh: "fixture-refresh-after",
+      expires: Date.now() + 1_200_000,
+    };
+  });
+  const manager = createOAuthManager({
+    buildApiKey: async (_provider, current) => {
+      settled.resolve();
+      return current.access;
+    },
+    canRefreshCredential: async () => true,
+    refreshCredential,
+    readBootstrapCredential: () => null,
+  });
+  const captureSettlement = oauthObservation.captureOAuthRefreshSettlement;
+  const observe = (owner = agentDir) =>
+    captureSettlement({
+      databasePaths: [resolveAuthProfileDatabasePath(owner)],
+      profileId,
+      matchesProvider: () => true,
+    });
+  vi.spyOn(oauthObservation, "captureOAuthRefreshSettlement").mockImplementation((params) => {
+    const wait = captureSettlement(params);
+    return wait
+      ? async () => {
+          observationEntered.resolve();
+          await wait();
+        }
+      : undefined;
+  });
+  let refresh: ReturnType<typeof manager.resolveOAuthAccess> | undefined;
+  let foreignLocalChanged = false;
+  const prepareRowsRead = sqliteRead.prepareAgentAuthProfileRowsRead;
+  vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((options) => {
+    // Only selection reads are held; refresh publication must reach the provider independently.
+    if (!modelAuthReadScope.getStore()) {
+      return prepareRowsRead(options);
+    }
+    const { databasePath } = options;
+    return {
+      assertCurrent: () => {},
+      dispose: async () => {},
+      read: async () => {
+        if (
+          foreignLocalChange &&
+          !foreignLocalChanged &&
+          databasePath === resolveAuthProfileDatabasePath(readAgentDir)
+        ) {
+          foreignLocalChanged = true;
+          // Simulate a foreign commit; its real rows change without a process-local auth publication.
+          runAuthProfileWriteTransaction(readAgentDir, (database) => {
+            writePersistedAuthProfileStoreRaw(
+              {
+                version: 1,
+                profiles:
+                  scope === "foreign local removed"
+                    ? {}
+                    : { [profileId]: { ...credential, copyToAgents: true } },
+              },
+              readAgentDir,
+              database,
+            );
+          });
+        }
+        if (foreignSharedChange && !refresh) {
+          const replacement = loadPersistedAuthProfileStore(readAgentDir);
+          if (!replacement) {
+            throw new Error("Missing local fixture");
+          }
+          runAuthProfileWriteTransaction(agentDir, (database) => {
+            writePersistedAuthProfileStoreRaw(replacement, agentDir, database);
+          });
+        }
+        const captured = loadPersistedAuthProfileStore(path.dirname(databasePath)) ?? {
+          version: 1,
+          profiles: {},
+        };
+        if (
+          !refresh &&
+          (!startDuringInheritedRead || databasePath === resolveAuthProfileDatabasePath(agentDir))
+        ) {
+          const activeStore = foreignSharedChange
+            ? loadPersistedAuthProfileStore(agentDir)!
+            : store;
+          const activeCredential = activeStore.profiles[profileId];
+          if (activeCredential?.type !== "oauth") {
+            throw new Error("Expected current OAuth credential");
+          }
+          refresh = modelAuthReadScope.exit(() =>
+            manager.resolveOAuthAccess({
+              store: activeStore,
+              profileId,
+              credential: activeCredential,
+              agentDir,
+              forceRefresh: true,
+            }),
+          );
+          void refresh.catch(() => {});
+          await withinTest(
+            awaitGateBeforeSettlement(
+              refreshEntered.promise,
+              refresh,
+              "OAuth refresh settled before entering the fixture provider",
+            ),
+            ctx.signal,
+          );
+          if (foreignSharedChange) {
+            const local = loadPersistedAuthProfileStore(readAgentDir)?.profiles[profileId];
+            if (scope === "foreign shared replacement") {
+              expect(readPendingOAuthRefreshClaimId(local)).toEqual(expect.any(String));
+            } else {
+              expect(local).toMatchObject({
+                copyToAgents: true,
+                refresh: "fixture-local-refresh",
+              });
+            }
+          }
+          if (localRemoved) {
+            saveAuthProfileStore({ version: 1, profiles: {} }, readAgentDir);
+          } else if (localAdded) {
+            saveAuthProfileStore(localStore(), readAgentDir);
+          }
+          if (scope === "peer CAS replacement") {
+            if (!externallyReplacedStore) {
+              throw new Error("Peer CAS replacement did not run");
+            }
+            setRuntimeAuthProfileStoreSnapshot(
+              { ...externallyReplacedStore, runtimeLocalProfileIds: [profileId] },
+              readAgentDir,
+            );
+          } else if (copiedPeer) {
+            expect(
+              readPendingOAuthRefreshClaimId(
+                loadPersistedAuthProfileStore(readAgentDir)?.profiles[profileId],
+              ),
+            ).toEqual(expect.any(String));
+            if (scope === "already fenced peer") {
+              if (!externallyFencedStore) {
+                throw new Error("Peer fence was not copied before discovery");
+              }
+              setRuntimeAuthProfileStoreSnapshot(
+                { ...externallyFencedStore, runtimeLocalProfileIds: [] },
+                readAgentDir,
+              );
+            }
+          }
+          if (scope === "inherited") {
+            expect(derivedSnapshotInvalidated).toBe(true);
+          }
+          expect(
+            captureSettlement({
+              databasePaths: [path.join(root, "unrelated", "openclaw-agent.sqlite")],
+              profileId,
+              matchesProvider: () => true,
+            }),
+          ).toBeUndefined();
+          if (scope === "caller timeout") {
+            const timedOut = expect(refresh).rejects.toThrow("exceeded hard timeout");
+            await vi.advanceTimersByTimeAsync(OAUTH_REFRESH_CALL_TIMEOUT_MS);
+            await timedOut;
+          }
+        } else if (refresh) {
+          retryEntered.resolve();
+          if (!localOverride) {
+            await withinTest(settled.promise, ctx.signal);
+          }
+        }
+        return {
+          store: { status: "readable", raw: captured },
+          state: { status: "missing", reason: "row" },
+          cacheable: true,
+        };
+      },
+    };
+  });
+  const resolution = modelAuthReadScope.run(true, () =>
+    resolveDynamicModelAuthProfile({
+      provider: "custom",
+      modelId: "fixture",
+      agentDir: readAgentDir,
+      authProfileId: scope === "unrelated pin" ? "custom:other" : profileId,
+    }),
+  );
+  try {
+    const waitedForRefresh = await withinTest(
+      Promise.race([
+        retryEntered.promise.then(() => false),
+        observationEntered.promise.then(() => true),
+        resolution.then(() => {
+          throw new Error("Resolution skipped the refresh barrier");
+        }),
+      ]),
+      ctx.signal,
+    );
+    if (localOverride) {
+      expect(waitedForRefresh).toBe(false);
+    } else if (localRemoved || localAdded) {
+      releaseRefresh.resolve();
+    } else if (scope === "restored claim") {
+      const beforeReplacement = observe();
+      if (!beforeReplacement) {
+        throw new Error("Expected pending claim before replacement");
+      }
+      const retired = beforeReplacement();
+      const baseline = captureAuthProfileStorePersistenceSnapshot(agentDir);
+      const replacement = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+        snapshot: baseline,
+        agentDir,
+        store: {
+          ...store,
+          profiles: {
+            ...store.profiles,
+            [profileId]: {
+              ...credential,
+              access: "fixture-temporary-access",
+              refresh: "fixture-temporary-refresh",
+            },
+          },
+        },
+      });
+      expect(replacement.publishRuntimeSnapshots()).toBe(true);
+      await retired;
+      expect(observe()).toBeUndefined();
+      restoreAuthProfileStorePersistenceSnapshot(baseline, replacement.owned, agentDir);
+      const restored = observe();
+      expect(restored).toEqual(expect.any(Function));
+      releaseRefresh.resolve();
+      await restored?.();
+    } else if (reconnectedPrimary) {
+      saveAuthProfileStore(
+        {
+          ...store,
+          profiles: {
+            ...store.profiles,
+            [profileId]: {
+              ...credential,
+              access: "fixture-reconnected-access",
+              refresh: "fixture-reconnected-refresh",
+            },
+          },
+        },
+        agentDir,
+      );
+      expect(observe()).toBeUndefined();
+      if (scope === "reconnected primary with peer") {
+        expect(observe(readAgentDir)).toEqual(expect.any(Function));
+        releaseRefresh.resolve();
+      }
+    } else {
+      releaseRefresh.resolve();
+    }
+    if (scope === "unrelated pin" || scope === "restored claim") {
+      await expect(resolution).rejects.toThrow(
+        "Auth profile store changed during its runtime read",
+      );
+    } else {
+      await expect(resolution).resolves.toEqual({
+        authProfileId: profileId,
+        authProfileMode: "oauth",
+      });
+    }
+    expect(refreshCredential).toHaveBeenCalledOnce();
+    if (localRemoved || scope === "foreign local removed") {
+      expect(loadPersistedAuthProfileStore(readAgentDir)?.profiles[profileId]).toBeUndefined();
+      expect(
+        loadAuthProfileStoreWithoutExternalProfiles(readAgentDir).profiles[profileId],
+      ).toMatchObject({
+        access: "fixture-access-after",
+        accountId: "fixture-account",
+      });
+    }
+    if (localOverride || localAdded) {
+      expect(
+        loadAuthProfileStoreWithoutExternalProfiles(readAgentDir).profiles[profileId],
+      ).toMatchObject({
+        access: "fixture-local-access",
+        accountId: "fixture-local-account",
+      });
+      releaseRefresh.resolve();
+      await refresh;
+    }
+    if (reconnectedPrimary) {
+      releaseRefresh.resolve();
+      await refresh;
+    }
+    expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId]).toMatchObject(
+      {
+        access: reconnectedPrimary ? "fixture-reconnected-access" : "fixture-access-after",
+        refresh: reconnectedPrimary ? "fixture-reconnected-refresh" : "fixture-refresh-after",
+      },
+    );
+  } finally {
+    releaseRefresh.resolve();
+    await Promise.allSettled([resolution, refresh]);
+    stopObservingMutations();
+    vi.useRealTimers();
+    await cleanupSessionStateForTest({ stateDir: root });
+  }
+});
+
+function settlementCredential(): OAuthCredential {
+  return {
+    type: "oauth",
+    provider: "openai",
+    access: "synthetic-current-access",
+    refresh: "synthetic-current-refresh",
+    accountId: "synthetic-account",
+    expires: Date.now() + 86_400_000,
+  };
+}
+
+function persistedRows(store: unknown, state: unknown): AuthProfileRowRead {
+  return {
+    store: store ? { status: "readable", raw: store } : { status: "missing", reason: "row" },
+    state: state ? { status: "readable", raw: state } : { status: "missing", reason: "row" },
+    cacheable: false,
+  };
+}
+
+it.each(["settled", "replaced", "removed", "failed"] as const)(
+  "resolves model selection after one real OAuth claim and its %s settlement",
+  async (outcome) => {
+    await withOpenClawTestState({ label: "model-auth-settlement" }, async (state) => {
+      const agentDir = state.agentDir("reader");
+      const databasePath = resolveAuthProfileDatabasePath(agentDir);
+      const profileId = "openai:selection";
+      const original = settlementCredential();
+      const initialStore: AuthProfileStore = {
+        version: 1,
+        profiles: { [profileId]: original },
+      };
+      saveAuthProfileStore(initialStore, agentDir);
+      vi.spyOn(sqliteRead, "readSharedAuthProfileRows").mockImplementation(async () =>
+        persistedRows(
+          readPersistedSharedAuthProfileStoreRaw(state.env),
+          readPersistedSharedAuthProfileStateRaw(state.env),
+        ),
+      );
+
+      const providerEntered = createDeferred();
+      const releaseProvider = createDeferred();
+      const joiningRefresh = createDeferred();
+      const readingPendingFence = createDeferred();
+      const providerFailure = new Error("Synthetic provider refresh failed");
+      const manager = createOAuthManager({
+        canRefreshCredential: async () => true,
+        readBootstrapCredential: () => null,
+        buildApiKey: async (_provider, current) => current.access,
+        refreshCredential: async () => {
+          const persisted = loadPersistedAuthProfileStore(agentDir);
+          const fenced = persisted?.profiles[profileId];
+          expect(isPendingOAuthRefreshFence(fenced?.type === "oauth" ? fenced : undefined)).toBe(
+            true,
+          );
+          providerEntered.resolve();
+          await releaseProvider.promise;
+          if (outcome === "failed") {
+            throw providerFailure;
+          }
+          if (outcome === "removed" || outcome === "replaced") {
+            saveAuthProfileStore(
+              {
+                version: 1,
+                profiles:
+                  outcome === "removed"
+                    ? {}
+                    : {
+                        [profileId]: {
+                          type: "api_key",
+                          provider: "openai",
+                          key: "synthetic-replacement-key",
+                        },
+                      },
+              },
+              agentDir,
+            );
+          }
+          return {
+            ...original,
+            access: "synthetic-settled-access",
+            refresh: "synthetic-settled-refresh",
+            expires: Date.now() + 2 * 86_400_000,
+          };
+        },
+      });
+      const captureSettlement = oauthObservation.captureOAuthRefreshSettlement;
+      vi.spyOn(oauthObservation, "captureOAuthRefreshSettlement").mockImplementation((params) => {
+        const wait = captureSettlement(params);
+        return wait
+          ? async () => {
+              joiningRefresh.resolve();
+              await wait();
+            }
+          : undefined;
+      });
+      let ownerReads = 0;
+      let refresh: Promise<unknown> | undefined;
+      const prepareRowsRead = sqliteRead.prepareAgentAuthProfileRowsRead;
+      vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((owner) => {
+        if (!modelAuthReadScope.getStore()) {
+          return prepareRowsRead(owner);
+        }
+        return {
+          assertCurrent: () => {},
+          dispose: async () => {},
+          read: async () => {
+            const ownerAgentDir = path.dirname(owner.databasePath);
+            const rows = persistedRows(
+              readPersistedAuthProfileStoreRaw(ownerAgentDir),
+              readPersistedAuthProfileStateRaw(ownerAgentDir),
+            );
+            if (owner.databasePath !== databasePath) {
+              return rows;
+            }
+            ownerReads += 1;
+            if (ownerReads === 1) {
+              // This real claim revokes the first captured read. The provider stays
+              // pending until selection joins it or wrongly begins its second read.
+              refresh = modelAuthReadScope
+                .exit(() =>
+                  manager.resolveOAuthAccess({
+                    store: initialStore,
+                    profileId,
+                    credential: original,
+                    agentDir,
+                    forceRefresh: true,
+                  }),
+                )
+                .then(
+                  (value) => ({ value }),
+                  (error: unknown) => ({ error }),
+                );
+              await Promise.race([providerEntered.promise, refresh]);
+            } else {
+              readingPendingFence.resolve();
+              // Before the repair this read captures the pending fence and its
+              // settlement invalidates the one remaining selection attempt.
+              await refresh;
+            }
+            return rows;
+          },
+        };
+      });
+      const resolution = modelAuthReadScope
+        .run(true, () =>
+          resolveDynamicModelAuthProfile({
+            provider: "openai",
+            modelId: "fixture",
+            agentDir,
+            ...(outcome === "failed" ? {} : { authProfileId: profileId }),
+          }),
+        )
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+      try {
+        await Promise.race([joiningRefresh.promise, readingPendingFence.promise, resolution]);
+        releaseProvider.resolve();
+        const result = await resolution;
+        if (outcome === "removed") {
+          expect(result).toMatchObject({
+            error: { code: "selected_auth_profile_unavailable", profileId },
+          });
+        } else {
+          expect(result).toEqual({
+            value:
+              outcome === "failed"
+                ? {}
+                : {
+                    authProfileId: profileId,
+                    authProfileMode: outcome === "replaced" ? "api_key" : "oauth",
+                  },
+          });
+        }
+        expect(ownerReads).toBe(2);
+      } finally {
+        releaseProvider.resolve();
+        await refresh;
+        await resolution;
+      }
+    });
+  },
+);

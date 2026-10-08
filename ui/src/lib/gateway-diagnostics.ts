@@ -1,42 +1,17 @@
+import type { getCommandLaneDiagnostics } from "../../../src/process/command-lane-diagnostics.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { HealthSnapshot, StatusSummary } from "../api/types.ts";
-import { loadModelCatalog } from "./model-catalog-store.ts";
+import type { HealthSnapshot, ModelCatalogResult, StatusSummary } from "../api/types.ts";
 
-type CommandLaneBlockReason = "lane" | "group-budget" | "sibling-reservation" | null;
+export type { CommandLaneSnapshot } from "../../../src/process/command-queue.types.js";
 
-export type CommandLaneSnapshot = {
-  lane: string;
-  queuedCount: number;
-  activeCount: number;
-  maxConcurrent: number;
-  draining: boolean;
-  generation: number;
-  group?: string;
-  groupActive?: number;
-  groupBudget?: number;
-  reservedForLane?: number;
-  blockedBy?: CommandLaneBlockReason;
-};
+export type CommandLaneDiagnostics = ReturnType<typeof getCommandLaneDiagnostics>;
+export type CommandLaneDynamicSummary = NonNullable<CommandLaneDiagnostics["dynamic"]>;
 
-export type CommandLaneDynamicSummary = {
-  laneCount: number;
-  activeCount: number;
-  queuedCount: number;
-  queuedLaneCount: number;
-};
-
-export type CommandLaneDiagnostics = {
-  lanes: CommandLaneSnapshot[];
-  dynamic: CommandLaneDynamicSummary | null;
-};
-
-type GatewayDiagnosticsSnapshot = {
+type GatewayDiagnosticsSnapshot = CommandLaneDiagnostics & {
   status: StatusSummary;
   health: HealthSnapshot;
   models: unknown[];
   heartbeat: unknown;
-  lanes: CommandLaneSnapshot[];
-  dynamic: CommandLaneDynamicSummary | null;
 };
 
 export async function loadCommandLaneDiagnostics(
@@ -51,20 +26,25 @@ export async function loadGatewayDiagnostics(
   agentId: string | null,
   signal?: AbortSignal,
 ): Promise<GatewayDiagnosticsSnapshot> {
+  // Diagnostics sample the Gateway itself, independently of cached picker choices.
   const modelsRequest = agentId
-    ? loadModelCatalog(client, { agentId, view: "default", signal })
+    ? client.request<ModelCatalogResult>(
+        "models.list",
+        { agentId: agentId.trim(), view: "default" },
+        { signal },
+      )
     : Promise.resolve({ models: [] });
   const lanesRequest = loadCommandLaneDiagnostics(client, signal);
   const [status, health, models, heartbeat, laneDiagnostics] = await Promise.all([
-    client.request("status", {}, { signal }),
-    client.request("health", {}, { signal }),
+    client.request<StatusSummary>("status", {}, { signal }),
+    client.request<HealthSnapshot>("health", {}, { signal }),
     modelsRequest,
     client.request("last-heartbeat", {}, { signal }),
     lanesRequest,
   ]);
   return {
-    status: status as StatusSummary,
-    health: health as HealthSnapshot,
+    status,
+    health,
     models: models.models,
     heartbeat,
     ...laneDiagnostics,

@@ -38,6 +38,7 @@ Dedicated deep references:
 - [Configuration — browser, UI, and desktop](/gateway/config-browser-ui-desktop) — browser automation, Control UI presentation, and desktop or paired-node config.
 - [Configuration — gateway](/gateway/config-gateway) — gateway config: bind, auth, roles, Control UI, terminal, remote, nodes, TLS, and reload.
 - [Configuration — cloud worker environments](/gateway/config-cloud-workers) — cloud worker profiles under `cloudWorkers`, including Crabbox and static SSH development.
+- [Storage locations](/concepts/storage-locations) — named storage destinations under `storage.locations`, initialization, and encryption.
 - [Configuration — hooks](/gateway/config-hooks) — hook config: HTTP contract, agent payload, session policy, mapping, retries, and Gmail.
 - [Configuration — environment, secrets, and includes](/gateway/config-secrets-env) — environment variables, secret providers, auth storage, and `$include` config splitting.
 - [Configuration — audit, logging, diagnostics, and telemetry](/gateway/config-observability) — observability config: audit, logging, diagnostics, and telemetry keys.
@@ -69,13 +70,22 @@ See [Configuration - agents](/gateway/config-agents) for:
 
 ## `worktreeRoot`
 
-Moved to [Configuration — runtime basics](/gateway/config-runtime).
+Worktree storage (`worktreeRoot`), filesystem acceleration (`worktreeAcceleration`), and the live-checkout cap (`worktreeMaxCount`) are documented in [Configuration — runtime basics](/gateway/config-runtime).
 
 ## Tools and custom providers
 
 Tool policy, experimental toggles, provider-backed tool config, and custom
 provider / base-URL setup live in
 [Configuration - tools and custom providers](/gateway/config-tools).
+
+`agents.entries.<id>.tools.github.allowInSandbox` is an optional boolean,
+defaulting to `false`. Set it on an agent's managed GitHub identity to expose
+that identity to the agent's own Docker or Podman sandbox, including a
+role-required sandbox. The profile is mounted read-only at `/openclaw/github`;
+effective shared scope refuses injection. This setting is not accepted under
+global `tools.github`, and security audit warns for every opted-in agent.
+See [GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in) for
+setup, credential exposure, and backend requirements.
 
 ## Models
 
@@ -113,6 +123,7 @@ Moved to [Configuration — browser, UI, and desktop](/gateway/config-browser-ui
 
 Moved to [Configuration — gateway](/gateway/config-gateway). Sections: OpenAI-compatible endpoints, Multi-instance isolation, `gateway.tls`, `gateway.reload`.
 
+<a id="gateway-field-details"></a>
 <a id="openai-compatible-endpoints"></a>
 <a id="multi-instance-isolation"></a>
 <a id="gatewaytls"></a>
@@ -224,3 +235,5 @@ Moved to [Configuration — environment, secrets, and includes](/gateway/config-
 - [Configuration](/gateway/configuration)
 - [Configuration examples](/gateway/configuration-examples)
 - [Doctor](/gateway/doctor)
+- [Cloud Workers](/gateway/cloud-workers) — the feature these worker settings configure
+- [`openclaw configure`](/cli/configure) — interactive prompts that edit these settings without hand-editing the file

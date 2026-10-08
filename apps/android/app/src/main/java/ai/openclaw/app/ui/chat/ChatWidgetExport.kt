@@ -1,11 +1,11 @@
 package ai.openclaw.app.ui.chat
 
-import android.app.Activity
+import ai.openclaw.app.takeCodePoints
+import ai.openclaw.app.takeUtf8Bytes
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
-import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -60,7 +60,14 @@ internal suspend fun exportChatWidgetImage(
   title: String?,
   destination: ChatWidgetExportDestination,
 ) {
-  val bitmap = captureChatWidgetBitmap(webView)
+  val bitmap =
+    withContext(Dispatchers.Main.immediate) {
+      require(webView.width > 0 && webView.height > 0) { "widget has no rendered size" }
+      captureChatWidgetWithPixelCopy(webView) ?: createBitmap(webView.width, webView.height, Bitmap.Config.ARGB_8888).also {
+        it.eraseColor(Color.TRANSPARENT)
+        webView.draw(Canvas(it))
+      }
+    }
   try {
     val fileName = widgetExportFileName(title)
     when (destination) {
@@ -71,12 +78,6 @@ internal suspend fun exportChatWidgetImage(
     bitmap.recycle()
   }
 }
-
-private suspend fun captureChatWidgetBitmap(webView: WebView): Bitmap =
-  withContext(Dispatchers.Main.immediate) {
-    require(webView.width > 0 && webView.height > 0) { "widget has no rendered size" }
-    captureChatWidgetWithPixelCopy(webView) ?: drawChatWidgetBitmap(webView)
-  }
 
 @Suppress("DEPRECATION")
 private suspend fun captureChatWidgetWithPixelCopy(webView: WebView): Bitmap? {
@@ -133,12 +134,6 @@ private suspend fun captureChatWidgetWithPixelCopy(webView: WebView): Bitmap? {
   bitmap.recycle()
   return null
 }
-
-private fun drawChatWidgetBitmap(webView: WebView): Bitmap =
-  createBitmap(webView.width, webView.height, Bitmap.Config.ARGB_8888).also { bitmap ->
-    bitmap.eraseColor(Color.TRANSPARENT)
-    webView.draw(Canvas(bitmap))
-  }
 
 private suspend fun copyChatWidgetImage(
   context: Context,
@@ -239,35 +234,3 @@ private suspend fun saveChatWidgetImage(
     throw error
   }
 }
-
-private fun String.takeCodePoints(limit: Int): String {
-  val count = codePointCount(0, length)
-  if (count <= limit) return this
-  return substring(0, offsetByCodePoints(0, limit))
-}
-
-private fun String.takeUtf8Bytes(limit: Int): String {
-  var end = 0
-  var byteCount = 0
-  while (end < length) {
-    val codePoint = codePointAt(end)
-    val codePointByteCount =
-      when {
-        codePoint <= 0x7f -> 1
-        codePoint <= 0x7ff -> 2
-        codePoint <= 0xffff -> 3
-        else -> 4
-      }
-    if (byteCount + codePointByteCount > limit) break
-    byteCount += codePointByteCount
-    end += Character.charCount(codePoint)
-  }
-  return substring(0, end)
-}
-
-private tailrec fun Context.findActivity(): Activity? =
-  when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-  }

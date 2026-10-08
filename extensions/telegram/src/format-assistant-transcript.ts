@@ -1,9 +1,5 @@
 import { markdownToIR, tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
-import {
-  decodeTelegramHtmlEntities,
-  findTelegramHtmlEntityEnd,
-  isTelegramRichLineBreakStructuralTag,
-} from "./format-html.js";
+import { decodeTelegramHtmlEntities, isTelegramRichLineBreakStructuralTag } from "./format-html.js";
 
 export const TELEGRAM_ASSISTANT_TRANSCRIPT_PREFIX = "<code>Assistant:</code> ";
 
@@ -13,12 +9,9 @@ type TelegramHtmlVisibleProjection = {
 };
 
 function maskTelegramExcludedText(text: string): string {
-  return text
-    .split("\n")
-    .map((line) =>
-      line.trim() ? `x${" ".repeat(Math.max(0, line.length - 1))}` : " ".repeat(line.length),
-    )
-    .join("\n");
+  return text.replace(/[^\n]+/g, (line) =>
+    line.trim() ? `x${" ".repeat(line.length - 1)}` : " ".repeat(line.length),
+  );
 }
 
 function maskTelegramExcludedRanges(projection: TelegramHtmlVisibleProjection): string {
@@ -33,6 +26,14 @@ function maskTelegramExcludedRanges(projection: TelegramHtmlVisibleProjection): 
 }
 
 function telegramProjectionHasRoleHeader(projection: TelegramHtmlVisibleProjection): boolean {
+  // Header delimiters must be literal or entity-encoded before Markdown parsing.
+  if (
+    !projection.text.includes("[") &&
+    !projection.text.includes("<") &&
+    !projection.text.includes("&")
+  ) {
+    return false;
+  }
   return Boolean(
     markdownToIR(maskTelegramExcludedRanges(projection), {
       assistantTranscriptRoleHeaders: true,
@@ -66,32 +67,6 @@ function appendTelegramHtmlVisibleValue(
   }
 }
 
-function appendTelegramHtmlVisibleSegment(
-  projection: TelegramHtmlVisibleProjection,
-  segment: string,
-  excluded: boolean,
-): void {
-  let index = 0;
-  while (index < segment.length) {
-    if (segment[index] === "&") {
-      const entityEnd = findTelegramHtmlEntityEnd(segment, index);
-      if (entityEnd >= 0) {
-        const rawEntity = segment.slice(index, entityEnd + 1);
-        appendTelegramHtmlVisibleValue(projection, decodeTelegramHtmlEntities(rawEntity), excluded);
-        index = entityEnd + 1;
-        continue;
-      }
-    }
-    const codePoint = segment.codePointAt(index);
-    if (codePoint === undefined) {
-      break;
-    }
-    const character = String.fromCodePoint(codePoint);
-    appendTelegramHtmlVisibleValue(projection, character, excluded);
-    index += character.length;
-  }
-}
-
 function projectTelegramHtmlVisibleText(html: string): TelegramHtmlVisibleProjection {
   const projection: TelegramHtmlVisibleProjection = { text: "", excludedRanges: [] };
   let codeDepth = 0;
@@ -99,38 +74,32 @@ function projectTelegramHtmlVisibleText(html: string): TelegramHtmlVisibleProjec
   let lastIndex = 0;
 
   for (const tag of tokenizeHtmlTags(html)) {
-    const tagStart = tag.start;
-    const tagEnd = tag.end;
-    appendTelegramHtmlVisibleSegment(
+    appendTelegramHtmlVisibleValue(
       projection,
-      html.slice(lastIndex, tagStart),
+      decodeTelegramHtmlEntities(html.slice(lastIndex, tag.start)),
       codeDepth > 0 || preDepth > 0,
     );
 
-    const rawTag = tag.raw;
-    const tagName = tag.name;
-    const isClosing = tag.closing;
-    const isSelfClosing = tag.selfClosing;
     if (
-      isTelegramRichLineBreakStructuralTag(rawTag, tagName) &&
+      isTelegramRichLineBreakStructuralTag(tag.raw, tag.name) &&
       projection.text &&
       !projection.text.endsWith("\n")
     ) {
       appendTelegramHtmlVisibleValue(projection, "\n", codeDepth > 0 || preDepth > 0);
     }
-    if (tagName === "br" && !isClosing) {
+    if (tag.name === "br" && !tag.closing) {
       appendTelegramHtmlVisibleValue(projection, "\n", codeDepth > 0 || preDepth > 0);
     }
-    if (!isSelfClosing && tagName === "code") {
-      codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
-    } else if (!isSelfClosing && tagName === "pre") {
-      preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
+    if (!tag.selfClosing && tag.name === "code") {
+      codeDepth = tag.closing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
+    } else if (!tag.selfClosing && tag.name === "pre") {
+      preDepth = tag.closing ? Math.max(0, preDepth - 1) : preDepth + 1;
     }
-    lastIndex = tagEnd;
+    lastIndex = tag.end;
   }
-  appendTelegramHtmlVisibleSegment(
+  appendTelegramHtmlVisibleValue(
     projection,
-    html.slice(lastIndex),
+    decodeTelegramHtmlEntities(html.slice(lastIndex)),
     codeDepth > 0 || preDepth > 0,
   );
   return projection;

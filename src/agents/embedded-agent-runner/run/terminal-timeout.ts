@@ -1,6 +1,6 @@
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
-import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
+import type { EmbeddedAgentRunResult } from "../types.js";
 import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
 import { resolveRunLivenessState } from "./incomplete-turn-resolution.js";
 import {
@@ -9,26 +9,11 @@ import {
   isEmbeddedRunTimeoutFinal,
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
+import type { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-// Carries the prepared terminal facts forward as one bundle instead of
-// re-enumerating them at every caller (see run-loop's terminalPrepared).
-type EmbeddedRunTerminalPreparedFacts = {
-  timedOutDuringPrompt: boolean;
-  hasSuccessfulFinalAssistantAfterPromptTimeout: boolean;
-  hasPartialAssistantTextAfterPromptTimeout: boolean;
-  payloads: EmbeddedAgentRunResult["payloads"];
-  payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
-  agentMeta: EmbeddedAgentMeta;
-  finalAssistantVisibleText?: string | undefined;
-  finalAssistantRawText?: string | undefined;
-  attemptToolSummary: EmbeddedAgentRunResult["meta"]["toolSummary"];
-  failureSignal: EmbeddedAgentRunResult["meta"]["failureSignal"];
-  terminalToolFailure?: EmbeddedAgentRunResult["meta"]["terminalToolFailure"];
-};
-
 export function resolveEmbeddedRunTerminalTimeout(input: {
-  terminalPrepared: EmbeddedRunTerminalPreparedFacts;
+  terminalPrepared: ReturnType<typeof prepareEmbeddedRunTerminal>;
   attempt: EmbeddedRunAttemptResult;
   terminalState: EmbeddedRunTerminalState;
   resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;

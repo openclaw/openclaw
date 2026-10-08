@@ -5,7 +5,6 @@ import {
   isInsideCode,
   stripReasoningTagsFromText,
 } from "openclaw/plugin-sdk/text-chunking";
-import type { TelegramReasoningStepState } from "./bot-message-dispatch.types.js";
 
 // A durable reasoning message already marked channel-side: 🧠 + italic body
 // (see markReasoningMessage). Detect it so a re-split passes it through
@@ -24,19 +23,13 @@ function markReasoningMessage(formatted: string): string {
   return withoutHeader.replace(/^_/u, "🧠 _");
 }
 const REASONING_TAG_PREFIXES = [
-  "<think",
-  "<thinking",
-  "<thought",
-  "<internal",
-  "<antthinking",
-  "<mm:think",
-  "</think",
-  "</thinking",
-  "</thought",
-  "</internal",
-  "</antthinking",
-  "</mm:think",
-];
+  "think",
+  "thinking",
+  "thought",
+  "internal",
+  "antthinking",
+  "mm:think",
+].flatMap((name) => [`<${name}`, `</${name}`]);
 const THINKING_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 
@@ -68,14 +61,14 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
 }
 
 function isPartialReasoningTagPrefix(text: string): boolean {
-  const trimmed = text.trim().replace(/^<\s*(\/?)\s+/u, "<$1");
-  if (!trimmed.startsWith("<")) {
+  const trimmed = text
+    .trim()
+    .replace(/^<\s*(\/?)\s+/u, "<$1")
+    .toLowerCase();
+  if (!trimmed.startsWith("<") || trimmed.includes(">")) {
     return false;
   }
-  if (trimmed.includes(">")) {
-    return false;
-  }
-  return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed.toLowerCase()));
+  return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed));
 }
 
 type TelegramReasoningSplit = {
@@ -119,45 +112,31 @@ export function splitTelegramReasoningText(
   };
 }
 
-export function createTelegramReasoningStepState(): TelegramReasoningStepState {
+export function createTelegramReasoningStepState() {
   let reasoningStatus: "none" | "hinted" | "delivered" = "none";
   let bufferedFinalAnswer: ReplyPayload | undefined;
 
-  const noteReasoningHint = () => {
-    if (reasoningStatus === "none") {
-      reasoningStatus = "hinted";
-    }
-  };
-
-  const noteReasoningDelivered = () => {
-    reasoningStatus = "delivered";
-  };
-
-  const shouldBufferFinalAnswer = () => {
-    return reasoningStatus === "hinted" && !bufferedFinalAnswer;
-  };
-
-  const bufferFinalAnswer = (value: ReplyPayload) => {
-    bufferedFinalAnswer = value;
-  };
-
-  const takeBufferedFinalAnswer = (): ReplyPayload | undefined => {
-    const value = bufferedFinalAnswer;
-    bufferedFinalAnswer = undefined;
-    return value;
-  };
-
-  const resetForNextStep = () => {
-    reasoningStatus = "none";
-    bufferedFinalAnswer = undefined;
-  };
-
   return {
-    noteReasoningHint,
-    noteReasoningDelivered,
-    shouldBufferFinalAnswer,
-    bufferFinalAnswer,
-    takeBufferedFinalAnswer,
-    resetForNextStep,
+    noteReasoningHint() {
+      if (reasoningStatus === "none") {
+        reasoningStatus = "hinted";
+      }
+    },
+    noteReasoningDelivered() {
+      reasoningStatus = "delivered";
+    },
+    shouldBufferFinalAnswer: () => reasoningStatus === "hinted" && !bufferedFinalAnswer,
+    bufferFinalAnswer(value: ReplyPayload) {
+      bufferedFinalAnswer = value;
+    },
+    takeBufferedFinalAnswer() {
+      const value = bufferedFinalAnswer;
+      bufferedFinalAnswer = undefined;
+      return value;
+    },
+    resetForNextStep() {
+      reasoningStatus = "none";
+      bufferedFinalAnswer = undefined;
+    },
   };
 }

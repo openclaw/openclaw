@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readCodexAsyncQuestions } from "./async-questions.js";
 import type { AttemptSettlementWarning } from "./attempt-terminal.js";
 import type { CodexAsyncAssistantMessage } from "./event-projector-assistant-message.js";
 import { readMirrorIdentity, readUpstreamUserText } from "./upstream-prompt-provenance.js";
@@ -9,7 +10,7 @@ export type MirroredAgentMessage = Extract<
   AgentMessage,
   { role: "user" | "assistant" | "toolResult" }
 > &
-  Partial<Pick<CodexAsyncAssistantMessage, "openclawAsyncDelivery">>;
+  Partial<Pick<CodexAsyncAssistantMessage, "openclawAsyncDelivery">> & { display?: boolean };
 
 export function isMirroredAgentMessage(message: AgentMessage): message is MirroredAgentMessage {
   return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
@@ -52,10 +53,7 @@ export function attachCodexMirrorAttestation(
   sourceFingerprint?: string,
 ): AgentMessage {
   const existing = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  const baseMeta =
-    existing && typeof existing === "object" && !Array.isArray(existing)
-      ? (existing as Record<string, unknown>)
-      : {};
+  const baseMeta = asOptionalRecord(existing) ?? {};
   const attested: AgentMessage & { [CODEX_META_KEY]: Record<string, unknown> } = {
     ...message,
     [CODEX_META_KEY]: {
@@ -94,18 +92,19 @@ export function hasCodexMirrorOrigin(message: AgentMessage): boolean {
 
 export function readCodexMirrorSourceFingerprint(message: AgentMessage): string | undefined {
   const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const value = (meta as Record<string, unknown>)[MIRROR_SOURCE_FINGERPRINT_META_KEY];
+  const value = asOptionalRecord(meta)?.[MIRROR_SOURCE_FINGERPRINT_META_KEY];
   return typeof value === "string" && value ? value : undefined;
 }
 
 export function serializeCodexMirrorSourceEvidence(message: AgentMessage): string {
   const content = "content" in message ? message.content : undefined;
+  const questions = isMirroredAgentMessage(message)
+    ? readCodexAsyncQuestions(message.openclawAsyncDelivery?.questions)
+    : undefined;
   return JSON.stringify({
     role: message.role,
     content,
+    ...(questions ? { questions } : {}),
     ...(message.role === "user" ? { upstreamUserText: readUpstreamUserText(message) } : {}),
     ...(message.role === "toolResult"
       ? {

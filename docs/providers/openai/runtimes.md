@@ -1,5 +1,6 @@
 ---
-summary: "Which runtime runs an openai/* turn, and how native Codex resolves auth"
+summary: "Choose an OpenAI runtime and understand native Codex auth"
+doc-schema-version: 1
 read_when:
   - You need to know whether a turn runs on OpenClaw or the native Codex harness
   - You are mapping the openai, codex, and agentRuntime names to layers
@@ -38,13 +39,32 @@ Affirmative reasoning support and native reasoning-effort metadata also preserve
 Codex selection. See [Runtime selection](/concepts/agent-runtimes#runtime-selection)
 for the supported capability values and the request overrides that remain protected.
 
+Catalog defaults added while loading configuration do not count as authored
+request overrides. File-backed API-key SecretRefs and the secret egress proxy
+also preserve compatibility with the official Platform Responses route; keep
+the official HTTPS model `baseUrl` when using that proxy.
+
 An explicit `agentRuntime.id: "openclaw"` keeps a Codex-eligible route on
 OpenClaw. Explicit `agentRuntime.id: "codex"` requires a registered Codex harness;
 unsupported routes/auth fail closed, except that authored request overrides may
 use Codex's declared exact-request OpenClaw fallback before execution. Inspect
 the completed result's actual harness when a recipe depends on native execution.
-Runtime selection does not change credential type or billing: Platform API-key
+Runtime compatibility does not establish credential type or billing: Platform API-key
 auth and ChatGPT/Codex subscription auth remain distinct.
+
+An official Completions adapter alone does not pin a supported model to metered
+billing: older configurations used that adapter with Codex subscription auth.
+When both credential kinds are eligible, automatic selection prefers the
+subscription route. That preference does not change the implicit runtime or
+require installing Codex for an API-only configuration. A literal provider
+`apiKey` without an `auth` override remains a fallback after eligible profiles.
+Required profile bindings, provider auth settings, configured secret references,
+and explicit auth order still take precedence. An authored OpenClaw runtime choice
+prefers the API route when both kinds are eligible; runtime compatibility is
+checked independently. Unpinned heartbeat and subagent models inherit their
+default model's route intent. Doctor reports a resolved billing-route change
+after saving a model-reference migration, including the consumer and old/new
+models, routes, and profiles.
 
 `openclaw doctor --fix` migrates legacy `codex/*` and `openai-codex/*` model
 refs, legacy Codex auth profile ids, and legacy Codex auth-order entries to the
@@ -69,12 +89,31 @@ account-based. OpenClaw selects auth in this order:
 1. Ordered OpenAI auth profiles for the agent, preferably under
    `auth.order.openai`. Run `openclaw doctor --fix` to migrate older legacy
    Codex auth profile ids and auth order.
-2. The app-server's existing account, such as a local Codex CLI ChatGPT
-   sign-in. For the default isolated agent home, OpenClaw bridges that native
-   CLI account into the app-server through its login RPC; it does not share the
-   CLI's config, plugins, or thread store.
+2. The native Codex account, only with an explicit `appServer.homeScope: "user"`
+   opt-in and when no host credential or account selection owns the route.
+   Ordinary OpenClaw sessions default to the isolated agent home, even when
+   Codex is already signed in. Prepared OpenClaw credentials stay in that home;
+   OpenClaw never logs them into the native user home.
 3. For local stdio app-server launches only, and only when the app-server
    reports no account: `CODEX_API_KEY`, then `OPENAI_API_KEY`.
+
+With the user-home opt-in, status and catalog reads ask Codex about its native
+login without importing credentials into an OpenClaw profile. A fresh auth refresh observes native login
+and logout. Native API-key and subscription accounts select their matching
+routes. Model runtime choices use the same route and account as thinking
+metadata; an unavailable runtime cannot be selected. Explicit auth import
+remains available when you want an OpenClaw-owned profile.
+
+If you previously relied on automatic use of a native Codex login, sign in with
+`openclaw models auth login --provider openai` and select the resulting OpenClaw
+profile. Selecting detected Codex in Model Setup reuses eligible OpenClaw credentials
+or opens the supported OpenAI sign-in flow before testing the connection. A cancelled
+or failed sign-in does not promote the route. If verification fails after sign-in,
+choose the saved sign-in to retry without logging in again. Setup no longer enables
+user-home sharing merely because a native login exists. Existing explicit `homeScope: "user"` settings remain opt-ins; remove that
+setting to use isolated sessions. Native session adoption and supervision are
+unchanged. Existing personal Codex history is not moved or deleted, and ordinary
+OpenClaw sessions remain durable in the per-agent Codex home.
 
 The default per-agent `codex-home/auth.json` is not a runtime auth store. If
 you copied or mounted Codex CLI credentials there, import them into the agent's
@@ -99,3 +138,7 @@ marks the profile blocked until Codex's advertised reset time and lets auth
 ordering rotate to the next `openai:*` profile, without changing the selected
 model or dropping out of the Codex harness. Once the reset time passes, the
 subscription profile is eligible again.
+
+Chat `/status` reports the authentication mode from the selected runtime's current
+prepared account. A native login stays distinct from an OpenClaw profile; it does
+not satisfy an unavailable explicit profile pin.

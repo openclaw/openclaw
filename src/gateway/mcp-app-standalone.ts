@@ -36,16 +36,16 @@ type StandaloneTicketBinding = {
   sessionKey: string;
   sessionId: string;
   viewId: string;
+  toolOperationsAuthorized: boolean;
   expiresAtMs: number;
 };
 
 type StandaloneTicket = { ticket: string; url: string; expiresAtMs: number };
+type StandaloneTicketActiveView = McpAppActiveView & {
+  toolOperationsAuthorized: boolean;
+};
 
 const ticketBindings = new Map<string, StandaloneTicketBinding>();
-
-export const mcpAppStandaloneTesting = {
-  clearTickets: () => ticketBindings.clear(),
-};
 
 function pruneTicketBindings(nowMs: number): void {
   for (const [nonce, binding] of ticketBindings) {
@@ -55,22 +55,27 @@ function pruneTicketBindings(nowMs: number): void {
   }
 }
 
-function signTicket(nonce: string, expiresAtMs: number, secret: Buffer): string {
-  return createHmac("sha256", secret)
+function signTicket(nonce: string, expiresAtMs: number): string {
+  return createHmac("sha256", ticketSecret)
     .update(`${MCP_APP_STANDALONE_TICKET_SCOPE}\0${nonce}\0${expiresAtMs}`)
     .digest("base64url");
 }
 
-function formatTicket(binding: StandaloneTicketBinding, secret: Buffer): string {
-  return `v1.${binding.nonce}.${binding.expiresAtMs}.${signTicket(binding.nonce, binding.expiresAtMs, secret)}`;
+function formatTicket(binding: StandaloneTicketBinding): StandaloneTicket {
+  const ticket = `v1.${binding.nonce}.${binding.expiresAtMs}.${signTicket(binding.nonce, binding.expiresAtMs)}`;
+  return { ticket, url: `${MCP_APP_STANDALONE_PATH}#${ticket}`, expiresAtMs: binding.expiresAtMs };
 }
 
 export function createMcpAppStandaloneTicket(params: {
   sessionKey: string;
-  view: Pick<McpAppViewLease, "viewId" | "sessionId" | "expiresAtMs">;
+  view: Pick<McpAppViewLease, "viewId" | "sessionId" | "expiresAtMs" | "requesterId">;
+  toolOperationsAuthorized: boolean;
   nowMs?: number;
-  secret?: Buffer;
 }): StandaloneTicket | undefined {
+  // A bearer-only window cannot establish a named requester’s live authority.
+  if (params.view.requesterId) {
+    return undefined;
+  }
   const nowMs = params.nowMs ?? Date.now();
   if (!Number.isSafeInteger(nowMs) || params.view.expiresAtMs <= nowMs) {
     return undefined;
@@ -82,7 +87,8 @@ export function createMcpAppStandaloneTicket(params: {
     if (
       binding.sessionKey === params.sessionKey &&
       binding.sessionId === params.view.sessionId &&
-      binding.viewId === params.view.viewId
+      binding.viewId === params.view.viewId &&
+      binding.toolOperationsAuthorized === params.toolOperationsAuthorized
     ) {
       if (binding.expiresAtMs > params.view.expiresAtMs) {
         ticketBindings.delete(binding.nonce);
@@ -98,12 +104,7 @@ export function createMcpAppStandaloneTicket(params: {
     (reusable.expiresAtMs >= expiresAtMs ||
       reusable.expiresAtMs - nowMs >= MCP_APP_STANDALONE_TICKET_MIN_REMAINING_MS)
   ) {
-    const ticket = formatTicket(reusable, params.secret ?? ticketSecret);
-    return {
-      ticket,
-      url: `${MCP_APP_STANDALONE_PATH}#${ticket}`,
-      expiresAtMs: reusable.expiresAtMs,
-    };
+    return formatTicket(reusable);
   }
   // Standalone issuance is additive to the existing authenticated view API.
   // At capacity, omit the link rather than failing that pre-existing path.
@@ -116,31 +117,17 @@ export function createMcpAppStandaloneTicket(params: {
     sessionKey: params.sessionKey,
     sessionId: params.view.sessionId,
     viewId: params.view.viewId,
+    toolOperationsAuthorized: params.toolOperationsAuthorized,
     expiresAtMs,
   };
   ticketBindings.set(nonce, binding);
-  const ticket = formatTicket(binding, params.secret ?? ticketSecret);
-  return {
-    ticket,
-    url: `${MCP_APP_STANDALONE_PATH}#${ticket}`,
-    expiresAtMs,
-  };
+  return formatTicket(binding);
 }
 
-export function verifyMcpAppStandaloneTicket(
+function verifyMcpAppStandaloneTicket(
   value: string,
-  expected: {
-    sessionKey?: string;
-    sessionId?: string;
-    viewId?: string;
-    nowMs?: number;
-    secret?: Buffer;
-  } = {},
+  nowMs: number,
 ): StandaloneTicketBinding | undefined {
-  const nowMs = expected.nowMs ?? Date.now();
-  if (!Number.isSafeInteger(nowMs)) {
-    return undefined;
-  }
   const parts = value.split(".");
   if (parts.length !== 4 || parts[0] !== "v1") {
     return undefined;
@@ -153,18 +140,12 @@ export function verifyMcpAppStandaloneTicket(
   if (!Number.isSafeInteger(expiresAtMs) || expiresAtMs <= nowMs) {
     return undefined;
   }
-  const expectedSignature = signTicket(nonce, expiresAtMs, expected.secret ?? ticketSecret);
+  const expectedSignature = signTicket(nonce, expiresAtMs);
   if (!safeEqualSecret(signature, expectedSignature)) {
     return undefined;
   }
   const binding = ticketBindings.get(nonce);
-  if (
-    !binding ||
-    binding.expiresAtMs !== expiresAtMs ||
-    (expected.sessionKey !== undefined && binding.sessionKey !== expected.sessionKey) ||
-    (expected.sessionId !== undefined && binding.sessionId !== expected.sessionId) ||
-    (expected.viewId !== undefined && binding.viewId !== expected.viewId)
-  ) {
+  if (!binding || binding.expiresAtMs !== expiresAtMs) {
     return undefined;
   }
   return binding;
@@ -173,9 +154,8 @@ export function verifyMcpAppStandaloneTicket(
 function resolveTicketActiveView(
   value: string,
   nowMs: number,
-  secret: Buffer,
-): McpAppActiveView | undefined {
-  const binding = verifyMcpAppStandaloneTicket(value, { nowMs, secret });
+): StandaloneTicketActiveView | undefined {
+  const binding = verifyMcpAppStandaloneTicket(value, nowMs);
   if (!binding) {
     return undefined;
   }
@@ -186,6 +166,7 @@ function resolveTicketActiveView(
   const view = getMcpAppViewLease(binding.viewId, runtime);
   if (
     !view ||
+    view.requesterId !== undefined ||
     view.viewId !== binding.viewId ||
     view.sessionId !== binding.sessionId ||
     view.expiresAtMs <= nowMs ||
@@ -193,7 +174,7 @@ function resolveTicketActiveView(
   ) {
     return undefined;
   }
-  return { runtime, view };
+  return { runtime, view, toolOperationsAuthorized: binding.toolOperationsAuthorized };
 }
 
 function ticketFromRequest(req: IncomingMessage): string | undefined {
@@ -206,11 +187,15 @@ function ticketFromRequest(req: IncomingMessage): string | undefined {
 }
 
 function supportsStandaloneToolOperations(
-  view: Pick<McpAppViewLease, "allowedAppToolNames" | "readOnly">,
+  active: Pick<StandaloneTicketActiveView, "toolOperationsAuthorized" | "view">,
 ): boolean {
-  // The ticket is the short-lived grant. Tool authority still requires the
-  // originating run's explicit allowlist and is revalidated on every request.
-  return view.allowedAppToolNames !== undefined && view.readOnly !== true;
+  // Tool authority is the intersection of the ticket issuer's Gateway scope and
+  // the originating run's live App-tool grant, revalidated on every request.
+  return (
+    active.toolOperationsAuthorized &&
+    active.view.allowedAppToolNames !== undefined &&
+    active.view.readOnly !== true
+  );
 }
 
 async function supportsStandaloneResourceOperations(view: McpAppViewLease): Promise<boolean> {
@@ -277,15 +262,10 @@ export async function handleMcpAppStandaloneHttpRequest(
     gatewayPort?: number;
     sandboxPort?: number;
     sandboxOrigin?: string;
-    now?: () => number;
-    nowMs?: number;
-    ticketSecret?: Buffer;
   } = {},
 ): Promise<boolean> {
-  let url: URL;
-  try {
-    url = new URL(req.url ?? "/", "http://localhost");
-  } catch {
+  const url = URL.parse(req.url ?? "/", "http://localhost");
+  if (!url) {
     return false;
   }
   const route = classifyMcpAppStandalonePath(url.pathname);
@@ -338,10 +318,7 @@ export async function handleMcpAppStandaloneHttpRequest(
 
   res.setHeader("Vary", "Authorization");
   const ticket = ticketFromRequest(req);
-  const now = options.now ?? (() => options.nowMs ?? Date.now());
-  const nowMs = now();
-  const secret = options.ticketSecret ?? ticketSecret;
-  const active = ticket ? resolveTicketActiveView(ticket, nowMs, secret) : undefined;
+  const active = ticket ? resolveTicketActiveView(ticket, Date.now()) : undefined;
   if (!active) {
     res.setHeader("WWW-Authenticate", "MCP-App");
     respondPlainText(res, 401, "Unauthorized");
@@ -365,7 +342,7 @@ export async function handleMcpAppStandaloneHttpRequest(
         }
         // Body parsing may consume meaningful ticket lifetime. Revalidate the
         // authoritative runtime and view immediately before privileged work.
-        const current = ticket ? resolveTicketActiveView(ticket, now(), secret) : undefined;
+        const current = ticket ? resolveTicketActiveView(ticket, Date.now()) : undefined;
         if (!current) {
           res.setHeader("WWW-Authenticate", "MCP-App");
           sendJson(res, 401, { ok: false, error: "Unauthorized" });
@@ -373,7 +350,7 @@ export async function handleMcpAppStandaloneHttpRequest(
         }
         if (
           (operation.method === "tools/call" || operation.method === "tools/list") &&
-          !supportsStandaloneToolOperations(current.view)
+          !supportsStandaloneToolOperations(current)
         ) {
           sendJson(res, 403, { ok: false, error: "MCP App tool bridge is unavailable" });
           return;
@@ -405,7 +382,9 @@ export async function handleMcpAppStandaloneHttpRequest(
         ...(view.csp ? { csp: view.csp } : {}),
         toolInput: view.toolInput,
         toolResult: view.toolResult,
-        serverTools: supportsStandaloneToolOperations(view),
+        ...(view.displayModes ? { displayModes: view.displayModes } : {}),
+        ...(view.deepLink ? { hostContext: { "openai/deepLink": view.deepLink } } : {}),
+        serverTools: supportsStandaloneToolOperations(active),
         serverResources,
       });
       return true;

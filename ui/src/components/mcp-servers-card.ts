@@ -4,6 +4,7 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
+import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
 import {
   buildAddMcpServerPatch,
@@ -17,6 +18,7 @@ import {
   type McpServersPatchBuildResult,
 } from "../lib/config/mcp-servers.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
@@ -29,6 +31,9 @@ import {
   renderSettingsSection,
   renderSettingsStatus,
 } from "./settings-ui.ts";
+import { WizardLoginController } from "./wizard-login-controller.ts";
+
+registerMcpEnglish();
 
 type McpServerMessage = { kind: "error" | "success"; text: string };
 
@@ -55,18 +60,24 @@ class McpServersCard extends OpenClawLightDomElement {
 
   @property() docsUrl = "https://docs.openclaw.ai/tools/mcp";
 
-  @state() private rows: McpServerSummary[] | null = null;
   @state() private busy = false;
   @state() private message: McpServerMessage | null = null;
   @state() private formOpen = false;
   private feedbackGeneration = 0;
+  private readonly login = new WizardLoginController(this, {
+    getClient: () => this.context?.gateway.snapshot.client ?? null,
+    getAgentId: () => null,
+    onClose: () => this.login.reset(),
+    requestFailedMessage: () => t("mcpServers.signInFailed"),
+    sessionExpiredMessage: () => t("mcpServers.signInExpired"),
+  });
 
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.runtimeConfig,
       (runtimeConfig) => {
         const generation = this.feedbackGeneration;
-        this.syncRows();
+        this.requestUpdate();
         void runtimeConfig.ensureLoaded().catch((error: unknown) => {
           if (
             generation !== this.feedbackGeneration ||
@@ -80,7 +91,7 @@ class McpServersCard extends OpenClawLightDomElement {
             text: formatUiError(error),
           };
         });
-        const unsubscribe = runtimeConfig.subscribe(() => this.syncRows());
+        const unsubscribe = runtimeConfig.subscribe(() => this.requestUpdate());
         return () => {
           // Async config work belongs to one connected source. Retire its UI
           // feedback before a replacement source or retained card can reuse it.
@@ -94,16 +105,20 @@ class McpServersCard extends OpenClawLightDomElement {
     .effect(
       () => this.context?.gateway,
       (gateway) => gateway.subscribe(() => this.requestUpdate()),
+    )
+    .effect(
+      () => this.context?.gateway.snapshot.hello,
+      () => () => this.login.reset(),
+    )
+    .effect(
+      () => this.context?.agentSelection,
+      (selection) => selection.subscribe(() => this.login.reset()),
     );
 
   override disconnectedCallback() {
+    this.login.reset();
     this.subscriptions.clear();
     super.disconnectedCallback();
-  }
-
-  private syncRows() {
-    const snapshot = this.context?.runtimeConfig.state.configSnapshot;
-    this.rows = summarizeMcpServers(resolveEditableSnapshotConfig(snapshot));
   }
 
   private mutationBlockedReason(): string | null {
@@ -118,7 +133,26 @@ class McpServersCard extends OpenClawLightDomElement {
   }
 
   private canMutate(): boolean {
-    return this.context !== undefined && this.mutationBlockedReason() === null;
+    return (
+      this.context !== undefined &&
+      this.mutationBlockedReason() === null &&
+      this.login.runner.state.phase === "idle"
+    );
+  }
+
+  private signIn(server: McpServerSummary): void {
+    if (
+      this.busy ||
+      !this.canMutate() ||
+      !server.enabled ||
+      server.signIn !== "operator" ||
+      !canCallGatewayMethod(this.context?.gateway.snapshot, "mcp.authLogin", "operator.admin")
+    ) {
+      return;
+    }
+    this.message = null;
+    this.login.runner.prepareSignIn("oauth", server.name);
+    void this.login.runner.startMcpLogin(server.name);
   }
 
   private async mutate(options: {
@@ -141,13 +175,12 @@ class McpServersCard extends OpenClawLightDomElement {
       this.message = { kind: "error", text: result.error };
       return false;
     }
-    this.syncRows();
     this.message = { kind: "success", text: options.successText };
     return true;
   }
 
   private async addServer(form: McpServerForm) {
-    const name = form.name.trim();
+    const name = form.name;
     if (!MCP_SERVER_NAME_PATTERN.test(name)) {
       this.message = { kind: "error", text: t("mcpServers.nameInvalid") };
       return;
@@ -212,7 +245,27 @@ class McpServersCard extends OpenClawLightDomElement {
             kind: server.enabled ? "ok" : "muted",
             label: server.enabled ? t("common.enabled") : t("common.disabled"),
           })}
-          <code>${command}</code>
+          ${
+            server.signIn === "profile"
+              ? html`<span class="settings-row__desc">${t("mcpServers.profileSignIn")}</span>`
+              : server.signIn === "requester"
+                ? html`<span class="settings-row__desc">${t("mcpServers.requesterSignIn")}</span>`
+                : html`<code>${command}</code>`
+          }
+          ${
+            server.enabled &&
+            server.signIn === "operator" &&
+            canCallGatewayMethod(this.context?.gateway.snapshot, "mcp.authLogin", "operator.admin")
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm"
+                  ?disabled=${disabled}
+                  @click=${() => this.signIn(server)}
+                >
+                  ${t("mcpServers.signIn")}
+                </button>`
+              : nothing
+          }
           <button
             type="button"
             class="btn btn--sm"
@@ -245,7 +298,9 @@ class McpServersCard extends OpenClawLightDomElement {
 
   override render() {
     const blockedReason = this.mutationBlockedReason();
-    const rows = this.rows;
+    const rows = summarizeMcpServers(
+      resolveEditableSnapshotConfig(this.context?.runtimeConfig.state.configSnapshot),
+    );
     const body = !rows
       ? renderSettingsLoadingSkeleton({ rows: 2 })
       : rows.length === 0
@@ -307,6 +362,7 @@ class McpServersCard extends OpenClawLightDomElement {
           `,
         )}
       </div>
+      ${this.login.render({ doneMessage: t("mcpServers.authenticationSaved") })}
     `;
   }
 }

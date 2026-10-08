@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -25,7 +26,7 @@ afterEach(() => {
 });
 
 describe("doctor reserved incognito session key repair", () => {
-  it("renames durable collisions and every key-bearing linkage idempotently", () => {
+  it("renames durable collisions and every key-bearing linkage idempotently", async () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-doctor-incognito-key-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const sqlitePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
@@ -39,7 +40,9 @@ describe("doctor reserved incognito session key repair", () => {
     const stateDatabase = openOpenClawStateDatabase({ env });
     const oldKey = "agent:main:dashboard:incognito-collision";
     const baseLegacyKey = "agent:main:dashboard:legacy-incognito-collision";
-    const newKey = `${baseLegacyKey}-1`;
+    const coldOccupiedKey = `${baseLegacyKey}-1`;
+    const newKey = `${baseLegacyKey}-2`;
+    const skillsSnapshot = { prompt: "Retained skill prompt", skills: [{ name: "demo" }] };
     try {
       const entryJson = JSON.stringify({
         sessionId: "session-old",
@@ -57,6 +60,11 @@ describe("doctor reserved incognito session key repair", () => {
           "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by, fork_source_session_key) VALUES (?, ?, ?, 1, ?, ?, ?)",
         )
         .run(oldKey, "session-old", entryJson, oldKey, oldKey, oldKey);
+      database.db
+        .prepare(
+          "INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES (?, 'skillsSnapshot', ?)",
+        )
+        .run(oldKey, JSON.stringify(skillsSnapshot));
       database.db
         .prepare(
           "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at, parent_session_key, spawned_by) VALUES (?, ?, 'conversation', 1, 1, ?, ?)",
@@ -101,6 +109,11 @@ describe("doctor reserved incognito session key repair", () => {
         .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
         .run(oldKey);
       secondaryDatabase.db
+        .prepare(
+          "INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES ('agent:work:dashboard:regular', 'systemPromptReport', ?)",
+        )
+        .run(JSON.stringify({ source: "run", generatedAt: 1, sessionKey: coldOccupiedKey }));
+      secondaryDatabase.db
         .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
         .run("agent:work:dashboard:regular");
       secondaryDatabase.db
@@ -139,11 +152,11 @@ describe("doctor reserved incognito session key repair", () => {
         oldKey,
       );
 
-      expect(repairReservedIncognitoSessionKeys({ apply: false, cfg: {}, env })).toEqual({
+      expect(await repairReservedIncognitoSessionKeys({ apply: false, cfg: {}, env })).toEqual({
         found: 1,
         repaired: 0,
       });
-      expect(repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
+      expect(await repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
         found: 1,
         repaired: 1,
       });
@@ -218,14 +231,26 @@ describe("doctor reserved incognito session key repair", () => {
         .prepare("SELECT session_key, entry_json FROM session_nodes")
         .get() as { session_key: string; entry_json: string };
       expect(entry.session_key).toBe(newKey);
-      expect(JSON.parse(entry.entry_json)).toMatchObject({
+      expect(
+        loadExactSessionEntryReadOnly({ agentId: "main", env, sessionKey: newKey })?.entry,
+      ).toMatchObject({
         parentSessionKey: newKey,
         completionOwnerSessionKey: newKey,
         forkSource: { sessionKey: newKey },
         compactionCheckpoints: [{ sessionKey: newKey }],
         systemPromptReport: { sessionKey: newKey },
+        skillsSnapshot,
         pluginExtensions: { test: { label: oldKey } },
       });
+      expect(JSON.parse(entry.entry_json)).not.toHaveProperty("systemPromptReport");
+      expect(JSON.parse(entry.entry_json)).not.toHaveProperty("skillsSnapshot");
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "work",
+          env,
+          sessionKey: "agent:work:dashboard:regular",
+        })?.entry.systemPromptReport?.sessionKey,
+      ).toBe(coldOccupiedKey);
       expect(
         database.db
           .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
@@ -246,7 +271,7 @@ describe("doctor reserved incognito session key repair", () => {
           entry: { sessionId: "session-work", updatedAt: 1 },
         },
       ]);
-      expect(repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
+      expect(await repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
         found: 0,
         repaired: 0,
       });
@@ -262,7 +287,7 @@ describe("doctor reserved incognito session key repair", () => {
 
   it.each([false, true])(
     "resumes an interrupted repair from its journal (shared owner: %s)",
-    (shared) => {
+    async (shared) => {
       const stateDir = fs.realpathSync(tempDirs.make("openclaw-doctor-incognito-resume-"));
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const sqlitePath = shared
@@ -316,11 +341,11 @@ describe("doctor reserved incognito session key repair", () => {
         )
         .run(resumedKey);
 
-      expect(repairReservedIncognitoSessionKeys({ apply: false, cfg, env })).toEqual({
+      expect(await repairReservedIncognitoSessionKeys({ apply: false, cfg, env })).toEqual({
         found: 2,
         repaired: 0,
       });
-      expect(repairReservedIncognitoSessionKeys({ apply: true, cfg, env })).toEqual({
+      expect(await repairReservedIncognitoSessionKeys({ apply: true, cfg, env })).toEqual({
         found: 2,
         repaired: 2,
       });
@@ -338,7 +363,7 @@ describe("doctor reserved incognito session key repair", () => {
     },
   );
 
-  it("rewrites dense incognito references in bounded batches without changing payloads", () => {
+  it("rewrites dense incognito references in bounded batches without changing payloads", async () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-doctor-incognito-density-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -390,7 +415,7 @@ describe("doctor reserved incognito session key repair", () => {
       return originalExec(sql);
     });
 
-    expect(repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
+    expect(await repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
       found: 1,
       repaired: 1,
     });

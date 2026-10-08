@@ -17,7 +17,9 @@ A pasted ref is context, not permission to publish or expand the task.
 - **Fix only:** investigate, repair locally, and validate. Publishing still
   requires ship/land or equivalent scoped authority.
 - **Land/ship or autonomous repair:** finish the authorized scope through current
-  source proof, review, exact-head CI, native merge, and remote verification.
+  source proof, review, native merge submission, and verified remote merge.
+  Keep checking pending requests and repair CI failures or conflicts under the
+  same authority; accepted auto-merge is pending work, not task completion.
   Preserve contributor credit and unrelated work. Routine steps need no repeated
   permission; security, schema, product, release, and other root gates remain.
 - **Queue/discovery:** read [triage](references/triage.md). Batch live reads and
@@ -82,6 +84,14 @@ proof with the limitation stated. Explicit live requests, external API contracts
 and changes whose risk requires authenticated execution keep their required proof.
 Never describe mocks, skipped checks, or an older head as live evidence.
 
+## CODEOWNERS review
+
+`CODEOWNERS` routes review; check live GitHub enforcement. Restricted/security
+paths and material product, behavior, security, or ownership changes need
+listed-owner involvement. For ownership/review governance, verified active
+organization-admin direction also qualifies; repository admin/bypass alone does
+not. Neither route waives enforced reviews.
+
 ## Review and publish
 
 Before committing or landing nontrivial code, run `$autoreview` and resolve
@@ -92,8 +102,11 @@ Reopen review for substantive changes or unresolved concerns, not a patch-identi
 rebase or a mechanical head change. Address real human/bot findings and explain
 rejected ones; bot scores and Rank-up lists do not create separate obligations.
 
-Use the current PR template. Keep problem, solution, user impact, useful evidence,
-known gaps, and contributor credit current. Explain material tradeoffs when they
+Use the current PR template. Lead with the plain-language problem and concrete
+user impact; keep the explanation short and leave implementation inventories in
+the diff or optional details. Keep important risks, migrations, required actions,
+useful evidence, known gaps, and contributor credit visible and current. Do not
+invent a user benefit for internal-only work. Explain material tradeoffs when they
 matter; do not require universal LOC tables, provenance fields, or alternate-fix
 essays. `CHANGELOG.md` is release-owned; user-facing release-note context stays
 in the PR/commit. Omit agent transcripts unless explicitly requested.
@@ -108,3 +121,29 @@ Verify the final merge/closure state and source rather than trusting a local
 summary. Report the problem, owner-level change, important proof and limitations,
 credit, and linked final state in concise prose. Record worthwhile follow-ups;
 do not manufacture another task after a bounded request is complete.
+
+## Finalize and clean up
+
+Never remove the worktree containing a live
+session's cwd, including your own. A child command's `cd` or `cwd` override does
+not move the parent session. Defer that worktree's removal until the session
+exits or releases its cwd; report the retained path in the final handoff.
+Once the requested outcome and required verification are complete, remove the
+task's disposable proof and scratch. This includes test logs, receipts, local
+proof archives, and `.crabbox` outputs. Do not retain, archive, export, or hand off
+these files merely to remove the completed task's worktree. Follow
+[native closeout](references/landing.md#recovery-and-closeout).
+
+Required pre-merge proof stays mandatory. Preserve requested deliverables,
+explicit retention requests, unfinished source, recovery state needed by unfinished
+operations, active owners, credentials, agent state, and shared dependencies.
+Optional follow-ups do not keep a completed task open.
+
+This applies to every task, not only PR work: report routine findings in
+chat/stdout. Create files only for deliverables or concrete tool/proof/recovery
+needs; state their purpose and reuse them. After the requested outcome and
+required verification are complete, remove task-owned proof, scratch, and
+finished worktrees through their native lifecycle. Do not require an archive or
+evidence handoff. Preserve requested deliverables, explicit retention requests,
+unfinished source and recovery state, live owners, credentials, agent state,
+shared dependencies, and unknown ownership.

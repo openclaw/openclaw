@@ -1,0 +1,479 @@
+import { stableStringify } from "@openclaw/normalization-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { withSandboxRuntimeStatusesInWorker } from "../../../agents/sandbox/runtime-status.js";
+import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
+import { normalizeChatType } from "../../../channels/chat-type.js";
+import { combineChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
+import { combineGatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
+import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
+import { normalizeMessageChannel } from "../../../utils/message-channel.js";
+import {
+  resolveReplyOperatorAuthorityKey,
+  resolveReplyScreenToolTarget,
+  resolveReplyThemeProfileId,
+  resolveReplyToolAuthorityContext,
+} from "../reply-tool-authority.js";
+import {
+  FollowupRunDeferredError,
+  isFollowupRunAborted,
+  type FollowupRun,
+  type QueuedFollowupReplyBatch,
+} from "./types.js";
+
+export function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
+  return (
+    // SAFETY: queue producers attach this private marker; only literal true selects prepared input.
+    (run as FollowupRun & { currentTurnImagesPrepared?: true }).currentTurnImagesPrepared === true
+  );
+}
+
+const QUEUED_ADMISSION_OWNER_STATE_KEY = Symbol.for("openclaw.queuedAdmissionOwnerState");
+const queuedAdmissionOwnerState = resolveGlobalSingleton(QUEUED_ADMISSION_OWNER_STATE_KEY, () => ({
+  keys: new WeakMap<NonNullable<FollowupRun["turnAdoptionLifecycle"]>, string>(),
+  nextId: 1,
+}));
+
+export function hasExclusiveTurnAdmission(
+  lifecycle: FollowupRun["turnAdoptionLifecycle"],
+): lifecycle is NonNullable<FollowupRun["turnAdoptionLifecycle"]> & {
+  admission: "exclusive";
+} {
+  return lifecycle?.admission === "exclusive";
+}
+
+export function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
+  const owners = new Set(
+    items.flatMap((item) =>
+      hasExclusiveTurnAdmission(item.turnAdoptionLifecycle) ? [item.turnAdoptionLifecycle] : [],
+    ),
+  );
+  if (owners.size > 1) {
+    throw new Error("followup queue cannot aggregate distinct admission lifecycles");
+  }
+}
+
+function resolveTurnAdoptionLifecycleDeliveryKey(
+  lifecycle: FollowupRun["turnAdoptionLifecycle"],
+): string {
+  if (!lifecycle) {
+    return "";
+  }
+  const explicitOwnerKey = lifecycle.ownerKey ?? "";
+  // Closed admission marker — never infer exclusive from onAbandoned presence.
+  // Cancel-only owners share collect identity via ownerKey alone.
+  if (!hasExclusiveTurnAdmission(lifecycle)) {
+    return explicitOwnerKey;
+  }
+  let admissionOwnerKey = queuedAdmissionOwnerState.keys.get(lifecycle);
+  if (!admissionOwnerKey) {
+    admissionOwnerKey = `admission:${queuedAdmissionOwnerState.nextId++}`;
+    queuedAdmissionOwnerState.keys.set(lifecycle, admissionOwnerKey);
+  }
+  // Durable admission callbacks own separate ingress identities. Combining
+  // them would let one source commit before a sibling rejects the aggregate.
+  return JSON.stringify([explicitOwnerKey, admissionOwnerKey]);
+}
+
+// Keep this key aligned with the fields that affect per-message authorization or
+// exec-context propagation in collect-mode batching. Display-only sender fields
+// stay out of the key so profile/name drift does not force conservative splits.
+// Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
+// intentionally excluded because they are session-level or not consulted in
+// per-message authorization checks.
+export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
+  const execution = run.run;
+  return JSON.stringify([
+    resolveReplyOperatorAuthorityKey(run.operatorAuthority),
+    execution.senderId ?? "",
+    JSON.stringify(execution.channelContext ?? null),
+    stableStringify(execution.conversationToolPolicy ?? null),
+    execution.senderE164 ?? "",
+    execution.senderIsOwner === true,
+    execution.execOverrides?.host ?? "",
+    execution.execOverrides?.security ?? "",
+    execution.execOverrides?.ask ?? "",
+    execution.execOverrides?.node ?? "",
+    execution.execOverrides?.nodeCwd ?? "",
+    execution.bashElevated?.enabled === true,
+    execution.bashElevated?.allowed === true,
+    execution.bashElevated?.defaultLevel ?? "",
+    execution.approvalReviewerDeviceId ?? "",
+  ]);
+}
+
+/** Storage grouping is policy-independent; drain prepares current screen/theme authority. */
+export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
+  const execution = run.run;
+  const provenance = execution.inputProvenance;
+  return JSON.stringify([
+    channelRouteDedupeKey({
+      channel: run.originatingChannel,
+      to: run.originatingTo,
+      accountId: run.originatingAccountId,
+      threadId: run.originatingThreadId,
+    }),
+    hasPreparedCurrentTurnImages(run),
+    // Approved sources skip the write hook; never carry unstaged input past it.
+    Boolean(run.userTurnTranscriptRecorder?.getPendingInputMessage?.()),
+    run.originatingChatId ?? "",
+    resolveFollowupReplyAnchor(run) ?? "",
+    run.originatingReplyToMode ?? "",
+    normalizeChatType(run.originatingChatType) ?? "",
+    resolveFollowupAuthorizationKey(run),
+    run.turnAdoptionLifecycle?.ownerKey ?? "",
+    normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
+    execution.provider,
+    execution.model,
+    execution.messageProvider ?? "",
+    JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
+    stableStringify(execution.toolBindings ?? null),
+    execution.chatType ?? "",
+    execution.agentAccountId ?? "",
+    execution.conversationRoutePeerId ?? "",
+    execution.groupId ?? "",
+    execution.groupChannel ?? "",
+    execution.groupSpace ?? "",
+    JSON.stringify([...new Set(execution.memberRoleIds ?? [])].toSorted()),
+    execution.spawnedBy ?? "",
+    execution.traceAuthorized === true,
+    execution.traceLevelOverride ?? "",
+    execution.thinkLevel ?? "",
+    execution.thinkLevelOverride ?? "",
+    execution.fastMode ?? "",
+    execution.fastModeOverride === true,
+    execution.fastModeAutoOnSecondsOverride === true,
+    execution.fastModeAutoOnSeconds ?? "",
+    execution.verboseLevel ?? "",
+    execution.verboseLevelOverride ?? "",
+    execution.reasoningLevel ?? "",
+    execution.elevatedLevel ?? "",
+    provenance?.kind ?? "",
+    provenance?.originSessionId ?? "",
+    provenance?.sourceSessionKey ?? "",
+    provenance?.sourceChannel ?? "",
+    provenance?.sourceTool ?? "",
+    stableStringify(execution.trustedInternalHandoff ?? null),
+    stableStringify(execution.scheduledToolPolicy ?? null),
+    stableStringify(execution.runtimePluginToolGrant ?? null),
+    stableStringify(run.toolsAllow ?? null),
+    stableStringify(
+      run.toolsAllow ? (readToolAllowlistIntersection(run.toolsAllow) ?? null) : null,
+    ),
+    run.disableTools === true,
+    execution.extraSystemPrompt ?? "",
+    execution.extraSystemPromptStatic ?? "",
+    execution.sourceReplyDeliveryMode ?? "",
+    execution.taskSuggestionDeliveryMode ?? "",
+    execution.silentReplyPromptMode ?? "",
+    execution.enforceFinalTag === true,
+    execution.skipProviderRuntimeHints === true,
+    execution.silentExpected === true,
+    run.currentInboundEventKind ?? "",
+    execution.terminalReplyExpectation ?? "",
+    execution.suppressNextUserMessagePersistence === true,
+    execution.suppressTranscriptOnlyAssistantPersistence === true,
+    execution.blockReplyBreak,
+    resolveTurnAdoptionLifecycleDeliveryKey(run.turnAdoptionLifecycle),
+  ]);
+}
+
+export async function prepareNextDeliveryGroup(
+  readItems: () => FollowupRun[],
+  assertDrainCurrent: () => void,
+): Promise<{ items: FollowupRun[]; assertCurrent: () => void }> {
+  const items = readItems().slice();
+  const sourceKey = (item: FollowupRun) =>
+    JSON.stringify([
+      resolveFollowupDeliveryStorageKey(item),
+      item.run.agentId,
+      item.run.sessionKey,
+      item.run.sessionId,
+      item.run.sessionFile,
+      item.admissionSessionId,
+      item.run.gatewayUiCommandTarget,
+    ]);
+  const sources = items.map((item) => ({
+    item,
+    run: item.run,
+    config: item.run.config,
+    lifecycle: item.turnAdoptionLifecycle,
+    operator: item.operatorAuthority,
+    key: sourceKey(item),
+  }));
+  const assertCurrent = () => {
+    assertDrainCurrent();
+    for (const source of sources) {
+      source.item.operatorAuthority?.assertCurrent();
+    }
+    const current = readItems();
+    for (const [index, source] of sources.entries()) {
+      const { item } = source;
+      if (
+        current[index] !== item ||
+        isFollowupRunAborted(item) ||
+        item.run !== source.run ||
+        item.run.config !== source.config ||
+        item.turnAdoptionLifecycle !== source.lifecycle ||
+        item.operatorAuthority !== source.operator ||
+        sourceKey(item) !== source.key
+      ) {
+        throw new FollowupRunDeferredError("Queued delivery source changed during preparation");
+      }
+    }
+    assertDrainCurrent();
+  };
+  assertCurrent();
+  if (items.length <= 1) {
+    return { items, assertCurrent };
+  }
+  const policyItems = items.filter((item) => item.run.gatewayUiCommandTarget && !item.disableTools);
+  return withSandboxRuntimeStatusesInWorker(
+    policyItems.map(({ run }) => ({
+      cfg: run.config,
+      agentId: run.agentId,
+      sessionKey: run.sessionKey,
+      classificationSessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
+    })),
+    { env: { ...process.env }, cwd: process.cwd(), assertCurrent },
+    (statuses) => {
+      const group: FollowupRun[] = [];
+      let firstKey: string | undefined;
+      for (const item of items) {
+        const index = policyItems.indexOf(item);
+        const profile =
+          index < 0
+            ? undefined
+            : resolveReplyToolAuthorityContext(item, undefined, statuses[index]).capabilityProfile;
+        const key = JSON.stringify([
+          resolveFollowupDeliveryStorageKey(item),
+          profile ? stableStringify(resolveReplyScreenToolTarget(item, profile) ?? null) : "null",
+          profile ? (resolveReplyThemeProfileId(item, profile) ?? "") : "",
+        ]);
+        if (firstKey !== undefined && key !== firstKey) {
+          break;
+        }
+        firstKey = key;
+        group.push(item);
+      }
+      assertCurrent();
+      return { items: group, assertCurrent };
+    },
+  );
+}
+
+export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
+  if (run.originatingReplyToMode === "off") {
+    return undefined;
+  }
+  const replyToId = normalizeOptionalString(run.originatingReplyToId);
+  if (replyToId || normalizeMessageChannel(run.originatingChannel) !== "slack") {
+    return replyToId;
+  }
+  const threadId = run.originatingThreadId;
+  const hasRoutedThread =
+    typeof threadId === "number"
+      ? Number.isFinite(threadId)
+      : normalizeOptionalString(threadId) !== undefined;
+  // Slack standalone turns have no parent reply id, but enabled reply policies
+  // still need the message id so collect groups cannot cross independent roots.
+  // A routed thread already owns that boundary and remains collectable across turns.
+  return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
+}
+
+type FollowupRuntimeMetadata = Pick<
+  FollowupRun,
+  | "sourceTurnId"
+  | "operatorAuthority"
+  | "personalBootstrapEligible"
+  | "currentInboundEventKind"
+  | "currentInboundAudio"
+  | "currentInboundContext"
+  | "explicitSkillSelections"
+  | "channelAdmissionEvidence"
+  | "gatewayLocalUserIngress"
+  | "toolsAllow"
+  | "disableTools"
+  | "abortSignal"
+  | "queueAbortSignal"
+  | "deliveryCorrelations"
+  | "turnAdoptionLifecycle"
+  | "replyOperationRunStates"
+  | "queuedFollowupReplyDisposition"
+  | "runObservers"
+>;
+
+function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
+  const contexts = items.flatMap((item, index) =>
+    item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
+  );
+  if (contexts.length === 0) {
+    return undefined;
+  }
+  if (contexts.length === 1) {
+    return contexts[0]?.context;
+  }
+  const renderField = (field: "text" | "resumableText") => {
+    const blocks = contexts.flatMap(({ context, index }) => {
+      const value = context[field];
+      return value ? [`Queued #${index + 1} context:\n${value}`] : [];
+    });
+    return blocks.length > 0 ? blocks.join("\n\n") : undefined;
+  };
+  const text = renderField("text");
+  if (!text) {
+    return undefined;
+  }
+  const resumableText = renderField("resumableText");
+  const injectedGoalContexts = [
+    ...new Set(contexts.flatMap(({ context }) => context.injectedGoalContexts ?? [])),
+  ];
+  return {
+    text,
+    ...(resumableText ? { resumableText } : {}),
+    fragments: contexts.flatMap(
+      ({ context }) =>
+        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
+    ),
+    promptJoiner: "\n\n",
+    ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
+  };
+}
+
+function collectReplyDisposition(
+  items: FollowupRun[],
+): FollowupRun["queuedFollowupReplyDisposition"] {
+  const primary = items.at(-1)?.queuedFollowupReplyDisposition;
+  const terminalRecipients = items.slice(0, -1).flatMap((item) => {
+    const disposition = item.queuedFollowupReplyDisposition;
+    return disposition?.kind === "deliver" ? [disposition.deliver] : [];
+  });
+  if (terminalRecipients.length === 0) {
+    return primary;
+  }
+  const deliver = primary?.kind === "deliver" ? primary.deliver : undefined;
+  return {
+    kind: "deliver",
+    deliver: Object.assign(
+      async (batch: QueuedFollowupReplyBatch) => {
+        if (batch.completion.kind === "progress") {
+          await deliver?.(batch);
+          return;
+        }
+        // The content owner publishes once; every consumed source receives the outcome.
+        const results = await Promise.allSettled([
+          ...terminalRecipients.map(async (recipient) => recipient({ ...batch, payloads: [] })),
+          Promise.resolve().then(() => deliver?.(batch)),
+        ]);
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure) {
+          throw failure.reason;
+        }
+      },
+      {
+        ownsCompletion: deliver?.ownsCompletion,
+        createSourceRetry: deliver?.createSourceRetry,
+      },
+    ),
+  };
+}
+
+export function collectRuntimeMetadata(
+  items: FollowupRun[],
+  abortSignal?: AbortSignal,
+): FollowupRuntimeMetadata {
+  const currentTurnSource = items.find(
+    (item) =>
+      item.currentInboundEventKind === "room_event" ||
+      item.currentInboundAudio === true ||
+      Boolean(item.currentInboundContext),
+  );
+  // Delivery-key equality proves every source has the same turn authority.
+  // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
+  const authoritySource = items.at(-1);
+  const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
+  const explicitSkillSelections = [
+    ...new Map(
+      items
+        .flatMap((item) => item.explicitSkillSelections ?? [])
+        .map((selection) => [selection.path, selection] as const),
+    ).values(),
+  ];
+  return {
+    sourceTurnId: authoritySource?.sourceTurnId,
+    operatorAuthority: authoritySource?.operatorAuthority,
+    ...(items.length > 0 && items.every((item) => item.personalBootstrapEligible === true)
+      ? { personalBootstrapEligible: true }
+      : {}),
+    currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
+    currentInboundAudio: currentTurnSource?.currentInboundAudio,
+    currentInboundContext: collectCurrentInboundContext(items),
+    explicitSkillSelections:
+      explicitSkillSelections.length > 0 ? explicitSkillSelections : undefined,
+    channelAdmissionEvidence: combineChannelAdmissionEvidence(
+      items.map((item) => item.channelAdmissionEvidence),
+    ),
+    gatewayLocalUserIngress: combineGatewayLocalUserIngress(
+      items.map((item) => item.gatewayLocalUserIngress),
+    ),
+    toolsAllow: authoritySource?.toolsAllow,
+    disableTools: authoritySource?.disableTools,
+    abortSignal,
+    queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
+    deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
+    turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
+    replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
+    queuedFollowupReplyDisposition: collectReplyDisposition(items),
+    runObservers: items.at(-1)?.runObservers,
+  };
+}
+
+export function resolveOverflowSummaryInboundEventKind(
+  sources: FollowupRun[],
+): "room_event" | undefined {
+  return sources.length > 0 &&
+    sources.every((source) => source.currentInboundEventKind === "room_event")
+    ? "room_event"
+    : undefined;
+}
+
+export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
+  return {
+    prompt: source.prompt,
+    sourceTurnId: source.sourceTurnId,
+    admissionSessionId: source.admissionSessionId,
+    operatorAuthority: source.operatorAuthority,
+    personalBootstrapEligible: source.personalBootstrapEligible,
+    queueAbortSignal: source.queueAbortSignal,
+    transcriptPrompt: source.transcriptPrompt,
+    userTurnTranscriptRecorder: source.userTurnTranscriptRecorder,
+    explicitSkillSelections: source.explicitSkillSelections,
+    toolsAllow: source.toolsAllow,
+    disableTools: source.disableTools,
+    images: source.images,
+    imageOrder: source.imageOrder,
+    media: source.media,
+    channelAdmissionEvidence: source.channelAdmissionEvidence,
+    gatewayLocalUserIngress: source.gatewayLocalUserIngress,
+    messageId: source.messageId,
+    summaryLine: source.summaryLine,
+    enqueuedAt: source.enqueuedAt,
+    originatingChannel: source.originatingChannel,
+    originatingTo: source.originatingTo,
+    originatingAccountId: source.originatingAccountId,
+    originatingThreadId: source.originatingThreadId,
+    originatingChatId: source.originatingChatId,
+    originatingReplyToId: source.originatingReplyToId,
+    originatingReplyToMode: source.originatingReplyToMode,
+    originatingChatType: source.originatingChatType,
+    abortSignal: source.abortSignal,
+    turnAdoptionLifecycle: source.turnAdoptionLifecycle,
+    replyOperationRunStates: source.replyOperationRunStates,
+    queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,
+    runObservers: source.runObservers,
+    ...(source.currentInboundEventKind === "room_event"
+      ? { currentInboundEventKind: "room_event" }
+      : {}),
+    run: source.run,
+  };
+}

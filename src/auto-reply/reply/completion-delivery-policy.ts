@@ -3,12 +3,20 @@ import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
-import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { SourceReplyDeliveryMode } from "../source-reply-delivery-mode.types.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
 type CompletionChatType = ChatType | "unknown";
+const COMPLETION_TARGET_CHAT_TYPES = new Map<string, CompletionChatType>([
+  ["group:", "group"],
+  ["channel:", "channel"],
+  ["thread:", "channel"],
+  ["dm:", "direct"],
+  ["direct:", "direct"],
+  ["user:", "direct"],
+]);
 
 type DurableCompletionDeliveryMode = "automatic" | "host_owned";
 
@@ -40,15 +48,12 @@ function resolveCompletionChatType(params: {
   );
 }
 
-export function completionRequiresMessageToolDelivery(params: {
-  cfg: OpenClawConfig;
-  requesterSessionKey?: string | null;
-  targetRequesterSessionKey?: string | null;
-  requesterEntry?: CompletionDeliverySessionEntry;
-  directOrigin?: DeliveryContext;
-  requesterSessionOrigin?: DeliveryContext;
-  messageToolAvailable?: boolean;
-}): boolean {
+export function completionRequiresMessageToolDelivery(
+  params: Parameters<typeof resolveCompletionChatType>[0] & {
+    cfg: OpenClawConfig;
+    messageToolAvailable?: boolean;
+  },
+): boolean {
   return (
     resolveSourceReplyDeliveryMode({
       cfg: params.cfg,
@@ -69,30 +74,8 @@ export function resolveDurableCompletionDeliveryMode(
   return sourceReplyDeliveryMode === "message_tool_only" ? "host_owned" : "automatic";
 }
 
-export function shouldRouteCompletionThroughRequesterSession(
-  sessionKey: string | undefined | null,
-): boolean {
-  const chatType = deriveSessionChatTypeFromKey(sessionKey);
-  return chatType === "group" || chatType === "channel";
-}
-
 function inferCompletionChatTypeFromTarget(to: string | undefined): CompletionChatType {
-  const normalized = to?.trim().toLowerCase();
-  if (!normalized) {
-    return "unknown";
-  }
-  if (normalized.startsWith("group:")) {
-    return "group";
-  }
-  if (normalized.startsWith("channel:") || normalized.startsWith("thread:")) {
-    return "channel";
-  }
-  if (
-    normalized.startsWith("dm:") ||
-    normalized.startsWith("direct:") ||
-    normalized.startsWith("user:")
-  ) {
-    return "direct";
-  }
-  return "unknown";
+  const normalized = to?.trim().toLowerCase() ?? "";
+  const prefix = normalized.slice(0, normalized.indexOf(":") + 1);
+  return COMPLETION_TARGET_CHAT_TYPES.get(prefix) ?? "unknown";
 }

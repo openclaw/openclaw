@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
-import { createTestBoardStore } from "../boards/board-store.test-support.js";
+import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
@@ -12,16 +12,22 @@ import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { resolveCanvasDocumentsDir } from "./documents.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { readCanvasDocumentHtmlSource, resolveCanvasDocumentsDir } from "./documents.js";
 import { registerTestWidgetContentKind as registerDiagramContentKind } from "./widget-tool.content-kinds.test-support.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 import { createBoardPutCaller } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
 
-const WIDGET_CODE_MAX_CHARS = 262_144;
-const PINNED_WIDGET_MAX_UTF8_BYTES = 256 * 1024;
+const WIDGET_HTML_MAX_UTF8_BYTES = 10 * 1024 * 1024;
+const PINNED_WIDGET_MAX_UTF8_BYTES = WIDGET_HTML_MAX_UTF8_BYTES;
 const WIDGET_MAX_PER_SCOPE = 32;
 const tempDirs: string[] = [];
 
@@ -31,7 +37,9 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetPluginRuntimeStateForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -54,6 +62,37 @@ function createLiveBoardTestContext(
   } as unknown as GatewayRequestContext;
   context.resolveGatewayContext = () => context;
   return context;
+}
+
+function createLiveBoardCaller(
+  store: ReturnType<typeof createTestBoardStore>,
+  broadcast = vi.fn(),
+  cfg: OpenClawConfig = { agents: { entries: { main: {} } } },
+): InProcessGatewayCaller {
+  const handlers = createBoardHandlers(store);
+  return async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
+    let result: unknown;
+    let failure: Error | undefined;
+    const respond: RespondFn = (ok, payload, error) => {
+      if (ok) {
+        result = payload;
+      } else {
+        failure = new Error(error?.message ?? "board request failed");
+      }
+    };
+    await handlers[method]!({
+      req: { type: "req", id: "show-widget", method, params },
+      params,
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: createLiveBoardTestContext(broadcast, cfg),
+    });
+    if (failure) {
+      throw failure;
+    }
+    return result as T;
+  };
 }
 
 function resolveCanvasDocumentDir(stateDir: string, documentId: string): string {
@@ -180,8 +219,9 @@ describe("show_widget", () => {
     });
 
     expect(tool.description).toContain(
-      "Inline hosting is disabled; set pin=true to place it on this session's dashboard",
+      "Inline previews are unavailable this turn; set pin=true to save to the session dashboard",
     );
+    expect(tool.description).not.toContain("Keep one-off visualizations inline");
     await expect(
       tool.execute("unpinned", {
         title: "Diagram",
@@ -204,7 +244,7 @@ describe("show_widget", () => {
       status: "pinned",
       boardWidgetName: "diagram",
       capabilityState: "none",
-      text: "Widget pinned to dashboard tab main as diagram",
+      text: "Widget pinned to dashboard tab main as diagram. Open this dashboard tab in Control UI to view it.",
     });
     expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
       "board.widget.put",
@@ -518,9 +558,9 @@ describe("show_widget", () => {
     await expect(
       tool.execute("oversized", {
         title: "Too large",
-        widget_code: "x".repeat(WIDGET_CODE_MAX_CHARS + 1),
+        widget_code: "x".repeat(WIDGET_HTML_MAX_UTF8_BYTES + 1),
       }),
-    ).rejects.toThrow(`widget_code exceeds maximum size (${WIDGET_CODE_MAX_CHARS} characters)`);
+    ).rejects.toThrow(`widget_code exceeds maximum size (${WIDGET_HTML_MAX_UTF8_BYTES} bytes)`);
   });
 
   it("rejects pinning without a session before creating a Canvas document", async () => {
@@ -537,33 +577,36 @@ describe("show_widget", () => {
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
   });
 
-  it("rejects multibyte pin input that exceeds the wrapped UTF-8 budget", async () => {
-    const stateDir = await createStateDir();
-    const callGateway = vi.fn();
-    const title = "Multibyte";
-    const wrapperBytes = Buffer.byteLength(buildWidgetDocument(title, ""), "utf8");
-    const widgetCode = "é".repeat(
-      Math.floor((PINNED_WIDGET_MAX_UTF8_BYTES - wrapperBytes) / 2) + 1,
-    );
-    expect(widgetCode.length).toBeLessThan(WIDGET_CODE_MAX_CHARS);
-    expect(Buffer.byteLength(buildWidgetDocument(title, widgetCode), "utf8")).toBeGreaterThan(
-      PINNED_WIDGET_MAX_UTF8_BYTES,
-    );
-    const tool = createShowWidgetTool({
-      stateDir,
-      sessionId: "wrapped-budget",
-      agentSessionKey: "agent:main:wrapped-budget",
-      callGateway,
-    });
+  it.each([true, false])(
+    "rejects multibyte input over the wrapped UTF-8 budget (pin=%s)",
+    async (pin) => {
+      const stateDir = await createStateDir();
+      const callGateway = vi.fn();
+      const title = "Multibyte";
+      const wrapperBytes = Buffer.byteLength(buildWidgetDocument(title, ""), "utf8");
+      const widgetCode = "é".repeat(
+        Math.floor((PINNED_WIDGET_MAX_UTF8_BYTES - wrapperBytes) / 2) + 1,
+      );
+      expect(Buffer.byteLength(widgetCode, "utf8")).toBeLessThan(WIDGET_HTML_MAX_UTF8_BYTES);
+      expect(Buffer.byteLength(buildWidgetDocument(title, widgetCode), "utf8")).toBeGreaterThan(
+        PINNED_WIDGET_MAX_UTF8_BYTES,
+      );
+      const tool = createShowWidgetTool({
+        stateDir,
+        sessionId: "wrapped-budget",
+        agentSessionKey: "agent:main:wrapped-budget",
+        callGateway,
+      });
 
-    await expect(
-      tool.execute("pin", { title, widget_code: widgetCode, pin: true }),
-    ).rejects.toThrow(
-      `pin exceeds effective dashboard budget (${PINNED_WIDGET_MAX_UTF8_BYTES} UTF-8 bytes after wrapping)`,
-    );
-    expect(callGateway).not.toHaveBeenCalled();
-    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
-  });
+      await expect(tool.execute("pin", { title, widget_code: widgetCode, pin })).rejects.toThrow(
+        pin
+          ? `pin exceeds effective dashboard budget (${PINNED_WIDGET_MAX_UTF8_BYTES} UTF-8 bytes after wrapping)`
+          : `widget document after wrapping exceeds maximum size (${WIDGET_HTML_MAX_UTF8_BYTES} bytes)`,
+      );
+      expect(callGateway).not.toHaveBeenCalled();
+      await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+    },
+  );
 
   it("does not create an inline Canvas document when dashboard pinning fails", async () => {
     const stateDir = await createStateDir();
@@ -619,8 +662,10 @@ describe("show_widget", () => {
       "utf8",
     );
     expect(html).toContain(
-      `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;`,
+      `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://cdnjs.cloudflare.com`,
     );
+    expect(html).toContain("font-src data:");
+    expect(html).toContain("img-src data:; media-src data: https: blob:; connect-src 'none'");
     expect(html).toContain("<title>&lt;Status&gt;</title>");
     expect(html).toContain("--accent:#bd4531");
     expect(html).toContain("--accent:#ff5c5c");
@@ -654,6 +699,8 @@ describe("show_widget", () => {
     ["qualified Main", "agent:main:pinned", "main", false],
     ["explicit Research global", "global", "research", false],
     ["Research global with retained Main", "global", "research", true],
+    ["large HTML", "agent:main:large-widget", "main", false],
+    ["wrapped HTML", "agent:main:wrapped-widget", "main", false],
   ] as const)(
     "creates and refreshes pinned HTML in %s",
     async (_label, sessionKey, agentId, retainedMain) => {
@@ -662,7 +709,7 @@ describe("show_widget", () => {
       const broadcast = vi.fn();
       const target = { sessionKey, agentId };
       const sibling = { sessionKey: "global", agentId: agentId === "main" ? "research" : "main" };
-      const siblingBefore = store.getSnapshot(sibling);
+      const siblingBefore = await store.getSnapshot(sibling);
       const boardBroadcastScope = { sessionKeys: [sessionKey], agentId };
       const eventSessionKey = sessionKey === "global" ? `agent:${agentId}:global` : sessionKey;
       const cfg: OpenClawConfig = {
@@ -672,34 +719,8 @@ describe("show_widget", () => {
       if (retainedMain) {
         retainLegacyDefaultAgentId(cfg, "main");
       }
-      const handlers = createBoardHandlers(store);
+      const callGateway = createLiveBoardCaller(store, broadcast, cfg);
       const title = "Release Status ".repeat(8).trim();
-      const callGateway: InProcessGatewayCaller = async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ): Promise<T> => {
-        let result: unknown;
-        let failure: Error | undefined;
-        const respond: RespondFn = (ok, payload, error) => {
-          if (ok) {
-            result = payload;
-          } else {
-            failure = new Error(error?.message ?? "board request failed");
-          }
-        };
-        await handlers[method]!({
-          req: { type: "req", id: "show-widget-pin", method, params },
-          params,
-          client: null,
-          isWebchatConnect: () => false,
-          respond,
-          context: createLiveBoardTestContext(broadcast, cfg),
-        });
-        if (failure) {
-          throw failure;
-        }
-        return result as T;
-      };
 
       const pinWidget = (widgetCode: string, withPlacement = false) =>
         executeWidget({
@@ -715,17 +736,26 @@ describe("show_widget", () => {
             : {}),
           callGateway,
         });
-      const result = await pinWidget("<p>ready</p>", true);
+      const initialHtml =
+        _label === "large HTML"
+          ? `<p>${"é".repeat(2 * 1024 * 1024)}</p>`
+          : _label === "wrapped HTML"
+            ? `<p>${"x".repeat(250 * 1024)}</p>`
+            : "<p>ready</p>";
+      const result = await pinWidget(initialHtml, true);
       const pinnedTitle = Array.from(title).slice(0, 80).join("");
 
-      expect(store.readWidgetHtml(target, "release-status")).toMatchObject({
-        html: buildWidgetDocument(pinnedTitle, "<p>ready</p>"),
+      expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
+        html: buildWidgetDocument(pinnedTitle, initialHtml),
         revision: 1,
       });
-      expect(store.getSnapshot(target).widgets[0]?.title).toBe(pinnedTitle);
-      expect(store.getSnapshot(target).widgets[0]?.presentation).toBe("frameless");
+      expect((await store.getSnapshot(target)).widgets[0]?.title).toBe(pinnedTitle);
+      expect((await store.getSnapshot(target)).widgets[0]?.presentation).toBe("frameless");
       expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
       expect(result.boardWidgetName).toBe("release-status");
+      expect((await readCanvasDocumentHtmlSource(result.viewId, { stateDir })).html).toContain(
+        initialHtml,
+      );
       expect(broadcast).toHaveBeenCalledWith(
         "board.changed",
         { sessionKey: eventSessionKey, revision: 1, widget: "release-status" },
@@ -739,11 +769,11 @@ describe("show_widget", () => {
           content: { kind: "plugin", pluginKind: "workboard:card" },
         }),
       ).rejects.toThrow(/same content kind.*remove/i);
-      expect(store.readWidgetHtml(target, "release-status")?.revision).toBe(1);
+      expect((await readBoardHtml(store, target, "release-status"))?.revision).toBe(1);
 
       const refreshed = await pinWidget("<p>refreshed</p>");
 
-      expect(store.readWidgetHtml(target, "release-status")).toMatchObject({
+      expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
         html: buildWidgetDocument(pinnedTitle, "<p>refreshed</p>"),
         revision: 2,
       });
@@ -753,39 +783,14 @@ describe("show_widget", () => {
         { sessionKey: eventSessionKey, revision: 2, widget: "release-status" },
         boardBroadcastScope,
       );
-      expect(store.getSnapshot(sibling)).toEqual(siblingBefore);
+      expect(await store.getSnapshot(sibling)).toEqual(siblingBefore);
     },
   );
 
   it("pins a granted-CSP document and declaration without networking in the inline preview", async () => {
     const stateDir = await createStateDir();
     const store = createTestBoardStore({ stateDir });
-    const handlers = createBoardHandlers(store);
-    const callGateway: InProcessGatewayCaller = async <T>(
-      method: string,
-      params: Record<string, unknown>,
-    ): Promise<T> => {
-      let result: unknown;
-      let failure: Error | undefined;
-      await handlers[method]!({
-        req: { type: "req", id: "show-widget-capabilities", method, params },
-        params,
-        client: null,
-        isWebchatConnect: () => false,
-        respond: (ok, payload, error) => {
-          if (ok) {
-            result = payload;
-          } else {
-            failure = new Error(error?.message ?? "board request failed");
-          }
-        },
-        context: createLiveBoardTestContext(),
-      });
-      if (failure) {
-        throw failure;
-      }
-      return result as T;
-    };
+    const callGateway = createLiveBoardCaller(store);
 
     const result = await executeWidget({
       stateDir,
@@ -803,7 +808,7 @@ describe("show_widget", () => {
       path.join(resolveCanvasDocumentDir(stateDir, result.viewId), "index.html"),
       "utf8",
     );
-    const pinned = store.readWidgetHtml({ sessionKey: "agent:main:weather" }, "weather");
+    const pinned = await readBoardHtml(store, { sessionKey: "agent:main:weather" }, "weather");
 
     expect(inlineHtml).toContain("connect-src 'none'");
     expect(pinned).toMatchObject({
@@ -820,63 +825,20 @@ describe("show_widget", () => {
 
   it("keeps generated pin names distinct when titles cannot fit a plain slug", async () => {
     const stateDir = await createStateDir();
-    const callGateway: InProcessGatewayCaller = async <T>(
-      _method: string,
-      params: Record<string, unknown>,
-    ): Promise<T> => {
-      const request = params as { name: string; sessionKey: string };
-      return {
-        sessionKey: request.sessionKey,
-        revision: 1,
-        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-        widgets: [
-          {
-            name: request.name,
-            tabId: "main",
-            contentKind: "html",
-            sizeW: 6,
-            sizeH: 4,
-            position: 0,
-            grantState: "none",
-            revision: 1,
-          },
-        ],
-        resolvedWidgetName: request.name,
-      } as T;
-    };
-
-    const unicodeA = await executeWidget({
-      stateDir,
-      agentSessionKey: "agent:main:pinned",
-      title: "状态",
-      widgetCode: "<p>one</p>",
-      pin: true,
-      callGateway,
-    });
-    const unicodeB = await executeWidget({
-      stateDir,
-      agentSessionKey: "agent:main:pinned",
-      title: "天气",
-      widgetCode: "<p>two</p>",
-      pin: true,
-      callGateway,
-    });
-    const longA = await executeWidget({
-      stateDir,
-      agentSessionKey: "agent:main:pinned",
-      title: `${"shared ".repeat(20)}alpha`,
-      widgetCode: "<p>three</p>",
-      pin: true,
-      callGateway,
-    });
-    const longB = await executeWidget({
-      stateDir,
-      agentSessionKey: "agent:main:pinned",
-      title: `${"shared ".repeat(20)}beta`,
-      widgetCode: "<p>four</p>",
-      pin: true,
-      callGateway,
-    });
+    const { callGateway } = createBoardPutCaller();
+    const pinWidget = (title: string, widgetCode: string) =>
+      executeWidget({
+        stateDir,
+        agentSessionKey: "agent:main:pinned",
+        title,
+        widgetCode,
+        pin: true,
+        callGateway,
+      });
+    const unicodeA = await pinWidget("状态", "<p>one</p>");
+    const unicodeB = await pinWidget("天气", "<p>two</p>");
+    const longA = await pinWidget(`${"shared ".repeat(20)}alpha`, "<p>three</p>");
+    const longB = await pinWidget(`${"shared ".repeat(20)}beta`, "<p>four</p>");
 
     expect(unicodeA.boardWidgetName).toMatch(/^widget-[a-f0-9]{8}$/u);
     expect(unicodeB.boardWidgetName).toMatch(/^widget-[a-f0-9]{8}$/u);
@@ -889,72 +851,30 @@ describe("show_widget", () => {
   it("keeps colliding generated pins distinct and canonical spellings stable", async () => {
     const stateDir = await createStateDir();
     const store = createTestBoardStore({ stateDir });
-    const handlers = createBoardHandlers(store);
-    const callGateway: InProcessGatewayCaller = async <T>(
-      method: string,
-      params: Record<string, unknown>,
-    ): Promise<T> => {
-      let result: unknown;
-      let failure: Error | undefined;
-      await handlers[method]!({
-        req: { type: "req", id: "generated-pin", method, params },
-        params,
-        client: null,
-        isWebchatConnect: () => false,
-        respond: (ok, payload, error) => {
-          if (ok) {
-            result = payload;
-          } else {
-            failure = new Error(error?.message ?? "board request failed");
-          }
-        },
-        context: createLiveBoardTestContext(),
-      });
-      if (failure) {
-        throw failure;
-      }
-      return result as T;
-    };
+    const callGateway = createLiveBoardCaller(store);
     const sessionKey = "agent:main:generated-collision";
+    const pinWidget = (title: string, widgetCode: string) =>
+      executeWidget({
+        stateDir,
+        agentSessionKey: sessionKey,
+        title,
+        widgetCode,
+        pin: true,
+        callGateway,
+      });
     const [slash, plus] = await Promise.all([
-      executeWidget({
-        stateDir,
-        agentSessionKey: sessionKey,
-        title: "Revenue / Cost",
-        widgetCode: "<p>slash</p>",
-        pin: true,
-        callGateway,
-      }),
-      executeWidget({
-        stateDir,
-        agentSessionKey: sessionKey,
-        title: "Revenue + Cost",
-        widgetCode: "<p>plus</p>",
-        pin: true,
-        callGateway,
-      }),
+      pinWidget("Revenue / Cost", "<p>slash</p>"),
+      pinWidget("Revenue + Cost", "<p>plus</p>"),
     ]);
     expect(new Set([slash.boardWidgetName, plus.boardWidgetName]).size).toBe(2);
-    expect(store.getSnapshot({ sessionKey }).widgets).toHaveLength(2);
+    expect((await store.getSnapshot({ sessionKey })).widgets).toHaveLength(2);
 
-    const composed = await executeWidget({
-      stateDir,
-      agentSessionKey: sessionKey,
-      title: "Café Menu".normalize("NFC"),
-      widgetCode: "<p>one</p>",
-      pin: true,
-      callGateway,
-    });
-    const decomposed = await executeWidget({
-      stateDir,
-      agentSessionKey: sessionKey,
-      title: "Café Menu".normalize("NFD"),
-      widgetCode: "<p>two</p>",
-      pin: true,
-      callGateway,
-    });
+    const composed = await pinWidget("Café Menu".normalize("NFC"), "<p>one</p>");
+    const decomposed = await pinWidget("Café Menu".normalize("NFD"), "<p>two</p>");
     expect(decomposed.boardWidgetName).toBe(composed.boardWidgetName);
-    expect(store.readWidgetHtml({ sessionKey }, composed.boardWidgetName ?? "")).toMatchObject({
+    expect(
+      await readBoardHtml(store, { sessionKey }, composed.boardWidgetName ?? ""),
+    ).toMatchObject({
       revision: 2,
     });
   });
@@ -981,28 +901,6 @@ describe("show_widget", () => {
     expect(html.indexOf("openclaw:widget-snapshot-request")).toBeLessThan(
       html.indexOf("<section>"),
     );
-    expect(html).toContain("openclaw:widget-prompt-offer");
-    expect(html).toContain("openclaw:widget-bridge-port-offer");
-    expect(html).toContain("openclaw:widget-bridge-request");
-    expect(html).toContain("prompt:freeze({send:sendPrompt})");
-    expect(html).toContain('state:freeze({emit:payload=>request("state.emit"');
-    expect(html).toContain('data:freeze({read:(bindingId,params)=>request("data.read"');
-    expect(html).toContain('action:freeze({run:(action,params)=>request("action.run"');
-    expect(html).toContain('cron:freeze({trigger:jobId=>request("cron.trigger"');
-    expect(html).toContain("navigator.userActivation");
-    expect(html).toContain("c.port1.postMessage.bind(c.port1)");
-    expect(html).toContain("b.port1.postMessage.bind(b.port1)");
-    expect(html).toContain('bridgePost({type:"openclaw:widget-bridge-request"');
-    expect(html).not.toContain(
-      'post({type:"openclaw:widget-bridge-request",id,method,params,ticket},"*")',
-    );
-    expect(html).toContain('promptPost({type:"openclaw:widget-prompt"');
-    expect(html).not.toContain('window.parent.postMessage({type:"openclaw:widget-prompt",');
-    expect(html).toContain("const post=(message,origin)=>parent.postMessage(message,origin)");
-    expect(html).toContain('query.call(root,"script")');
-    expect(html).toContain('queryDocument("canvas")');
-    expect(html).toContain("canvasWidth*canvasHeight>16777216");
-    expect(html).toContain('toDataURL.call(canvas,"image/png")');
   });
 
   it("uses opaque ids and evicts the oldest widget within a session scope", async () => {

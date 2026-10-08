@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseDocument } from "yaml";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { hasErrnoCode } from "./errno.js";
+import { isFullGitObjectId } from "./update-dev-target.js";
 import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
-import type { CommandRunner } from "./update-runner-types.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
+import { runStep } from "./update-runner-command.js";
+import type { CommandRunner, RunStepOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const BUILD_MAX_OLD_SPACE_MB = 8192;
 const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
@@ -11,6 +16,80 @@ const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
   OPENCLAW_LOCAL_CHECK_MODE: "throttled",
 };
 const DEV_PREFLIGHT_LINT_OPT_IN_ENV = "OPENCLAW_UPDATE_PREFLIGHT_LINT";
+
+const PREFLIGHT_TEMP_PREFIX =
+  process.platform === "win32" ? "ocu-pf-" : ".openclaw-update-preflight-";
+const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
+
+export type StepFactory = (
+  name: string,
+  argv: string[],
+  cwd: string,
+  env?: NodeJS.ProcessEnv,
+) => RunStepOptions;
+
+export function resolveTagFetchRef(candidate: string): string | null {
+  const ref = candidate.endsWith("^{}") ? candidate.slice(0, -"^{}".length) : candidate;
+  return ref.startsWith("refs/tags/") ? ref : null;
+}
+
+export function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
+  const trimmed = devTargetRef.trim();
+  if (isFullGitObjectId(trimmed) || trimmed.startsWith("refs/remotes/")) {
+    return [trimmed];
+  }
+  if (trimmed.startsWith("refs/heads/")) {
+    return [`refs/remotes/origin/${trimmed.slice("refs/heads/".length)}`];
+  }
+  if (trimmed.startsWith("origin/")) {
+    return [`refs/remotes/${trimmed}`];
+  }
+  if (trimmed.startsWith("refs/tags/")) {
+    return [`${trimmed}^{}`, trimmed];
+  }
+  // Plain branch names resolve from the freshly fetched remote ref.
+  return [`refs/remotes/origin/${trimmed}`, `refs/tags/${trimmed}^{}`, `refs/tags/${trimmed}`];
+}
+
+export async function createPreflightRoot(artifactRoot: string) {
+  // On POSIX, ignored artifact storage keeps interrupted worktrees out of Git status.
+  // Honor existing redirects like build-all-cache; only the mkdtemp child is private.
+  const baseDir =
+    process.platform === "win32" && path.sep === "\\"
+      ? path.win32.join(process.env.SystemDrive ?? "C:", WINDOWS_PREFLIGHT_BASE_DIR)
+      : path.join(await fs.realpath(artifactRoot), ".artifacts");
+  await fs.mkdir(baseDir, { recursive: true });
+  return fs.mkdtemp(path.join(baseDir, PREFLIGHT_TEMP_PREFIX));
+}
+
+export async function resetPreflightCandidateWorktree(worktreeDir: string, step: StepFactory) {
+  const resetStep = await runStep(
+    step("preflight-reset", ["git", "-C", worktreeDir, "reset", "--hard"], worktreeDir),
+  );
+  if (isFailedUpdateStep(resetStep)) {
+    return false;
+  }
+  const cleanStep = await runStep(
+    step("preflight-clean", ["git", "-C", worktreeDir, "clean", "-fdx"], worktreeDir),
+  );
+  return !isFailedUpdateStep(cleanStep);
+}
+
+export function classifyPreflightFailure(step: UpdateStepResult): "failed" | "insufficient-space" {
+  // pnpm reports filesystem errors on stdout by default. Require the storage
+  // diagnostic: ENOSPC also covers inotify limits.
+  const output = stripAnsi(`${step.stdoutTail ?? ""}\n${step.stderrTail ?? ""}`);
+  const nodeNoSpace =
+    /^\s*(?:\[(?:ERR_PNPM_)?ENOSPC\][^\r\n]*|(?:Error:\s*)?)ENOSPC: no space left on device(?:,|$)/m.test(
+      output,
+    );
+  // Git uses strerror without an errno token; require a complete operation diagnostic.
+  const gitNoSpace =
+    /^(?:fatal|error): (?:cannot|could not|unable to) [^\r\n]+: No space left on device$/m.test(
+      output,
+    );
+  return nodeNoSpace || gitNoSpace ? "insufficient-space" : "failed";
+}
 
 export function shouldInstallWithoutScriptsOnWindows(manager: "pnpm" | "bun" | "npm"): boolean {
   return process.platform === "win32" && manager === "pnpm";
@@ -30,15 +109,12 @@ function resolveBuildNodeOptions(baseOptions: string | undefined): string {
   return current.replace(/(?:^|\s)--max-old-space-size=\d+(?=\s|$)/, ` ${desired}`).trim();
 }
 
-export function resolveBuildEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  buildCacheRoot?: string,
-): NodeJS.ProcessEnv {
+export function resolveBuildEnv(env: NodeJS.ProcessEnv, buildCacheRoot: string): NodeJS.ProcessEnv {
   return {
     ...env,
     OPENCLAW_UPDATE_IN_PROGRESS: "1",
     NODE_OPTIONS: resolveBuildNodeOptions(env.NODE_OPTIONS ?? process.env.NODE_OPTIONS),
-    ...(buildCacheRoot ? { BUILD_ALL_CACHE_ROOT: buildCacheRoot } : {}),
+    BUILD_ALL_CACHE_ROOT: buildCacheRoot,
   };
 }
 
@@ -88,24 +164,27 @@ export async function prepareCandidateCommandEnv(
   cwd: string,
   runCommand: CommandRunner,
   timeoutMs: number,
-): Promise<{ env: NodeJS.ProcessEnv | undefined; restoreWorkspace?: () => Promise<void> }> {
+): Promise<{ env: NodeJS.ProcessEnv; restoreWorkspace?: () => Promise<void> }> {
+  // Source launchers select the serving checkout; candidate builds must not
+  // resolve their plugin SDK or bundled sources through that inherited root.
+  const effectiveEnv: NodeJS.ProcessEnv = {
+    ...(env ?? process.env),
+    OPENCLAW_DEV_SOURCE_ROOT: cwd,
+  };
   if (manager !== "pnpm") {
-    return { env };
+    return { env: effectiveEnv };
   }
-  const effectiveEnv = env ?? process.env;
   const hasExplicitPreferOffline =
     effectiveEnv.pnpm_config_prefer_offline !== undefined ||
-    effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined;
-  const hasConfigPreferOffline = hasExplicitPreferOffline
-    ? false
-    : await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv });
+    effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined ||
+    (await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv }));
   const candidateEnv: NodeJS.ProcessEnv = {
-    ...resolvePnpmCandidateEnv(env, "node_modules/.pnpm"),
+    ...resolvePnpmCandidateEnv(effectiveEnv, "node_modules/.pnpm"),
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
     npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
     pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",
   };
-  if (!hasExplicitPreferOffline && !hasConfigPreferOffline) {
+  if (!hasExplicitPreferOffline) {
     candidateEnv.PNPM_CONFIG_PREFER_OFFLINE = "true";
     candidateEnv.pnpm_config_prefer_offline = "true";
   }

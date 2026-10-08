@@ -2,7 +2,11 @@
 // Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime-state.js";
@@ -24,14 +28,6 @@ import { invokeNodeWithReadinessRetry } from "./node-invoke-readiness.js";
 import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
-
-// Plugin node.invoke policies are the last gateway-side guard before a
-// plugin-declared dangerous node command reaches the node transport.
-function parseScopes(client: GatewayClient | null): string[] {
-  return Array.isArray(client?.connect?.scopes)
-    ? client.connect.scopes.filter((scope): scope is string => typeof scope === "string")
-    : [];
-}
 
 function parsePayload(payloadJSON: string | null | undefined, payload: unknown): unknown {
   if (!payloadJSON) {
@@ -111,6 +107,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   };
   timeoutMs?: number;
   signal?: AbortSignal;
+  deadlineAtMs?: number;
   resolveRemainingTimeoutMs?: () => number | undefined;
   onNodeCommandDispatched?: () => void;
   nodeInvokeStream?: GatewayNodeInvokeStream;
@@ -163,7 +160,15 @@ export async function applyPluginNodeInvokePolicy(params: {
     });
   };
   // Route metadata comes only from an authenticated or host-bound agent runtime.
-  const trustedTurnSource = callerIdentity ? params.turnSource : undefined;
+  const trustedTurnSource =
+    callerIdentity && params.turnSource
+      ? {
+          channel: normalizeOptionalString(params.turnSource.channel),
+          to: normalizeOptionalString(params.turnSource.to),
+          accountId: normalizeOptionalString(params.turnSource.accountId),
+          threadId: normalizeOptionalThreadValue(params.turnSource.threadId),
+        }
+      : undefined;
   const entry = registry?.nodeInvokePolicies?.find((candidate) =>
     candidate.policy.commands.includes(params.command),
   );
@@ -324,6 +329,12 @@ export async function applyPluginNodeInvokePolicy(params: {
           ? Math.min(requestedTimeoutMs, remainingTimeoutMs)
           : remainingTimeoutMs
         : requestedTimeoutMs;
+    const deadlineAtMs =
+      params.deadlineAtMs === undefined
+        ? undefined
+        : typeof requestedTimeoutMs === "number" && requestedTimeoutMs > 0
+          ? Math.min(params.deadlineAtMs, performance.now() + requestedTimeoutMs)
+          : params.deadlineAtMs;
     // Pairing and policy checks above may await. Revalidate the exact runtime
     // capability at the final transport handoff so closure wins that race.
     sessionAuthority?.assertCurrent();
@@ -372,6 +383,7 @@ export async function applyPluginNodeInvokePolicy(params: {
         : {}),
       command: params.command,
       params: override.params ?? params.params,
+      ...(trustedTurnSource ? { turnSource: trustedTurnSource } : {}),
       timeoutMs,
       ...(sessionAuthority
         ? {
@@ -432,7 +444,10 @@ export async function applyPluginNodeInvokePolicy(params: {
     };
     const res = params.privateTransport
       ? await params.privateTransport.invoke(request)
-      : await invokeNodeWithReadinessRetry(params.context.nodeRegistry, request);
+      : await invokeNodeWithReadinessRetry(params.context.nodeRegistry, {
+          ...request,
+          deadlineAtMs,
+        });
     if (!res.ok) {
       if (nodeCommandDispatched) {
         recordNodeDecision({
@@ -528,12 +543,13 @@ export async function applyPluginNodeInvokePolicy(params: {
         displayName: params.nodeSession.displayName,
         platform: params.nodeSession.platform,
         deviceFamily: params.nodeSession.deviceFamily,
+        caps: params.nodeSession.caps,
         commands: params.nodeSession.commands,
       },
       client: params.client
         ? {
             connId: params.client.connId,
-            scopes: parseScopes(params.client),
+            scopes: filterStringEntries(params.client.connect?.scopes),
           }
         : null,
       ...(risk ? { risk } : {}),

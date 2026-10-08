@@ -1,16 +1,24 @@
 import type { AgentHarnessModelCatalogParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveCodexAppServerAuthProfileId,
+  resolveCodexAppServerAuthProfileStore,
+} from "./auth-profile.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
+import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
-import { listAllCodexAppServerModels, type CodexAppServerModel } from "./models.js";
-import { isJsonObject, type CodexGetAccountResponse } from "./protocol.js";
+import {
+  DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
+  listAllCodexAppServerModels,
+  type CodexAppServerModel,
+} from "./models.js";
+import { probeCodexNativeAuth } from "./native-auth.js";
+import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
+import { isCodexResponsesOAuthCredential } from "./responses-oauth.js";
 import { captureSharedCodexAppServerCatalogLifetime } from "./shared-client.js";
 
-// Manifest contract (openclaw.plugin.json discovery.timeoutMs default): live model
-// discovery is bounded tightly so a wedged app-server degrades to the static catalog.
-const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 2500;
 type ModelInputType = NonNullable<ModelCatalogEntry["input"]>[number];
 const INPUT_TYPES: ReadonlySet<string> = new Set(["text", "image", "audio", "video", "document"]);
 
@@ -48,6 +56,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
     pluginConfig: unknown;
     models?: ReadonlySet<string>;
     accountType?: "apiKey" | "chatgpt";
+    authMode?: string;
     isCurrent?: () => boolean;
   };
   const scopes = new WeakMap<AgentHarnessModelCatalogParams["config"], Map<string, Observation>>();
@@ -70,7 +79,10 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         observation.models?.has(params.modelId) &&
         observation.accountType &&
         observation.isCurrent?.()
-        ? { accountType: observation.accountType }
+        ? {
+            accountType: observation.accountType,
+            ...(observation.authMode ? { authMode: observation.authMode } : {}),
+          }
         : undefined;
     },
     async load(
@@ -89,14 +101,44 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const observation: Observation = { pluginConfig };
       // Revoke before any await, including failed/disabled refreshes and superseded reads.
       observations.set(key, observation);
-      const discovery = readCodexPluginConfig(pluginConfig).discovery;
+      const configured = readCodexPluginConfig(pluginConfig);
+      const discovery = configured.discovery;
       if (discovery?.enabled === false) {
         return [];
       }
-      const { start } = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+      const options = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+      const ownsLocalProcess =
+        options.start.transport === "stdio" && !isCodexAppServerProxyLaunch(options.start.args);
+      const authProfileStore =
+        ownsLocalProcess && options.start.homeScope === "agent"
+          ? resolveCodexAppServerAuthProfileStore({
+              agentDir: params.agentDir,
+              config: params.config,
+            })
+          : undefined;
+      const authProfileId = authProfileStore
+        ? resolveCodexAppServerAuthProfileId({ store: authProfileStore, config: params.config })
+        : undefined;
+      // SIWC's public provider owns the account model list. Native Codex sees only a
+      // placeholder API key here, so its bundled catalog cannot describe that account.
+      if (isCodexResponsesOAuthCredential(authProfileStore?.profiles[authProfileId ?? ""])) {
+        return [];
+      }
+      const usesNativeHome = ownsLocalProcess && options.start.homeScope === "user";
+      const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
+      if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
+        return [];
+      }
+      const { start } = options;
       const timeoutMs = discovery?.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
       const result = await withCodexAppServerJsonClient(
-        { startOptions: start, config: params.config, agentDir: params.agentDir, timeoutMs },
+        {
+          startOptions: start,
+          config: params.config,
+          agentDir: params.agentDir,
+          timeoutMs,
+          ...(authProfileStore ? { authProfileStore, authProfileId } : {}),
+        },
         async (request, client) => {
           const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
           const listed = await listAllCodexAppServerModels({
@@ -115,13 +157,12 @@ export function createCodexAppServerModelCatalog(runtime: string) {
             method: "account/read",
             requestParams: { refreshToken: false },
           });
-          const observedType = isJsonObject(account.account) ? account.account.type : undefined;
-          const accountType =
-            account.requiresOpenaiAuth === true
-              ? observedType === "apiKey" || observedType === "chatgpt"
-                ? observedType
-                : undefined
-              : undefined;
+          const observedType = account.account?.type;
+          const accountType = account.requiresOpenaiAuth
+            ? observedType === "apiKey" || observedType === "chatgpt"
+              ? observedType
+              : undefined
+            : undefined;
           return { models, isCurrent, accountType } as const;
         },
       );
@@ -130,8 +171,22 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         return [];
       }
       observation.models = new Set(result.models.map((model) => model.id));
-      observation.accountType = result.accountType;
+      observation.accountType =
+        !usesNativeHome ||
+        (native?.mode === "api-key" && result.accountType === "apiKey") ||
+        ((native?.mode === "oauth" || native?.mode === "token") && result.accountType === "chatgpt")
+          ? result.accountType
+          : undefined;
       observation.isCurrent = result.isCurrent;
+      // A remote ChatGPT account does not distinguish OAuth from caller-supplied tokens.
+      // Carry the local mode only after its account type matches this discovery observation.
+      observation.authMode =
+        observation.accountType === "apiKey"
+          ? "api_key"
+          : observation.accountType === "chatgpt" &&
+              (native?.mode === "oauth" || native?.mode === "token")
+            ? native.mode
+            : undefined;
       return codexAppServerModelsToCatalogEntries(result.models, runtime);
     },
   };

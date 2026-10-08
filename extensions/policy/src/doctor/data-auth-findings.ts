@@ -11,11 +11,7 @@ import {
 } from "./data-auth-shapes.js";
 import { policyEvidenceFinding } from "./policy-evidence-finding.js";
 import { authProfileHasMetadata, requiredAuthProfileMetadata } from "./policy-runtime.js";
-import {
-  agentScopedPolicyTargets,
-  dataHandlingPolicyHasRules,
-  scopedAgentIdMatches,
-} from "./policy-scope.js";
+import { agentScopedPolicyTargets, policyHasRules, scopedAgentIdMatches } from "./policy-scope.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
 export function secretAuthProvenanceFindings(
@@ -32,7 +28,6 @@ export function secretAuthProvenanceFindings(
       : [
           ...secretManagedProviderFindings(policy, policyDocName, evidence),
           ...secretDeniedSourceFindings(policy, policyDocName, evidence),
-          ...secretInsecureProviderFindings(policy, policyDocName, evidence),
         ]),
     ...(authShapeFindings.length > 0
       ? authShapeFindings
@@ -58,7 +53,7 @@ export function dataHandlingFindings(
     ...dataHandlingFindingsForRule(policy, policyDocName, "dataHandling", evidence, () => true),
   );
   for (const target of agentScopedPolicyTargets(policy)) {
-    if (!dataHandlingPolicyHasRules(target.overlay.dataHandling)) {
+    if (!policyHasRules(target.overlay, "dataHandling")) {
       continue;
     }
     findings.push(
@@ -183,18 +178,13 @@ function secretManagedProviderFindings(
           !providerKeys.has(`${secret.refSource}:${secret.refProvider}`)),
     )
     .map((secret): HealthFinding => {
-      return {
+      return policyEvidenceFinding(secret, {
         checkId: CHECK_IDS.policySecretsUnmanagedProvider,
-        severity: "error",
         message: `SecretRef uses unmanaged provider '${secret.refProvider ?? "default"}'.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: secret.source,
-        target: secret.source,
         requirement: `oc://${policyDocName}/secrets/requireManagedProviders`,
         fixHint:
           "Declare the referenced provider under secrets.providers or update policy after review.",
-      };
+      });
     });
 }
 
@@ -214,42 +204,12 @@ function secretDeniedSourceFindings(
     })
     .map((secret): HealthFinding => {
       const source = secret.kind === "provider" ? secret.providerSource : secret.refSource;
-      return {
+      return policyEvidenceFinding(secret, {
         checkId: CHECK_IDS.policySecretsDeniedProviderSource,
-        severity: "error",
         message: `Secret ${secret.kind} '${secret.id}' uses denied source '${source}'.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: secret.source,
-        target: secret.source,
         requirement: `oc://${policyDocName}/secrets/denySources`,
         fixHint: "Move this secret to an approved source or update policy after review.",
-      };
-    });
-}
-
-function secretInsecureProviderFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["secrets", "allowInsecureProviders"]) !== false) {
-    return [];
-  }
-  return (evidence.secrets ?? [])
-    .filter((secret) => secret.kind === "provider" && (secret.insecure?.length ?? 0) > 0)
-    .map((secret): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policySecretsInsecureProvider,
-        severity: "error",
-        message: `Secret provider '${secret.id}' enables insecure posture: ${(secret.insecure ?? []).join(", ")}.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: secret.source,
-        target: secret.source,
-        requirement: `oc://${policyDocName}/secrets/allowInsecureProviders`,
-        fixHint: "Remove insecure provider overrides or update policy after review.",
-      };
+      });
     });
 }
 
@@ -270,17 +230,12 @@ function authProfileMetadataFindings(
       return [];
     }
     return [
-      {
+      policyEvidenceFinding(profile, {
         checkId: CHECK_IDS.policyAuthProfileInvalidMetadata,
-        severity: "error",
         message: `Auth profile '${profile.id}' is missing required metadata: ${missing.join(", ")}.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: profile.source,
-        target: profile.source,
         requirement: `oc://${policyDocName}/auth/profiles/requireMetadata`,
         fixHint: "Set auth.profiles.<id>.provider and a supported auth profile mode.",
-      },
+      }),
     ];
   });
 }
@@ -297,16 +252,11 @@ function authProfileModeFindings(
   return (evidence.authProfiles ?? [])
     .filter((profile) => profile.mode !== undefined && !allowedModes.has(profile.mode))
     .map((profile): HealthFinding => {
-      return {
+      return policyEvidenceFinding(profile, {
         checkId: CHECK_IDS.policyAuthProfileUnapprovedMode,
-        severity: "error",
         message: `Auth profile '${profile.id}' uses mode '${profile.mode}' outside the policy allowlist.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: profile.source,
-        target: profile.source,
         requirement: `oc://${policyDocName}/auth/profiles/allowModes`,
         fixHint: "Change the auth profile mode or update policy after review.",
-      };
+      });
     });
 }

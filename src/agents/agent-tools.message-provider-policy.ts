@@ -14,6 +14,23 @@ const TOOL_ALLOW_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>
   node: ["canvas", "pdf", "tts", "view_image", "web_fetch", "web_search"],
 };
 
+/**
+ * True when a provider's allowlist removes the tool by design rather than by an
+ * operator's policy. Callers that diagnose a missing tool use this to stay quiet about
+ * transports that were never meant to carry it.
+ */
+export function messageProviderExcludesTool(
+  messageProvider: string | undefined,
+  toolName: string,
+): boolean {
+  const normalizedProvider = normalizeOptionalLowercaseString(messageProvider);
+  if (!normalizedProvider) {
+    return false;
+  }
+  const allowedTools = TOOL_ALLOW_BY_MESSAGE_PROVIDER[normalizedProvider];
+  return allowedTools !== undefined && allowedTools.length > 0 && !allowedTools.includes(toolName);
+}
+
 /** Applies message-provider filtering while preserving duplicate tool entries. */
 export function filterToolsByMessageProvider<TTool extends { name: string }>(
   tools: readonly TTool[],

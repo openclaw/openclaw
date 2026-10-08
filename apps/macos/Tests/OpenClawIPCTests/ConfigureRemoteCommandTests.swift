@@ -5,6 +5,16 @@ import Testing
 
 @Suite(.serialized)
 struct ConfigureRemoteCommandTests {
+    @Test @MainActor func `cancelled discovery completes with the largest supported timeout`() async {
+        let discovery = Task { @MainActor in
+            await runDiscover(["--timeout", String(Int.max), "--json"])
+            return Task.isCancelled
+        }
+        // Cancel before yielding MainActor, so the real command reaches its wait without sleeping.
+        discovery.cancel()
+        #expect(await discovery.value)
+    }
+
     @Test(arguments: ["configure-remote", "connect", "wizard", "status", "discover"])
     func `all commands share profile selection before dispatch`(command: String) throws {
         let home = URL(fileURLWithPath: "/synthetic-home", isDirectory: true)
@@ -177,10 +187,18 @@ struct ConfigureRemoteCommandTests {
         try body()
     }
 
-    @Test @MainActor func `configure remote writes ssh config and app defaults`() async throws {
+    @Test(arguments: [nil, 18790])
+    @MainActor func `configure remote writes ssh config and app defaults preserving the local gateway port`(
+        localGatewayPort: Int?) async throws
+    {
         let configURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-configure-remote-\(UUID().uuidString).json")
         defer { try? FileManager().removeItem(at: configURL) }
+
+        if let localGatewayPort {
+            let initial = ["gateway": ["mode": "local", "port": localGatewayPort]] as [String: Any]
+            try JSONSerialization.data(withJSONObject: initial).write(to: configURL)
+        }
 
         let defaultSuites = [
             "ConfigureRemoteCommandTests.release.\(UUID().uuidString)",
@@ -219,7 +237,7 @@ struct ConfigureRemoteCommandTests {
             let gateway = try #require(root["gateway"] as? [String: Any])
             let remote = try #require(gateway["remote"] as? [String: Any])
             #expect(gateway["mode"] as? String == "remote")
-            #expect(gateway["port"] as? Int == 19089)
+            #expect(gateway["port"] as? Int == localGatewayPort)
             #expect(remote["transport"] as? String == "ssh")
             #expect(remote["url"] as? String == "ws://127.0.0.1:19089")
             #expect(remote["remotePort"] as? Int == 18789)
@@ -479,6 +497,32 @@ struct ConfigureRemoteCommandTests {
 
 @Suite(.serialized)
 struct GatewayConfigTests {
+    @Test func `config reader rejects overflowing numeric ports and preserves representable values`() throws {
+        let configURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-cli-numeric-ports-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: configURL) }
+        let cases: [(raw: String, expected: Int?)] = [
+            ("1e100", nil),
+            ("-1e100", nil),
+            ("9223372036854775808", nil),
+            ("9223372036854775807", Int.max),
+            ("-9223372036854775808", Int.min),
+            ("18789", 18789),
+            ("18789.9", 18789),
+            ("-18789.9", -18789),
+        ]
+        for (raw, expected) in cases {
+            let json = """
+            {"gateway":{"mode":"remote","port":\(raw),"remote":{"remotePort":\(raw)}}}
+            """
+            try Data(json.utf8).write(to: configURL)
+            let config = loadGatewayConfig(from: configURL)
+            #expect(config.mode == "remote")
+            #expect(config.port == expected)
+            #expect(config.remotePort == expected)
+        }
+    }
+
     @Test @MainActor func `config path wins when both config and state dir are set`() async throws {
         let rootDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-cli-config-precedence-\(UUID().uuidString)", isDirectory: true)

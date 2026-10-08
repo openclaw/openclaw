@@ -1,6 +1,8 @@
+import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-generation.types.js";
 import type { SessionEntry } from "./types.js";
 
-export type LegacyMainSessionMigrationMode = "automatic" | "detect" | "doctor-fix";
+export type LegacyMainSessionMigrationMode = "detect" | "doctor-fix";
 
 type LegacyMainSessionMigrationOutcomeKind =
   | "not-armed"
@@ -36,8 +38,6 @@ export type LegacyMainSessionMigrationResult = {
   warnings: string[];
 };
 
-export type TranscriptDigest = { eventCount: number; rollingHash: string };
-
 export type PhysicalStore = {
   databaseAgentId: string;
   ownerStorePath: string;
@@ -46,9 +46,10 @@ export type PhysicalStore = {
 
 export type SessionClaim = {
   canonicalKey: string;
-  digest: TranscriptDigest;
+  databaseIdentity: OpenClawAgentDatabaseIdentity;
   entry: SessionEntry;
-  eventRows: Array<{ createdAt: number; eventJson: string }>;
+  generations: SqliteSessionGenerationClaim[];
   key: string;
+  nodeArtifactFingerprint: string;
   store: PhysicalStore;
 };

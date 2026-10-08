@@ -1,11 +1,13 @@
-/**
- * Runs compaction hooks and post-compaction side effects for embedded sessions.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
+import type { HookRunner } from "../../plugins/hooks.js";
+import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
+import {
+  getActiveMemoryProviderCore,
+  getActiveMemorySearchManagerCore,
+} from "../../plugins/memory-runtime.js";
+import { resolveLoadedMemoryProviderKind } from "../../plugins/memory-state.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchIndexConfig } from "../memory-search.js";
@@ -14,39 +16,78 @@ import {
   estimateCompactedRequestTokens,
   type CompactionRequestBudget,
 } from "../sessions/compaction/request-budget.js";
+import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { log } from "./logger.js";
-
-function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
-  const mode = config?.agents?.defaults?.compaction?.postIndexSync;
-  if (mode === "off" || mode === "async" || mode === "await") {
-    return mode;
-  }
-  return "async";
-}
 
 type PostCompactionSession = {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  memoryAudience?: MemoryAudience;
+  sandboxed?: boolean;
   sessionFile: string;
-  assertActive?: () => void;
+  assertActive?: () => void | Promise<void>;
 };
 
-async function runPostCompactionSessionMemorySync(params: PostCompactionSession): Promise<void> {
-  if (!params.config) {
-    return;
-  }
+async function runPostCompactionSessionMemorySync(
+  params: PostCompactionSession & { config: OpenClawConfig },
+): Promise<void> {
   try {
-    const sessionFile = params.sessionFile.trim();
-    if (!sessionFile) {
-      return;
-    }
     const agentId = resolveSessionAgentId({
       sessionKey: params.sessionKey,
       config: params.config,
       agentId: params.agentId,
     });
+    // A native slot owner owns its refresh. Classification reads owners this process
+    // already loaded; every other owner keeps the session-sync checks below, which
+    // never load the slot plugin or call it just to decide.
+    if (resolveLoadedMemoryProviderKind(params.config) === "native") {
+      const sessionKey = params.sessionKey?.trim();
+      const authority =
+        params.memoryAudience && sessionKey
+          ? {
+              kind: "session" as const,
+              sessionKey,
+              sessionId: params.sessionId?.trim() || undefined,
+              sandboxed: params.sandboxed === true,
+              audience: params.memoryAudience,
+            }
+          : { kind: "host" as const, operation: "post-compaction-refresh" };
+      let provider: Awaited<ReturnType<typeof getActiveMemoryProviderCore>>["provider"] = null;
+      try {
+        await params.assertActive?.();
+        // Providers check currency synchronously before I/O; the memory runtime adds audience
+        // currency to this guard. The caller's writer check can await a session read, so it
+        // runs at the awaited gates around open and refresh instead.
+        const acquired = await getActiveMemoryProviderCore({
+          cfg: params.config,
+          agentId,
+          context: { authority, assertCurrent: () => {} },
+        });
+        provider = acquired.provider;
+        await params.assertActive?.();
+        if (!provider) {
+          log.debug(
+            `memory refresh denied (post-compaction) for ${acquired.providerId ?? "selected memory provider"}: ${acquired.error ?? "provider unavailable"}`,
+          );
+          return;
+        }
+        if (!provider.refresh) {
+          log.debug(
+            `memory refresh unsupported (post-compaction) for ${acquired.providerId ?? "selected memory provider"}`,
+          );
+          return;
+        }
+        await provider.refresh();
+        await params.assertActive?.();
+      } catch (error) {
+        log.debug(`memory refresh failed (post-compaction): ${formatErrorMessage(error)}`);
+      } finally {
+        await provider?.close().catch(() => {});
+      }
+      return;
+    }
     // The memory backend owns provider resolution; an unavailable backend must
     // not cold-load embedding plugins just to decide whether to sync.
     const resolvedMemory = resolveMemorySearchIndexConfig(params.config, agentId);
@@ -56,12 +97,12 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
     if (!resolvedMemory.sync.sessions.postCompactionForce) {
       return;
     }
-    params.assertActive?.();
+    await params.assertActive?.();
     const { manager } = await getActiveMemorySearchManagerCore({
       cfg: params.config,
       agentId,
     });
-    params.assertActive?.();
+    await params.assertActive?.();
     if (!manager?.sync) {
       return;
     }
@@ -78,38 +119,16 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
               },
             ],
           }
-        : { archiveFiles: [sessionFile] }),
+        : { archiveFiles: [params.sessionFile] }),
     });
   } catch (err) {
-    params.assertActive?.();
+    await params.assertActive?.();
     log.warn(`memory sync skipped (post-compaction): ${formatErrorMessage(err)}`);
   }
 }
 
-function syncPostCompactionSessionMemory(
-  params: PostCompactionSession & {
-    mode: "off" | "async" | "await";
-  },
-): Promise<void> {
-  if (params.mode === "off" || !params.config) {
-    return Promise.resolve();
-  }
-
-  const syncTask = runPostCompactionSessionMemorySync(params);
-  if (params.mode === "await") {
-    return syncTask;
-  }
-  // Async indexing must not retain a closed foreground owner or leak an abort
-  // rejection after the caller has already settled its turn.
-  void syncTask.catch((error: unknown) => {
-    log.debug(`memory sync cancelled (post-compaction): ${formatErrorMessage(error)}`);
-  });
-  return Promise.resolve();
-}
-
-/** Emits post-compaction transcript and memory-index side effects for a compacted session file. */
 export async function runPostCompactionSideEffects(params: PostCompactionSession): Promise<void> {
-  params.assertActive?.();
+  await params.assertActive?.();
   const sessionFile = params.sessionFile.trim();
   if (!sessionFile) {
     return;
@@ -120,58 +139,25 @@ export async function runPostCompactionSideEffects(params: PostCompactionSession
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  params.assertActive?.();
-  await syncPostCompactionSessionMemory({
-    ...params,
-    sessionFile,
-    mode: resolvePostCompactionIndexSyncMode(params.config),
-  });
-  params.assertActive?.();
-}
-
-/** Narrow adapter over the global hook runner methods used by compaction. */
-type CompactionHookRunner = {
-  hasHooks?: (hookName?: string) => boolean;
-  runBeforeCompaction?: (
-    metrics: { messageCount: number; tokenCount?: number; sessionFile?: string },
-    context: {
-      sessionId: string;
-      agentId: string;
-      sessionKey: string;
-      workspaceDir: string;
-      messageProvider?: string;
-    },
-  ) => Promise<void> | void;
-  runAfterCompaction?: (
-    metrics: {
-      messageCount: number;
-      tokenCount?: number;
-      compactedCount: number;
-      sessionFile: string;
-    },
-    context: {
-      sessionId: string;
-      agentId: string;
-      sessionKey: string;
-      workspaceDir: string;
-      messageProvider?: string;
-    },
-  ) => Promise<void> | void;
-};
-
-/** Converts the global hook runner into the compaction-specific hook shape. */
-export function asCompactionHookRunner(
-  hookRunner: ReturnType<typeof getGlobalHookRunner> | null | undefined,
-): CompactionHookRunner | null {
-  if (!hookRunner) {
-    return null;
+  await params.assertActive?.();
+  const mode = params.config?.agents?.defaults?.compaction?.postIndexSync ?? "async";
+  const syncTask =
+    mode !== "off" && params.config
+      ? runPostCompactionSessionMemorySync({ ...params, config: params.config, sessionFile })
+      : undefined;
+  if (mode !== "await") {
+    // Async indexing cannot leak an abort rejection after foreground settlement.
+    void syncTask?.catch((error: unknown) => {
+      log.debug(`memory sync cancelled (post-compaction): ${formatErrorMessage(error)}`);
+    });
   }
-  return {
-    hasHooks: (hookName?: string) => hookRunner.hasHooks?.(hookName as never) ?? false,
-    runBeforeCompaction: hookRunner.runBeforeCompaction?.bind(hookRunner),
-    runAfterCompaction: hookRunner.runAfterCompaction?.bind(hookRunner),
-  };
+  await (mode === "await" ? syncTask : undefined);
+  await params.assertActive?.();
 }
+
+type CompactionHookRunner = Partial<
+  Pick<HookRunner, "hasHooks" | "runBeforeCompaction" | "runAfterCompaction">
+>;
 
 function estimateTokenCountSafe(
   messages: AgentMessage[],
@@ -205,83 +191,6 @@ export function buildBeforeCompactionHookMetrics(params: {
   };
 }
 
-/** Runs internal and plugin before-compaction hooks, forwarding hook-produced messages. */
-export async function runBeforeCompactionHooks(params: {
-  hookRunner?: CompactionHookRunner | null;
-  sessionId: string;
-  sessionKey: string;
-  sessionAgentId: string;
-  workspaceDir: string;
-  messageProvider?: string;
-  metrics: ReturnType<typeof buildBeforeCompactionHookMetrics>;
-  assertActive?: () => void;
-  onHookMessages?: (payload: {
-    phase: "before";
-    messages: string[];
-    sessionId: string;
-    sessionKey: string;
-  }) => void | Promise<void>;
-}) {
-  const missingSessionKey = false;
-  const hookSessionKey = params.sessionKey;
-  params.assertActive?.();
-  try {
-    const hookEvent = createInternalHookEvent("session", "compact:before", hookSessionKey, {
-      sessionId: params.sessionId,
-      missingSessionKey,
-      messageCount: params.metrics.messageCountBefore,
-      tokenCount: params.metrics.tokenCountBefore,
-      messageCountOriginal: params.metrics.messageCountOriginal,
-      tokenCountOriginal: params.metrics.tokenCountOriginal,
-    });
-    await triggerInternalHook(hookEvent);
-    params.assertActive?.();
-    if (hookEvent.messages.length > 0) {
-      await params.onHookMessages?.({
-        phase: "before",
-        messages: hookEvent.messages.slice(),
-        sessionId: params.sessionId,
-        sessionKey: hookSessionKey,
-      });
-    }
-  } catch (err) {
-    params.assertActive?.();
-    log.warn("session:compact:before hook failed", {
-      errorMessage: formatErrorMessage(err),
-      errorStack: err instanceof Error ? err.stack : undefined,
-    });
-  }
-  params.assertActive?.();
-  if (params.hookRunner?.hasHooks?.("before_compaction")) {
-    try {
-      await params.hookRunner.runBeforeCompaction?.(
-        {
-          messageCount: params.metrics.messageCountBefore,
-          tokenCount: params.metrics.tokenCountBefore,
-        },
-        {
-          sessionId: params.sessionId,
-          agentId: params.sessionAgentId,
-          sessionKey: hookSessionKey,
-          workspaceDir: params.workspaceDir,
-          messageProvider: params.messageProvider,
-        },
-      );
-    } catch (err) {
-      params.assertActive?.();
-      log.warn("before_compaction hook failed", {
-        errorMessage: formatErrorMessage(err),
-        errorStack: err instanceof Error ? err.stack : undefined,
-      });
-    }
-  }
-  params.assertActive?.();
-  return {
-    hookSessionKey,
-    missingSessionKey,
-  };
-}
-
 /** Estimates compacted-session token count and rejects impossible growth from stale estimates. */
 export function estimateTokensAfterCompaction(params: {
   messagesAfter: AgentMessage[];
@@ -311,86 +220,111 @@ export function estimateTokensAfterCompaction(params: {
   return tokensAfter;
 }
 
-/** Runs internal and plugin after-compaction hooks with the final compacted metrics. */
-export async function runAfterCompactionHooks(params: {
+type CompactionHookParams = {
   hookRunner?: CompactionHookRunner | null;
   sessionId: string;
+  sessionKey: string;
   sessionAgentId: string;
-  hookSessionKey: string;
-  missingSessionKey: boolean;
   workspaceDir: string;
   messageProvider?: string;
-  messageCountAfter: number;
-  tokensAfter?: number;
-  compactedCount: number;
-  sessionFile: string;
-  previousSessionId?: string;
-  summaryLength?: number;
-  tokensBefore?: number;
-  firstKeptEntryId?: string;
   assertActive?: () => void;
-  onHookMessages?: (payload: {
-    phase: "after";
-    messages: string[];
-    sessionId: string;
-    sessionKey: string;
-  }) => void | Promise<void>;
-}) {
+  onHookMessages?: CompactEmbeddedAgentSessionParams["onCompactionHookMessages"];
+} & (
+  | { phase: "before"; metrics: ReturnType<typeof buildBeforeCompactionHookMetrics> }
+  | {
+      phase: "after";
+      messageCountAfter: number;
+      tokensAfter?: number;
+      compactedCount: number;
+      sessionFile: string;
+      previousSessionId?: string;
+      summaryLength?: number;
+      tokensBefore?: number;
+      firstKeptEntryId?: string;
+    }
+);
+
+/** Internal hooks settle and forward messages before plugin hooks see the same phase. */
+export async function runCompactionHooks(params: CompactionHookParams): Promise<void> {
   params.assertActive?.();
-  try {
-    const hookEvent = createInternalHookEvent("session", "compact:after", params.hookSessionKey, {
-      sessionId: params.sessionId,
-      missingSessionKey: params.missingSessionKey,
-      messageCount: params.messageCountAfter,
-      tokenCount: params.tokensAfter,
-      compactedCount: params.compactedCount,
-      summaryLength: params.summaryLength,
-      tokensBefore: params.tokensBefore,
-      tokensAfter: params.tokensAfter,
-      firstKeptEntryId: params.firstKeptEntryId,
+  const logHookFailure = (hookName: string, error: unknown) => {
+    params.assertActive?.();
+    log.warn(`${hookName} hook failed`, {
+      errorMessage: formatErrorMessage(error),
+      errorStack: error instanceof Error ? error.stack : undefined,
     });
+  };
+  try {
+    const hookEvent = createInternalHookEvent(
+      "session",
+      `compact:${params.phase}`,
+      params.sessionKey,
+      {
+        sessionId: params.sessionId,
+        missingSessionKey: false,
+        ...(params.phase === "before"
+          ? {
+              messageCount: params.metrics.messageCountBefore,
+              tokenCount: params.metrics.tokenCountBefore,
+              messageCountOriginal: params.metrics.messageCountOriginal,
+              tokenCountOriginal: params.metrics.tokenCountOriginal,
+            }
+          : {
+              messageCount: params.messageCountAfter,
+              tokenCount: params.tokensAfter,
+              compactedCount: params.compactedCount,
+              summaryLength: params.summaryLength,
+              tokensBefore: params.tokensBefore,
+              tokensAfter: params.tokensAfter,
+              firstKeptEntryId: params.firstKeptEntryId,
+            }),
+      },
+    );
     await triggerInternalHook(hookEvent);
     params.assertActive?.();
     if (hookEvent.messages.length > 0) {
       await params.onHookMessages?.({
-        phase: "after",
+        phase: params.phase,
         messages: hookEvent.messages.slice(),
         sessionId: params.sessionId,
-        sessionKey: params.hookSessionKey,
+        sessionKey: params.sessionKey,
       });
     }
   } catch (err) {
-    params.assertActive?.();
-    log.warn("session:compact:after hook failed", {
-      errorMessage: formatErrorMessage(err),
-      errorStack: err instanceof Error ? err.stack : undefined,
-    });
+    logHookFailure(`session:compact:${params.phase}`, err);
   }
   params.assertActive?.();
-  if (params.hookRunner?.hasHooks?.("after_compaction")) {
+  if (params.hookRunner?.hasHooks?.(`${params.phase}_compaction`)) {
     try {
-      await params.hookRunner.runAfterCompaction?.(
-        {
-          messageCount: params.messageCountAfter,
-          tokenCount: params.tokensAfter,
-          compactedCount: params.compactedCount,
-          sessionFile: params.sessionFile,
-          ...(params.previousSessionId ? { previousSessionId: params.previousSessionId } : {}),
-        },
-        {
-          sessionId: params.sessionId,
-          agentId: params.sessionAgentId,
-          sessionKey: params.hookSessionKey,
-          workspaceDir: params.workspaceDir,
-          messageProvider: params.messageProvider,
-        },
-      );
+      const context = {
+        sessionId: params.sessionId,
+        agentId: params.sessionAgentId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        messageProvider: params.messageProvider,
+      };
+      if (params.phase === "before") {
+        await params.hookRunner.runBeforeCompaction?.(
+          {
+            messageCount: params.metrics.messageCountBefore,
+            tokenCount: params.metrics.tokenCountBefore,
+          },
+          context,
+        );
+      } else {
+        await params.hookRunner.runAfterCompaction?.(
+          {
+            messageCount: params.messageCountAfter,
+            tokenCount: params.tokensAfter,
+            compactedCount: params.compactedCount,
+            sessionFile: params.sessionFile,
+            ...(params.previousSessionId ? { previousSessionId: params.previousSessionId } : {}),
+          },
+          context,
+        );
+      }
     } catch (err) {
-      params.assertActive?.();
-      log.warn("after_compaction hook failed", {
-        errorMessage: formatErrorMessage(err),
-        errorStack: err instanceof Error ? err.stack : undefined,
-      });
+      logHookFailure(`${params.phase}_compaction`, err);
     }
   }
   params.assertActive?.();

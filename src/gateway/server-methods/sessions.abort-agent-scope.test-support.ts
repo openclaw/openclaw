@@ -1,3 +1,4 @@
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export function createActiveRun(sessionKey: string, params: { agentId?: string } = {}) {
@@ -13,28 +14,29 @@ export function createActiveRun(sessionKey: string, params: { agentId?: string }
   };
 }
 
-export type ActiveRun = ReturnType<typeof createActiveRun>;
-type TestAgentConfig = { id: string; default?: boolean };
+type ActiveRun = ReturnType<typeof createActiveRun>;
+type LegacyTestAgentConfig = { id: string; default?: boolean };
 
-function createDefaultAgents(): TestAgentConfig[] {
+function createDefaultAgents(): LegacyTestAgentConfig[] {
   return [{ id: "main", default: true }, { id: "work" }];
 }
 
 export function createContext(
   options: {
     activeRuns?: ReadonlyArray<readonly [string, ActiveRun]>;
-    agents?: TestAgentConfig[];
+    agents?: LegacyTestAgentConfig[];
     globalScope?: boolean;
     extra?: Partial<GatewayRequestContext>;
   } = {},
 ): GatewayRequestContext {
-  const cfg = {
+  const cfg = createCanonicalAgentConfigFixture({
     agents: { list: options.agents ?? createDefaultAgents() },
-    ...(options.globalScope ? { session: { scope: "global" as const } } : {}),
-  };
+    ...(options.globalScope ? { session: { scope: "global" } } : {}),
+  }).config;
   return {
     chatAbortControllers: new Map(options.activeRuns ?? []),
     getRuntimeConfig: () => cfg,
+    logGateway: { info: () => {}, warn: () => {} },
     ...options.extra,
   } as unknown as GatewayRequestContext;
 }

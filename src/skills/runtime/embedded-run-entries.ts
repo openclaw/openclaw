@@ -1,8 +1,11 @@
-// Embedded run entry helpers serialize runtime skill metadata for agent run records.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadSkillLibrarySelection } from "../library/selection.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  captureSkillLibrarySelection,
+  prepareSkillLibrarySelection,
+} from "../library/selection.js";
 import { resolveSkillRuntimeConfig } from "../loading/runtime-config.js";
-import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 import {
   WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
@@ -10,46 +13,70 @@ import {
   type SkillEntry,
   type SkillSnapshot,
 } from "../types.js";
+import { getSkillsSourceVersion } from "./refresh-state.js";
+import { resolveSkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
 /** Resolves skill entries embedded into a run payload into runtime-visible entries. */
-export function resolveEmbeddedRunSkillEntries(params: {
+export async function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;
   executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
   config?: OpenClawConfig;
   agentId?: string;
   eligibility?: SkillEligibilityContext;
   skillsSnapshot?: SkillSnapshot;
   workspaceOnly?: boolean;
-}): {
+  assertCurrent?: () => void;
+}): Promise<{
   shouldLoadSkillEntries: boolean;
   skillEntries: SkillEntry[];
-  loadSkillEntries: () => SkillEntry[];
+  loadSkillEntries: () => Promise<SkillEntry[]>;
   preserveEntryOrder: boolean;
-} {
+}> {
   const shouldLoadSkillEntries =
     !params.skillsSnapshot ||
     (Boolean(params.skillsSnapshot.prompt.trim()) && !params.skillsSnapshot.resolvedSkills);
   const config = resolveSkillRuntimeConfig(params.config);
   // Materialized sandbox copies are the sole read root, including lazy rebuilds
   // of hydrated library snapshots that still carry their host provenance.
+  const persistedRoots =
+    params.skillsSnapshot?.promptFormatVersion === WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION
+      ? params.skillsSnapshot.skillRoots
+      : undefined;
   const skillRoots = normalizeWorkspaceSkillRoots(
     params.workspaceOnly === true
       ? { agentWorkspaceDir: params.workspaceDir }
-      : ((params.skillsSnapshot?.promptFormatVersion === WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION
-          ? params.skillsSnapshot.skillRoots
-          : undefined) ?? {
-          agentWorkspaceDir: params.workspaceDir,
-          executionWorkspaceDir: params.executionWorkspaceDir,
-        }),
+      : {
+          agentWorkspaceDir: persistedRoots?.agentWorkspaceDir ?? params.workspaceDir,
+          executionWorkspaceDir:
+            persistedRoots?.executionWorkspaceDir ?? params.executionWorkspaceDir,
+          executionWorkspaceFileHost:
+            params.executionWorkspaceFileHost ??
+            resolveSkillSnapshotExecutionFileHost(params.skillsSnapshot),
+        },
   );
   let cachedSkillEntries: SkillEntry[] | undefined;
-  const loadSkillEntries = (): SkillEntry[] => {
+  const loadSkillEntries = async (): Promise<SkillEntry[]> => {
     if (cachedSkillEntries) {
       return cachedSkillEntries;
     }
+    params.assertCurrent?.();
+    const librarySelections = captureSkillLibrarySelection(
+      params.workspaceOnly === true ? [] : (params.skillsSnapshot?.librarySelections ?? []),
+    );
+    const libraryContext = librarySelections.length
+      ? captureOpenClawStateWorkerContext()
+      : undefined;
+    const assertPreparedEntriesCurrent = () => {
+      params.assertCurrent?.();
+      libraryContext?.maintenanceScope?.assertAdmission();
+      libraryContext?.admission.assertCurrent();
+    };
     const options = {
       config,
       agentId: params.agentId,
+      executionWorkspaceDir: skillRoots.executionWorkspaceDir,
+      executionWorkspaceFileHost: skillRoots.executionWorkspaceFileHost,
       ...(params.eligibility ? { eligibility: params.eligibility } : {}),
       ...(params.skillsSnapshot?.skillFilter
         ? { skillFilter: params.skillsSnapshot.skillFilter }
@@ -59,20 +86,38 @@ export function resolveEmbeddedRunSkillEntries(params: {
         : {}),
       ...(params.workspaceOnly === true ? { workspaceOnly: true } : {}),
     };
-    cachedSkillEntries = loadWorkspaceSkills(skillRoots.agentWorkspaceDir, {
-      ...options,
-      executionWorkspaceDir: skillRoots.executionWorkspaceDir,
-    });
-    if (params.skillsSnapshot?.librarySelections?.length && params.workspaceOnly !== true) {
-      cachedSkillEntries.push(
-        ...loadSkillLibrarySelection(params.skillsSnapshot.librarySelections),
+    for (;;) {
+      assertPreparedEntriesCurrent();
+      const sourceVersion = getSkillsSourceVersion(skillRoots.agentWorkspaceDir, options);
+      const workspaceEntries = await prepareWorkspaceSkills(
+        skillRoots.agentWorkspaceDir,
+        options,
+        params.assertCurrent,
       );
+      assertPreparedEntriesCurrent();
+      const libraryEntries = libraryContext
+        ? await prepareSkillLibrarySelection(
+            librarySelections,
+            { env: libraryContext.environment },
+            assertPreparedEntriesCurrent,
+          )
+        : undefined;
+      assertPreparedEntriesCurrent();
+      if (cachedSkillEntries) {
+        return cachedSkillEntries;
+      }
+      if (getSkillsSourceVersion(skillRoots.agentWorkspaceDir, options) !== sourceVersion) {
+        continue;
+      }
+      cachedSkillEntries = libraryEntries
+        ? [...workspaceEntries, ...libraryEntries]
+        : workspaceEntries;
+      return cachedSkillEntries;
     }
-    return cachedSkillEntries;
   };
   return {
     shouldLoadSkillEntries,
-    skillEntries: shouldLoadSkillEntries ? loadSkillEntries() : [],
+    skillEntries: shouldLoadSkillEntries ? await loadSkillEntries() : [],
     loadSkillEntries,
     // Merged loading orders agent skills first so prompt caps keep their priority.
     preserveEntryOrder: skillRoots.executionWorkspaceDir !== undefined,

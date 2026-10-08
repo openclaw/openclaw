@@ -8,6 +8,7 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { commitPluginInstallRecordsOnly } from "./install-record-commit.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "./installed-plugin-index-records.js";
+import { refreshPersistedInstalledPluginIndexWithLeaseSync } from "./installed-plugin-index-store-write.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -50,6 +51,47 @@ function readRow(databasePath: string) {
 }
 
 describe("installed plugin index mutation receipts", () => {
+  it("collects only committed index writes and their owned compensation", async () => {
+    const env = makeEnv();
+    await withEnvAsync(env, () =>
+      withPluginLifecycleLease({}, async (lease) => {
+        const failure = new Error("source changed after index publication");
+        await expect(
+          commitPluginInstallRecordsOnly({
+            nextInstallRecords: {},
+            nextConfig: {},
+            verifyConfigFresh: async () => {
+              throw failure;
+            },
+          }),
+        ).rejects.toBe(failure);
+        expect(readRow(lease.databasePath)).toBeNull();
+      }),
+    );
+  });
+  it("discards mutation receipts when the actual outer SQLite transaction rolls back", async () => {
+    const env = makeEnv();
+    await withPluginLifecycleLease({ env }, async (lease) => {
+      const failure = new Error("outer transaction rollback");
+      expect(() =>
+        runOpenClawStateWriteTransaction(
+          () => {
+            refreshPersistedInstalledPluginIndexWithLeaseSync({
+              reason: "source-changed",
+              installRecords: {},
+              candidates: [],
+              env,
+              lease,
+            });
+            throw failure;
+          },
+          { env },
+        ),
+      ).toThrow(failure);
+      expect(readRow(lease.databasePath)).toBeNull();
+    });
+  });
+
   it.each([null, priorJson, "true"])(
     "retains exact predecessor and committed row for %s",
     async (valueJson) => {
@@ -148,6 +190,19 @@ describe("installed plugin index mutation receipts", () => {
     await withPluginLifecycleLease({ env }, async (lease) => {
       let receipt;
       try {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            // A deferred constraint fails at COMMIT, after the index write and receipt capture.
+            db.exec(`CREATE TEMP TABLE receipt_parent (id INTEGER PRIMARY KEY);
+            CREATE TEMP TABLE receipt_child (
+              parent_id INTEGER REFERENCES receipt_parent(id) DEFERRABLE INITIALLY DEFERRED
+            );
+            CREATE TEMP TRIGGER receipt_commit_failure AFTER INSERT ON main.config_machine_state
+              WHEN NEW.state_key = 'plugins.installedIndex'
+              BEGIN INSERT INTO receipt_child VALUES (1); END;`);
+          },
+          { path: lease.databasePath, env },
+        );
         await expect(
           (async () => {
             receipt = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
@@ -156,19 +211,7 @@ describe("installed plugin index mutation receipts", () => {
                 env,
                 filePath: lease.databasePath,
                 candidates: [],
-                lease: {
-                  assertOwnedInTransaction(db) {
-                    lease.assertOwnedInTransaction(db);
-                    // A deferred constraint fails at COMMIT, after the index write and receipt capture.
-                    db.exec(`CREATE TEMP TABLE receipt_parent (id INTEGER PRIMARY KEY);
-                  CREATE TEMP TABLE receipt_child (
-                    parent_id INTEGER REFERENCES receipt_parent(id) DEFERRABLE INITIALLY DEFERRED
-                  );
-                  CREATE TEMP TRIGGER receipt_commit_failure AFTER INSERT ON main.config_machine_state
-                    WHEN NEW.state_key = 'plugins.installedIndex'
-                    BEGIN INSERT INTO receipt_child VALUES (1); END;`);
-                  },
-                },
+                lease,
               },
             );
           })(),

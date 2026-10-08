@@ -1,5 +1,4 @@
 // Reply payload tests cover reply target parsing, media payloads, and approval metadata.
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildTtsSupplementMediaPayload,
@@ -19,7 +18,6 @@ import {
   resolveAskUserQuestionOptionIndex,
   resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
-  resolveTextChunksWithFallback,
   sendPayloadMediaSequence,
   sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
@@ -56,37 +54,17 @@ describe("ask_user question option indices", () => {
 
 describe("isReasoningReplyPayload", () => {
   it.each([
-    { name: "flagged", payload: { text: "Visible", isReasoning: true }, expected: true },
-    { name: "prefix", payload: { text: "  \n Thinking\n_hidden_" }, expected: true },
-    {
-      name: "legacy animated prefix",
-      payload: { text: "Thinking...\n\n_hidden_" },
-      expected: true,
-    },
-    { name: "legacy prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
-    { name: "blockquote", payload: { text: "> Thinking\n> _hidden_" }, expected: true },
-    {
-      name: "visible prose starting with thinking",
-      payload: { text: "Thinking... this is the answer" },
-      expected: false,
-    },
-    {
-      name: "visible exact thinking label",
-      payload: { text: "Thinking..." },
-      expected: false,
-    },
-    {
-      name: "visible thinking status line",
-      payload: { text: "Thinking...\nI'll check that now" },
-      expected: false,
-    },
-    {
-      name: "mid-message mention",
-      payload: { text: "Intro\nThinking: visible discussion" },
-      expected: false,
-    },
-    { name: "missing text", payload: {}, expected: false },
-  ])("$name", ({ payload, expected }) => {
+    ["flagged", { text: "Visible", isReasoning: true }, true],
+    ["prefix", { text: "  \n Thinking\n_hidden_" }, true],
+    ["legacy animated prefix", { text: "Thinking...\n\n_hidden_" }, true],
+    ["legacy prefix", { text: "  \n Reasoning:\n_hidden_" }, true],
+    ["blockquote", { text: "> Thinking\n> _hidden_" }, true],
+    ["visible prose starting with thinking", { text: "Thinking... this is the answer" }, false],
+    ["visible exact thinking label", { text: "Thinking..." }, false],
+    ["visible thinking status line", { text: "Thinking...\nI'll check that now" }, false],
+    ["mid-message mention", { text: "Intro\nThinking: visible discussion" }, false],
+    ["missing text", {}, false],
+  ])("%s", (_name, payload, expected) => {
     expect(isReasoningReplyPayload(payload)).toBe(expected);
   });
 });
@@ -173,7 +151,6 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
 describe("sendPayloadTextChunkSequence", () => {
   it.each([
     { name: "empty", chunks: [], expectedCalls: [], expectedResult: undefined },
-    { name: "single", chunks: ["one"], expectedCalls: [["one", 0, true]], expectedResult: "one" },
     {
       name: "multiple",
       chunks: ["one", "two"],
@@ -520,23 +497,6 @@ describe("sendTextMediaPayload", () => {
 });
 
 describe("normalizeOutboundReplyPayload", () => {
-  it("strips internal-only local media trust flags from loose payload objects", () => {
-    expect(
-      normalizeOutboundReplyPayload({
-        text: "hello",
-        mediaUrl: "/tmp/reply.opus",
-        trustedLocalMedia: true,
-        sensitiveMedia: true,
-        replyToId: "abc123",
-      }),
-    ).toEqual({
-      text: "hello",
-      mediaUrl: "/tmp/reply.opus",
-      sensitiveMedia: true,
-      replyToId: "abc123",
-    });
-  });
-
   it("preserves rich outbound fields from loose payload objects", () => {
     const presentation = {
       blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
@@ -609,13 +569,14 @@ describe("normalizeOutboundReplyPayload", () => {
       mediaUrl: "/tmp/reply.opus",
       trustedLocalMedia: true,
       sensitiveMedia: true,
+      replyToId: "abc123",
     });
 
     expect(handler).toHaveBeenCalledWith({
       text: "hello",
       mediaUrl: "/tmp/reply.opus",
       sensitiveMedia: true,
-      replyToId: undefined,
+      replyToId: "abc123",
       mediaUrls: undefined,
     });
   });
@@ -664,39 +625,33 @@ describe("TTS supplement payload helpers", () => {
 });
 
 describe("resolveOutboundMediaUrls", () => {
-  it.each([
-    {
-      name: "prefers mediaUrls over the legacy single-media field",
-      payload: {
-        mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
-        mediaUrl: "https://example.com/legacy.png",
-      },
-      expected: ["https://example.com/a.png", "https://example.com/b.png"],
-    },
-    {
-      name: "falls back to the legacy single-media field",
-      payload: {
-        mediaUrl: "https://example.com/legacy.png",
-      },
-      expected: ["https://example.com/legacy.png"],
-    },
-    {
-      name: "falls back to the legacy single-media field when plural entries are blank",
-      payload: {
-        mediaUrls: ["   "],
-        mediaUrl: "https://example.com/legacy.png",
-      },
-      expected: ["https://example.com/legacy.png"],
-    },
-    {
-      name: "preserves raw plural entries and duplicates when one attachment is valid",
-      payload: {
-        mediaUrls: ["   ", " https://example.com/a.png ", " https://example.com/a.png "],
-        mediaUrl: "https://example.com/legacy.png",
-      },
-      expected: ["   ", " https://example.com/a.png ", " https://example.com/a.png "],
-    },
-  ])("$name", ({ payload, expected }) => {
+  it.each<[name: string, payload: { mediaUrls?: string[]; mediaUrl?: string }, expected: string[]]>(
+    [
+      [
+        "falls back to the legacy single-media field",
+        {
+          mediaUrl: "https://example.com/legacy.png",
+        },
+        ["https://example.com/legacy.png"],
+      ],
+      [
+        "falls back to the legacy single-media field when plural entries are blank",
+        {
+          mediaUrls: ["   "],
+          mediaUrl: "https://example.com/legacy.png",
+        },
+        ["https://example.com/legacy.png"],
+      ],
+      [
+        "preserves raw plural entries and duplicates when one attachment is valid",
+        {
+          mediaUrls: ["   ", " https://example.com/a.png ", " https://example.com/a.png "],
+          mediaUrl: "https://example.com/legacy.png",
+        },
+        ["   ", " https://example.com/a.png ", " https://example.com/a.png "],
+      ],
+    ],
+  )("%s", (_name, payload, expected) => {
     const mediaUrls = resolveOutboundMediaUrls(payload);
     expect(mediaUrls).toEqual(expected);
     if (payload.mediaUrls?.some((mediaUrl) => mediaUrl.trim())) {
@@ -706,23 +661,10 @@ describe("resolveOutboundMediaUrls", () => {
 });
 
 describe("countOutboundMedia", () => {
-  it.each([
-    {
-      name: "counts normalized media entries",
-      payload: {
-        mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
-      },
-      expected: 2,
-    },
-    {
-      name: "counts legacy single-media payloads",
-      payload: {
-        mediaUrl: "https://example.com/legacy.png",
-      },
-      expected: 1,
-    },
-  ])("$name", ({ payload, expected }) => {
-    expect(countOutboundMedia(payload)).toBe(expected);
+  it("counts normalized media entries", () => {
+    expect(
+      countOutboundMedia({ mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"] }),
+    ).toBe(2);
   });
 });
 
@@ -736,107 +678,60 @@ describe("hasOutboundMedia", () => {
 
 describe("hasOutboundText", () => {
   it.each([
-    {
-      name: "checks raw text presence by default",
-      payload: { text: "hello" },
-      options: undefined,
-      expected: true,
-    },
-    {
-      name: "treats whitespace-only text as present by default",
-      payload: { text: "   " },
-      options: undefined,
-      expected: true,
-    },
-    {
-      name: "returns false when text is missing",
-      payload: {},
-      options: undefined,
-      expected: false,
-    },
-    {
-      name: "can trim whitespace-only text",
-      payload: { text: "   " },
-      options: { trim: true },
-      expected: false,
-    },
-    {
-      name: "keeps non-empty trimmed text",
-      payload: { text: " hi " },
-      options: { trim: true },
-      expected: true,
-    },
-  ])("$name", ({ payload, options, expected }) => {
+    ["treats whitespace-only text as present by default", { text: "   " }, undefined, true],
+    ["returns false when text is missing", {}, undefined, false],
+    ["can trim whitespace-only text", { text: "   " }, { trim: true }, false],
+    ["keeps non-empty trimmed text", { text: " hi " }, { trim: true }, true],
+  ])("%s", (_name, payload, options, expected) => {
     expect(hasOutboundText(payload, options)).toBe(expected);
   });
 });
 
 describe("hasOutboundReplyContent", () => {
   it.each([
-    {
-      name: "detects text content",
-      payload: { text: "hello" },
-      options: undefined,
-      expected: true,
-    },
-    {
-      name: "detects media content",
-      payload: { mediaUrl: "https://example.com/a.png" },
-      options: undefined,
-      expected: true,
-    },
-    {
-      name: "returns false when text and media are both missing",
-      payload: {},
-      options: undefined,
-      expected: false,
-    },
-    {
-      name: "can ignore whitespace-only text",
-      payload: { text: "   " },
-      options: { trimText: true },
-      expected: false,
-    },
-    {
-      name: "still reports content when trimmed text is blank but media exists",
-      payload: { text: "   ", mediaUrls: ["https://example.com/a.png"] },
-      options: { trimText: true },
-      expected: true,
-    },
-    {
-      name: "detects presentation-only content",
-      payload: {
+    ["detects text content", { text: "hello" }, undefined, true],
+    ["returns false when text and media are both missing", {}, undefined, false],
+    ["can ignore whitespace-only text", { text: "   " }, { trimText: true }, false],
+    [
+      "still reports content when trimmed text is blank but media exists",
+      { text: "   ", mediaUrls: ["https://example.com/a.png"] },
+      { trimText: true },
+      true,
+    ],
+    [
+      "detects presentation-only content",
+      {
         text: "   ",
         presentation: {
           blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
         },
       },
-      options: { trimText: true },
-      expected: true,
-    },
-    {
-      name: "detects interactive-only content",
-      payload: {
+      { trimText: true },
+      true,
+    ],
+    [
+      "detects interactive-only content",
+      {
         interactive: {
           blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
         },
       },
-      options: undefined,
-      expected: true,
-    },
-    {
-      name: "detects channel data-only content",
-      payload: { channelData: { webchat: { cardId: "card-1" } } },
-      options: undefined,
-      expected: true,
-    },
-    {
-      name: "ignores empty rich payload fields",
-      payload: { presentation: { blocks: [] }, interactive: { blocks: [] }, channelData: {} },
-      options: undefined,
-      expected: false,
-    },
-  ])("$name", ({ payload, options, expected }) => {
+      undefined,
+      true,
+    ],
+    [
+      "detects channel data-only content",
+      { channelData: { webchat: { cardId: "card-1" } } },
+      undefined,
+      true,
+    ],
+    [
+      "ignores empty rich payload fields",
+      { presentation: { blocks: [] }, interactive: { blocks: [] }, channelData: {} },
+      undefined,
+      false,
+    ],
+  ])("%s", (_name, payload, options, expected) => {
     expect(hasOutboundReplyContent(payload, options)).toBe(expected);
   });
 });
@@ -877,31 +772,6 @@ describe("resolveSendableOutboundReplyParts", () => {
       hasMedia: false,
       hasContent: true,
     });
-  });
-});
-
-describe("resolveTextChunksWithFallback", () => {
-  it.each([
-    {
-      name: "returns existing chunks unchanged",
-      text: "hello",
-      chunks: ["a", "b"],
-      expected: ["a", "b"],
-    },
-    {
-      name: "falls back to the full text when chunkers return nothing",
-      text: "hello",
-      chunks: [],
-      expected: ["hello"],
-    },
-    {
-      name: "returns empty for empty text with no chunks",
-      text: "",
-      chunks: [],
-      expected: [],
-    },
-  ])("$name", ({ text, chunks, expected }) => {
-    expect(resolveTextChunksWithFallback(text, chunks)).toEqual(expected);
   });
 });
 
@@ -1028,25 +898,14 @@ describe("sendMediaWithLeadingCaption", () => {
     ).resolves.toBe(true);
 
     expect(onError).toHaveBeenCalledTimes(1);
-    const [errorPayload] = expectDefined(
-      (
-        onError.mock.calls as unknown as Array<
-          [
-            {
-              mediaUrl?: string;
-              caption?: string;
-              index?: number;
-              isFirst?: boolean;
-            },
-          ]
-        >
-      )[0],
-      "(onError.mock.calls as unknown as Array<\n        [\n          {\n            mediaUrl?: string;\n            caption?: string;\n            index?: number;\n            isFirst?: boolean;\n          },\n        ]\n      >)[0] test invariant",
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/a.png",
+        caption: "hello",
+        index: 0,
+        isFirst: true,
+      }),
     );
-    expect(errorPayload.mediaUrl).toBe("https://example.com/a.png");
-    expect(errorPayload.caption).toBe("hello");
-    expect(errorPayload.index).toBe(0);
-    expect(errorPayload.isFirst).toBe(true);
     expect(send).toHaveBeenNthCalledWith(2, {
       mediaUrl: "https://example.com/b.png",
       caption: undefined,

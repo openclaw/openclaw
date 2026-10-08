@@ -33,6 +33,12 @@ const status = {
   skills: [],
 };
 
+async function openSkillSettings(page: Page) {
+  await page.goto(`${suite.server.baseUrl}skills`);
+  await page.getByRole("button", { name: "Skill settings", exact: true }).click();
+  await page.waitForURL(`${suite.server.baseUrl}settings/skills?agent=main`);
+}
+
 async function expectLibraryDialogOpen(page: Page) {
   const dialog = page.locator("openclaw-modal-dialog dialog");
   await dialog.evaluate(async (element) => {
@@ -45,6 +51,7 @@ async function expectLibraryDialogOpen(page: Page) {
 }
 
 async function expectSkillNameValidation(page: Page) {
+  await expectLibraryDialogOpen(page);
   const input = page.getByLabel("Skill name", { exact: true });
   await input.hover();
   await page
@@ -103,7 +110,7 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}skills`);
+      await openSkillSettings(page);
       await page.getByRole("button", { name: "Create skill", exact: true }).click();
       expect(await page.getByText("My skills", { exact: true }).count()).toBe(0);
       expect(await page.getByText("Team", { exact: true }).count()).toBe(0);
@@ -139,7 +146,7 @@ suite.define(() => {
           "skills.library.save": published,
         },
       });
-      await page.goto(`${suite.server.baseUrl}skills`);
+      await openSkillSettings(page);
       await page.getByRole("button", { name: "Create skill", exact: true }).click();
       await expectSkillNameValidation(page);
       await page.getByLabel("Skill name", { exact: true }).fill("a".repeat(64));
@@ -204,9 +211,10 @@ suite.define(() => {
         slug: own.entry.slug,
         expectedRevision: own.entry.revision,
         content: draft,
-        files: own.files.map((file) =>
-          file.path === "assets/sample.bin" ? { ...file, executable: true } : file,
-        ),
+        files: own.files
+          .filter((file) => file.path === "assets/sample.bin")
+          .map(({ path, content, encoding }) => ({ path, content, encoding, executable: true })),
+        retainFiles: ["references/checklist.md"],
       });
       await gateway.rejectDeferred("skills.library.save", {
         code: "INVALID_REQUEST",
@@ -283,7 +291,7 @@ suite.define(() => {
             "skills.library.save": published,
           },
         });
-        await page.goto(`${suite.server.baseUrl}skills`);
+        await openSkillSettings(page);
         await page.getByRole("button", { name: "Create skill", exact: true }).click();
         await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
         const skill = page.getByLabel("SKILL.md", { exact: true });
@@ -355,7 +363,7 @@ suite.define(() => {
           "skills.library.save": published,
         },
       });
-      await page.goto(`${suite.server.baseUrl}skills`);
+      await openSkillSettings(page);
       await page.getByRole("button", { name: "Import skill", exact: true }).click();
       await expectSkillNameValidation(page);
       await page.getByLabel("Skill name", { exact: true }).fill("a".repeat(64));
@@ -406,11 +414,14 @@ suite.define(() => {
       await page.getByRole("radio", { name: "Team", exact: true }).click();
       await page.getByRole("button", { name: /release-notes Prepare the team's/u }).click();
       await page.getByText(/Only its owner or an authorized administrator/u).waitFor();
+      // The read-only checks can finish while the reader is still animating in.
+      await expectLibraryDialogOpen(page);
       expect(await page.getByRole("button", { name: "Transfer to team" }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Share with team" }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Save skill", exact: true }).count()).toBe(0);
       expect(await page.getByLabel("Executable supporting file").count()).toBe(0);
       await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.locator("openclaw-modal-dialog").waitFor({ state: "detached" });
       await page.getByRole("button", { name: /support-triage Turn a support report/u }).click();
       await page
         .getByText(`Team · revision ${team.entry.revision.slice(0, 8)}`, { exact: true })
@@ -449,7 +460,7 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}skills`);
+      await openSkillSettings(page);
       await page.getByRole("button", { name: "Import skill", exact: true }).click();
       await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
       await page
@@ -502,7 +513,7 @@ suite.define(() => {
           "skills.library.mutate": published,
         },
       });
-      await page.goto(`${suite.server.baseUrl}skills`);
+      await openSkillSettings(page);
       await page.getByRole("button", { name: /release-notes Draft concise/u }).click();
       await page.getByRole("button", { name: "Share with team", exact: true }).click();
       expect((await gateway.waitForRequest("skills.library.mutate")).params).toMatchObject({

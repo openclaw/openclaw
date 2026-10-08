@@ -1,8 +1,10 @@
 /** Native composition entry for ordinary, restricted, and cold provider-hook loading. */
 import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
 import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
+import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
+import { resolveCompatibleRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { createPluginCapabilityCatalogContext } from "./capability-catalog-context.js";
 import { isPluginRegistryLoadInFlight } from "./loader-cache.js";
 import {
@@ -10,21 +12,41 @@ import {
   type InternalPluginLoadOverrides,
   type NativePluginLoadBindings,
 } from "./loader-runtime-core.js";
-import { createPluginRuntimeRegistryResolver } from "./loader-runtime-registry.js";
 import type { PluginLoadOptions } from "./loader-types.js";
+import {
+  createPluginCache,
+  getPluginCache,
+  releasePluginCacheInstance,
+  retirePluginCache,
+  withPluginCache,
+} from "./plugin-cache.js";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { inheritPluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
 import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
 import { createProviderHookRuntime } from "./provider-hook-runtime-core.js";
 import { createProviderRegistryResolver } from "./providers.runtime-core.js";
 import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
+import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 import { createRuntimeModelAuth } from "./runtime/runtime-model-auth.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 // Construction only binds callbacks. No profile reads, plugin loads, or network work occur here.
 // Hoisted entry functions let cold auth discovery re-enter this same binding without a module cycle.
-export const resolveRuntimePluginRegistry =
-  createPluginRuntimeRegistryResolver(loadOpenClawPlugins);
+export function resolveRuntimePluginRegistry(
+  options?: PluginLoadOptions,
+): PluginRegistry | undefined {
+  const activeRegistry = resolveCompatibleRuntimePluginRegistry(options);
+  if (activeRegistry) {
+    return activeRegistry;
+  }
+  // Runtime helpers must not recurse while this exact snapshot is registering.
+  return isPluginRegistryLoadInFlight(options)
+    ? undefined
+    : loadOpenClawPlugins({ ...options, activate: false });
+}
 const providerRegistry = Object.freeze(
   createProviderRegistryResolver({
     loadOpenClawPlugins,
@@ -57,6 +79,7 @@ const loaderBindings: NativePluginLoadBindings = Object.freeze({
     return (modelConfig ??= Object.freeze({
       resolveDefaultModelForAgent,
       resolveAllowedModelRef: resolveAllowedModelRefCore,
+      resolveModelRuntimePolicy,
     }));
   },
   get capabilityCatalogContext() {
@@ -64,15 +87,7 @@ const loaderBindings: NativePluginLoadBindings = Object.freeze({
   },
 });
 
-type NativePluginBindings = {
-  providerRegistry: ReturnType<typeof createProviderRegistryResolver>;
-  providerHooks: ReturnType<typeof createProviderHookRuntime>;
-  externalProfiles: ReturnType<typeof createProviderExternalAuthResolver>;
-  externalAuth: ReturnType<typeof createExternalAuthRuntime>;
-  authStore: ReturnType<typeof createAuthProfileStoreRuntime>;
-  authAvailability: ReturnType<typeof createProviderAuthAvailability>;
-};
-export const nativePluginBindings: Readonly<NativePluginBindings> = Object.freeze({
+export const nativePluginBindings = Object.freeze({
   providerRegistry,
   providerHooks,
   externalProfiles,
@@ -86,6 +101,24 @@ export function resolvePluginCapabilityCatalogContext() {
 }
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   return loadOpenClawPluginsCore(options, loaderBindings);
+}
+
+/** Publishes synchronously, then joins every accepted health write before returning to its host. */
+export async function loadAndActivateRootPluginRegistry(
+  options: PluginLoadOptions = {},
+): Promise<PluginRegistry> {
+  const cleanup: Promise<void>[] = [];
+  try {
+    return loadOpenClawPluginsCore(
+      { ...options, activate: true },
+      loaderBindings,
+      undefined,
+      undefined,
+      (completion) => cleanup.push(completion),
+    );
+  } finally {
+    await Promise.allSettled(cleanup);
+  }
 }
 
 /** Acquires a fresh discovery registry; release waits for its registration resources. */
@@ -105,9 +138,48 @@ export async function acquirePluginRegistryForInspection(
 async function acquireRegistryResources(
   load: (resources: PluginRegistryInspectionResources) => PluginRegistry,
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
-  const resources = new PluginRegistryInspectionResources();
+  const cache = createPluginCache();
+  const resources = new PluginRegistryInspectionResources(async (registry, rollbackInstances) => {
+    const instances = new Set(cache.instances);
+    for (const record of registry?.plugins ?? []) {
+      const instance = getPluginInstance(record);
+      // Borrowed records stay in the lending registry's custody.
+      if (instance && instance.owner?.registry === registry) {
+        instances.add(instance);
+      }
+    }
+    // Inspections own disposal, not host cleanup notifications or persistent session state.
+    // Rollback completions were already consumed by the collector before this finalizer.
+    const results = await Promise.allSettled(
+      [...instances]
+        .filter((instance) => !rollbackInstances.has(instance))
+        .map((instance) => instance.dispose()),
+    );
+    const failures: unknown[] = results.flatMap((result) =>
+      result.status === "rejected"
+        ? [new PluginRuntimeCloseRetainedError(result.reason)]
+        : result.value.errors,
+    );
+    for (const instance of instances) {
+      releasePluginCacheInstance(instance, cache);
+    }
+    try {
+      const retired = await retirePluginCache(cache);
+      failures.push(...retired.failures.map((failure) => failure.error));
+    } catch (reason) {
+      failures.push(new PluginRuntimeCloseRetainedError(reason));
+    }
+    if (failures.length) {
+      const error = new AggregateError(failures, "Plugin inspection instances failed to retire");
+      // Settled callback faults are diagnostics; timed-out disposal still owns physical cleanup.
+      throw failures.some((failure) => failure instanceof PluginInstanceDrainTimeoutError)
+        ? new PluginRuntimeCloseRetainedError(error)
+        : error;
+    }
+  });
   try {
-    const registry = load(resources);
+    inheritPluginNativeAdmissions(getPluginCache(), cache);
+    const registry = withPluginCache(cache, () => load(resources));
     return { registry, release: () => resources.release() };
   } catch (error) {
     try {

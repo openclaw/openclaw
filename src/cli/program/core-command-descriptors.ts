@@ -5,10 +5,6 @@ import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { hasMachineOutputOption } from "../machine-output-argv.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
-/** Descriptor shape for root commands owned by the core CLI. */
-type CoreCliCommandDescriptor = NamedCommandDescriptor;
-
-/** Static root-command descriptors for the core CLI surface. */
 export const CORE_CLI_COMMAND_DESCRIPTORS = [
   {
     name: "setup",
@@ -51,7 +47,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
   },
   {
     name: "database",
-    description: "Inspect shared-state schema compatibility and write ownership",
+    description: "Inspect database schema compatibility and shared-state write ownership",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -59,6 +55,13 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
     name: "migrate",
     description: "Import state from another agent system",
     hasSubcommands: true,
+  },
+  {
+    name: "storage",
+    description: "List, initialize, and test configured storage locations",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+    machineOutput: ({ argv }) => hasMachineOutputOption(argv, "--json"),
   },
   {
     name: "doctor",
@@ -133,33 +136,24 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
     description: "List stored conversation sessions",
     hasSubcommands: true,
   },
-  {
-    name: "tasks",
-    description: "Inspect durable background tasks and TaskFlow state",
-    hasSubcommands: true,
-  },
-] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>;
+] as const satisfies ReadonlyArray<NamedCommandDescriptor>;
 
-/** Return core root-command descriptors in help/registration order. */
-export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {
+export function getCoreCliCommandDescriptors(): ReadonlyArray<NamedCommandDescriptor> {
   return isExperimentalClawsEnabled()
     ? CORE_CLI_COMMAND_DESCRIPTORS
     : CORE_CLI_COMMAND_DESCRIPTORS.filter((descriptor) => descriptor.name !== "claws");
 }
 
-/** Return names for all core root commands. */
 export function getCoreCliCommandNamesCore(): string[] {
   return getCoreCliCommandDescriptors().map((descriptor) => descriptor.name);
 }
 
-/** Return core root commands that own child subcommands. */
 export function getCoreCliCommandsWithSubcommands(): string[] {
   return getCoreCliCommandDescriptors()
     .filter((descriptor) => descriptor.hasSubcommands)
     .map((descriptor) => descriptor.name);
 }
 
-/** Return core root commands whose parent action should default to help. */
 export function getCoreCliParentDefaultHelpCommands(): string[] {
   return getCoreCliCommandDescriptors()
     .filter((descriptor) => descriptor.parentDefaultHelp)

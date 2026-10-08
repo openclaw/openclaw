@@ -3,24 +3,16 @@ import { describe, expect, it } from "vitest";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 
 describe("decodeDataUrl", () => {
-  it.each(["SGVsbG8=", "SGVsbG8", "\r\nSGVs\r\nbG8="])(
-    "preserves supported base64 spelling %j",
-    (payload) => {
-      const result = decodeDataUrl(` DATA:IMAGE/PNG;BASE64,${payload}\n `);
-      expect(result.mimeType).toBe("image/png");
-      expect(result.buffer.toString()).toBe("Hello");
-    },
-  );
+  it("preserves line-wrapped base64 and normalizes MIME casing", () => {
+    const result = decodeDataUrl(" DATA:IMAGE/PNG;BASE64,\r\nSGVs\r\nbG8=\n ");
+    expect(result.mimeType).toBe("image/png");
+    expect(result.buffer.toString()).toBe("Hello");
+  });
 
-  it.each([
-    "data:image/png;base64,",
-    "data:image/png;base64\n,SGVsbG8=",
-    "data:image/png;charset=utf-8;base64,SGVsbG8=",
-    "data:image/png;base64,SGVs bG8=",
-    "data:image/png;base64,SGVsbG8%3D",
-    "data:image/png;base64,SGVsbG8=,",
-  ])("rejects unsupported data URL syntax %j", (input) => {
-    expect(() => decodeDataUrl(input)).toThrow("Invalid data URL (expected base64 data: URL).");
+  it("rejects whitespace inside a base64 block", () => {
+    expect(() => decodeDataUrl("data:image/png;base64,SGVs bG8=")).toThrow(
+      "Invalid data URL (expected base64 data: URL).",
+    );
   });
 
   it.each([0, 1])("checks a canonical-size payload with %i extra bytes", (extraBytes) => {

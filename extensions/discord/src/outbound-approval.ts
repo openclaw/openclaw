@@ -1,11 +1,4 @@
-// Discord plugin module implements outbound approval behavior.
-function hasApprovalChannelData(payload: { channelData?: unknown }): boolean {
-  const channelData = payload.channelData;
-  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
-    return false;
-  }
-  return Boolean((channelData as { execApproval?: unknown }).execApproval);
-}
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function neutralizeDiscordApprovalMentions(value: string): string {
   return value
@@ -21,10 +14,8 @@ export function normalizeDiscordApprovalPayload<
     channelData?: unknown;
   },
 >(payload: T): T {
-  return hasApprovalChannelData(payload) && payload.text
-    ? {
-        ...payload,
-        text: neutralizeDiscordApprovalMentions(payload.text),
-      }
-    : payload;
+  if (!asOptionalRecord(payload.channelData)?.execApproval || !payload.text) {
+    return payload;
+  }
+  return { ...payload, text: neutralizeDiscordApprovalMentions(payload.text) };
 }

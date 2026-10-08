@@ -1,4 +1,3 @@
-// Discord plugin module implements accounts behavior.
 import {
   createAccountActionGate,
   createAccountListHelpers,
@@ -34,7 +33,7 @@ export type ResolvedDiscordAccount = {
 const {
   listAccountIds,
   resolveDefaultAccountId,
-  resolveAccountConfig: resolveMergedDiscordAccountConfig,
+  resolveAccountConfig: mergeDiscordAccountConfig,
 } = createAccountListHelpers<DiscordAccountConfig>("discord", {
   implicitDefaultAccount: {
     channelKeys: ["token"],
@@ -52,55 +51,43 @@ export function resolveDiscordAccountConfig(
   return resolveAccountEntry(cfg.channels?.discord?.accounts, accountId);
 }
 
-export function mergeDiscordAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): DiscordAccountConfig {
-  return resolveMergedDiscordAccountConfig(cfg, accountId);
-}
+export { mergeDiscordAccountConfig };
 
-export function resolveDiscordAccountAllowFrom(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] | undefined {
+type DiscordAccountParams = { cfg: OpenClawConfig; accountId?: string | null };
+
+function readConfiguredAccount(params: DiscordAccountParams) {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
   );
-  const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
+  return resolveDiscordAccountConfig(params.cfg, accountId);
+}
+
+export function resolveDiscordAccountAllowFrom(params: DiscordAccountParams): string[] | undefined {
+  const accountConfig = readConfiguredAccount(params);
   const rootConfig = params.cfg.channels?.discord as DiscordAccountConfig | undefined;
   const allowFrom = accountConfig?.allowFrom ?? rootConfig?.allowFrom;
   return allowFrom ? mapAllowFromEntries(allowFrom) : undefined;
 }
 
-export function resolveDiscordAccountDmPolicy(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): ChannelDmPolicy | undefined {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
-  );
-  const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
+export function resolveDiscordAccountDmPolicy(
+  params: DiscordAccountParams,
+): ChannelDmPolicy | undefined {
+  const accountConfig = readConfiguredAccount(params);
   const rootConfig = params.cfg.channels?.discord as DiscordAccountConfig | undefined;
   return normalizeChannelDmPolicy(accountConfig?.dmPolicy ?? rootConfig?.dmPolicy ?? "pairing");
 }
 
-export function createDiscordActionGate(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): (key: keyof DiscordActionConfig, defaultValue?: boolean) => boolean {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
-  );
+export function createDiscordActionGate(
+  params: DiscordAccountParams,
+): (key: keyof DiscordActionConfig, defaultValue?: boolean) => boolean {
+  const accountConfig = readConfiguredAccount(params);
   return createAccountActionGate({
     baseActions: params.cfg.channels?.discord?.actions,
-    accountActions: resolveDiscordAccountConfig(params.cfg, accountId)?.actions,
+    accountActions: accountConfig?.actions,
   });
 }
 
-export function resolveDiscordAccount(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): ResolvedDiscordAccount {
+export function resolveDiscordAccount(params: DiscordAccountParams): ResolvedDiscordAccount {
   const cfg = selectDiscordRuntimeConfig(params.cfg);
   const accountId = normalizeAccountId(params.accountId ?? resolveDefaultDiscordAccountId(cfg));
   const baseEnabled = cfg.channels?.discord?.enabled !== false;

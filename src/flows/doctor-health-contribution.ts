@@ -1,21 +1,21 @@
 import { normalizeUpdatePostInstallDoctorWarnings } from "../infra/update-doctor-result.js";
 import type {
   DoctorContributionHealthCheck,
+  DoctorHealthCheckContext,
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
 import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
-import type { HealthFinding } from "./health-checks.js";
+import type { HealthFinding, HealthRepairContext } from "./health-checks.js";
 
 export function createDoctorHealthContribution(params: {
   id: string;
   label: string;
   healthCheckIds?: readonly string[];
   healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
-  hint?: string;
   required?: true;
-  updatePolicy?: DoctorHealthContribution["updatePolicy"];
+  updateWork?: DoctorHealthContribution["updateWork"];
   run?: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution {
   const healthChecks = normalizeHealthChecks(params.id, params.healthChecks);
@@ -25,23 +25,15 @@ export function createDoctorHealthContribution(params: {
   }
   return {
     id: params.id,
-    kind: "core",
-    surface: "health",
-    option: {
-      value: params.id,
-      label: params.label,
-      ...(params.hint ? { hint: params.hint } : {}),
-    },
-    source: "doctor",
+    label: params.label,
     healthChecks,
     healthCheckIds,
     ...(params.required ? { required: true as const } : {}),
-    ...(params.updatePolicy ? { updatePolicy: params.updatePolicy } : {}),
+    ...(params.updateWork ? { updateWork: params.updateWork } : {}),
     run:
       params.run ??
       ((ctx) =>
         runStructuredDoctorHealthContribution({
-          contributionId: params.id,
           ctx,
           checks: healthChecks,
         })),
@@ -56,59 +48,40 @@ function normalizeHealthChecks(
     return [];
   }
   const checks = Array.isArray(healthChecks) ? healthChecks : [healthChecks];
-  return checks.map((check) =>
-    normalizeContributionHealthCheck(check, contributionId, checks.length),
-  );
-}
-
-function normalizeContributionHealthCheck(
-  check: DoctorContributionHealthCheck,
-  contributionId: string,
-  count: number,
-): DoctorHealthCheck {
-  const id = check.id ?? (count === 1 ? deriveCoreHealthCheckId(contributionId) : undefined);
-  if (id === undefined) {
-    throw new Error(
-      `doctor contribution ${contributionId} must specify health check ids when it declares multiple healthChecks`,
-    );
-  }
-  const identity = {
-    id,
-    kind: check.kind ?? "core",
-    source: check.source ?? "doctor",
-  };
-  return { ...check, ...identity };
-}
-
-function deriveCoreHealthCheckId(contributionId: string): string {
-  return contributionId.startsWith("doctor:")
+  const defaultId = contributionId.startsWith("doctor:")
     ? `core/doctor/${contributionId.slice("doctor:".length)}`
     : `core/doctor/${contributionId}`;
+  return checks.map((check: DoctorContributionHealthCheck): DoctorHealthCheck => {
+    const id = check.id ?? (checks.length === 1 ? defaultId : undefined);
+    if (id === undefined) {
+      throw new Error(
+        `doctor contribution ${contributionId} must specify health check ids when it declares multiple healthChecks`,
+      );
+    }
+    return Object.assign({}, check, { id, kind: "core" as const, source: "doctor" });
+  });
 }
 
 async function runStructuredDoctorHealthContribution(params: {
-  contributionId: string;
   ctx: DoctorHealthFlowContext;
   checks: readonly DoctorHealthCheck[];
 }): Promise<void> {
-  if (params.checks.length === 0) {
-    throw new Error(`doctor contribution ${params.contributionId} has no structured health`);
-  }
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
   const workspaceDir = resolveDoctorWorkspaceDir(params.ctx.cfg, params.ctx.env);
   const dryRun = !params.ctx.prompter.shouldRepair;
-  const result = await runDoctorHealthRepairs(
-    {
-      mode: "fix",
-      runtime: params.ctx.runtime,
-      cfg: params.ctx.cfg,
-      cwd: workspaceDir,
-      configPath: params.ctx.configPath,
-      dryRun,
-      allowExecSecretRefs: params.ctx.options.allowExec === true,
-    },
-    { checks: params.checks, dryRun },
-  );
+  const configBeforeRepair = JSON.stringify(params.ctx.cfg);
+  const context: HealthRepairContext & DoctorHealthCheckContext = {
+    mode: "fix",
+    runtime: params.ctx.runtime,
+    cfg: params.ctx.cfg,
+    env: params.ctx.env,
+    cwd: workspaceDir,
+    configPath: params.ctx.configPath,
+    dryRun,
+    allowExecSecretRefs: params.ctx.options.allowExec === true,
+    agentDatabaseRefusals: params.ctx.agentDatabaseRefusals,
+  };
+  const result = await runDoctorHealthRepairs(context, { checks: params.checks, dryRun });
   params.ctx.cfg = result.config;
   renderStructuredHealthFindings(params.ctx, result.findings);
   // Display retains original findings; finalization records only unresolved warnings.
@@ -120,8 +93,15 @@ async function runStructuredDoctorHealthContribution(params: {
   for (const warning of result.warnings) {
     params.ctx.runtime.error(warning);
   }
-  for (const change of result.changes) {
-    params.ctx.runtime.log(change);
+  if (configBeforeRepair !== JSON.stringify(result.config)) {
+    params.ctx.configResult.pendingChangePanels = [
+      ...(params.ctx.configResult.pendingChangePanels ?? []),
+      ...result.changes,
+    ];
+  } else {
+    for (const change of result.changes) {
+      params.ctx.runtime.log(change);
+    }
   }
 }
 
@@ -129,14 +109,21 @@ export function recordDoctorHealthWarnings(
   ctx: DoctorHealthFlowContext,
   findings: readonly HealthFinding[],
   warnings: readonly string[] = [],
+  options?: { prepend?: boolean },
 ): void {
-  ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings([
-    ...(ctx.updateWarnings ?? []),
+  const existing = ctx.updateWarnings ?? [];
+  const added = [
     ...findings
       .filter((finding) => finding.severity === "warning")
-      .map((finding) => `${finding.checkId}: ${finding.message}`),
+      .map(
+        (finding) =>
+          `${finding.checkId}${finding.errorCode ? ` [${finding.errorCode}]` : ""}: ${finding.message}`,
+      ),
     ...warnings,
-  ]);
+  ];
+  ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings(
+    options?.prepend ? [...added, ...existing] : [...existing, ...added],
+  );
 }
 
 export function renderStructuredHealthFindings(

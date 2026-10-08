@@ -6,7 +6,8 @@ import { resolvePluginProviders } from "openclaw/plugin-sdk/provider-catalog-run
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { getRegisteredAgentHarness, registerAgentHarness } from "../agents/harness/registry.js";
 import type { AgentHarness } from "../agents/harness/types.js";
-import { registerPluginCliCommands } from "../plugins/cli.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { registerPluginCliCommandsFromValidatedConfig } from "../plugins/cli.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { acquirePluginRegistryForInspection } from "../plugins/loader.js";
 import {
@@ -26,6 +27,7 @@ import {
   trackAsyncWork,
 } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
 import { registerCommandGroups } from "./program/register-command-groups.js";
 import {
@@ -179,6 +181,7 @@ afterEach(() => {
     cleanup();
   }
   resetPluginLoaderTestStateForTest();
+  clearRuntimeConfigSnapshot();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -315,19 +318,20 @@ it.each(["returned", "cooperating"] as const)(
       withCliCommandCleanup(false, async (cleanup) => {
         const resources = getCliPluginInvocationResources()!;
         const registry = await resources.acquire(fixture.load);
+        // Terminal cleanup consumes an admitted handle; it cannot acquire a retired provider.
+        const providers = withPluginRuntimeRegistryScope(registry, () =>
+          resolvePluginProviders({
+            config: fixture.config,
+            env: fixture.env,
+            onlyPluginIds: [fixture.id],
+          }),
+        );
         const entered = createDeferredCore();
         const resume = createDeferredCore();
         let descendant: Promise<void> | undefined;
         const actualCleanup = async () => {
           entered.resolve();
           await resume.promise;
-          const providers = withPluginRuntimeRegistryScope(registry, () =>
-            resolvePluginProviders({
-              config: fixture.config,
-              env: fixture.env,
-              onlyPluginIds: [fixture.id],
-            }),
-          );
           expect(providers).toHaveLength(1);
           expect(
             providers[0]!.isCacheTtlEligible?.({
@@ -443,7 +447,11 @@ it("leaves standalone command programs with their caller after registration retu
   const fixture = nativeFixture();
   fixture.state.resume.resolve();
   const program = new Command();
-  await registerPluginCliCommands(program, fixture.config, fixture.env);
+  const configPath = path.join(fixture.env.HOME, "openclaw.json");
+  fs.writeFileSync(configPath, JSON.stringify(fixture.config));
+  await withEnvAsync({ ...fixture.env, OPENCLAW_CONFIG_PATH: configPath }, () =>
+    registerPluginCliCommandsFromValidatedConfig(program, fixture.env),
+  );
   expect(getCliPluginInvocationResources()).toBeUndefined();
   expect(program.commands.map((command) => command.name())).toEqual(["native"]);
   await program.parseAsync(["node", "fixture", "native"]);

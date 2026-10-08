@@ -6,7 +6,10 @@
  */
 
 import { t } from "../../i18n/index.ts";
-import type { CronFormState } from "../../lib/cron/index.ts";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
+import type { CronFormState } from "../../lib/cron/types.ts";
+
+registerCronEnglish();
 
 type CronSuggestion = {
   id: string;

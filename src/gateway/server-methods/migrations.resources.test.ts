@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as loader from "../../plugins/loader.js";
 import { loadAndActivateRootPluginRegistry } from "../../plugins/loader.js";
@@ -25,11 +26,12 @@ describe("memory migration registration resources", () => {
     "replays a terminal %s after native resources close without applying again",
     async (mode) => {
       const fixture = createMigrationResourceFixture();
+      const config: OpenClawConfig = fixture.config;
       const dedupe: GatewayRequestContext["dedupe"] = new Map();
       const logGateway = createSubsystemLogger("migration-native-test");
       const warn = vi.spyOn(logGateway, "warn").mockImplementation(() => {});
       const context = {
-        getRuntimeConfig: () => fixture.config,
+        getRuntimeConfig: () => config,
         dedupe,
         logGateway,
       } as GatewayRequestContext;
@@ -83,7 +85,9 @@ describe("memory migration registration resources", () => {
             try {
               await Promise.race([fixture.state.applying.promise, firstRun]);
               expect(fixture.state.applyCalls).toBe(1);
-              expect(fixture.state.connections[1]?.database.isOpen).toBe(true);
+              expect(fixture.state.connections[1]?.database.isOpen, first.frames.join("\n")).toBe(
+                true,
+              );
               const retry = invoke("migrations.memory.apply", params);
               const retryRun = retry.run();
               fixture.state.resumeApply.resolve();
@@ -139,8 +143,9 @@ describe("memory migration registration resources", () => {
   it("joins fresh planning before releasing its database when a raw active provider getter rejects", async () => {
     const active = createMigrationResourceFixture();
     const fresh = createMigrationResourceFixture({ pausePlan: true });
+    const config: OpenClawConfig = fresh.config;
     const respond = vi.fn<RespondFn>();
-    const context = { getRuntimeConfig: () => fresh.config } as GatewayRequestContext;
+    const context = { getRuntimeConfig: () => config } as GatewayRequestContext;
     try {
       await withEnvAsync(
         {
@@ -148,7 +153,7 @@ describe("memory migration registration resources", () => {
           OPENCLAW_CONFIG_PATH: path.join(fresh.root, "state", "openclaw.json"),
         },
         async () => {
-          const raw = loadAndActivateRootPluginRegistry({ config: active.config });
+          const raw = await loadAndActivateRootPluginRegistry({ config: active.config });
           expect(raw.migrationProviders).toHaveLength(1);
           active.state.failLabel = true;
           fresh.state.failPlan = true;
@@ -209,10 +214,11 @@ describe("memory migration registration resources", () => {
 
   it("reserves same-key requests before a real cold acquisition resolves", async () => {
     const fixture = createMigrationResourceFixture();
+    const config: OpenClawConfig = fixture.config;
     const acquired = createDeferredCore();
     const releaseAcquisition = createDeferredCore();
     const dedupe: GatewayRequestContext["dedupe"] = new Map();
-    const context = { getRuntimeConfig: () => fixture.config, dedupe } as GatewayRequestContext;
+    const context = { getRuntimeConfig: () => config, dedupe } as GatewayRequestContext;
     const invoke = (method: keyof typeof migrationsHandlers, params: Record<string, unknown>) => {
       const frames: string[] = [];
       const respond = vi.fn<RespondFn>((ok, payload, error, meta) => {
@@ -285,7 +291,7 @@ describe("memory migration registration resources", () => {
             expect(spy).toHaveBeenCalledOnce();
             releaseAcquisition.resolve();
             await Promise.all(runs);
-            expect(first.respond.mock.calls[0]?.[0]).toBe(true);
+            expect(first.respond.mock.calls[0]?.[0], first.frames.join("\n")).toBe(true);
             expect(duplicate.respond.mock.calls[0]?.[3]).toEqual({ cached: true });
             expect(fixture.state.applyCalls).toBe(1);
             expect(fixture.state.connections[1]?.disposals).toBe(1);

@@ -1,13 +1,20 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
+  AgentSummary,
   ProjectRecord,
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { DraftRepositoryState } from "./discovery.ts";
+import type { SubmittedWorktreePreference } from "./draft-preference-state.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
 
 type DraftRepositorySnapshot = Readonly<{
+  agentId: string;
+  agents: readonly AgentSummary[];
   remotePlacement: boolean;
   selectedProject: ProjectRecord | undefined;
   remoteProject: DraftRemoteProject | null;
@@ -20,6 +27,10 @@ type DraftRepositorySnapshot = Readonly<{
 type DraftRepositoryCallbacks = {
   requestUpdate: () => void;
   persistPreference: (patch: NewSessionPreference) => void;
+  capturePreferenceConsumption: (
+    owner: Readonly<{ agentId: string; workspace: string }>,
+    expected: SubmittedWorktreePreference,
+  ) => ((consume: () => void) => void | Promise<void>) | undefined;
 };
 
 type ResolvedRepository = Exclude<DraftRepositoryState, { kind: "checking" }>;
@@ -44,9 +55,11 @@ export class DraftRepositoryController {
   private baseRefOverride: string | undefined;
   private repositoryValue: DraftRepositoryState = { kind: "idle" };
   private requestToken = 0;
+  private selectionRevision = 0;
   private preferredWorktreeRestore = false;
   private worktreeSelectedByUser = false;
-  private detailsSelectedByUser = false;
+  private baseRefSelectedByUser = false;
+  private nameSelectedByUser = false;
 
   constructor(
     private readonly read: () => DraftRepositorySnapshot,
@@ -57,14 +70,26 @@ export class DraftRepositoryController {
     return this.worktreeValue;
   }
 
+  get preferenceWorktree(): boolean {
+    return this.worktreeValue || this.preferredWorktreeRestore;
+  }
+
   get worktreeName(): string {
     return this.worktreeNameValue;
   }
 
   get baseRef(): string {
-    // Discovery supplies defaults; reconnects never rewrite the operator's selection.
-    const repository = this.repositoryValue.kind === "git" ? this.repositoryValue : undefined;
-    return this.baseRefOverride ?? (repository?.defaultBranch || repository?.headBranch || "");
+    // An omitted ref lets the Gateway fetch its default; discovery is only a suggestion.
+    return this.baseRefOverride ?? "";
+  }
+
+  get remoteRepository(): SessionCreateParams["repository"] {
+    const { remotePlacement, remoteProject } = this.read();
+    if (!remotePlacement || !remoteProject) {
+      return undefined;
+    }
+    const ref = this.baseRef.trim();
+    return { url: remoteProject.cloneUrl, ...(ref ? { ref } : {}) };
   }
 
   get repository(): DraftRepositoryState {
@@ -76,17 +101,29 @@ export class DraftRepositoryController {
   }
 
   get hasUserSelection(): boolean {
-    return this.worktreeSelectedByUser || this.detailsSelectedByUser;
+    return this.worktreeSelectedByUser || this.baseRefSelectedByUser || this.nameSelectedByUser;
   }
 
   adoptPreference(preference: NewSessionPreference | null) {
     if (!this.worktreeSelectedByUser) {
       this.worktreeValue = false;
-      this.preferredWorktreeRestore = preference?.worktree === true;
+      // Remote worktree flags describe placement isolation, not a local checkout choice.
+      this.preferredWorktreeRestore =
+        preference?.worktree === true && (!preference.where || preference.where.kind === "local");
     }
-    if (!this.detailsSelectedByUser) {
-      this.baseRefOverride = preference?.baseRef || undefined;
-      this.worktreeNameValue = preference?.worktreeName ?? "";
+    if (!this.baseRefSelectedByUser) {
+      const baseRef = preference?.baseRef || undefined;
+      if (this.baseRefOverride !== baseRef) {
+        this.selectionRevision += 1;
+      }
+      this.baseRefOverride = baseRef;
+    }
+    if (!this.nameSelectedByUser) {
+      const worktreeName = preference?.worktreeName ?? "";
+      if (this.worktreeNameValue !== worktreeName) {
+        this.selectionRevision += 1;
+      }
+      this.worktreeNameValue = worktreeName;
     }
     if (!this.matchesCurrentRepo()) {
       // Retire the old folder's RPC before it can consume the new preference.
@@ -105,9 +142,11 @@ export class DraftRepositoryController {
   }
 
   clearDetails(persist = false) {
+    this.selectionRevision += 1;
     this.baseRefOverride = undefined;
     this.worktreeNameValue = "";
-    this.detailsSelectedByUser = false;
+    this.baseRefSelectedByUser = false;
+    this.nameSelectedByUser = false;
     if (persist) {
       this.callbacks.persistPreference({ baseRef: "", worktreeName: "" });
     }
@@ -119,6 +158,7 @@ export class DraftRepositoryController {
   }
 
   selectWorktree(value: boolean, clearName = true) {
+    this.selectionRevision += 1;
     this.preferredWorktreeRestore = false;
     this.worktreeSelectedByUser = true;
     this.worktreeValue = value;
@@ -127,37 +167,36 @@ export class DraftRepositoryController {
     }
   }
 
-  forceWorktree(value: boolean) {
-    this.worktreeValue = value;
-  }
-
   rejectPreferredWorktree() {
     this.preferredWorktreeRestore = false;
     this.worktreeValue = false;
     this.clearDetails(true);
   }
 
-  select(value: boolean) {
-    if (this.worktreeValue === value || this.read().remotePlacement) {
-      return;
+  select(value: boolean): boolean {
+    if (
+      this.worktreeValue === value ||
+      this.read().remotePlacement ||
+      (value && !this.available())
+    ) {
+      return false;
     }
     this.selectWorktree(value, false);
     this.callbacks.persistPreference({
       folder: this.read().folder.trim() || this.read().workspace,
       worktree: this.worktreeValue,
     });
-    if (this.worktreeValue && !this.available()) {
-      this.load();
-    }
     this.callbacks.requestUpdate();
+    return true;
   }
 
   setBaseRef(baseRef: string, submitting: boolean) {
     if (submitting) {
       return;
     }
+    this.selectionRevision += 1;
     this.baseRefOverride = baseRef;
-    this.detailsSelectedByUser = true;
+    this.baseRefSelectedByUser = true;
     this.callbacks.persistPreference({ baseRef });
     this.callbacks.requestUpdate();
   }
@@ -166,10 +205,56 @@ export class DraftRepositoryController {
     if (submitting) {
       return;
     }
+    this.selectionRevision += 1;
     this.worktreeNameValue = worktreeName;
-    this.detailsSelectedByUser = true;
+    this.nameSelectedByUser = true;
     this.callbacks.persistPreference({ worktreeName });
     this.callbacks.requestUpdate();
+  }
+
+  captureSubmittedName(
+    params: Pick<
+      SessionCreateParams,
+      "worktree" | "worktreeName" | "worktreeBaseRef" | "cwd" | "projectId"
+    >,
+    submission: Readonly<{ agentId: string; recovered?: boolean }>,
+  ) {
+    const name = params.worktreeName?.trim();
+    if (!params.worktree || !name) {
+      return undefined;
+    }
+    const revision = this.selectionRevision;
+    const snapshot = this.read();
+    const agentId = normalizeAgentId(submission.agentId);
+    const agent = snapshot.agents.find((candidate) => normalizeAgentId(candidate.id) === agentId);
+    const owner = { agentId, workspace: normalizeOptionalString(agent?.workspace) ?? "" };
+    const currentAgent = owner.agentId === snapshot.agentId;
+    const persist = this.callbacks.capturePreferenceConsumption(owner, {
+      worktreeName: name,
+      ...(!submission.recovered ? { selectedBaseRef: this.baseRefOverride?.trim() ?? "" } : {}),
+      folder:
+        params.cwd ?? (currentAgent ? snapshot.folder.trim() || owner.workspace : owner.workspace),
+      baseRef: params.worktreeBaseRef ?? (currentAgent ? this.baseRef : undefined),
+      projectId: params.projectId ?? (currentAgent ? snapshot.selectedProject?.id : undefined),
+    });
+    return (
+      persist &&
+      (() =>
+        persist(() => {
+          if (
+            owner.agentId !== this.read().agentId ||
+            revision !== this.selectionRevision ||
+            name !== this.worktreeNameValue.trim()
+          ) {
+            return;
+          }
+          // A custom name belongs to one accepted draft; keep the checkout defaults.
+          this.selectionRevision += 1;
+          this.worktreeNameValue = "";
+          this.nameSelectedByUser = true;
+          this.callbacks.requestUpdate();
+        }))
+    );
   }
 
   available(): boolean {
@@ -222,6 +307,7 @@ export class DraftRepositoryController {
                 branches: result.branches,
                 ...(result.defaultBranch ? { defaultBranch: result.defaultBranch } : {}),
                 ...(result.headBranch ? { headBranch: result.headBranch } : {}),
+                ...(result.branchesUnavailable ? { branchesUnavailable: true } : {}),
               }
             : { kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable", repoRoot },
         );
@@ -244,14 +330,13 @@ export class DraftRepositoryController {
     // Worktree preferences can arrive while discovery is pending.
     this.repositoryValue = state;
     if (state.kind === "direct") {
-      if (!this.read().remotePlacement) {
-        const rejectedWorktree = this.worktreeValue || this.preferredWorktreeRestore;
-        this.worktreeValue = false;
-        if (rejectedWorktree) {
-          this.callbacks.persistPreference({ worktree: false });
-        }
+      const rejectedWorktree = this.worktreeValue || this.preferredWorktreeRestore;
+      this.worktreeValue = false;
+      if (rejectedWorktree && !this.read().remotePlacement) {
+        this.callbacks.persistPreference({ worktree: false });
       }
-    } else if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser && this.available()) {
+    } else if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser) {
+      // Failed discovery cannot revoke isolation intent; the submit gate checks availability.
       this.worktreeValue = true;
     }
     this.preferredWorktreeRestore = false;

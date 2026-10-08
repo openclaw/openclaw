@@ -1,14 +1,137 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { createAgentIdentityCapability } from "./identity.ts";
+import { createAgentIdentityCapability, fetchAgentIdentity } from "./identity.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+it.each([undefined, 7_000])(
+  "paces rejected identity reads per agent (retry hint %s)",
+  async (hint) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+    const unavailable = new GatewayProtocolRequestError({
+      code: "UNAVAILABLE",
+      message: "agent.identity.get unavailable during gateway restart",
+      details: { reason: "gateway-restarting" },
+      retryable: true,
+      retryAfterMs: hint,
+    });
+    const request = vi.fn().mockRejectedValue(unavailable);
+    const client = createTestGatewayClient(request);
+    const capability = createAgentIdentityCapability({
+      snapshot: { client, phase: "connected" },
+      subscribe: () => () => undefined,
+    });
+    let now = 0;
+    for (const [attempt, backoff] of [500, 1_000, 2_000, 4_000, 5_000, 5_000].entries()) {
+      await capability.ensure([" main ", "main"]);
+      for (let render = 0; render < 40; render += 1) {
+        await capability.ensure(["main"]);
+      }
+      expect(request).toHaveBeenCalledTimes(attempt + 1);
+      now += Math.max(backoff, hint ?? 0);
+      clock.mockReturnValue(now - 1);
+      await expect(fetchAgentIdentity(client, "main")).rejects.toBe(unavailable);
+      expect(request).toHaveBeenCalledTimes(attempt + 1);
+      clock.mockReturnValue(now);
+    }
+
+    const recovered = { agentId: "main", name: "Recovered", avatar: "" };
+    request.mockResolvedValueOnce(recovered);
+    await capability.ensure(["main"]);
+    expect(capability.get("main")).toBe(recovered);
+    // Another agent owns a separate retry window.
+    await capability.ensure(["other"]);
+    expect(request).toHaveBeenCalledTimes(8);
+
+    clock.mockReturnValue(now + 60_000);
+    await capability.ensure(["main"]);
+    clock.mockReturnValue(now + 60_000 + Math.max(500, hint ?? 0));
+    await capability.ensure(["main"]);
+    expect(request).toHaveBeenCalledTimes(10);
+    expect(capability.get("main")).toBe(recovered);
+  },
+);
+
+it("retains the displayed identity while sidebar and chat share a failed refresh", async () => {
+  const { fetchAssistantIdentity } = await import("../../app/assistant-identity.ts");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+  const original = { agentId: "main", name: "Main", avatar: "/avatar/main?v=old" };
+  const replacement = { ...original, avatar: "/avatar/main?v=new" };
+  const failure = new Error("Gateway unavailable");
+  const request = vi.fn().mockResolvedValueOnce(original).mockRejectedValue(failure);
+  const client = createTestGatewayClient(request);
+  const capability = createAgentIdentityCapability({
+    snapshot: { client, phase: "connected" },
+    subscribe: () => () => undefined,
+  });
+  const publish = vi.fn();
+  capability.subscribe(publish);
+  await capability.ensure(["main"]);
+  clock.mockReturnValue(60_000);
+  await capability.ensure(["main"]);
+  await expect(fetchAssistantIdentity(client, "main")).rejects.toBe(failure);
+  await capability.ensure(["main"]);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(capability.get("main")).toBe(original);
+  expect(publish).toHaveBeenCalledOnce();
+
+  request.mockResolvedValueOnce(replacement);
+  clock.mockReturnValue(60_500);
+  await capability.ensure(["main"]);
+  expect(capability.get("main")).toBe(replacement);
+  expect(publish).toHaveBeenCalledTimes(2);
+});
+
+it.each(["reconnect", "config", "agent"])(
+  "retires failed identity reads on %s invalidation",
+  async (kind) => {
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    const result = { agentId: "main", name: "Current", avatar: "" };
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Unavailable"))
+      .mockResolvedValue(result);
+    const client = createTestGatewayClient(request);
+    const snapshot: { client: GatewayBrowserClient; phase: ApplicationGatewayPhase } = {
+      client,
+      phase: "connected",
+    };
+    let onSnapshot = (_snapshot: typeof snapshot) => {};
+    let onEvent = (_event: { event: string }) => {};
+    const capability = createAgentIdentityCapability({
+      snapshot,
+      subscribe(listener) {
+        onSnapshot = listener;
+        return () => undefined;
+      },
+      subscribeEvents(listener) {
+        onEvent = listener;
+        return () => undefined;
+      },
+    });
+    await capability.ensure(["main"]);
+    if (kind === "reconnect") {
+      snapshot.phase = "reconnecting";
+      onSnapshot(snapshot);
+      snapshot.phase = "connected";
+      onSnapshot(snapshot);
+    } else if (kind === "config") {
+      onEvent({ event: "config.changed" });
+    } else {
+      capability.invalidate(["main"]);
+    }
+    await capability.ensure(["main"]);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(capability.get("main")).toBe(result);
+  },
+);
 
 it("rejects stale identities after reconnecting the same client", async () => {
   const oldRequest = createDeferred<AgentIdentityResult>();

@@ -8,3 +8,11 @@ const agentHarnessPluginMocks = vi.hoisted(() => ({
 export function getAgentHarnessPluginMocks() {
   return agentHarnessPluginMocks;
 }
+
+const attemptExecutionMocks = vi.hoisted(() => ({
+  useRealRunAgentAttempt: false,
+}));
+
+export function getAgentAttemptExecutionMocks() {
+  return attemptExecutionMocks;
+}

@@ -5,12 +5,12 @@ import { captureContextEngineRegistryStateForTests } from "../../context-engine/
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
 
-const cleanupCases = (["command-rpc", "channel-delivery"] as const).flatMap((kind) =>
-  (["success", "failure", "late-success", "late-failure"] as const).map((settlement) => ({
-    kind,
-    settlement,
-  })),
-);
+const cleanupCases = [
+  { kind: "command-rpc", settlement: "success" },
+  { kind: "channel-delivery", settlement: "failure" },
+  { kind: "command-rpc", settlement: "late-success" },
+  { kind: "channel-delivery", settlement: "late-failure" },
+] as const;
 
 it.each(cleanupCases)(
   "settles $kind replies and cleanup ownership for $settlement",
@@ -25,7 +25,7 @@ it.each(cleanupCases)(
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.useFakeTimers();
     vi.stubEnv("OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS", "25");
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       "cleanup-probe",
       () => ({
         info: { id: "cleanup-probe", name: "Cleanup probe" },
@@ -61,6 +61,7 @@ it.each(cleanupCases)(
                   readDeliveryEvidence: () => ({
                     hasDirectlySentBlockReply: false,
                     hasBlockReplyPipelineOutput: false,
+                    hasRetryBlockedDelivery: false,
                   }),
                 },
           sessionOverride: { kind: "preserve" },
@@ -110,7 +111,7 @@ it.each(cleanupCases)(
       vi.useRealTimers();
       vi.unstubAllEnvs();
       warn.mockRestore();
-      restoreRegistry();
+      await restoreRegistry();
     }
   },
 );

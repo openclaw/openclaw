@@ -39,8 +39,16 @@ A logical result's receipt takes precedence over its legacy message IDs.
 The result carries a receipt, `messageIds` (including an empty array), and
 `visibleReplySent: true`; routing fields stay in the receipt. Optional `content`
 is passed through, and `kind` and `replyToId` use the receipt builder's rules.
-Keep acceptance side effects, content joining,
-suppression, and whether an identityless outcome needs a receipt in the adapter.
+For batches that join accepted text with newlines, use
+`createChannelDeliveryAccumulator({ kind?, replyToId? })` from
+`openclaw/plugin-sdk/channel-outbound`.
+Call `add(source, acceptedText?)` only after each physical send succeeds. `size`
+counts accepted sends, and `result()` returns their combined receipt and nonempty
+text, or a `no_visible_result` suppression for an empty batch. On failure, throw
+`partialError(error)` to retain earlier sends and a nested partial-delivery
+error's accepted subset; failures before any acceptance pass through unchanged.
+Keep transport acceptance side effects, other content-joining rules, and whether
+an identityless outcome needs a receipt in the adapter.
 
 Channel actions and adapter capabilities come from the selected plugin
 registration. An omitted `actions`, `message`, or `outbound` surface is not
@@ -57,13 +65,18 @@ contract test failure:
 | `message.live.capabilities`           | `draftPreview`, `previewFinalization`, `progressUpdates`, `nativeStreaming`, `quietFinalization` |
 | `message.live.finalizer.capabilities` | `finalEdit`, `normalFallback`, `discardPending`, `previewReceipt`, `retainOnAmbiguousFailure`    |
 
-Channels that finalize a draft preview in place should route the runtime logic
-through `defineFinalizableLivePreviewAdapter(...)` plus
-`deliverWithFinalizableLivePreviewAdapter(...)`, and keep the declared
-capabilities backed by `verifyChannelMessageLiveCapabilityAdapterProofs(...)`
-and `verifyChannelMessageLiveFinalizerProofs(...)` tests so native preview,
-progress, edit, fallback/retention, cleanup, and receipt behavior cannot drift
-silently.
+Channels with previews should use `createLivePreviewLifecycle(...)` from
+`openclaw/plugin-sdk/channel-outbound` for final acceptance, promotion, and
+cleanup. Supply real transport operations and explicit delivery results instead
+of keeping channel-local final/cleanup flags. Native streaming and persistent
+cards retain their transport-specific finalization; they are not required to
+pretend to be deletable drafts. See
+[Progress and preview delivery ownership](/plugins/sdk-channel-outbound#progress-and-preview-delivery-ownership).
+
+Keep declared capabilities backed by
+`verifyChannelMessageLiveCapabilityAdapterProofs(...)` and
+`verifyChannelMessageLiveFinalizerProofs(...)` tests so native progress, edit,
+fallback/retention, cleanup, and receipt behavior cannot drift silently.
 
 ### Progress visibility acceptance
 
@@ -75,10 +88,11 @@ an explicit boolean.
 
 ### Quiet progress presentation
 
-Native progress renderers must retain approval and failure lines when ordinary
-tool rows are disabled. The shared progress compositor retains those lines in
-its snapshots; native renderers must preserve them alongside plan rows and
-ordinary activity.
+Native progress renderers must retain approval requests when tool rows are
+disabled, alongside authored progress text and plan rows. Intermediate tool
+failures and nonzero command exits follow the tool-row visibility setting;
+they must not bypass quiet mode. Terminal task errors still use normal error
+delivery. The shared progress compositor applies this policy to its snapshots.
 
 `resolveChannelStreamingPreviewToolProgress(entry, defaultValue?, mode?)` keeps
 its shipped default of `true` when the second argument is omitted or
@@ -93,6 +107,13 @@ explicit output until the next breaking SDK release. New callers should omit
 them and use `streaming.progress.toolProgress` to control tool rows with the
 standard progress markers.
 
+When consuming prepared agent items, create the compositor with `preparedItems: true`.
+`pushItemEvent` then owns visible tool progress; raw tool, command-output, and
+patch callbacks retain diagnostic bookkeeping without adding duplicate rows.
+Omit this option for existing plugins that use raw callbacks. Their arguments,
+detail mode, custom line builder, and terminal command/patch rendering remain
+supported. This is an adapter capability, not a user configuration setting.
+
 ### Quiet acknowledgement and coalesced progress
 
 `createStatusReactionController({ presentation: "acknowledgement", ... })`
@@ -105,6 +126,32 @@ controls accept `coalesceInFlight: true` to keep background updates arriving
 during a send in the next throttle window. Explicit `flush()` still bypasses
 the delay for attention and finalization. Cancel pending updates and await
 in-flight work before closing or rotating a stream.
+
+Use `createFinalizableDraftLifecycle` for physical deletion custody rather than
+maintaining a plugin-local retry queue. `retire(id)` claims a detached preview;
+`retire(id, { defer: true })` records it without deleting it immediately.
+`cleanupPending()` retries retired IDs without deleting the current preview.
+When transport cleanup policy must change, pass a synchronous `prepareCleanup`
+callback to `cleanupPending`; it runs in order with clears, before deletion.
+Rejected deletions remain owned for a later cleanup attempt.
+
+For synchronous turn rotation, `reset()` advances `generation`, reopens delivery,
+and resets the current message and pending updates. Published messages remain the
+adapter's responsibility. `reset("discard")` also retires
+creates from earlier generations when they settle. Call `createMessage(send, publish)`
+inside the serialized send loop; its synchronous `publish` callback installs only
+current-generation receipts. Capture `generation` before edits and recheck it before
+publishing their results. `retireCurrent(stopForClear)` similarly fences awaited
+cleanup. Adapters that already settle their sends before rotation can use
+`resetMessage()` to reset identity and pending/throttle state without reopening delivery
+or advancing the generation.
+
+Pass `"keep"` as the throttle argument to `resetMessage("keep")` or
+`reset("discard", "keep")` when rotation must preserve the existing throttle
+window and scheduled flush. The default resets both. Transports that decide
+stale-preview disposition during cleanup can pass `{ defer: true }` as the
+third argument to `createMessage`; stale discarded receipts then enter deletion
+custody without an immediate deletion attempt.
 
 ### Commentary delivery ownership
 

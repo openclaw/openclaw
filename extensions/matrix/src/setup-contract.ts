@@ -1,4 +1,3 @@
-// Matrix plugin module implements setup contract behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 
 export const matrixSingleAccountKeysToMove = [
@@ -86,13 +85,6 @@ export function resolveSingleAccountPromotionTarget(params: {
     if (onlyAccount) {
       return onlyAccount[0];
     }
-  }
-  if (
-    namedAccounts.length > 1 &&
-    accounts[DEFAULT_ACCOUNT_ID] &&
-    typeof accounts[DEFAULT_ACCOUNT_ID] === "object"
-  ) {
-    return DEFAULT_ACCOUNT_ID;
   }
   return DEFAULT_ACCOUNT_ID;
 }

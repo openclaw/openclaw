@@ -21,14 +21,14 @@ settings and `extensions.partialclone`, then repacks. See the
 [repair sequence](/gateway/doctor#11e-project-clone-shape) before running these
 network and disk operations manually.
 
-Modern doctor checks use a small split contract:
+Doctor checks that use the structured health registry declare a small split contract:
 
 ```ts
 detect(ctx, scope?) -> HealthFinding[]
 repair?(ctx, findings) -> HealthRepairResult
 ```
 
-`detect()` powers `doctor --lint`. `repair()` is optional and only runs under `doctor --fix` / `doctor --repair`. Checks that have not migrated to this shape still use the legacy doctor contribution flow.
+`detect()` powers `doctor --lint`. `repair()` is optional and only runs under `doctor --fix` / `doctor --repair`. Doctor contributions that declare only a `run()` handler instead of `healthChecks` are not exposed through this contract.
 
 Repair contexts can carry `dryRun`/`diff` requests; repair results can return structured `diffs` (config/file edits) and `effects` (service, process, package, state, or other side effects), so converted checks can grow toward `doctor --fix --dry-run` without moving mutation planning into `detect()`.
 
@@ -46,4 +46,4 @@ A finding includes:
 | `ocPath`          | Precise `oc://` address when a check can point to one. |
 | `fixHint`         | Suggested operator action or repair summary.           |
 
-Modernized core doctor checks stay attached to the ordered doctor contribution that owns their human `doctor` / `doctor --fix` behavior. The shared structured health registry is the extension point: bundled and plugin-backed checks run after core doctor checks once their owning package registers them in the active command path. `openclaw/plugin-sdk/health` exposes the same contract for plugin authors.
+Core doctor checks that declare structured health checks stay attached to the ordered doctor contribution that owns their human `doctor` / `doctor --fix` behavior. The shared structured health registry is the extension point: bundled and plugin-backed checks run after core doctor checks once their owning package registers them in the active command path. `openclaw/plugin-sdk/health` exposes the same contract for plugin authors.

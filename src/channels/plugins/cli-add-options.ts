@@ -16,7 +16,7 @@ export type ChannelSetupCliOptionValueMetadata = {
 // one even when the value placeholder differs, so dedupe by switch identity or
 // one plugin's `--url <server>` next to another's `--url <url>` would throw and
 // break `channels add` registration entirely.
-export function channelCliOptionSwitchKey(flags: string): string {
+function channelCliOptionSwitchKey(flags: string): string {
   const option = new Option(flags);
   return option.long ?? option.short ?? option.flags;
 }
@@ -87,4 +87,20 @@ export function resolveChannelSetupCliOptionMetadata(
   }
 
   return { options, optionCandidates, selectedChannel, valueMetadataByAttributeName };
+}
+
+/**
+ * True only when a selected channel resolved and its registered option set leaves
+ * `--use-env` out: core adds that flag to the legacy option list, while a channel
+ * publishing its own `setup` contract has to declare the matching field. Unselected
+ * and unknown ids stay false so the generic advice is untouched for them.
+ */
+export function channelOmitsEnvBackedSetupOption(channelId?: string): boolean {
+  const { selectedChannel } = resolveChannelSetupCliOptionMetadata(channelId);
+  if (!selectedChannel?.setup) {
+    return false;
+  }
+  return !selectedChannel.setup.fields.some(
+    (field) => channelCliOptionSwitchKey(field.cli.flags) === "--use-env",
+  );
 }

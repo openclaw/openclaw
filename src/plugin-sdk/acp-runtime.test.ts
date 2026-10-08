@@ -1,5 +1,6 @@
 // ACP runtime tests cover plugin-facing ACP runtime setup and gateway dispatch behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import type { AcpSessionManagerDeps } from "../acp/control-plane/manager.types.js";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 
@@ -19,6 +20,18 @@ import {
   testing,
   tryDispatchAcpReplyHook,
 } from "./acp-runtime.js";
+
+it("keeps released ACP metadata signatures independent of internal actor bindings", () => {
+  expectTypeOf<
+    Parameters<typeof import("./acp-runtime.js").readAcpSessionEntryAsync>["length"]
+  >().toEqualTypeOf<1>();
+  expectTypeOf<
+    Parameters<AcpSessionManagerDeps["loadSessionEntryAsync"]>["length"]
+  >().toEqualTypeOf<1>();
+  expectTypeOf<
+    Parameters<AcpSessionManagerDeps["upsertSessionMeta"]>["length"]
+  >().toEqualTypeOf<1>();
+});
 
 const event = {
   ctx: buildTestCtx({
@@ -70,25 +83,6 @@ function expectDispatchPayloadFields(expected: Record<string, unknown>): void {
 describe("tryDispatchAcpReplyHook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("skips ACP runtime lookup for plain-text deny turns", async () => {
-    const result = await tryDispatchAcpReplyHook(
-      {
-        ...event,
-        sendPolicy: "deny",
-        ctx: buildTestCtx({
-          SessionKey: "agent:test:session",
-          BodyForCommands: "write a test",
-          BodyForAgent: "write a test",
-        }),
-      },
-      ctx,
-    );
-
-    expect(result).toBeUndefined();
-    expect(bypassMock).not.toHaveBeenCalled();
-    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("skips ACP runtime lookup for non-command deny turns even when CommandBody is populated", async () => {
@@ -253,27 +247,60 @@ describe("tryDispatchAcpReplyHook", () => {
       counts: { tool: 0, block: 0, final: 0 },
     });
     let shouldSendToolSummaries = true;
+    let fullToolDetails = false;
     const eventWithGetter = {
       ...event,
       get shouldSendToolSummaries() {
         return shouldSendToolSummaries;
       },
+      get shouldSendFullToolDetails() {
+        return fullToolDetails;
+      },
     };
 
     await tryDispatchAcpReplyHook(eventWithGetter, ctx);
 
-    expectDispatchPayloadFields({
-      shouldSendToolSummaries: true,
-      shouldSendFullToolDetails: false,
-    });
     const [payload] = dispatchMock.mock.calls[0] ?? [];
-    const livePredicate = (payload as { shouldSendToolSummariesNow?: () => boolean })
-      .shouldSendToolSummariesNow;
+    const livePredicate = (payload as { shouldSendToolSummaries: () => Promise<boolean> })
+      .shouldSendToolSummaries;
     expect(livePredicate).toBeTypeOf("function");
-    expect(livePredicate?.()).toBe(true);
+    expect(await livePredicate()).toBe(true);
 
     shouldSendToolSummaries = false;
-    expect(livePredicate?.()).toBe(false);
+    expect(await livePredicate()).toBe(false);
+    fullToolDetails = true;
+    expect(
+      await (
+        payload as { shouldSendFullToolDetails: () => Promise<boolean> }
+      ).shouldSendFullToolDetails(),
+    ).toBe(false);
+  });
+
+  it("uses awaited visibility without touching deprecated event getters", async () => {
+    bypassMock.mockResolvedValue(false);
+    let summaries = false;
+    dispatchMock.mockImplementationOnce(async (params) => {
+      expect(await params.shouldSendToolSummaries()).toBe(false);
+      summaries = true;
+      expect(await params.shouldSendToolSummaries()).toBe(true);
+      expect(await params.shouldSendFullToolDetails()).toBe(true);
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
+    await tryDispatchAcpReplyHook(
+      {
+        ...event,
+        get shouldSendToolSummaries(): boolean {
+          throw new Error("deprecated synchronous read");
+        },
+        get shouldSendFullToolDetails(): boolean {
+          throw new Error("deprecated synchronous read");
+        },
+        shouldSendToolSummariesAsync: async () => summaries,
+        shouldSendFullToolDetailsAsync: async () => true,
+      },
+      ctx,
+    );
+    expect(dispatchMock).toHaveBeenCalledOnce();
   });
 
   it("passes runtime toolsAllow through to ACP dispatch", async () => {

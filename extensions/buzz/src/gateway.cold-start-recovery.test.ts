@@ -2,13 +2,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
+import type { ChannelGatewayContextV2 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelGatewayContext } from "../runtime-api.js";
 import type { BuzzInboundMessage } from "./message-event.js";
 import type { ResolvedBuzzAccount } from "./types.js";
 
@@ -217,6 +219,7 @@ function startGatewayProcess(channelIds: string[] = [CHANNEL_ID]): {
   const account = resolveBuzzAccount({ cfg });
   const abort = new AbortController();
   const ctx = {
+    scheduler: createTestPluginServiceScheduler(),
     cfg,
     accountId: account.accountId,
     account,
@@ -225,7 +228,7 @@ function startGatewayProcess(channelIds: string[] = [CHANNEL_ID]): {
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     getStatus: vi.fn(),
     setStatus: vi.fn(),
-  } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
+  } as unknown as ChannelGatewayContextV2<ResolvedBuzzAccount>;
   return { abort, lifecycle: startBuzzGatewayAccount(ctx) };
 }
 
@@ -324,9 +327,10 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   if (previousStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -403,10 +407,31 @@ describe("Buzz gateway cold-start recovery", () => {
     });
   });
 
+  it("reads persisted room activations once when reconnecting at capacity", async () => {
+    const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
+    const entries = vi.spyOn(store, "entries");
+    const channelIds = Array.from({ length: BUZZ_MAX_CONFIGURED_ROOMS }, (_, i) => `room-${i}`);
+    await resolveBuzzRecoverySince({
+      store,
+      channelIds,
+      nowSeconds: START_SECONDS,
+      lookbackSeconds: LOOKBACK_SECONDS,
+    });
+    entries.mockClear();
+    const recovered = await resolveBuzzRecoverySince({
+      store,
+      channelIds,
+      nowSeconds: START_SECONDS + 60,
+      lookbackSeconds: LOOKBACK_SECONDS,
+    });
+    expect(recovered).toEqual(new Map(channelIds.map((id) => [id, START_SECONDS])));
+    expect(entries).toHaveBeenCalledOnce();
+  });
+
   it("rejects recovery when an existing room cursor cannot be read", async () => {
     const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
     await store.register(`room:${SECOND_CHANNEL_ID}`, { seconds: START_SECONDS - 60 });
-    vi.spyOn(store, "lookup").mockRejectedValueOnce(new Error("first room cursor unavailable"));
+    vi.spyOn(store, "entries").mockRejectedValueOnce(new Error("first room cursor unavailable"));
     await expect(
       resolveBuzzRecoverySince({
         store,
@@ -417,18 +442,22 @@ describe("Buzz gateway cold-start recovery", () => {
     ).rejects.toThrow("first room cursor unavailable");
   });
 
-  it("rejects recovery when a persisted room activation floor is invalid", async () => {
+  it("preserves room-order writes when a later activation floor is invalid", async () => {
     const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
-    await store.register(`room:${CHANNEL_ID}`, { seconds: "corrupt" } as never);
+    await store.register("room:removed", { seconds: START_SECONDS - 60 });
+    await store.register(`room:${SECOND_CHANNEL_ID}`, { seconds: "corrupt" } as never);
 
     await expect(
       resolveBuzzRecoverySince({
         store,
-        channelIds: [CHANNEL_ID],
+        channelIds: [CHANNEL_ID, SECOND_CHANNEL_ID, "later-room"],
         nowSeconds: START_SECONDS,
         lookbackSeconds: LOOKBACK_SECONDS,
       }),
-    ).rejects.toThrow(`Invalid Buzz recovery watermark for room ${CHANNEL_ID}`);
+    ).rejects.toThrow(`Invalid Buzz recovery watermark for room ${SECOND_CHANNEL_ID}`);
+    expect(await store.lookup("room:removed")).toBeUndefined();
+    expect(await store.lookup(`room:${CHANNEL_ID}`)).toEqual({ seconds: START_SECONDS });
+    expect(await store.lookup("room:later-room")).toBeUndefined();
   });
 
   it("recovers a later-arriving room message with an older sender timestamp", async () => {

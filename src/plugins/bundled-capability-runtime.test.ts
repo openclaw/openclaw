@@ -78,12 +78,7 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     const target = writePlugin({
       id: "shadowed-capability",
       dir: path.join(bundledRoot, "shadowed-capability"),
-      body: `module.exports = {
-        id: "shadowed-capability",
-        register(api) {
-          api.registerProvider({ id: "bundled-capability", label: "Bundled owner", auth: [] });
-        },
-      };`,
+      registration: `api.registerProvider({ id: "bundled-capability", label: "Bundled owner", auth: [] });`,
     });
     fs.writeFileSync(
       path.join(target.dir, "package.json"),
@@ -144,17 +139,12 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
   it("loads only the requested bundled plugin without replacing the active registry", () => {
     const target = writePlugin({
       id: "capability-target",
-      body: `module.exports = {
-        id: "capability-target",
-        register(api) {
-          if (api.registrationMode === "discovery") {
-            api.registerProvider({ id: "capability-target", label: "Target", auth: [] });
-          }
-          if (api.registrationMode === "full") {
-            api.registerProvider({ id: "full-only", label: "Full only", auth: [] });
-          }
-        },
-      };`,
+      registration: `if (api.registrationMode === "discovery") {
+        api.registerProvider({ id: "capability-target", label: "Target", auth: [] });
+      }
+      if (api.registrationMode === "full") {
+        api.registerProvider({ id: "full-only", label: "Full only", auth: [] });
+      }`,
     });
     const unscoped = writePlugin({
       id: "capability-unscoped",
@@ -193,12 +183,7 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
   ])("never imports a $name plugin through bundled capability capture", ({ plugins }) => {
     const blocked = writePlugin({
       id: "blocked-capability",
-      body: `module.exports = {
-        id: "blocked-capability",
-        register(api) {
-          api.registerProvider({ id: "blocked-capability", label: "Blocked", auth: [] });
-        },
-      };`,
+      registration: `api.registerProvider({ id: "blocked-capability", label: "Blocked", auth: [] });`,
     });
 
     const registry = loadBundledCapabilityRuntimeRegistry({

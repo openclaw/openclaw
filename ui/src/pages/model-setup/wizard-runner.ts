@@ -1,21 +1,35 @@
+import { raceWithTimeout } from "@openclaw/retry";
 import type {
   WizardStartResult,
   WizardStatusResult,
 } from "../../../../packages/gateway-protocol/src/schema/wizard.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SystemAgentSetupActivateParams, WizardNextResult } from "../../api/types.ts";
+import type {
+  ProviderLoginOption,
+  SystemAgentSetupActivateParams,
+  WizardNextResult,
+} from "../../api/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSetupAdmissionBusyError, isWizardNotFoundError } from "../../lib/gateway-errors.ts";
+import {
+  openExternalUrlSafe,
+  reserveExternalWindowForDeferredNavigation,
+  resolveSafeExternalUrl,
+} from "../../lib/open-external-url.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import type { FirstRunSetup } from "./first-run-setup.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
   type ModelSetupWizardResult,
+  type ModelSetupWizardRecovery,
   type ModelSetupWizardState,
   wizardStateFromResult,
 } from "./state.ts";
 
 export type ModelSetupWizardStartMethod =
+  | "mcp.authLogin"
+  | "models.authLogin"
   | "openclaw.setup.auth.start"
   | "openclaw.setup.prepare.start"
   | "openclaw.setup.activate.start";
@@ -34,25 +48,36 @@ type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
   getAgentId: () => string | null;
   onChange: (state: ModelSetupWizardState) => void;
+  onBackgroundCompletion?: (completion: ModelSetupWizardCompletion) => Promise<void>;
+  onSessionMissing?: () => void;
   onStart?: (
     method: ModelSetupWizardStartMethod,
-    activation?: SystemAgentSetupActivateParams,
+    activation?: Parameters<FirstRunSetup["beginActivation"]>[0],
   ) => WizardTerminalObserver | undefined;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
   sessionExpiredMessage: () => string;
+  gatewayNotRespondingMessage: () => string;
 };
 
 type WizardSession = {
   client: GatewayBrowserClient;
   sessionId: string;
   authChoice: string;
+  authKind?: ProviderLoginOption["kind"];
+  notes: string[];
+  reservedWindow?: WindowProxy | null;
+  openedUrl?: string;
+  externalInputTimer?: ReturnType<typeof setTimeout>;
+  externalInputRequest?: Promise<ModelSetupWizardCompletion | null>;
   admitted?: boolean;
   suspended?: boolean;
   retired?: boolean;
   retirementGeneration: number;
   terminalResult?: ModelSetupWizardResult;
+  cancellationRequested?: boolean;
   cancellationPromise?: Promise<WizardStatusResult>;
+  inputClosurePromise?: Promise<WizardStatusResult>;
   abortController: AbortController;
   startMethod: ModelSetupWizardStartMethod;
   activationTargetId?: string;
@@ -63,8 +88,22 @@ export class ModelSetupWizardRunner {
   private currentState: ModelSetupWizardState = { phase: "idle" };
   private session: WizardSession | null = null;
   private retirementGeneration = 0;
+  private authLabel: string | undefined;
+  private pendingSignIn:
+    | { kind: ProviderLoginOption["kind"]; window: WindowProxy | null }
+    | undefined;
 
   constructor(private readonly options: WizardRunnerOptions) {}
+
+  prepareSignIn(kind: ProviderLoginOption["kind"] | "install" | "custom", label: string): void {
+    this.authLabel = label;
+    this.pendingSignIn?.window?.close();
+    const browser = kind === "oauth" || kind === "device-code";
+    this.pendingSignIn = {
+      kind: browser ? kind : "secret",
+      window: browser ? reserveExternalWindowForDeferredNavigation() : null,
+    };
+  }
 
   get state(): ModelSetupWizardState {
     return this.currentState;
@@ -74,14 +113,40 @@ export class ModelSetupWizardRunner {
     return this.session?.admitted === true;
   }
 
-  suspend(): void {
+  suspend(notice?: string): void {
     const session = this.session;
     if (!session) {
       return;
     }
     session.suspended = true;
     session.abortController.abort();
-    this.setState({ phase: "starting", authChoice: session.authChoice });
+    // A suspended wizard cannot receive its sign-in URL; a resumed step still
+    // offers that URL as an explicit link.
+    session.reservedWindow?.close();
+    session.reservedWindow = null;
+    this.setState({
+      phase: "starting",
+      authChoice: session.authChoice,
+      ...(notice ? { notice } : {}),
+    });
+  }
+
+  restore(recovery: ModelSetupWizardRecovery, onTerminalResult: WizardTerminalObserver): void {
+    const client = this.options.getClient();
+    if (!client || this.session) {
+      return;
+    }
+    this.session = {
+      ...recovery,
+      client,
+      notes: [],
+      admitted: true,
+      retirementGeneration: this.retirementGeneration,
+      abortController: new AbortController(),
+      startMethod: "openclaw.setup.auth.start",
+      onTerminalResult,
+    };
+    this.setState({ phase: "starting", authChoice: recovery.authChoice });
   }
 
   async resume(): Promise<ModelSetupWizardCompletion | null> {
@@ -99,6 +164,7 @@ export class ModelSetupWizardRunner {
       client,
       abortController: new AbortController(),
       cancellationPromise: undefined,
+      inputClosurePromise: undefined,
       suspended: false,
       retired: false,
     };
@@ -106,11 +172,11 @@ export class ModelSetupWizardRunner {
     this.setState({ phase: "starting", authChoice: session.authChoice });
     try {
       if (session.terminalResult) {
-        return this.applyResult(session, session.authChoice, session.terminalResult);
+        return this.applyResult(session, session.terminalResult);
       }
       // Never repeat start or the last answer: either may have committed before
       // the socket closed. The existing wizard owns the next visible step.
-      return await this.requestNext(session, session.authChoice);
+      return await this.requestNext(session);
     } catch (error) {
       this.handleError(error, session);
       return null;
@@ -121,11 +187,16 @@ export class ModelSetupWizardRunner {
     authChoice: string,
     startMethod: Exclude<
       ModelSetupWizardStartMethod,
-      "openclaw.setup.activate.start"
+      "openclaw.setup.activate.start" | "mcp.authLogin"
     > = "openclaw.setup.auth.start",
     preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> = {},
+    modelTarget?: "utility",
   ): Promise<ModelSetupWizardCompletion | null> {
-    return this.startSession(authChoice, startMethod, { authChoice, ...preferences });
+    return this.startSession(authChoice, startMethod, {
+      authChoice,
+      ...preferences,
+      ...(modelTarget ? { modelTarget } : {}),
+    });
   }
 
   activate(
@@ -140,30 +211,53 @@ export class ModelSetupWizardRunner {
     );
   }
 
+  startMcpLogin(serverName: string): Promise<ModelSetupWizardCompletion | null> {
+    return this.startSession(serverName, "mcp.authLogin", { serverName });
+  }
+
   private async startSession(
     authChoice: string,
     startMethod: ModelSetupWizardStartMethod,
-    params: { authChoice: string } | SystemAgentSetupActivateParams,
+    params:
+      | { authChoice: string; modelTarget?: "utility" }
+      | SystemAgentSetupActivateParams
+      | { serverName: string },
     activationTargetId?: string,
   ): Promise<ModelSetupWizardCompletion | null> {
     const client = this.options.getClient();
     if (!client || this.currentState.phase !== "idle") {
       return null;
     }
+    const sessionId = generateUUID();
     const session: WizardSession = {
       client,
-      sessionId: generateUUID(),
+      sessionId,
       retirementGeneration: this.retirementGeneration,
       authChoice,
+      authKind: this.pendingSignIn?.kind,
+      notes: [],
+      reservedWindow: this.pendingSignIn?.window,
       abortController: new AbortController(),
       startMethod,
       activationTargetId,
-      onTerminalResult: this.options.onStart?.(startMethod, "kind" in params ? params : undefined),
+      onTerminalResult: this.options.onStart?.(
+        startMethod,
+        "kind" in params
+          ? params
+          : startMethod === "openclaw.setup.auth.start" && "authChoice" in params
+            ? {
+                ...params,
+                kind: "provider-auth",
+                wizard: { sessionId, authChoice, authKind: this.pendingSignIn?.kind },
+              }
+            : undefined,
+      ),
     };
+    this.pendingSignIn = undefined;
     this.session = session;
     this.setState({ phase: "starting", authChoice });
     try {
-      const agentId = this.options.getAgentId();
+      const agentId = startMethod === "mcp.authLogin" ? null : this.options.getAgentId();
       const request = client
         .request<WizardStartResult>(
           startMethod,
@@ -196,9 +290,9 @@ export class ModelSetupWizardRunner {
         return null;
       }
       if (started.done) {
-        return this.applyResult(session, authChoice, started);
+        return this.applyResult(session, started);
       }
-      return await this.requestNext(session, authChoice);
+      return await this.requestNext(session);
     } catch (error) {
       this.handleError(error, session);
       return null;
@@ -214,8 +308,16 @@ export class ModelSetupWizardRunner {
     this.setState({ ...state, busy: true, validationError: null });
     const answer = includeValue ? { stepId: state.step.id, value } : { stepId: state.step.id };
     try {
-      return await this.requestNext(session, state.authChoice, answer);
+      return await this.requestNext(session, answer);
     } catch (error) {
+      const pending = session.externalInputRequest;
+      if (pending) {
+        session.externalInputRequest = undefined;
+        const completion = await pending;
+        if (completion || session !== this.session) {
+          return completion;
+        }
+      }
       this.handleError(error, session);
       return null;
     }
@@ -223,11 +325,7 @@ export class ModelSetupWizardRunner {
 
   async cancel(options: { settleActiveRequest?: boolean } = {}): Promise<void> {
     const session = this.session;
-    if (!options.settleActiveRequest) {
-      session?.abortController.abort();
-    }
-    this.session = null;
-    this.setState({ phase: "idle" });
+    this.clearSession(!options.settleActiveRequest);
     if (session) {
       await this.cancelSession(session);
     }
@@ -239,6 +337,7 @@ export class ModelSetupWizardRunner {
       this.close();
       return "cancelled";
     }
+    session.cancellationRequested = true;
     let result: WizardStatusResult | undefined;
     try {
       result = await this.sendCancellation(session);
@@ -256,12 +355,37 @@ export class ModelSetupWizardRunner {
       return undefined;
     }
     if (result?.status === "cancelled" || result?.status === "error") {
+      if (session.startMethod === "models.authLogin" || session.startMethod === "mcp.authLogin") {
+        // Cancellation acknowledges the abort before provider teardown releases
+        // admission. Status waits for that release; a purged session is settled.
+        try {
+          await session.client.request<WizardStatusResult>(
+            "wizard.status",
+            { sessionId: session.sessionId },
+            {
+              timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
+              signal: session.abortController.signal,
+            },
+          );
+        } catch (error) {
+          if (session !== this.session || this.isRetired(session) || session.suspended) {
+            return undefined;
+          }
+          if (!isWizardNotFoundError(error)) {
+            throw error;
+          }
+        }
+        if (session !== this.session || this.isRetired(session) || session.suspended) {
+          return undefined;
+        }
+      }
       this.close();
       return "cancelled";
     }
     // Protected preparation may decline cancellation. Keep the admitted wizard
     // and its outstanding next request so the same auth flow can reach a checkpoint.
     if (result?.status === "running") {
+      session.cancellationRequested = false;
       return "running";
     }
     return undefined;
@@ -273,13 +397,26 @@ export class ModelSetupWizardRunner {
     if (options.retireOwner) {
       this.retirementGeneration += 1;
     }
-    this.session?.abortController.abort();
+    this.clearSession();
+  }
+
+  private clearSession(abortRequest = true): void {
+    this.pendingSignIn?.window?.close();
+    this.pendingSignIn = undefined;
+    this.session?.reservedWindow?.close();
+    clearTimeout(this.session?.externalInputTimer);
+    if (abortRequest) {
+      this.session?.abortController.abort();
+    }
     this.session = null;
+    this.authLabel = undefined;
     this.setState({ phase: "idle" });
   }
 
   fail(message: string): void {
-    this.session = null;
+    const label = this.authLabel;
+    this.close();
+    this.authLabel = label;
     this.setState({ phase: "error", message });
   }
 
@@ -288,7 +425,6 @@ export class ModelSetupWizardRunner {
     request: Promise<ModelSetupWizardResult>,
   ): Promise<ModelSetupWizardResult> {
     let timedOut = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     // Gateway request abort/deadline retirement discards the late session needed for cleanup.
     const retainedRequest = request.then(async (result) => {
       if (timedOut) {
@@ -300,43 +436,61 @@ export class ModelSetupWizardRunner {
       }
       return result;
     });
-    try {
-      return await Promise.race([
-        retainedRequest,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            timedOut = true;
-            reject(
-              new Error(
-                `gateway request timed out after ${MODEL_SETUP_AUTH_START_TIMEOUT_MS}ms: ${session.startMethod}`,
-              ),
-            );
-          }, MODEL_SETUP_AUTH_START_TIMEOUT_MS);
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
+    return await raceWithTimeout(retainedRequest, MODEL_SETUP_AUTH_START_TIMEOUT_MS, () => {
+      timedOut = true;
+      throw new Error(this.options.gatewayNotRespondingMessage());
+    });
   }
 
   private async requestNext(
     session: WizardSession,
-    authChoice: string,
     answer?: { stepId: string; value?: unknown },
+    acceptResult?: () => boolean,
   ): Promise<ModelSetupWizardCompletion | null> {
     if (session.suspended || this.isRetired(session)) {
       return null;
     }
-    const { client, sessionId, abortController } = session;
+    const { client, sessionId, abortController, authChoice } = session;
     const signal = abortController.signal;
     let nextAnswer = answer;
+    let acceptsFirstResult = acceptResult;
     while (true) {
       const result = await client.request<WizardNextResult>(
         "wizard.next",
         { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
         { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
       );
-      const completion = this.applyResult(session, authChoice, result);
+      if (acceptsFirstResult && !acceptsFirstResult() && !result.done) {
+        return null;
+      }
+      acceptsFirstResult = undefined;
+      if (
+        session === this.session &&
+        !session.suspended &&
+        !this.isRetired(session) &&
+        !result.done &&
+        result.step?.type === "note" &&
+        (session.authKind === "oauth" || session.authKind === "device-code")
+      ) {
+        if (result.step.message) {
+          session.notes.push(result.step.message);
+        }
+        if (result.step.externalUrl || result.step.deviceCode) {
+          // The next request can wait for the browser callback without another
+          // step. Keep its recovery actions visible while acknowledging this note.
+          this.setState({
+            phase: "step",
+            authChoice,
+            step: result.step,
+            busy: true,
+            validationError: null,
+          });
+        }
+        this.openSignInUrl(session, result.step.externalUrl);
+        nextAnswer = { stepId: result.step.id };
+        continue;
+      }
+      const completion = this.applyResult(session, result);
       if (session !== this.session || completion) {
         return completion;
       }
@@ -352,7 +506,6 @@ export class ModelSetupWizardRunner {
 
   private applyResult(
     session: WizardSession,
-    authChoice: string,
     result: ModelSetupWizardResult,
   ): ModelSetupWizardCompletion | null {
     if (session === this.session && session.suspended && result.done) {
@@ -367,17 +520,57 @@ export class ModelSetupWizardRunner {
       this.close();
       return null;
     }
-    const next = wizardStateFromResult(
-      authChoice,
+    if (result.done && result.status === "cancelled" && session.cancellationRequested) {
+      this.close();
+      return null;
+    }
+    let next = wizardStateFromResult(
+      session.authChoice,
       result,
       result.status === "cancelled"
         ? this.options.cancelledMessage()
         : this.options.requestFailedMessage(),
     );
+    if (
+      next.phase === "step" &&
+      session.authKind === "oauth" &&
+      next.step.type === "text" &&
+      next.step.externalUrl
+    ) {
+      next = { ...next, externalAuthInput: true };
+    }
+    if (session.notes.length) {
+      if (next.phase === "error") {
+        next = { ...next, message: [next.message, ...session.notes].join("\n\n") };
+      } else if (
+        next.phase === "step" &&
+        next.step.executor !== "gateway" &&
+        !next.step.externalUrl
+      ) {
+        next = {
+          ...next,
+          step: {
+            ...next.step,
+            message: [next.step.message, ...session.notes].filter(Boolean).join("\n\n"),
+          },
+        };
+      }
+    }
+    clearTimeout(session.externalInputTimer);
     if (result.done) {
+      session.reservedWindow?.close();
       this.session = null;
     }
     this.setState(next);
+    if (next.phase === "step") {
+      this.openSignInUrl(session, next.step.externalUrl);
+      if (next.externalAuthInput) {
+        this.watchExternalInput(session, next);
+      } else if (next.step.executor !== "gateway") {
+        session.reservedWindow?.close();
+        session.reservedWindow = null;
+      }
+    }
     if (!result.done || result.status !== "done") {
       return null;
     }
@@ -390,41 +583,106 @@ export class ModelSetupWizardRunner {
     };
   }
 
+  private openSignInUrl(session: WizardSession, url: string | undefined): void {
+    if (!url || session.openedUrl === url) {
+      return;
+    }
+    const safeUrl = resolveSafeExternalUrl(url, window.location.href);
+    if (!safeUrl) {
+      return;
+    }
+    if (session.reservedWindow && !session.reservedWindow.closed) {
+      session.reservedWindow.location.replace(safeUrl);
+      session.reservedWindow = null;
+    } else {
+      openExternalUrlSafe(safeUrl);
+    }
+    session.openedUrl = url;
+  }
+
+  private watchExternalInput(session: WizardSession, state: ModelSetupWizardState): void {
+    // Only the browser callback can settle this input without an answer. One
+    // wizard read per second stops as soon as this exact presentation changes.
+    const poll = async () => {
+      const current = () =>
+        session === this.session && this.currentState === state && !session.suspended;
+      if (!current()) {
+        return;
+      }
+      try {
+        const request = this.requestNext(session, undefined, current);
+        session.externalInputRequest = request;
+        const completion = await request;
+        if (session.externalInputRequest !== request) {
+          return;
+        }
+        session.externalInputRequest = undefined;
+        if (completion) {
+          const completedState = this.currentState;
+          const isCurrent = completion.isCurrent;
+          await this.options.onBackgroundCompletion?.({
+            ...completion,
+            isCurrent: () => this.currentState === completedState && isCurrent?.() !== false,
+          });
+        }
+      } catch (error) {
+        if (current()) {
+          this.handleError(error, session);
+        }
+      }
+    };
+    session.externalInputTimer = setTimeout(() => {
+      void poll();
+    }, 1000);
+  }
+
   private handleError(error: unknown, session: WizardSession): void {
     if (session !== this.session || session.suspended) {
       return;
     }
+    clearTimeout(session.externalInputTimer);
+    session.reservedWindow?.close();
     this.session = null;
     session.abortController.abort();
     const sessionExpired = isWizardNotFoundError(error);
-    if (!sessionExpired) {
+    if (sessionExpired) {
+      this.options.onSessionMissing?.();
+    } else {
       void this.cancelSession(session);
     }
     const message = sessionExpired
       ? this.options.sessionExpiredMessage()
       : formatUiError(error, this.options.requestFailedMessage());
-    this.setState({ phase: "error", message });
+    this.setState({ phase: "error", message: [message, ...session.notes].join("\n\n") });
   }
 
   private async cancelSession(session: WizardSession): Promise<WizardStatusResult | undefined> {
     try {
-      return await this.sendCancellation(session);
+      return await this.sendCancellation(
+        session,
+        session.startMethod === "models.authLogin" || session.startMethod === "mcp.authLogin",
+      );
     } catch {
       // Detached cleanup is best effort; explicit cancellation surfaces failures.
       return undefined;
     }
   }
 
-  private async sendCancellation(session: WizardSession): Promise<WizardStatusResult | undefined> {
+  private async sendCancellation(
+    session: WizardSession,
+    closeInput = false,
+  ): Promise<WizardStatusResult | undefined> {
     if (this.isRetired(session)) {
       return undefined;
     }
-    if (!session.cancellationPromise) {
-      // Explicit cancellation and detached cleanup share only the pending request.
-      session.cancellationPromise = session.client
+    const promiseKey = closeInput ? "inputClosurePromise" : "cancellationPromise";
+    if (!session[promiseKey]) {
+      // Disposal must close input even when a pending user cancellation can
+      // still return running for a protected credential write.
+      session[promiseKey] = session.client
         .request<WizardStatusResult>(
           "wizard.cancel",
-          { sessionId: session.sessionId },
+          { sessionId: session.sessionId, ...(closeInput ? { closeInput: true } : {}) },
           { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
         )
         .then((result) => {
@@ -434,10 +692,10 @@ export class ModelSetupWizardRunner {
           return result;
         })
         .finally(() => {
-          session.cancellationPromise = undefined;
+          session[promiseKey] = undefined;
         });
     }
-    return session.cancellationPromise;
+    return session[promiseKey];
   }
 
   private reportTerminalResult(
@@ -463,6 +721,10 @@ export class ModelSetupWizardRunner {
   }
 
   private setState(state: ModelSetupWizardState): void {
+    clearTimeout(this.session?.externalInputTimer);
+    if (this.authLabel) {
+      state.authLabel = this.authLabel;
+    }
     this.currentState = state;
     this.options.onChange(state);
   }

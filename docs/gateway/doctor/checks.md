@@ -18,6 +18,8 @@ full behavior and rationale of each numbered check, follow the links under
     - UI protocol freshness check (rebuilds Control UI when the protocol schema is newer).
     - Health check + restart prompt.
     - Problem-only skill and plugin notes; healthy inventory stays in `openclaw skills check` and `openclaw plugins list`.
+    - Runtime tool schema checks report failing MCP servers and continue with the remaining checks. If subprocess cleanup cannot be confirmed, Doctor retains the server findings and adds a cleanup diagnostic; inspect or stop the affected MCP processes before rerunning Doctor.
+    - During updates, Doctor defers MCP connections and records each enabled server with a follow-up command. Core tool schemas are still checked. Run `openclaw doctor --lint --only core/doctor/runtime-tool-schemas` after the update to inspect MCP tools.
 
   </Accordion>
   <Accordion title="Config and migrations">
@@ -36,7 +38,7 @@ full behavior and rationale of each numbered check, follow the links under
     - Retired QMD memory config and derived workspace cleanup; see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
     - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
     - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, `notify: true` webhook fallback jobs).
-    - Legacy workspace `TOOLS.md` migration into the `## Tools` section of `AGENTS.md`, with the original archived under the state directory before removal.
+    - Legacy workspace `TOOLS.md` migration into the `## Tools` section of `AGENTS.md`, archiving the original before removal. On POSIX, Doctor preserves the existing destination's owner, group, and mode bits. If importing notes would add POSIX readers or ownership cannot be preserved, it keeps both files and reports a warning. These checks do not establish filesystem ACL preservation.
     - Codex CLI runtime pin repair (`agentRuntime.id: "codex-cli"` → `"codex"`) across `agents.defaults`, `agents.entries.*`, and `models.providers.*` (including per-model entries).
     - Stale plugin config cleanup when plugins are enabled; when `plugins.enabled=false`, stale plugin references are preserved as inert containment config.
 
@@ -48,6 +50,7 @@ full behavior and rationale of each numbered check, follow the links under
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Config file permission checks (chmod 600) when running locally.
     - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
+    - Claude CLI discovery uses the Anthropic plugin's executable resolver, including native installations in `~/.local/bin`. During updates, a Doctor child can inherit the Gateway service's narrower `PATH`; Doctor reports the discovered binary's location when it is outside that path. A missing binary still produces installation guidance.
 
   </Accordion>
   <Accordion title="Gateway, services, and supervisors">
@@ -55,10 +58,10 @@ full behavior and rationale of each numbered check, follow the links under
     - Legacy service migration and extra gateway detection.
     - Matrix channel legacy state migration (in `--fix` / `--repair` mode).
     - Gateway runtime checks (service installed but not running; cached launchd label).
-    - Channel status warnings (probed from the running gateway).
+    - Channel status warnings (checked from the running gateway).
     - Channel-specific permission checks live under `openclaw channels capabilities`; for example, Discord voice channel permissions are audited with `openclaw channels capabilities --channel discord --target channel:<channel-id>`.
     - WhatsApp responsiveness reports Gateway pressure and detected local TUI clients without attributing the pressure to those clients. Inspect [Gateway diagnostics](/gateway/diagnostics) before deciding whether to close clients; Doctor does not stop them.
-    - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*`, migrates `openai-codex:*` auth profiles/order to `openai:*`, removes stale session/whole-agent runtime pins, and lets the repaired effective route determine whether Codex is compatible.
+    - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*`, migrates `openai-codex:*` auth profiles/order to `openai:*`, removes stale session runtime pins, and lets the repaired effective route determine whether Codex is compatible.
     - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
     - Embedded proxy environment cleanup for gateway services that captured shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` values during install or update.
     - Gateway runtime checks (unsupported legacy Bun services, version-manager paths).

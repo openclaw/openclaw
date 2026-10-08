@@ -10,6 +10,8 @@ import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBaseToolHandlerState } from "./agent-tool-handler-state.test-helpers.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { prepareToolResult } from "./embedded-agent-tool-results.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -20,15 +22,6 @@ const hookMocks = vi.hoisted(() => ({
 }));
 
 const beforeToolCallMocks = vi.hoisted(() => ({
-  BeforeToolCallBlockedError: class BeforeToolCallBlockedError extends Error {
-    reason: string;
-
-    constructor(reason: string) {
-      super(reason);
-      this.name = "BeforeToolCallBlockedError";
-      this.reason = reason;
-    }
-  },
   consumeAdjustedParamsForToolCall: vi.fn((_toolCallId: string): unknown => undefined),
   recordAdjustedParamsForToolCall: vi.fn(),
   recordStructuredReplayTrustForToolCall: vi.fn(),
@@ -108,7 +101,6 @@ async function loadFreshAfterToolCallModulesForTest() {
     peekPreExecutionBlockedToolCall: vi.fn(() => false),
   }));
   vi.doMock("./agent-tools.before-tool-call.js", () => ({
-    BeforeToolCallBlockedError: beforeToolCallMocks.BeforeToolCallBlockedError,
     buildBlockedToolResult: ({ reason }: { reason: string }) => ({
       content: [{ type: "text", text: reason }],
       details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
@@ -118,8 +110,6 @@ async function loadFreshAfterToolCallModulesForTest() {
     recordAdjustedParamsForToolCall: beforeToolCallMocks.recordAdjustedParamsForToolCall,
     recordStructuredReplayTrustForToolCall:
       beforeToolCallMocks.recordStructuredReplayTrustForToolCall,
-    isBeforeToolCallBlockedError: (error: unknown) =>
-      error instanceof beforeToolCallMocks.BeforeToolCallBlockedError,
     isToolWrappedWithBeforeToolCallHook: beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook,
     runBeforeToolCallHook: beforeToolCallMocks.runBeforeToolCallHook,
   }));
@@ -192,34 +182,9 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
         isError: params.isError,
         result: params.result,
       } as never,
+      prepareToolResult(params.result),
     );
   }
-
-  it("fires after_tool_call exactly once on success when both adapter and handler are active", async () => {
-    const { def, extensionContext } = resolveAdapterDefinition(createTestTool("read"));
-
-    const toolCallId = "integration-call-1";
-    const args = { path: "/tmp/test.txt" };
-    const ctx = createToolHandlerCtx();
-
-    // Step 1: Simulate tool_execution_start event (SDK emits this)
-    await emitToolExecutionStartEvent({ ctx, toolName: "read", toolCallId, args });
-
-    // Step 2: Execute tool through the adapter wrapper (SDK calls this)
-    await def.execute(toolCallId, args, undefined, undefined, extensionContext);
-
-    // Step 3: Simulate tool_execution_end event (SDK emits this after execute returns)
-    await emitToolExecutionEndEvent({
-      ctx,
-      toolName: "read",
-      toolCallId,
-      isError: false,
-      result: { content: [{ type: "text", text: "ok" }] },
-    });
-
-    // The hook must fire exactly once — not zero, not two.
-    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-  });
 
   it("fires after_tool_call exactly once on error when both adapter and handler are active", async () => {
     const { def, extensionContext } = resolveAdapterDefinition(createFailingTool("exec"));
@@ -262,6 +227,7 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
 
     await emitToolExecutionStartEvent({ ctx, toolName: "read", toolCallId, args });
     await def.execute(toolCallId, args, undefined, undefined, extensionContext);
+    expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).not.toHaveBeenCalled();
     await emitToolExecutionEndEvent({
       ctx,
       toolName: "read",
@@ -270,7 +236,7 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
       result: { content: [{ type: "text", text: "ok" }] },
     });
 
-    expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).toHaveBeenCalledWith(
+    expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).toHaveBeenCalledExactlyOnceWith(
       toolCallId,
       "integration-test",
     );

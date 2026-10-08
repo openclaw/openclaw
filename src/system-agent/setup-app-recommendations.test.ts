@@ -1,7 +1,56 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as clawHubSkills from "../infra/clawhub-skills.js";
+import * as catalog from "../plugins/official-external-plugin-catalog.js";
 import type { OfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
 import { defaultRuntime } from "../runtime.js";
-import { getSetupAppRecommendations, type SetupAppScanPhase } from "./setup-app-recommendations.js";
+import {
+  getSetupAppRecommendations as getRecommendations,
+  type SetupAppScanPhase,
+} from "./setup-app-recommendations.js";
+import * as inference from "./setup-inference.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+async function getSetupAppRecommendations(
+  params: Parameters<typeof getRecommendations>[0] & {
+    deps?: {
+      listPlugins?: typeof catalog.listOfficialExternalPluginCatalogEntries;
+      listChannels?: typeof catalog.listOfficialExternalChannelCatalogEntries;
+      listProviders?: typeof catalog.listOfficialExternalProviderCatalogEntries;
+      searchSkills?: typeof clawHubSkills.searchClawHubSkills;
+      complete?: (prompt: string) => Promise<{ ok: true; text: string }>;
+    };
+  },
+) {
+  const { deps = {}, ...request } = params;
+  if (deps.listPlugins) {
+    vi.spyOn(catalog, "listOfficialExternalPluginCatalogEntries").mockImplementation(
+      deps.listPlugins,
+    );
+  }
+  if (deps.listChannels) {
+    vi.spyOn(catalog, "listOfficialExternalChannelCatalogEntries").mockImplementation(
+      deps.listChannels,
+    );
+  }
+  if (deps.listProviders) {
+    vi.spyOn(catalog, "listOfficialExternalProviderCatalogEntries").mockImplementation(
+      deps.listProviders,
+    );
+  }
+  if (deps.searchSkills) {
+    vi.spyOn(clawHubSkills, "searchClawHubSkills").mockImplementation(deps.searchSkills);
+  }
+  if (deps.complete) {
+    const complete = deps.complete;
+    vi.spyOn(inference, "completeSetupInference").mockImplementation(async ({ prompt }) => ({
+      ...(await complete(prompt)),
+      modelRef: "mock/model",
+      latencyMs: 0,
+    }));
+  }
+  return await getRecommendations(request);
+}
 
 /** Force an "ok" result so the returned candidate `groups` can be asserted. */
 function completeMatching(
@@ -51,6 +100,7 @@ describe("setup app recommendation candidates", () => {
         listProviders: () => [],
         searchSkills: async ({ query }) => [
           {
+            registry: "https://clawhub.ai",
             score: 1,
             slug: `${query.toLocaleLowerCase("en-US")}-tools`,
             installRef: `@demo-owner/${query.toLocaleLowerCase("en-US")}-tools`,
@@ -100,6 +150,7 @@ describe("setup app recommendation candidates", () => {
         listProviders: () => [],
         searchSkills: async () => [
           {
+            registry: "https://clawhub.ai",
             score: 1,
             slug: "notes-tools",
             installRef: "@demo-owner/notes-tools",
@@ -107,6 +158,7 @@ describe("setup app recommendation candidates", () => {
             displayName: "Notes Tools",
           },
           {
+            registry: "https://clawhub.ai",
             score: 0.9,
             slug: "notes-tools",
             installRef: "@other-owner/notes-tools",
@@ -114,6 +166,7 @@ describe("setup app recommendation candidates", () => {
             displayName: "Other Notes Tools",
           },
           {
+            registry: "https://clawhub.ai",
             score: 0.8,
             slug: "legacy-notes-tools",
             installRef: "legacy-notes-tools",
@@ -148,6 +201,7 @@ describe("setup app recommendation candidates", () => {
     });
     const searchSkills = vi.fn(async () => [
       {
+        registry: "https://clawhub.ai",
         score: 2,
         slug: "notes-tools",
         installRef: "@demo-owner/notes-tools",
@@ -155,6 +209,7 @@ describe("setup app recommendation candidates", () => {
         displayName: "Duplicate notes",
       },
       {
+        registry: "https://clawhub.ai",
         score: 1,
         slug: "notes-tools",
         installRef: "@demo-owner/notes-tools",
@@ -195,6 +250,7 @@ describe("setup app recommendation candidates", () => {
       }
       return [
         {
+          registry: "https://clawhub.ai",
           score: 1,
           slug: "working",
           installRef: "@demo-owner/working",
@@ -261,6 +317,7 @@ describe("setup app recommendation matcher", () => {
     listProviders: () => [],
     searchSkills: async () => [
       {
+        registry: "https://clawhub.ai",
         score: 1,
         slug: "notes-tools",
         installRef: "@demo-owner/notes-tools",
@@ -334,6 +391,34 @@ describe("setup app recommendation matcher", () => {
       expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
       expect(result.matches[0]?.reason).toBe(`${"a".repeat(118)}…`);
       expect(result.matches[0]?.reason.length).toBeLessThanOrEqual(120);
+    }
+  });
+
+  it("uses the first complete object when prose contains later JSON", async () => {
+    const result = await getSetupAppRecommendations({
+      inventorySource,
+      runtime: defaultRuntime,
+      deps: {
+        ...candidateDeps,
+        complete: async () => ({
+          ok: true,
+          text: `${JSON.stringify({
+            matches: [
+              {
+                appLabel: "Notes",
+                candidateId: "@demo-owner/notes-tools",
+                tier: "recommended",
+                reason: "Connects directly to your notes",
+              },
+            ],
+          })}\nDiagnostics: {"tokens":12}`,
+        }),
+      },
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
     }
   });
 

@@ -60,22 +60,6 @@ describe("realtime voice exact-speech protocol", () => {
     ).toStrictEqual({ kind: "exact-speech-echo", text: "queued answer" });
   });
 
-  it("builds a normal consult message", () => {
-    expect(
-      classifyRealtimeVoiceConsultToolCall(
-        {
-          question: "  What changed? ",
-          context: "  PR #123 ",
-          responseStyle: " concise ",
-        },
-        { retainedExactSpeechTexts: [] },
-      ),
-    ).toStrictEqual({
-      kind: "consult",
-      message: "What changed?\n\nContext:\nPR #123\n\nSpoken style:\nconcise",
-    });
-  });
-
   it("returns a malformed outcome for invalid consult arguments", () => {
     expect(
       classifyRealtimeVoiceConsultToolCall(

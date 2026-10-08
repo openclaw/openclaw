@@ -1,4 +1,3 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 export const MODEL_FIELD_HELP: Record<string, string> = {
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
@@ -11,7 +10,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.catalogRefresh.enabled":
     "Fetch hosted model catalog updates in the background (default: true). Set to false to disable all remote model catalog traffic.",
   "models.catalogRefresh.url":
-    "Override the hosted model catalog URL for a self-hosted HTTPS mirror (localhost HTTP is allowed for testing). Changes apply after a Gateway restart.",
+    "Override the hosted model catalog URL for a self-hosted HTTPS mirror (localhost HTTP is allowed for testing). A running Gateway stops using the previous source's catalog and adopts the mirror's at its next catalog check, without restarting.",
   "models.providers.*.baseUrl":
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
   "models.providers.*.apiKey":
@@ -39,7 +38,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.agentRuntime.id":
     'Provider agent runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli". OpenAI on the official endpoint defaults to the Codex harness when omitted.',
   "models.providers.*.localService":
-    "Optional on-demand local model server process for this provider. OpenClaw probes healthUrl, starts the command when needed, waits for readiness, and then sends the model request.",
+    "Optional on-demand local model server process for this provider. OpenClaw checks healthUrl, starts the command when needed, waits for readiness, and then sends the model request.",
   "models.providers.*.localService.command":
     "Absolute executable path for the local model server process. Keep this path explicit so provider startup is deterministic and does not depend on shell PATH lookup.",
   "models.providers.*.localService.args":
@@ -48,9 +47,9 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.localService.env":
     "Additional environment variables for the local model server process. Values that look secret are redacted from config snapshots.",
   "models.providers.*.localService.healthUrl":
-    "Readiness URL probed before model requests. If omitted, OpenClaw uses the provider baseUrl with /models appended.",
+    "Readiness URL checked before model requests. If omitted, OpenClaw uses the provider baseUrl with /models appended.",
   "models.providers.*.localService.readyTimeoutMs":
-    "Maximum milliseconds to wait for the local model server readiness probe after starting the process.",
+    "Maximum milliseconds to wait for the local model server readiness check after starting the process.",
   "models.providers.*.localService.idleStopMs":
     "Milliseconds to keep an OpenClaw-started local model server alive after the last request finishes. Set 0 to keep it alive until OpenClaw exits.",
   "models.providers.*.request":
@@ -138,35 +137,28 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.models[].mediaInput.image.tokenMode":
     'Provider image token accounting style: "tile", "detail", or "provider".',
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
-  "channels.googlechat.botLoopProtection":
-    "Sliding-window guard for accepted Google Chat bot-to-bot loops. Defaults to the shared bot loop protection budget when allowBots lets bot-authored messages reach dispatch.",
-  "channels.mattermost.botToken":
-    "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
-  "channels.mattermost.baseUrl":
-    "Base URL for your Mattermost server (e.g., https://chat.example.com).",
-  "channels.mattermost.chatmode":
-    'Reply to channel messages on mention ("oncall"), on trigger chars (">" or "!") ("onchar"), or on every message ("onmessage").',
-  "channels.mattermost.oncharPrefixes": 'Trigger prefixes for onchar mode (default: [">", "!"]).',
-  "channels.mattermost.requireMention":
-    "Require @mention in channels before responding (default: true).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "agents.defaults.workspace":
     "Default agent workspace for bootstrap and memory files. Also used as the working directory when agents.defaults.cwd is unset. Set this explicitly when running from wrappers so path resolution stays deterministic.",
   "agents.defaults.cwd":
     "Working directory for agent reply runs, separate from workspace bootstrap and memory files. Agent-specific cwd and session-spawned cwd take precedence. Supports ~ and relative paths; a distinct cwd requires an unsandboxed run.",
+  "agents.defaults.skipBootstrap":
+    'Skips automatic creation of workspace bootstrap files, not injection of existing files. For the embedded runtime, set agents.defaults.contextInjection to "never" to disable injection unless overridden per agent.',
   "agents.defaults.skipOptionalBootstrapFiles":
     "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, IDENTITY.md (HEARTBEAT.md is accepted but a no-op).",
   "agents.defaults.contextInjection":
-    'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+    'Controls workspace bootstrap-file injection in the embedded runtime: "always" uses normal injection (default), "continuation-skip" skips eligible continuation turns after a recorded full-bootstrap turn, and "never" disables injection. Does not control CLI-backed prompt preparation.',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":
     "Max total characters across all injected workspace bootstrap files (default: 60000).",
   "agents.defaults.experimental":
     "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
+  "agents.defaults.experimental.decisionAssistance":
+    "Global opt-in for experimental assistance from the owning agent’s configured Decision model (default: false; requires explicit true). The effective decisionModel can be inherited from global defaults or selected per agent; an empty per-agent value disables assistance. Supported uses may send selected data to that provider and incur provider charges. See the Decision assistance documentation for supported uses, setup, and data handling. This setting does not gate explicit decision_evaluate calls, select providers, or grant actions.",
   "agents.defaults.experimental.localModelLean":
-    "Explicitly restrict optional tools such as browser, automations, and message. Off by default; supported local runtimes use automatic Tool Search without this restriction. Explicit tool allows and required delivery tools are preserved.",
+    "Advanced troubleshooting override that restricts optional tools such as browser, automations, and message. Off by default; supported local runtimes use automatic Tool Search without this restriction. Explicit tool allows and required delivery tools are preserved.",
   "agents.defaults.startupContext":
     'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
   "agents.defaults.startupContext.enabled":

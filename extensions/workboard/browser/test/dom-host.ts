@@ -35,6 +35,56 @@ export function installDomComponents(host: ControlUiHost): void {
     container.append(element);
     return { update: vi.fn(apply), dispose: vi.fn(() => element.remove()) };
   });
+  host.components.mountSelectPicker = vi.fn((container, initial) => {
+    const element = document.createElement("span");
+    element.dataset.testSelectPicker = "";
+    const apply = (props: typeof initial) => {
+      Object.assign(element, props);
+    };
+    apply(initial);
+    container.append(element);
+    return { update: vi.fn(apply), dispose: vi.fn(() => element.remove()) };
+  });
+  host.components.mountAgentAvatar = vi.fn((container, initial) => {
+    const element = document.createElement("span");
+    element.dataset.testAgentAvatar = "";
+    const apply = (props: typeof initial) => {
+      Object.assign(element, props);
+    };
+    apply(initial);
+    container.append(element);
+    return { update: vi.fn(apply), dispose: vi.fn(() => element.remove()) };
+  });
+  host.components.mountAppearancePicker = vi.fn((container, initial) => {
+    const element = document.createElement("span");
+    element.dataset.testAppearancePicker = "";
+    const apply = (props: typeof initial) => {
+      Object.assign(element, props);
+    };
+    apply(initial);
+    container.append(element);
+    return { update: vi.fn(apply), dispose: vi.fn(() => element.remove()) };
+  });
+  host.components.mountAppearanceGlyph = vi.fn((container, initial) => {
+    const element = document.createElement("span");
+    element.dataset.testAppearanceGlyph = "";
+    const apply = (props: typeof initial) => {
+      Object.assign(element, props);
+    };
+    apply(initial);
+    container.append(element);
+    return { update: vi.fn(apply), dispose: vi.fn(() => element.remove()) };
+  });
+  host.components.mountSessionSummary = vi.fn((container, initial) => {
+    const element = document.createElement("span");
+    element.dataset.testSessionSummary = "";
+    const apply = (props: typeof initial) => {
+      Object.assign(element, props);
+    };
+    apply(initial);
+    container.append(element);
+    return { update: vi.fn(apply), dispose: vi.fn(() => element.remove()) };
+  });
   host.components.mountDashboard = vi.fn((container, initial) => {
     const element = document.createElement("section");
     element.dataset.testDashboard = "";

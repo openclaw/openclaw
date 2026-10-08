@@ -14,7 +14,9 @@ the user-facing mental model, see [Agent runtimes](/concepts/agent-runtimes).
 
 Use this surface only for bundled or trusted native plugins. The contract is
 still experimental because the parameter types intentionally mirror the
-current embedded runner.
+current embedded runner. Core-only auxiliary-run controls are excluded: Side
+chat's direct-tool and selected-session read restrictions are internal behavior,
+not supported plugin harness inputs.
 
 ## When to use a harness
 
@@ -118,4 +120,6 @@ eight child pages below. The anchors from the single-page version still resolve 
 - [Runtime Helpers](/plugins/sdk-runtime)
 - [Provider Plugins](/plugins/sdk-provider-plugins)
 - [Codex Harness](/plugins/codex-harness)
+- [Codex harness runtime](/plugins/codex-harness-runtime)
+- [Copilot SDK harness](/plugins/copilot)
 - [Model Providers](/concepts/model-providers)

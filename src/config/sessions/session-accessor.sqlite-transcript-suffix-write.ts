@@ -4,6 +4,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import type {
+  SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
@@ -13,14 +14,12 @@ import {
   toDatabaseOptions,
   transcriptWriteScopeIsCurrent,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  readTranscriptContextVersionInTransaction,
-  type SessionTranscriptContextVersion,
-} from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   prepareSqliteTranscriptSuffixMutation,
   replaceSqliteTranscriptSuffixInTransaction,
 } from "./session-accessor.sqlite-transcript-suffix.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
@@ -37,10 +36,13 @@ export function replaceTranscriptSuffixEventsSync(
   captureVersionInTransaction?: (version: SessionTranscriptContextVersion) => void,
   eventsStartAtPersistedPrefix = false,
   retainedCustomDataIds: readonly string[] = [],
+  admit?: (stage: "transaction" | "commit") => void,
+  projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
 ): boolean {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
   const owner = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  assertSessionTranscriptHot(owner.db, resolved.sessionId);
   const plan = prepareSqliteTranscriptSuffixMutation(
     owner,
     resolved,
@@ -52,29 +54,36 @@ export function replaceTranscriptSuffixEventsSync(
     retainedCustomDataIds,
   );
   let replaced = false;
-  runOpenClawAgentWriteTransaction((database) => {
-    assertOwnedTranscriptWriteCommit(fencedScope);
-    const fresh = readSessionEntryRow(database, resolved.sessionKey);
-    if (!transcriptWriteScopeIsCurrent(fresh?.entry, resolved.sessionId, fencedScope)) {
-      return;
-    }
-    replaceSqliteTranscriptSuffixInTransaction(database, resolved, plan);
-    const committedVersion = readTranscriptContextVersionInTransaction(
-      database,
-      resolved.sessionId,
-    );
-    if (
-      captureVersionInTransaction &&
-      !stageSqliteTransactionState(database.db, {
-        stage: () => {},
-        rollback: () => {},
-        commit: () => captureVersionInTransaction(committedVersion),
-      })
-    ) {
-      throw new Error("Transcript suffix replacement requires committed transaction state");
-    }
-    replaced = true;
-  }, toDatabaseOptions(resolved));
+  runOpenClawAgentWriteTransaction(
+    (database) => {
+      admit?.("transaction");
+      assertOwnedTranscriptWriteCommit(fencedScope);
+      assertSessionTranscriptHot(database.db, resolved.sessionId);
+      const fresh = readSessionEntryRow(database, resolved.sessionKey);
+      if (!transcriptWriteScopeIsCurrent(fresh?.entry, resolved.sessionId, fencedScope)) {
+        return;
+      }
+      replaceSqliteTranscriptSuffixInTransaction(database, resolved, plan, projection);
+      const committedVersion = readTranscriptContextVersionInTransaction(
+        database,
+        resolved.sessionId,
+      );
+      if (
+        captureVersionInTransaction &&
+        !stageSqliteTransactionState(database.db, {
+          stage: () => {},
+          rollback: () => {},
+          commit: () => captureVersionInTransaction(committedVersion),
+        })
+      ) {
+        throw new Error("Transcript suffix replacement requires committed transaction state");
+      }
+      admit?.("commit");
+      replaced = true;
+    },
+    toDatabaseOptions(resolved),
+    { operationLabel: "session.transcript.replace-suffix" },
+  );
   if (fencedScope.expectedWriterRunId !== undefined && !replaced) {
     throw new SessionTranscriptWriterClaimReboundError();
   }

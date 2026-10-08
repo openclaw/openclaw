@@ -11,9 +11,9 @@ import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
-  noteClientVoiceConfirmationUtterance,
 } from "./client-voice-confirmation.js";
 import {
+  noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance,
   resetClientVoiceConfirmationStateForTest,
   snapshotClientVoiceConfirmationStateForTest,
 } from "./client-voice-confirmation.test-support.js";

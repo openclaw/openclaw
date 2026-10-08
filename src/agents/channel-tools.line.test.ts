@@ -1,19 +1,19 @@
 // Compose LINE's public plugin contract with the canonical runtime prompt.
 import { expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { loadBundledPluginPublicSurface } from "../plugin-sdk/test-helpers/public-surface-loader.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveChannelMessageToolHints } from "./channel-tools.js";
 import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 it("offers LINE buttons without prescribing an unsupported config setting", async () => {
-  const { linePlugin } = await loadBundledPluginPublicSurface<{ linePlugin: ChannelPlugin }>({
+  const { linePlugin } = await loadBundledPluginFacade<{ linePlugin: ChannelPlugin }>({
     pluginId: "line",
     artifactBasename: "api.js",
   });

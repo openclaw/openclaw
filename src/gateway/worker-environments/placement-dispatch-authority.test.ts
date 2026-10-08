@@ -10,7 +10,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import {
   addSessionMember,
   removeSessionMember,
-} from "../../config/sessions/session-sharing-store.js";
+} from "../../config/sessions/session-sharing-store.native.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -40,8 +40,11 @@ describe("worker placement cancellation and reclaim authority", () => {
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
 
-  const createTestHarness = (options: Parameters<typeof createHarness>[1] = {}) =>
-    createHarness(placementStore, { workspacePath: path.join(root, "workspace"), ...options });
+  const createTestHarness = (options: Parameters<typeof createHarness>[2] = {}) =>
+    createHarness(database, placementStore, {
+      workspacePath: path.join(root, "workspace"),
+      ...options,
+    });
 
   beforeEach(async () => {
     root = tempDirs.make("openclaw-reclaim-auth-");
@@ -74,7 +77,7 @@ describe("worker placement cancellation and reclaim authority", () => {
       expect(harness.log).not.toContain("activation");
       expect(harness.placements.current()?.state).toBe("failed");
       if (stage === "requested") {
-        expect(harness.environments.create).not.toHaveBeenCalled();
+        expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
       } else {
         expect(harness.environments.destroy).toHaveBeenCalledOnce();
       }
@@ -192,30 +195,18 @@ describe("worker placement cancellation and reclaim authority", () => {
   it("passes the Move admission signal through destination provisioning", async () => {
     const harness = createTestHarness();
     const active = await harness.service.dispatch(REQUEST);
-    database.db
-      .prepare(`INSERT INTO worker_environments (
-      environment_id, provider_id, profile_id, profile_snapshot_json, provision_operation_id,
-      lease_id, state, owner_epoch, attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
-    ) VALUES (?, 'fake', ?, '{}', 'move-source', 'lease-1', 'attached', ?, ?, 1000, 1000, 1000)`)
-      .run(
-        active.environmentId,
-        REQUEST.profileId,
-        active.activeOwnerEpoch,
-        JSON.stringify([active.sessionId]),
-      );
+
     const entered = createDeferredCore();
     const settled = createDeferredCore();
     const controller = new AbortController();
     let provisionSignal: AbortSignal | undefined;
-    vi.mocked(harness.environments.create).mockImplementation(
-      async (_profile, _id, _machine, _mode, _projectPath, signal) => {
-        provisionSignal = signal;
-        entered.resolve();
-        await settled.promise;
-        signal?.throwIfAborted();
-        throw new Error("destination unexpectedly finished");
-      },
-    );
+    vi.mocked(harness.environments.createWithRequest).mockImplementation(async ({ signal }) => {
+      provisionSignal = signal;
+      entered.resolve();
+      await settled.promise;
+      signal?.throwIfAborted();
+      throw new Error("destination unexpectedly finished");
+    });
     const moving = harness.service
       .move(
         {
@@ -351,6 +342,58 @@ describe("worker placement cancellation and reclaim authority", () => {
 
 describe("worker placement dispatch authority", () => {
   const effects = ["create", "attach", "tunnel:attached", "sync", "placement:starting"];
+  const deviceNode: NodeWorkerSupervisorNodeProof = {
+    nodeId: "device-1",
+    connId: "device-connection-1",
+    pairingIdentity: "device-identity-1",
+    pairingGeneration: "device-pairing-1",
+    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+    clientMode: GATEWAY_CLIENT_MODES.NODE,
+    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+    workerHost: {
+      enabled: true as const,
+      capacity: { total: 2, available: 2 },
+      capturedExecPolicy: true,
+      promptContext: 1,
+    },
+    commands: ["system.run"],
+  };
+
+  it("stops after requested placement acknowledgment before node readiness", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const database = openOpenClawStateDatabase({ env: state.env });
+      const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+      const harness = createHarness(database, store, { workspacePath: state.workspaceDir });
+      const readNodeReadiness = vi.fn(async () => ({ available: true, node: deviceNode }));
+      bindDeviceWorkerAvailability(harness.environments, readNodeReadiness);
+      let authorized = true;
+
+      await expect(
+        harness.service.dispatch(
+          {
+            ...REQUEST,
+            profileId: "device:device-1",
+            deviceId: deviceNode.nodeId,
+            devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+          },
+          (placement) => {
+            if (placement.state === "requested") {
+              authorized = false;
+            }
+          },
+          () => {
+            if (!authorized) {
+              throw new Error("session creator authority closed after acknowledgment");
+            }
+          },
+        ),
+      ).rejects.toThrow("session creator authority closed after acknowledgment");
+
+      expect(readNodeReadiness).not.toHaveBeenCalled();
+      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
+      expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed", turnClaim: null });
+    });
+  });
 
   it.each([
     { boundary: "readiness", completedEffects: 0 },
@@ -365,7 +408,7 @@ describe("worker placement dispatch authority", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const database = openOpenClawStateDatabase({ env: state.env });
         const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-        const harness = createHarness(store, { workspacePath: state.workspaceDir });
+        const harness = createHarness(database, store, { workspacePath: state.workspaceDir });
         const scope = { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey };
         const owner = ensureProfileForEmail("dispatch-owner@example.test");
         const member = ensureProfileForEmail("dispatch-member@example.test");
@@ -397,37 +440,26 @@ describe("worker placement dispatch authority", () => {
             ).not.toBeNull();
           }
         };
-        const node: NodeWorkerSupervisorNodeProof = {
-          nodeId: "device-1",
-          connId: "device-connection-1",
-          pairingIdentity: "device-identity-1",
-          pairingGeneration: "device-pairing-1",
-          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-          clientMode: GATEWAY_CLIENT_MODES.NODE,
-          protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-          workerHost: { enabled: true as const, capacity: { total: 2, available: 2 } },
-          commands: ["system.run"],
-        };
         let readinessObserved = false;
         bindDeviceWorkerAvailability(harness.environments, async () => {
           if (!readinessObserved) {
             readinessObserved = true;
             revokeAt("readiness");
           }
-          return { available: true, node };
+          return { available: true, node: deviceNode };
         });
         const deviceIdentity = {
           providerId: "device",
           profileId: "device:device-1",
           profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
-          nodeDeviceId: node.nodeId,
+          nodeDeviceId: deviceNode.nodeId,
           sshEndpoint: null,
           sharedHost: true,
         };
         const ready = { ...harness.ready, ...deviceIdentity };
         let current: ReturnType<typeof harness.environments.get> = ready;
         vi.mocked(harness.environments.get).mockImplementation(() => current);
-        vi.mocked(harness.environments.createFromProfileSnapshot).mockImplementation(async () => {
+        vi.mocked(harness.environments.createWithRequest).mockImplementation(async () => {
           harness.log.push("create");
           revokeAt("provisioning");
           return ready;
@@ -462,7 +494,7 @@ describe("worker placement dispatch authority", () => {
             {
               ...REQUEST,
               profileId: deviceIdentity.profileId,
-              deviceId: node.nodeId,
+              deviceId: deviceNode.nodeId,
               devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
               inheritedProfile: {
                 providerId: deviceIdentity.providerId,

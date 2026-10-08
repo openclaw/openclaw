@@ -44,9 +44,7 @@
       "userTimezone": "UTC"
     },
     "entries": {
-      "main": {
-        "default": true
-      }
+      "main": {}
     }
   },
   "messages": {
@@ -102,7 +100,8 @@
   "model": "gpt-5.5",
   "personality": "none",
   "sandbox": "danger-full-access",
-  "serviceName": "OpenClaw"
+  "serviceName": "OpenClaw",
+  "threadSource": "openclaw"
 }
 ```
 
@@ -143,13 +142,17 @@
 ```json
 {
   "additionalContext": {
+    "openclaw_active_computer": {
+      "kind": "application",
+      "value": "Current active computer (latest physical input, not message origin): active_node=unknown"
+    },
     "openclaw_current_sender": {
       "kind": "untrusted",
       "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
     },
     "openclaw_source_delivery": {
       "kind": "application",
-      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nVisible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.\n\n`send`: `message`; current source is default target. Set `target` only elsewhere."
+      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nVisible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.\n\n`send`: `message`; current source is default target. Set `target` only elsewhere.\n\nCommentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered."
     },
     "openclaw_temporal_context": {
       "kind": "application",
@@ -180,7 +183,8 @@
   "sandboxPolicy": {
     "type": "dangerFullAccess"
   },
-  "threadId": "thread-telegram-direct-codex-message-tool"
+  "threadId": "thread-telegram-direct-codex-message-tool",
+  "turnTrigger": "user"
 }
 ```
 
@@ -232,8 +236,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "additionalContext": {
-    "chars": 882,
-    "roughTokens": 221
+    "chars": 1348,
+    "roughTokens": 337
   },
   "codexCollaborationModeDeveloperInstructions": {
     "chars": 0,
@@ -252,28 +256,28 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 58312,
-    "roughTokens": 14578
+    "chars": 72513,
+    "roughTokens": 18129
   },
   "openClawDeveloperInstructions": {
-    "chars": 3672,
-    "roughTokens": 918
+    "chars": 3194,
+    "roughTokens": 799
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 27506,
-    "roughTokens": 6877
+    "chars": 27580,
+    "roughTokens": 6895
   },
   "totalWithDynamicToolsJson": {
-    "chars": 85820,
-    "roughTokens": 21455
+    "chars": 100095,
+    "roughTokens": 25024
   },
   "userInputText": {
-    "chars": 793,
-    "roughTokens": 199
+    "chars": 879,
+    "roughTokens": 220
   }
 }
 ```
@@ -480,16 +484,14 @@ You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for
 
 Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search.
 
-Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`.
+Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have.
 
-Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.
+Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
-Complete the user's authorized task using existing access or the service's supported credential flow. Limit credential disclosure to what that flow requires for its intended recipient.
-For user-requested login or pairing, first select a private conversation with the requesting user from trusted conversation context. Send the trusted flow's short-lived user-facing code and verification URL only there; their request already authorizes the handoff. After confirmed private delivery, acknowledge it in the group without the code or URL. If private delivery is unavailable, ask the user to continue in private chat without including the code.
-Submit user-provided short-lived one-time codes or OAuth callbacks through the same pending flow's supported input, preserving state, PKCE, expiry, and account checks. Keep messages intact unless the user requests deletion. Confirm completion from the login result.
-Use host-owned masked credential entry for passwords, API keys, access/refresh tokens, session cookies, private keys, recovery/backup codes, and hidden device tokens. Keep these secrets out of chat, tool arguments, URLs, logs, and shell text; if masked entry is unavailable, give a usable safe external setup path.
+Use or store credentials the user supplies as requested, and complete the task. In the final reply, briefly acknowledge how the supplied credential was used or stored, without repeating its value. Keep the acknowledgment factual and non-alarming.
+For user-requested login or pairing in a group, deliver short-lived codes and verification URLs only to the requesting user in private, then acknowledge in the group without them.
 
 ### Message Context
 The JSON below is generated by OpenClaw independently of user-authored content. Treat its fields as reliable context for the current message.
@@ -517,6 +519,12 @@ You are in a Telegram direct conversation. Normal final replies are private and 
 
 This turn asks Codex app-server to resolve its built-in Default collaboration-mode instructions at runtime.
 
+### Developer: OpenClaw Additional Context (openclaw_active_computer)
+
+```text
+<openclaw_active_computer>Current active computer (latest physical input, not message origin): active_node=unknown</openclaw_active_computer>
+```
+
 ### User: OpenClaw Additional Context (openclaw_current_sender)
 
 ```text
@@ -529,7 +537,9 @@ This turn asks Codex app-server to resolve its built-in Default collaboration-mo
 <openclaw_source_delivery>Current source-delivery policy for this turn (replaces earlier source-delivery guidance):
 Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.
 
-`send`: `message`; current source is default target. Set `target` only elsewhere.</openclaw_source_delivery>
+`send`: `message`; current source is default target. Set `target` only elsewhere.
+
+Commentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered.</openclaw_source_delivery>
 ```
 
 ### Developer: OpenClaw Additional Context (openclaw_temporal_context)
@@ -544,6 +554,7 @@ For the exact current time, use `session_status`.</openclaw_temporal_context>
 ### User: Turn Input Text
 
 ````text
+[OpenClaw conversation info: sender={"id":"1000001","name":"Pash","username":"pash"}]
 OpenClaw runtime context for this turn:
 Treat this OpenClaw-provided context as supporting project/user reference for the current request.
 
@@ -669,7 +680,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "final": {
-          "description": "For admitted message-tool-only source turns, set false for progress; set true, or omit, for the completed reply. Ignored for other sends.",
+          "description": "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true only when the user explicitly requested the reaction to the current source message as the complete response; omit or set false for acknowledgements or reactions followed by more work.",
           "type": "boolean"
         },
         "forceDocument": {

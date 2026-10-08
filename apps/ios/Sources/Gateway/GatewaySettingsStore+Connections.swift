@@ -11,35 +11,9 @@ extension GatewaySettingsStore {
 
         static let empty = GatewayRegistry()
 
-        private enum CodingKeys: String, CodingKey {
-            case version
-            case activeStableID
-            case connectedStableIDs
-            case entries
-        }
-
-        init(
-            version: Int = 1,
-            activeStableID: String? = nil,
-            connectedStableIDs: [String] = [],
-            entries: [GatewayRegistryEntry] = [])
-        {
-            self.version = version
-            self.activeStableID = activeStableID
-            self.connectedStableIDs = connectedStableIDs
-            self.entries = entries
-        }
-
-        init(from decoder: Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            let version = try values.decode(Int.self, forKey: .version)
-            let activeStableID = try values.decodeIfPresent(String.self, forKey: .activeStableID)
-            self.version = version
-            self.activeStableID = activeStableID
-            self.connectedStableIDs = try values.decodeIfPresent(
-                [String].self,
-                forKey: .connectedStableIDs) ?? (version == 1 ? activeStableID.map { [$0] } ?? [] : [])
-            self.entries = try values.decodeIfPresent([GatewayRegistryEntry].self, forKey: .entries) ?? []
+        var activeEntry: GatewayRegistryEntry? {
+            guard let activeStableID else { return nil }
+            return self.entries.first { GatewayStableIdentifier.matches($0.stableID, activeStableID) }
         }
     }
 
@@ -74,13 +48,20 @@ extension GatewaySettingsStore {
         }
         return self.saveGatewayRegistry(registry)
     }
+}
 
-    static func connectedGatewayEntries() -> [GatewayRegistryEntry] {
-        let registry = self.loadGatewayRegistry()
-        return registry.connectedStableIDs.compactMap { connectedID in
-            registry.entries.first {
-                GatewayStableIdentifier.matches($0.stableID, connectedID)
-            }
-        }
+extension GatewaySettingsStore.GatewayRegistry {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try values.decode(Int.self, forKey: .version)
+        let activeStableID = try values.decodeIfPresent(String.self, forKey: .activeStableID)
+        self.version = version
+        self.activeStableID = activeStableID
+        self.connectedStableIDs = try values.decodeIfPresent(
+            [String].self,
+            forKey: .connectedStableIDs) ?? (version == 1 ? activeStableID.map { [$0] } ?? [] : [])
+        self.entries = try values.decodeIfPresent(
+            [GatewaySettingsStore.GatewayRegistryEntry].self,
+            forKey: .entries) ?? []
     }
 }

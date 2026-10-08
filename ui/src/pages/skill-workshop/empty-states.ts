@@ -1,7 +1,10 @@
 import { html } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { renderSelfLearningPitch, type SkillWorkshopSelfLearning } from "./self-learning.ts";
+
+registerSkillWorkshopEnglish();
 
 export function renderSkillWorkshopEmptyDetail({ query }: { query: string }) {
   const searching = query.trim().length > 0;

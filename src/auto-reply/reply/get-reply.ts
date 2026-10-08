@@ -1,5 +1,3 @@
-// Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
-import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isImplicitAcpWorkspaceCandidate } from "../../agents/agent-scope-config.js";
 import {
@@ -8,28 +6,30 @@ import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
 import {
   WorkspaceAliasRepointedError,
   WorkspaceVanishedError,
 } from "../../agents/workspace-state-identity.js";
-import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
-import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -42,16 +42,16 @@ import {
   isModelSelectionLocked,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
-import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
-import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
+} from "../../utils/delivery-context.read.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
-import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../heartbeat.js";
 import {
   markReplyPayloadForSourceSuppressionDelivery,
   type ReplyPayload,
@@ -65,12 +65,19 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
   initFastReplySessionState,
   resolveGetReplyConfig,
-  shouldUseReplyFastTestBootstrap,
+  shouldUseReplyFastTestRuntime,
 } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
+import {
+  applyLinkUnderstandingIfNeeded,
+  applyMediaUnderstandingIfNeeded,
+  hasExplicitAudioUnderstandingConfig,
+  hasLinkCandidate,
+  resolveReplyAgentScope,
+} from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import type { InternalGetReplyOptions as BaseInternalGetReplyOptions } from "./get-reply.types.js";
+import { prepareInternalGetReplyOptions, withExtractedFileImages } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
   hasInboundAudio,
@@ -81,18 +88,23 @@ import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
+  classifyHeartbeatPendingFinalDelivery,
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
 } from "./pending-final-delivery-state.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+import { createReplyProbeModelLevelResolver } from "./reply-model-levels.js";
 import {
   recordReplyPreRunRejection,
   resolveReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { prepareReplyWorkspace } from "./reply-workspace.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
@@ -100,83 +112,15 @@ import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js
 import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
-type ResetCommandAction = "new" | "reset";
-
-type RuntimeInternalGetReplyOptions = BaseInternalGetReplyOptions & {
-  extractedFileImages?: ExtractedFileImage[];
-};
-
-function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
-  const stripped = stripHeartbeatToken(text, {
-    mode: "heartbeat",
-    maxAckChars: ackMaxChars,
-  });
-  return {
-    shouldClear: stripped.shouldSkip,
-    replayText: stripped.didStrip && stripped.text ? stripped.text : text,
-  };
-}
-
-const sessionResetModelRuntimeLoader = createLazyImportLoader(
-  () => import("./session-reset-model.runtime.js"),
-);
 const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
-  () => import("./stage-sandbox-media.runtime.js"),
-);
-const mediaUnderstandingApplyRuntimeLoader = createLazyImportLoader(
-  () => import("../../media-understanding/apply.runtime.js"),
-);
-const linkUnderstandingApplyRuntimeLoader = createLazyImportLoader(
-  () => import("../../link-understanding/apply.runtime.js"),
+  () => import("./stage-sandbox-media.js"),
 );
 const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-timing");
-const commandsCoreRuntimeLoader = createLazyImportLoader(
-  () => import("./commands-core.runtime.js"),
-);
-
-function hasLinkCandidate(ctx: MsgContext): boolean {
-  const message = ctx.agentText;
-  if (!message) {
-    return false;
-  }
-  return /\bhttps?:\/\/\S+/i.test(message);
-}
-
-async function applyMediaUnderstandingIfNeeded(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  activeModel: { provider: string; model: string };
-  processingMode?: "audio-only" | "files-only" | "audio-and-files";
-  selfServeLocalPaths?: boolean;
-}): Promise<ApplyMediaUnderstandingResult | undefined> {
-  if (!hasInboundMediaForUnderstanding(params.ctx)) {
-    return undefined;
-  }
-  try {
-    const { applyMediaUnderstanding } = await mediaUnderstandingApplyRuntimeLoader.load();
-    return await applyMediaUnderstanding(params);
-  } catch (err) {
-    mediaUnderstandingApplyRuntimeLoader.clear();
-    logVerbose(
-      `media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
-    );
-    return undefined;
-  }
-}
-
-function hasExplicitAudioUnderstandingConfig(cfg: OpenClawConfig): boolean {
-  const audio = cfg.tools?.media?.audio;
-  return audio !== undefined && audio.enabled !== false;
-}
 
 function canSelfServeLocalPaths(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentId: string;
-  agentDir?: string;
   sessionKey?: string;
   workspaceDir: string;
   provider: string;
@@ -213,20 +157,17 @@ function canSelfServeLocalPaths(params: {
     sessionKey: policySessionKey,
     runSessionKey: policySessionKey === params.sessionKey ? undefined : params.sessionKey,
     agentId: params.agentId,
-    agentDir: params.agentDir,
     agentAccountId: params.ctx.AccountId,
     messageProvider: resolveOriginMessageProvider({
       originatingChannel: params.ctx.OriginatingChannel,
       provider: params.ctx.Provider ?? params.ctx.Surface,
     }),
-    chatType: params.ctx.ChatType,
     conversationToolPolicy: params.ctx.ConversationToolPolicy,
     groupId: resolveGroupSessionKey(params.ctx)?.id,
     groupChannel:
       normalizeOptionalString(params.ctx.GroupChannel) ??
       normalizeOptionalString(params.ctx.GroupSubject),
     groupSpace: normalizeOptionalString(params.ctx.GroupSpace),
-    memberRoleIds: params.ctx.MemberRoleIds,
     spawnedBy: params.spawnedBy,
     senderId: normalizeOptionalString(params.ctx.SenderId),
     senderName: normalizeOptionalString(params.ctx.SenderName),
@@ -249,57 +190,37 @@ function canSelfServeLocalPaths(params: {
   );
 }
 
-function collectStagedAttachmentPaths(ctx: MsgContext): ReadonlyMap<number, string> {
-  return new Map(
-    normalizeMediaFacts(ctx.media).flatMap((fact, index) => {
-      const mediaPath = normalizeOptionalString(fact.path);
-      return mediaPath ? [[index, mediaPath] as const] : [];
-    }),
-  );
-}
-
-function withExtractedFileImages(
-  opts: RuntimeInternalGetReplyOptions | undefined,
-  extractedFileImages: ExtractedFileImage[] | undefined,
-): RuntimeInternalGetReplyOptions | undefined {
-  if (!extractedFileImages || extractedFileImages.length === 0) {
-    return opts;
-  }
-  return {
-    ...opts,
-    extractedFileImages: [...(opts?.extractedFileImages ?? []), ...extractedFileImages],
-  };
-}
-
-async function applyLinkUnderstandingIfNeeded(params: {
+/**
+ * A sender who may not run commands is owed no reply when command handling ends without one;
+ * the refusal is the answer. Authorized commands keep their requirement: a failure throws or
+ * returns an error, and an empty result (such as unsent streamed blocks) still gets the notice.
+ */
+function finishCommandTurn(params: {
+  opts: GetReplyOptions | undefined;
   ctx: MsgContext;
   cfg: OpenClawConfig;
-  signal?: AbortSignal;
-}): Promise<boolean> {
-  if (!hasLinkCandidate(params.ctx)) {
-    return false;
+  reply: ReplyPayload | ReplyPayload[] | undefined;
+}): ReplyPayload | ReplyPayload[] | undefined {
+  const { opts, ctx, cfg, reply } = params;
+  const runState = resolveReplyOperationRunState(opts);
+  if (
+    runState &&
+    runState.replyCompletion?.outcome !== "blocked" &&
+    (Array.isArray(reply) ? reply.length === 0 : !reply) &&
+    !resolveCommandAuthorization({ ctx, cfg, commandAuthorized: ctx.CommandAuthorized === true })
+      .isAuthorizedSender
+  ) {
+    runState.replyCompletion = resolveReplyCompletion("optional", "empty");
   }
-  try {
-    const { applyLinkUnderstanding } = await linkUnderstandingApplyRuntimeLoader.load();
-    await applyLinkUnderstanding(params);
-    return true;
-  } catch (err) {
-    if (isAbortError(err)) {
-      throw err;
-    }
-    linkUnderstandingApplyRuntimeLoader.clear();
-    logVerbose(
-      `link understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
-    );
-    return false;
-  }
+  return reply;
 }
 
 export async function getReplyFromConfig(
   ctx: MsgContext,
-  opts?: GetReplyOptions,
+  options?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const opts = prepareInternalGetReplyOptions(options, ctx);
   const isFastTestEnv = isFastTestRuntimeEnv();
   const preparedReplyDispatchRuntime = configOverride
     ? undefined
@@ -319,9 +240,9 @@ export async function getReplyFromConfig(
     enabled: profilerEnabled,
   });
   const useFastTestBootstrap = resolverTiming.measureSync("reply.resolve_fast_test_bootstrap", () =>
-    shouldUseReplyFastTestBootstrap({
+    shouldUseReplyFastTestRuntime({
       isFastTestEnv,
-      configOverride,
+      cfg: configOverride,
     }),
   );
   const inboundMediaWasAlreadyStaged = hasStagedMediaFacts(ctx.media);
@@ -338,18 +259,15 @@ export async function getReplyFromConfig(
   if (explicitSteerTargetSessionKey) {
     finalized.CommandTargetSessionKey = explicitSteerTargetSessionKey;
   }
-  const initialAgentScope = resolverTiming.measureSync("reply.resolve_agent_scope", () => {
-    const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
-    const resolvedAgentSessionKey = targetSessionKey || finalized.SessionKey;
-    return {
-      agentSessionKey: resolvedAgentSessionKey,
-      agentId: resolveSessionAgentId({
-        sessionKey: resolvedAgentSessionKey,
-        config: cfg,
-        fallbackAgentId: finalized.AgentId,
-      }),
-    };
-  });
+  const initialAgentScope = await resolverTiming.measure("reply.resolve_agent_scope", () =>
+    resolveReplyAgentScope({ cfg, ctx: finalized }),
+  );
+  assertReplyPreprocessingActive(opts?.abortSignal);
+  opts?.operatorAuthority?.assertCurrent();
+  const refusal = readAgentDatabaseAdmissionRefusal(initialAgentScope.agentId);
+  if (refusal) {
+    return { text: `${refusal.reason}\n${refusal.repairHint}`, isError: true };
+  }
   const agentSessionKey = initialAgentScope.agentSessionKey;
   const agentId = initialAgentScope.agentId;
   if (
@@ -400,9 +318,6 @@ export async function getReplyFromConfig(
   );
   const optsWithSkillFilter =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
-  const internalOptsWithSkillFilter = optsWithSkillFilter as
-    | RuntimeInternalGetReplyOptions
-    | undefined;
   let extractedFileImages: ExtractedFileImage[] | undefined;
   let enableLocalPathSelfServe: ApplyMediaUnderstandingResult["enableLocalPathSelfServe"];
   const agentCfg = cfg.agents?.defaults;
@@ -422,6 +337,7 @@ export async function getReplyFromConfig(
   let provider = defaultProvider;
   let model = defaultModel;
   let hasResolvedHeartbeatModelOverride = false;
+  let heartbeatAuthProfile: { provider: string; model: string; profileId: string } | undefined;
   if (opts?.isHeartbeat) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
     // fall back to the global defaults heartbeat model for backward compatibility.
@@ -442,18 +358,18 @@ export async function getReplyFromConfig(
       provider = heartbeatRef.ref.provider;
       model = heartbeatRef.ref.model;
       hasResolvedHeartbeatModelOverride = true;
+      const profileId = splitTrailingAuthProfile(heartbeatRaw).profile;
+      heartbeatAuthProfile = profileId ? { ...heartbeatRef.ref, profileId } : undefined;
     }
   }
 
   const { workspaceDirRaw, workspaceDirForNativeCommand, agentDir, timeoutMs } =
     resolverTiming.measureSync("reply.resolve_workspace_agent_dir", () => {
       const workspaceDirRawLocal =
-        preparedWorkspaceDir ??
-        resolveAgentWorkspaceDir(cfg, agentId) ??
-        DEFAULT_AGENT_WORKSPACE_DIR;
+        resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
       return {
         workspaceDirRaw: workspaceDirRawLocal,
-        workspaceDirForNativeCommand: workspaceDirRawLocal,
+        workspaceDirForNativeCommand: preparedWorkspaceDir ?? workspaceDirRawLocal,
         agentDir: preparedAgentDir ?? resolveAgentDir(cfg, agentId),
         timeoutMs: resolveAgentTimeoutMs({
           cfg,
@@ -477,6 +393,18 @@ export async function getReplyFromConfig(
     opts?.onTypingController?.(controller);
     return controller;
   });
+  const rejectSessionPreparation = (error: Error): ReplyPayload => {
+    typing.cleanup();
+    if (error instanceof ModelSelectionLockedError || error instanceof SessionResetCleanupError) {
+      recordReplyPreRunRejection(
+        resolveReplyOperationRunState(opts),
+        error instanceof SessionResetCleanupError
+          ? "session-directive-rejected"
+          : "model-selection-locked",
+      );
+    }
+    return { text: error.message };
+  };
 
   const nativeSlashCommandFastReply = await traceGetReplyPhase(
     "reply.native_slash_command_fast_path",
@@ -502,7 +430,12 @@ export async function getReplyFromConfig(
   );
   if (nativeSlashCommandFastReply.handled) {
     logResolverTiming("completed", "native_slash_command_fast_path");
-    return nativeSlashCommandFastReply.reply;
+    return finishCommandTurn({
+      opts,
+      ctx: finalized,
+      cfg,
+      reply: nativeSlashCommandFastReply.reply,
+    });
   }
   const optsWithCommandQueueOverride = nativeSlashCommandFastReply.queueModeOverride
     ? { ...optsWithSkillFilter, queueModeOverride: nativeSlashCommandFastReply.queueModeOverride }
@@ -512,7 +445,8 @@ export async function getReplyFromConfig(
     ? await traceGetReplyPhase("reply.resolve_acp_workspace_provisioning", async () => {
         // Implicit ACP agents need the live session's ACP meta (per-session cwd
         // from /acp spawn --cwd or /acp cwd) before workspace scaffolding runs.
-        const state = resolveReplySessionPreprocessingState({ ctx: finalized, cfg });
+        const state = await resolveReplySessionPreprocessingState({ ctx: finalized, cfg });
+        assertReplyPreprocessingActive(optsWithSkillFilter?.abortSignal);
         return {
           cfg,
           agentId,
@@ -522,19 +456,18 @@ export async function getReplyFromConfig(
       })
     : { cfg, agentId, ...(agentSessionKey ? { sessionKey: agentSessionKey } : {}) };
 
-  let workspace: Awaited<ReturnType<typeof ensureAgentWorkspace>>;
+  let workspace: Awaited<ReturnType<typeof prepareReplyWorkspace>>;
   try {
-    workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
-      useFastTestBootstrap
-        ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
-        : await ensureAgentWorkspace({
-            dir: workspaceDirRaw,
-            ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-            skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-            provisioning: await (
-              await import("../../agents/acp-workspace-provisioning.js")
-            ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
-          }),
+    workspace = await traceGetReplyPhase("reply.ensure_workspace", () =>
+      prepareReplyWorkspace({
+        dir: workspaceDirRaw,
+        ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+        skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+        useFastTestBootstrap,
+        provisioningInput: acpWorkspaceProvisioningInput,
+        abortSignal: optsWithSkillFilter?.abortSignal,
+        operatorAuthority: optsWithSkillFilter?.operatorAuthority,
+      }),
     );
   } catch (error) {
     if (
@@ -553,22 +486,50 @@ export async function getReplyFromConfig(
         : "⚠️ This agent's workspace is missing on the gateway host. Ask the operator to restore the workspace from backup and run `openclaw doctor`.";
     return markReplyPayloadForSourceSuppressionDelivery({ text });
   }
-  const workspaceDir = workspace.dir;
+  const workspaceDir = preparedWorkspaceDir ?? workspace.dir;
+  const workspaceContext = { cfg, agentId, agentDir, workspaceDir };
+  const skillSnapshotScope = { workspaceDir, config: cfg, agentId };
 
-  if (
+  const remoteMediaNeedsStaging =
     !isFastTestEnv &&
     !inboundMediaWasAlreadyStaged &&
     normalizeOptionalString(finalized.MediaRemoteHost) &&
-    hasInboundMedia(finalized)
-  ) {
+    hasInboundMedia(finalized);
+  const remoteMediaSessionState = remoteMediaNeedsStaging
+    ? await resolveReplySessionPreprocessingState({ ctx: finalized, cfg })
+    : undefined;
+  if (remoteMediaSessionState) {
+    const entry = remoteMediaSessionState.sessionEntry;
+    const selectedSkills =
+      entry?.skillLibrarySelections ??
+      entry?.skillsSnapshot?.librarySelections ??
+      finalized.SessionCreation?.skillLibrarySelections;
+    // This write precedes session initialization and media understanding. Give
+    // it the same private-skill isolation identity as the admitted run.
+    const stagingSkillsSnapshot = selectedSkills?.length
+      ? (
+          await (
+            await import("../../skills/runtime/session-snapshot.js")
+          ).resolveReusableWorkspaceSkillSnapshot({
+            ...skillSnapshotScope,
+            executionWorkspaceDir: entry?.worktree?.canonicalWorkspaceDir ?? workspaceDir,
+            existingSnapshot: entry?.skillsSnapshot,
+            librarySelections: selectedSkills,
+            skillFilter: mergedSkillFilter,
+            skillOverrides: entry?.toolOverrides?.skills,
+          })
+        ).snapshot
+      : undefined;
+    assertReplyPreprocessingActive(optsWithSkillFilter?.abortSignal);
     await traceGetReplyPhase("reply.stage_remote_media_pre_understanding", () =>
       stageRemoteInboundMediaIfNeeded({
         ctx: finalized,
         cfg,
         agentId,
-        sessionKey: agentSessionKey,
+        sessionKey: remoteMediaSessionState.sessionKey,
         workspaceDir,
-        abortSignal: internalOptsWithSkillFilter?.abortSignal,
+        skillsSnapshot: stagingSkillsSnapshot,
+        abortSignal: optsWithSkillFilter?.abortSignal,
       }),
     );
   }
@@ -577,10 +538,12 @@ export async function getReplyFromConfig(
   const linkUnderstandingRequested = !isFastTestEnv && hasLinkCandidate(finalized);
   const preprocessingState =
     mediaUnderstandingRequested || linkUnderstandingRequested
-      ? await traceGetReplyPhase("reply.resolve_session_preprocessing_state", () =>
+      ? (remoteMediaSessionState ??
+        (await traceGetReplyPhase("reply.resolve_session_preprocessing_state", () =>
           resolveReplySessionPreprocessingState({ ctx: finalized, cfg }),
-        )
+        )))
       : undefined;
+  assertReplyPreprocessingActive(optsWithSkillFilter?.abortSignal);
   const utilityModelSelectionLocked = isModelSelectionLocked(preprocessingState?.sessionEntry);
 
   if (mediaUnderstandingRequested) {
@@ -593,10 +556,7 @@ export async function getReplyFromConfig(
     const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
       applyMediaUnderstandingIfNeeded({
         ctx: finalized,
-        cfg,
-        agentId,
-        agentDir,
-        workspaceDir,
+        ...workspaceContext,
         activeModel: { provider, model },
         // Cache and classify now; the final provider and owner policy are
         // resolved later, immediately before the embedded turn starts.
@@ -620,16 +580,12 @@ export async function getReplyFromConfig(
       applyLinkUnderstandingIfNeeded({
         ctx: finalized,
         cfg,
-        signal: internalOptsWithSkillFilter?.abortSignal,
+        signal: optsWithSkillFilter?.abortSignal,
       }),
     );
   }
   // Cleanup may resolve after cancellation; hooks must stay inside the reply lifetime.
-  if (internalOptsWithSkillFilter?.abortSignal?.aborted) {
-    throw createAbortError("Reply canceled during preprocessing", {
-      cause: internalOptsWithSkillFilter.abortSignal.reason,
-    });
-  }
+  assertReplyPreprocessingActive(optsWithSkillFilter?.abortSignal);
   emitPreAgentMessageHooks({
     ctx: finalized,
     cfg,
@@ -640,7 +596,7 @@ export async function getReplyFromConfig(
   let sessionState: Awaited<ReturnType<typeof initSessionState>>;
   try {
     sessionState = useFastTestBootstrap
-      ? initFastReplySessionState({
+      ? await initFastReplySessionState({
           ctx: finalized,
           cfg,
           agentId,
@@ -649,50 +605,35 @@ export async function getReplyFromConfig(
         })
       : await traceGetReplyPhase("reply.init_session_state", () =>
           initSessionState({
+            providerReviewAcknowledgment: optsWithSkillFilter?.providerReviewAcknowledgment,
             ctx: finalized,
             cfg,
             commandAuthorized,
-            ...(internalOptsWithSkillFilter?.expectedExistingSessionId
-              ? { expectedExistingSessionId: internalOptsWithSkillFilter.expectedExistingSessionId }
+            ...(optsWithSkillFilter?.expectedExistingSessionId
+              ? { expectedExistingSessionId: optsWithSkillFilter.expectedExistingSessionId }
               : {}),
-            pinExpectedExistingSession:
-              internalOptsWithSkillFilter?.pinExpectedExistingSession === true,
-            newlyCreatedSessionId: internalOptsWithSkillFilter?.newlyCreatedSessionId,
-            requestedSessionId: internalOptsWithSkillFilter?.requestedSessionId,
-            resumeRequestedSession: internalOptsWithSkillFilter?.resumeRequestedSession,
-            signal: internalOptsWithSkillFilter?.abortSignal,
+            pinExpectedExistingSession: optsWithSkillFilter?.pinExpectedExistingSession === true,
+            newlyCreatedSessionId: optsWithSkillFilter?.newlyCreatedSessionId,
+            requestedSessionId: optsWithSkillFilter?.requestedSessionId,
+            resumeRequestedSession: optsWithSkillFilter?.resumeRequestedSession,
+            signal: optsWithSkillFilter?.abortSignal,
           }),
         );
   } catch (error) {
     if (error instanceof ModelSelectionLockedError || error instanceof SessionResetCleanupError) {
-      typing.cleanup();
-      recordReplyPreRunRejection(
-        resolveReplyOperationRunState(opts),
-        error instanceof SessionResetCleanupError
-          ? "session-directive-rejected"
-          : "model-selection-locked",
-      );
-      return { text: error.message };
+      return rejectSessionPreparation(error);
     }
     throw error;
   }
   if (!useFastTestBootstrap) {
     try {
-      const baselineEntry = await traceGetReplyPhase("reply.capture_session_diff_baseline", () =>
-        ensureSessionDiffBaseline({
-          cwd:
-            normalizeOptionalString(sessionState.sessionEntry.spawnedCwd) ??
-            normalizeOptionalString(sessionState.sessionEntry.spawnedWorkspaceDir) ??
-            workspaceDir,
-          entry: sessionState.sessionEntry,
-          isNewSession: sessionState.isNewSession,
-          sessionKey: sessionState.sessionKey,
-          storePath: sessionState.storePath,
+      await traceGetReplyPhase("reply.capture_session_diff_baseline", () =>
+        prepareReplySessionDiffBaseline({
+          agentId,
+          workspaceDir,
+          sessionState,
         }),
       );
-      sessionState.sessionEntry = baselineEntry;
-      sessionState.sessionEntryHandle.replaceCurrent(baselineEntry);
-      sessionState.sessionStore[sessionState.sessionKey] = baselineEntry;
     } catch (error) {
       if (isSessionWorkStartInvalidatedError(error)) {
         throw error;
@@ -723,6 +664,8 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+  const replySession = { sessionEntry, sessionStore, sessionKey, storePath };
+  const replyContext = { ...workspaceContext, ...replySession };
   const sessionModelSelectionLocked = isModelSelectionLocked(sessionEntry);
   if (sessionModelSelectionLocked && hasResolvedHeartbeatModelOverride) {
     // Heartbeat routing is turn-local. A native harness lock owns the durable
@@ -730,13 +673,11 @@ export async function getReplyFromConfig(
     provider = defaultProvider;
     model = defaultModel;
     hasResolvedHeartbeatModelOverride = false;
+    heartbeatAuthProfile = undefined;
   }
   // Utility-model narration is turn-local decoration. Initialize the durable
   // session first, then keep it completely outside model-locked native runs.
-  const admittedSessionSettings =
-    // SAFETY: Gateway dispatch owns this internal extension and forwards the same options object here.
-    (optsWithCommandQueueOverride as RuntimeInternalGetReplyOptions | undefined)
-      ?.admittedSessionSettings;
+  const admittedSessionSettings = optsWithCommandQueueOverride?.admittedSessionSettings;
   const turnToolOverrides = admittedSessionSettings
     ? admittedSessionSettings.toolOverrides
     : sessionEntry.toolOverrides;
@@ -750,79 +691,59 @@ export async function getReplyFromConfig(
     opts: optsWithSessionSkillOverrides,
     disabled: sessionModelSelectionLocked,
   });
-  const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
   let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
-  internalResolvedOpts?.onSessionPrepared?.({
+  resolvedOpts?.onSessionPrepared?.({
     sessionKey,
     sessionId,
     lifecycleRevision: sessionEntry.lifecycleRevision,
     storePath,
   });
 
-  if (sessionEntry?.pendingFinalDelivery?.kind === "replayable") {
+  // Heartbeats may safely clear ack-only pending state, but must not replay
+  // user-facing pending finals through a different delivery target.
+  if (opts?.isHeartbeat && sessionEntry.pendingFinalDelivery?.kind === "replayable") {
     const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDelivery.text);
-
-    // Heartbeats may safely clear ack-only pending state, but must not replay
-    // user-facing pending finals through a different delivery target.
-    if (opts?.isHeartbeat) {
-      const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
-        text,
-        DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-      );
-      if (heartbeatPending.shouldClear) {
-        Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
-        sessionEntryHandle.replaceCurrent(sessionEntry);
-        if (sessionKey && sessionStore) {
-          sessionStore[sessionKey] = sessionEntry;
-        }
-        if (sessionKey && storePath) {
-          const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
-          await updateSessionEntry(
-            { storePath, sessionKey },
-            () => ({ ...PENDING_FINAL_DELIVERY_CLEAR_PATCH }),
-            {
-              skipMaintenance: true,
-              takeCacheOwnership: true,
-            },
-          );
-        }
+    const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
+      text,
+      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+    );
+    if (heartbeatPending.shouldClear) {
+      Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
+      sessionEntryHandle.replaceCurrent(sessionEntry);
+      if (sessionKey && storePath) {
+        const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({ ...PENDING_FINAL_DELIVERY_CLEAR_PATCH }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
+          },
+        );
       }
     }
   }
 
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
-    const { applyResetModelOverride } = await sessionResetModelRuntimeLoader.load();
+    const { applyResetModelOverride } = await import("./session-reset-model.js");
     try {
       await applyResetModelOverride({
-        cfg,
-        agentId,
-        agentDir,
-        workspaceDir,
+        ...replyContext,
         resetTriggered,
         bodyStripped,
         sessionCtx,
         ctx: finalized,
-        sessionEntry,
         sessionEntryHandle,
-        sessionStore,
-        sessionKey,
-        storePath,
         defaultProvider,
         defaultModel,
         aliasIndex,
       });
     } catch (error) {
-      if (error instanceof ModelSelectionLockedError) {
-        typing.cleanup();
-        recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "model-selection-locked");
-        return { text: error.message };
+      if (error instanceof ModelSelectionLockedError || isSessionWorkStartInvalidatedError(error)) {
+        return rejectSessionPreparation(error);
       }
-      if (!isSessionWorkStartInvalidatedError(error)) {
-        throw error;
-      }
-      typing.cleanup();
-      return { text: error.message };
+      throw error;
     }
   }
 
@@ -929,7 +850,7 @@ export async function getReplyFromConfig(
   }
 
   const conversation =
-    internalResolvedOpts?.replyConversation ??
+    resolvedOpts?.replyConversation ??
     prepareReplyConversation({
       ctx: sessionCtx,
       sessionEntry: sessionStore[sessionKey] ?? sessionEntry,
@@ -940,16 +861,9 @@ export async function getReplyFromConfig(
   const directiveResult = await traceGetReplyPhase("reply.resolve_directives", () =>
     resolveReplyDirectives({
       ctx: finalized,
-      cfg,
-      agentId,
-      agentDir,
-      workspaceDir,
+      ...replyContext,
       agentCfg,
       sessionCtx,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
       sessionScope,
       conversation,
       isGroup,
@@ -972,10 +886,9 @@ export async function getReplyFromConfig(
   );
   if (directiveResult.kind === "reply") {
     logResolverTiming("completed", "directive_reply");
-    return directiveResult.reply;
+    return finishCommandTurn({ opts, ctx: finalized, cfg, reply: directiveResult.reply });
   }
   const {
-    commandSource,
     command,
     allowTextCommands,
     skillCommands,
@@ -983,28 +896,20 @@ export async function getReplyFromConfig(
     elevatedAllowed,
     elevatedFailures,
     defaultActivation,
-    resolvedFastMode,
-    resolvedFastModeAutoOnSeconds,
-    resolvedFastModeOverride,
-    resolvedFastModeAutoOnSecondsOverride,
     resolvedVerboseLevel,
     resolvedElevatedLevel,
-    execOverrides,
-    blockStreamingEnabled,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
     provider: resolvedProvider,
     model: resolvedModel,
     requestedRouteResolution,
     modelState,
+    resolveModelLevels,
     contextTokens,
     inlineStatusRequested,
     directiveAck,
-    perMessageQueueMode,
-    perMessageQueueOptions,
   } = directiveResult.result;
-  let { directives, cleanedBody, resolvedThinkLevel, resolvedReasoningLevel } =
-    directiveResult.result;
+  let { directives, cleanedBody } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
 
@@ -1016,8 +921,8 @@ export async function getReplyFromConfig(
     if (!resetMatch) {
       return;
     }
-    const { emitResetCommandHooks } = await commandsCoreRuntimeLoader.load();
-    const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
+    const { emitResetCommandHooks } = await import("./commands-reset-hooks.js");
+    const action = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
       agentId,
@@ -1040,29 +945,27 @@ export async function getReplyFromConfig(
     directives.hasStatusDirective ||
     command.commandBodyNormalized.trim() === "/status";
   const statusThinkingCatalog = shouldPrepareStatusThinkingCatalog
-    ? await traceGetReplyPhase("reply.prepare_status_thinking_catalog", () =>
-        modelState.resolveThinkingCatalog(),
-      )
+    ? await traceGetReplyPhase("reply.prepare_status_thinking_catalog", () => {
+        assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
+        return racePromiseWithAbortSignal(
+          modelState.resolveThinkingCatalog(),
+          resolvedOpts?.abortSignal,
+        );
+      })
     : undefined;
+  assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
 
   const inlineActionResult = await traceGetReplyPhase("reply.handle_inline_actions", () =>
     handleInlineActions({
       ctx,
       sessionCtx,
-      cfg,
-      agentId,
-      agentDir,
-      sessionEntry,
+      ...replyContext,
       ...(initialSessionEntry ? { initialSessionEntry } : {}),
       allowCreateSessionEntry: useFastTestBootstrap && initialSessionEntry === undefined,
       previousSessionEntry,
       previousSessionMemory,
       previousSessionResetMessages,
-      sessionStore,
-      sessionKey,
-      storePath,
       sessionScope,
-      workspaceDir,
       isGroup,
       opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
       typing,
@@ -1078,9 +981,8 @@ export async function getReplyFromConfig(
       elevatedFailures,
       defaultActivation: () => defaultActivation,
       thinkingCatalog: statusThinkingCatalog,
-      resolvedThinkLevel,
+      resolveModelLevels,
       resolvedVerboseLevel,
-      resolvedReasoningLevel,
       resolvedElevatedLevel,
       blockReplyChunking,
       resolvedBlockStreamingBreak,
@@ -1093,38 +995,39 @@ export async function getReplyFromConfig(
       skillFilter: mergedSkillFilter,
     }),
   );
-  if (inlineActionResult.kind === "reply") {
-    await maybeEmitMissingResetHooks();
-    logResolverTiming("completed", "inline_action_reply");
-    return inlineActionResult.reply;
-  }
   await maybeEmitMissingResetHooks();
+  if (inlineActionResult.kind === "reply") {
+    logResolverTiming("completed", "inline_action_reply");
+    return finishCommandTurn({ opts, ctx: finalized, cfg, reply: inlineActionResult.reply });
+  }
   directives = inlineActionResult.directives;
   cleanedBody = inlineActionResult.cleanedBody;
   const explicitSkillSelections = inlineActionResult.explicitSkillSelections;
   const queueModeOverride = inlineActionResult.queueModeOverride;
   const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
-  const runAutoFallbackPrimaryProbe = directives.hasModelDirective
-    ? undefined
-    : autoFallbackPrimaryProbe;
-  const runProvider = runAutoFallbackPrimaryProbe?.provider ?? provider;
-  const runModel = runAutoFallbackPrimaryProbe?.model ?? model;
+  const runAutoFallbackPrimaryProbe =
+    directives.hasModelDirective ||
+    (autoFallbackPrimaryProbe &&
+      resolvedOpts?.operatorAuthority?.modelPolicy &&
+      !resolvedOpts.operatorAuthority.modelPolicy.allows(autoFallbackPrimaryProbe))
+      ? undefined
+      : autoFallbackPrimaryProbe;
+  let runProvider = runAutoFallbackPrimaryProbe?.provider ?? provider;
+  let runModel = runAutoFallbackPrimaryProbe?.model ?? model;
   let runModelState = modelState;
+  let resolveRunModelLevels = resolveModelLevels;
   if (runAutoFallbackPrimaryProbe) {
     try {
       runModelState = await createModelSelectionState({
         cfg,
         agentId,
         agentCfg,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
+        ...replySession,
         parentSessionKey:
           sessionEntry.parentSessionKey ??
           sessionCtx.ModelParentSessionKey ??
           sessionCtx.ParentSessionKey,
-        storePath,
         defaultProvider,
         defaultModel,
         primaryProvider,
@@ -1136,49 +1039,38 @@ export async function getReplyFromConfig(
         hasResolvedHeartbeatModelOverride,
         isHeartbeat: opts?.isHeartbeat === true,
         preparedModelCatalog,
+        operatorAuthority: resolvedOpts?.operatorAuthority,
       });
     } catch (error) {
-      if (
-        !(error instanceof ModelSelectionLockedError) &&
-        !isSessionWorkStartInvalidatedError(error)
-      ) {
-        throw error;
+      if (error instanceof ModelSelectionLockedError || isSessionWorkStartInvalidatedError(error)) {
+        return rejectSessionPreparation(error);
       }
-      typing.cleanup();
-      if (error instanceof ModelSelectionLockedError) {
-        recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "model-selection-locked");
-      }
-      return { text: error.message };
+      throw error;
     }
-    const thinkingLevelOverride = normalizeThinkLevel(resolvedOpts?.thinkingLevelOverride);
-    const hasTurnOrSessionThinkLevel =
-      thinkingLevelOverride !== undefined ||
-      directives.thinkLevel !== undefined ||
-      (!directives.clearThinkLevel && sessionEntry.thinkingLevel !== undefined);
-    const hasExplicitThinkLevel =
-      hasTurnOrSessionThinkLevel ||
-      configuredThinkingDefault !== undefined ||
-      runModelState.hasConfiguredThinkingDefault === true;
-    if (!hasTurnOrSessionThinkLevel) {
-      resolvedThinkLevel = await runModelState.resolveDefaultThinkingLevel();
+    if (runModelState.operatorModelOverride) {
+      runProvider = runModelState.provider;
+      runModel = runModelState.model;
     }
-    const rawSessionReasoningLevel = sessionEntry.reasoningLevel;
-    const hasExplicitReasoningLevel =
-      directives.reasoningLevel !== undefined ||
-      rawSessionReasoningLevel != null ||
-      agentEntry?.reasoningDefault != null ||
-      agentCfg?.reasoningDefault != null;
-    if (!hasExplicitReasoningLevel) {
-      const thinkingActive = resolvedThinkLevel !== "off";
-      resolvedReasoningLevel =
-        thinkingActive || hasExplicitThinkLevel
-          ? "off"
-          : await runModelState.resolveDefaultReasoningLevel();
-    }
+    resolveRunModelLevels = await createReplyProbeModelLevelResolver({
+      modelState: runModelState,
+      abortSignal: resolvedOpts?.abortSignal,
+      previous: resolveModelLevels,
+      directives,
+      sessionEntry,
+      thinkingLevelOverride: resolvedOpts?.thinkingLevelOverride,
+      configuredThinkingDefault,
+      hasConfiguredReasoningDefault:
+        agentEntry?.reasoningDefault != null || agentCfg?.reasoningDefault != null,
+    });
   }
+  const { resolvedThinkLevel, resolvedReasoningLevel } = await resolveRunModelLevels();
 
-  let stagedAttachmentPaths = hasStagedMediaFacts(finalized.media)
-    ? collectStagedAttachmentPaths(finalized)
+  let stagedAttachmentPaths: ReadonlyMap<number, string> = hasStagedMediaFacts(finalized.media)
+    ? new Map(
+        normalizeMediaFacts(finalized.media).flatMap((fact, index) =>
+          fact.path ? [[index, fact.path] as const] : [],
+        ),
+      )
     : new Map<number, string>();
   // Already-staged facts or SDK projections must remain a single-stage contract.
   if (
@@ -1189,6 +1081,35 @@ export async function getReplyFromConfig(
     hasInboundMedia(ctx)
   ) {
     const { stageSandboxMedia } = await stageSandboxMediaRuntimeLoader.load();
+    const stagingSessionEntry =
+      sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry;
+    const stagingWorkspaceDir =
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: stagingSessionEntry.spawnedBy,
+        workspaceDir: stagingSessionEntry.spawnedWorkspaceDir,
+        cwd: stagingSessionEntry.spawnedCwd,
+      }) ?? workspaceDir;
+    // Private library selections change the sandbox isolation identity. Resolve
+    // the current selection before staging so the attachment and admitted run
+    // select the same SSH runtime, even when a prior snapshot needs refreshing.
+    const selectedSkills =
+      stagingSessionEntry.skillLibrarySelections ??
+      stagingSessionEntry.skillsSnapshot?.librarySelections;
+    const stagingSkillsSnapshot = selectedSkills?.length
+      ? (
+          await (
+            await import("../../skills/runtime/session-snapshot.js")
+          ).resolveReusableWorkspaceSkillSnapshot({
+            ...skillSnapshotScope,
+            executionWorkspaceDir:
+              stagingSessionEntry.worktree?.canonicalWorkspaceDir ?? workspaceDir,
+            existingSnapshot: stagingSessionEntry.skillsSnapshot,
+            librarySelections: selectedSkills,
+            skillFilter: preparedReplyOpts?.skillFilter,
+            skillOverrides: preparedReplyOpts?.skillOverrides,
+          })
+        ).snapshot
+      : undefined;
     const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
       stageSandboxMedia({
         ctx,
@@ -1196,8 +1117,9 @@ export async function getReplyFromConfig(
         cfg,
         agentId,
         sessionKey,
-        workspaceDir,
-        abortSignal: internalOptsWithSkillFilter?.abortSignal,
+        workspaceDir: stagingWorkspaceDir,
+        skillsSnapshot: stagingSkillsSnapshot,
+        abortSignal: optsWithSkillFilter?.abortSignal,
       }),
     );
     stagedAttachmentPaths = stageResult.staged;
@@ -1209,7 +1131,6 @@ export async function getReplyFromConfig(
       ctx: sessionCtx,
       cfg,
       agentId,
-      agentDir,
       sessionKey,
       workspaceDir,
       provider: runProvider,
@@ -1229,42 +1150,28 @@ export async function getReplyFromConfig(
   logResolverTiming("milestone", "before_run_prepared_reply");
   const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
     runPreparedReply({
+      ...directiveResult.result,
       ctx,
       sessionCtx,
       conversation,
-      cfg,
-      agentId,
-      agentDir,
+      ...replyContext,
       agentCfg,
       sessionCfg,
       commandAuthorized,
-      command,
-      commandSource,
-      allowTextCommands,
       directives,
-      defaultActivation,
       resolvedThinkLevel,
-      resolvedFastMode,
-      resolvedFastModeAutoOnSeconds,
-      resolvedFastModeOverride,
-      resolvedFastModeAutoOnSecondsOverride,
-      resolvedVerboseLevel,
       resolvedReasoningLevel,
-      resolvedElevatedLevel,
-      execOverrides,
-      elevatedEnabled,
-      elevatedAllowed,
-      blockStreamingEnabled,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
       modelState: runModelState,
       provider: runProvider,
       model: runModel,
+      ...(hasResolvedHeartbeatModelOverride &&
+      heartbeatAuthProfile?.provider === runProvider &&
+      heartbeatAuthProfile.model === runModel
+        ? { configuredProfileId: heartbeatAuthProfile.profileId }
+        : {}),
       requestedRouteResolution: runAutoFallbackPrimaryProbe
         ? runModelState.requestedRouteResolution
         : requestedRouteResolution,
-      perMessageQueueMode,
-      perMessageQueueOptions,
       typing,
       opts: queueModeOverride ? { ...preparedReplyOpts, queueModeOverride } : preparedReplyOpts,
       defaultModel,
@@ -1272,12 +1179,7 @@ export async function getReplyFromConfig(
       isNewSession,
       resetTriggered,
       systemSent,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
       sessionId,
-      storePath,
-      workspaceDir,
       abortedLastRun,
       explicitSkillSelections,
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,

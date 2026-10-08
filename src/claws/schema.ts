@@ -1,4 +1,3 @@
-// Strict parser for grouped Claw schema version 1 manifests.
 import { z } from "zod";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import {
@@ -10,6 +9,15 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { computeNextRunAtMs } from "../cron/schedule.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
+import {
+  CLAW_BOOTSTRAP_FILE_NAMES,
+  CLAW_EXTENSION_FORMATS,
+  CLAW_PACKAGE_KINDS,
+  CLAW_PACKAGE_SOURCE,
+  CLAW_SCHEMA_VERSION,
+  type ClawDiagnostic,
+  type ClawOpenClawAgentSettings,
+} from "./manifest-contract.js";
 import {
   conflictsWithClawPath,
   isCanonicalClawHubPackageName,
@@ -24,13 +32,6 @@ import {
   isConcreteBundleMcpToolName,
   resolveClawToolProfileSnapshot,
 } from "./tool-profile-consent.js";
-import {
-  CLAW_BOOTSTRAP_FILE_NAMES,
-  CLAW_SCHEMA_VERSION,
-  type ClawDiagnostic,
-  type ClawManifest,
-  type ClawOpenClawProfile,
-} from "./types.js";
 
 const nonEmptyString = z
   .string()
@@ -40,6 +41,11 @@ const nonEmptyString = z
     "Value must not have leading or trailing whitespace.",
   );
 const optionalString = nonEmptyString.optional();
+// Check reference shape here; the add planner reports local catalog availability.
+const modelRef = nonEmptyString.regex(
+  /^[^\s/]+\/[^\s/]+(?:\/[^\s/]+)*$/,
+  "Model must use provider/model form.",
+);
 
 function isBoundedClawToolGrant(value: string): boolean {
   const normalized = normalizeToolPolicyName(value);
@@ -116,8 +122,8 @@ const openClawExtensionSchema = z
   .object({
     id: agentId,
     kind: z.literal("plugin"),
-    format: z.enum(["openclaw", "claude", "codex", "cursor"]),
-    source: z.literal("clawhub"),
+    format: z.enum(CLAW_EXTENSION_FORMATS),
+    source: z.literal(CLAW_PACKAGE_SOURCE),
     ref: clawHubPackageName,
     version: exactVersion,
   })
@@ -128,6 +134,17 @@ const openClawProfileSchema = z
     schemaVersion: z.literal(1),
     agent: z
       .object({
+        model: z
+          .object({ primary: modelRef, fallbacks: z.array(modelRef).optional() })
+          .strict()
+          .optional(),
+        subagents: z
+          .object({
+            allowAgents: z.array(agentId).optional(),
+            delegationMode: z.enum(["suggest", "prefer"]).optional(),
+          })
+          .strict()
+          .optional(),
         groupChat: z
           .object({ mentionPatterns: z.array(nonEmptyString).min(1).optional() })
           .strict()
@@ -338,8 +355,8 @@ const workspaceSchema = z
 
 const packageSchema = z
   .object({
-    kind: z.enum(["skill", "plugin"]),
-    source: z.literal("clawhub"),
+    kind: z.enum(CLAW_PACKAGE_KINDS),
+    source: z.literal(CLAW_PACKAGE_SOURCE),
     ref: clawHubPackageName,
     version: exactVersion,
   })
@@ -582,6 +599,19 @@ const manifestSchema = z
     });
   });
 
+export type ClawOpenClawExtension = z.output<typeof openClawExtensionSchema>;
+export type ClawOpenClawProfile = {
+  schemaVersion: 1;
+  agent: ClawOpenClawAgentSettings;
+  extensions?: ClawOpenClawExtension[];
+};
+export type ClawPackage = z.output<typeof packageSchema>;
+export type ClawMcpServer = z.output<typeof mcpServerSchema>;
+export type ClawCronJob = z.output<typeof cronJobSchema>;
+export type ClawManifest = Omit<z.output<typeof manifestSchema>, "metadata"> & {
+  metadata?: Record<string, string>;
+};
+
 function formatIssuePath(path: PropertyKey[]): string {
   if (path.length === 0) {
     return "$";
@@ -610,7 +640,7 @@ export function parseClawManifest(
   if (!parsed.success) {
     return { ok: false, diagnostics: diagnosticsFromZodError(parsed.error) };
   }
-  return { ok: true, manifest: parsed.data as ClawManifest, diagnostics: [] };
+  return { ok: true, manifest: parsed.data, diagnostics: [] };
 }
 
 export function parseClawOpenClawProfile(value: unknown):

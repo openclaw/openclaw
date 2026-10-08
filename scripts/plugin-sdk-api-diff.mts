@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createPluginSdkApiDiff,
   diffPluginSdkApi,
   formatPluginSdkApiDiffReport,
   hasPluginSdkApiChanges,
@@ -15,10 +17,12 @@ import {
   type PluginSdkApiDiffSurface,
 } from "../src/plugin-sdk/api-diff.ts";
 import { runTasksWithConcurrency } from "../src/utils/run-with-concurrency.js";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { isConstrainedCiCheckHost } from "./lib/local-check-runtime.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmPreflightSdkSelectors } from "./openclaw-npm-extended-stable-release.mjs";
 import {
+  createPluginSdkApiDiffSet,
   createPluginSdkApiReleaseEvidence,
   createPluginSdkApiReleaseEvidenceSet,
 } from "./plugin-sdk-api-release-evidence.mjs";
@@ -54,14 +58,16 @@ function readValue(argv: string[], index: number, flag: string): string {
 }
 
 function parseArgs(argv: string[]): Args {
-  let acknowledgement: string | null = null;
-  let base = "";
-  let bases: Args["bases"] = null;
-  let evidencePath: string | null = null;
-  let head = "";
-  let jsonPath: string | null = null;
-  let requireAcknowledgement = false;
-  let summaryPath: string | null = null;
+  const options: Args = {
+    acknowledgement: null,
+    base: "",
+    bases: null,
+    evidencePath: null,
+    head: "",
+    jsonPath: null,
+    requireAcknowledgement: false,
+    summaryPath: null,
+  };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -69,11 +75,11 @@ function parseArgs(argv: string[]): Args {
       case "--":
         break;
       case "--acknowledge":
-        acknowledgement = readValue(argv, index, arg);
+        options.acknowledgement = readValue(argv, index, arg);
         index += 1;
         break;
       case "--base":
-        base = readValue(argv, index, arg);
+        options.base = readValue(argv, index, arg);
         index += 1;
         break;
       case "--bases-json": {
@@ -88,27 +94,27 @@ function parseArgs(argv: string[]): Args {
         ) {
           throw new Error("--bases-json requires exactly beta and latest Git refs");
         }
-        bases = { beta: value.beta, latest: value.latest };
+        options.bases = { beta: value.beta, latest: value.latest };
         index += 1;
         break;
       }
       case "--evidence":
-        evidencePath = path.resolve(readValue(argv, index, arg));
+        options.evidencePath = path.resolve(readValue(argv, index, arg));
         index += 1;
         break;
       case "--head":
-        head = readValue(argv, index, arg);
+        options.head = readValue(argv, index, arg);
         index += 1;
         break;
       case "--json":
-        jsonPath = path.resolve(readValue(argv, index, arg));
+        options.jsonPath = path.resolve(readValue(argv, index, arg));
         index += 1;
         break;
       case "--require-acknowledgement":
-        requireAcknowledgement = true;
+        options.requireAcknowledgement = true;
         break;
       case "--summary":
-        summaryPath = path.resolve(readValue(argv, index, arg));
+        options.summaryPath = path.resolve(readValue(argv, index, arg));
         index += 1;
         break;
       case "-h":
@@ -119,28 +125,19 @@ function parseArgs(argv: string[]): Args {
         usage();
     }
   }
-  if ((!base && !bases) || (base && bases) || !head) {
+  if ((!options.base && !options.bases) || (options.base && options.bases) || !options.head) {
     usage();
   }
-  if (bases && requireAcknowledgement) {
+  if (options.bases && options.requireAcknowledgement) {
     throw new Error(
       "Review beta/latest receipts using the selected publication channel's acknowledgement",
     );
   }
-  if (acknowledgement !== null && !/^[a-f0-9]{8}$/u.test(acknowledgement)) {
+  if (options.acknowledgement !== null && !/^[a-f0-9]{8}$/u.test(options.acknowledgement)) {
     console.error("--acknowledge must be the 8-character lowercase digest printed by the report.");
     usage();
   }
-  return {
-    acknowledgement,
-    base,
-    bases,
-    evidencePath,
-    head,
-    jsonPath,
-    requireAcknowledgement,
-    summaryPath,
-  };
+  return options;
 }
 
 function git(repoRoot: string, args: string[]): string {
@@ -240,6 +237,14 @@ async function renderWorker(argv: string[]): Promise<boolean> {
   if (!repoRoot || !outputPath || argv.length !== 4) {
     throw new Error("Invalid Plugin SDK API renderer invocation");
   }
+  // Tagged revisions retain their checked-in declaration inputs.
+  if (
+    !["state", "agent"].every((name) =>
+      existsSync(path.join(repoRoot, `src/state/openclaw-${name}-db.generated.d.ts`)),
+    )
+  ) {
+    await ensureKyselyTypes(repoRoot);
+  }
   await writeFile(outputPath, JSON.stringify(await renderPluginSdkApiRoot(repoRoot)));
   return true;
 }
@@ -265,8 +270,13 @@ async function main(): Promise<void> {
     path.join(temporaryParent, "openclaw-plugin-sdk-api-diff-"),
   );
   // A regular release compares two npm predecessors against one frozen head.
-  // Install and render each commit once, including selectors already at that head.
-  const commits = [...new Set([...bases.map((base) => base.commit), headCommit])];
+  // Identical commits need no rendering, even when the caller's checkout is dirty.
+  const commits = [
+    ...new Set(bases.map((base) => base.commit).filter((commit) => commit !== headCommit)),
+  ];
+  if (commits.length > 0) {
+    commits.push(headCommit);
+  }
   const addedWorktrees: string[] = [];
   const abortController = new AbortController();
   let interruptedExitCode: number | undefined;
@@ -307,7 +317,7 @@ async function main(): Promise<void> {
     })
       ? 1
       : 2;
-    const rendered = await runTasksWithConcurrency({
+    const prepared = await runTasksWithConcurrency({
       limit,
       errorMode: "stop",
       // Drain aborted siblings before removing their registered worktrees.
@@ -319,28 +329,65 @@ async function main(): Promise<void> {
         addedWorktrees.push(worktree);
         git(worktree, ["sparse-checkout", "set", "src", "packages", "patches", "scripts"]);
         git(worktree, ["checkout", "--detach", commit]);
+        const installStartedAt = performance.now();
+        console.error(`[plugin-sdk-api-diff] ${commit} install started`);
         await installRevisionDependencies(worktree, abortController.signal);
+        console.error(
+          `[plugin-sdk-api-diff] ${commit} install completed in ${Math.round(performance.now() - installStartedAt)}ms`,
+        );
+        return worktree;
+      }),
+    });
+    if (prepared.hasError) {
+      throw prepared.firstError;
+    }
+    // pnpm can hardlink revision dependencies into its shared store. Finish every
+    // install before any compiler snapshots those files, or a sibling install can
+    // change inode metadata while the declaration renderer is proving immutability.
+    const rendered = await runTasksWithConcurrency({
+      limit,
+      errorMode: "stop",
+      throwOnError: false,
+      onTaskError: () => abortController.abort(),
+      tasks: commits.map((commit, index) => async () => {
+        const worktree = prepared.results[index];
+        if (!worktree) {
+          throw new Error(`Plugin SDK API worktree is missing for ${commit}`);
+        }
         const renderPath = path.join(temporaryRoot, `${commit}.json`);
+        const renderStartedAt = performance.now();
+        console.error(`[plugin-sdk-api-diff] ${commit} render started`);
         await renderRevision(repoRoot, worktree, renderPath, abortController.signal);
+        console.error(
+          `[plugin-sdk-api-diff] ${commit} render completed in ${Math.round(performance.now() - renderStartedAt)}ms`,
+        );
         surfaces.set(commit, parsePluginSdkApiDiffSurface(await fs.readFile(renderPath, "utf8")));
       }),
     });
     if (rendered.hasError) {
       throw rendered.firstError;
     }
-    const after = surfaces.get(headCommit);
-    if (!after) {
-      throw new Error("Plugin SDK API head snapshot is missing");
-    }
-    const diffs = new Map<string, PluginSdkApiDiff>();
+    const diffs = new Map<string, PluginSdkApiDiff>([
+      [
+        headCommit,
+        createPluginSdkApiDiff({ entrypointsAdded: [], entrypointsRemoved: [], exports: [] }),
+      ],
+    ]);
     const workflowSha = git(repoRoot, ["rev-parse", "HEAD"]);
     const comparisons = bases.map((base) => {
-      const before = surfaces.get(base.commit);
-      if (!before) {
-        throw new Error("Plugin SDK API predecessor snapshot is missing");
+      let diff = diffs.get(base.commit);
+      if (!diff) {
+        const after = surfaces.get(headCommit);
+        if (!after) {
+          throw new Error("Plugin SDK API head snapshot is missing");
+        }
+        const before = surfaces.get(base.commit);
+        if (!before) {
+          throw new Error("Plugin SDK API predecessor snapshot is missing");
+        }
+        diff = diffPluginSdkApi(before, after);
+        diffs.set(base.commit, diff);
       }
-      const diff = diffs.get(base.commit) ?? diffPluginSdkApi(before, after);
-      diffs.set(base.commit, diff);
       return {
         selector: base.selector,
         diff,
@@ -368,8 +415,10 @@ async function main(): Promise<void> {
     process.stdout.write(report);
     if (args.jsonPath) {
       const diff = args.bases
-        ? Object.fromEntries(
-            comparisons.map((comparison) => [comparison.selector, comparison.diff]),
+        ? createPluginSdkApiDiffSet(
+            Object.fromEntries(
+              comparisons.map((comparison) => [comparison.selector, comparison.diff]),
+            ),
           )
         : primary.diff;
       await writeFile(args.jsonPath, `${JSON.stringify(diff, null, 2)}\n`);

@@ -12,21 +12,21 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.app.RemoteInput
-import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import androidx.core.content.LocusIdCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
+import androidx.core.net.toUri
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -42,22 +42,26 @@ private const val extraAgentId = "ai.openclaw.app.extra.CONVERSATION_AGENT_ID"
 private const val extraSessionKey = "ai.openclaw.app.extra.CONVERSATION_SESSION_KEY"
 private const val extraRunId = "ai.openclaw.app.extra.CONVERSATION_RUN_ID"
 private const val extraLaunchToken = "ai.openclaw.app.extra.CONVERSATION_LAUNCH_TOKEN"
+private const val extraPublicationGeneration = "ai.openclaw.app.extra.CONVERSATION_PUBLICATION_GENERATION"
 private const val remoteInputReply = "ai.openclaw.app.remote_input.CONVERSATION_REPLY"
 private const val notificationIntentScheme = "openclaw"
 private const val notificationIntentAuthority = "conversation-notification"
 private const val notificationIntentOpenPath = "open"
-private const val notificationIntentReplyPath = "reply"
+private const val notificationIntentReplyPath = "reply-v2"
+private const val legacyNotificationIntentReplyPath = "reply"
 private const val conversationChannelId = "openclaw.chat.replies"
 private const val conversationNotificationId = 1
 private const val conversationNotificationTagPrefix = "openclaw.chat."
 private const val conversationShortcutPrefix = "openclaw-chat-"
 private const val conversationGroup = "openclaw.chat"
 private const val replyTimeoutMs = 5_000L
+private const val replyRecoveryTimeoutMs = 1_000L
 private const val maxTargetPartLength = 2_048
 private const val maxReplyLength = 16_000
 private const val maxPendingConversationLaunches = 32
 private const val conversationLaunchRequestCode = 0
 private const val conversationReplyRequestCode = 1
+private const val conversationGenerationRequestCode = 2
 
 internal data class ConversationNotificationTarget(
   val gatewayStableId: String,
@@ -82,7 +86,6 @@ internal data class ConversationNotificationTarget(
       gatewayStableId = gatewayStableId,
       agentId = agentId,
       sessionKey = sessionKey,
-      routingVerified = true,
     )
 
   companion object {
@@ -91,15 +94,11 @@ internal data class ConversationNotificationTarget(
       runId: String,
     ): ConversationNotificationTarget? {
       if (!owner.routingVerified) return null
-      val gatewayStableId = owner.gatewayStableId.validTargetPart() ?: return null
-      val agentId = owner.agentId.validTargetPart() ?: return null
-      val sessionKey = owner.sessionKey.validTargetPart() ?: return null
-      val normalizedRunId = runId.validTargetPart() ?: return null
       return ConversationNotificationTarget(
-        gatewayStableId = gatewayStableId,
-        agentId = agentId,
-        sessionKey = sessionKey,
-        runId = normalizedRunId,
+        gatewayStableId = owner.gatewayStableId.validTargetPart() ?: return null,
+        agentId = owner.agentId.validTargetPart() ?: return null,
+        sessionKey = owner.sessionKey.validTargetPart() ?: return null,
+        runId = runId.validTargetPart() ?: return null,
       )
     }
   }
@@ -115,11 +114,11 @@ internal fun conversationNotificationLaunchIntent(
     .setData(conversationNotificationIntentData(notificationIntentOpenPath, target))
     .putConversationTarget(target)
 
-internal fun parseConversationNotificationTrampolineIntent(intent: Intent?): ConversationNotificationTarget? =
-  intent.readOwnedConversationTarget(
-    expectedAction = actionOpenConversationNotification,
-    identityPath = notificationIntentOpenPath,
-  )
+internal fun parseConversationNotificationTrampolineIntent(intent: Intent?): ConversationNotificationTarget? {
+  if (intent?.action != actionOpenConversationNotification) return null
+  val target = intent.readConversationTarget() ?: return null
+  return target.takeIf { intent.data == conversationNotificationIntentData(notificationIntentOpenPath, target) }
+}
 
 internal fun conversationNotificationMainIntent(
   context: Context,
@@ -149,11 +148,31 @@ internal fun conversationNotificationReplyIntent(
     .setData(conversationNotificationIntentData(notificationIntentReplyPath, target))
     .putConversationTarget(target)
 
-internal fun parseConversationNotificationReplyIntent(intent: Intent?): ConversationNotificationTarget? =
-  intent.readOwnedConversationTarget(
-    expectedAction = actionReplyConversationNotification,
-    identityPath = notificationIntentReplyPath,
-  )
+internal data class ConversationNotificationReply(
+  val target: ConversationNotificationTarget,
+  val generation: PendingIntent?,
+)
+
+internal fun parseConversationNotificationReplyIntent(intent: Intent?): ConversationNotificationReply? {
+  if (intent?.action != actionReplyConversationNotification) return null
+  val target = intent.readConversationTarget() ?: return null
+  val generation =
+    when (intent.data) {
+      conversationNotificationIntentData(notificationIntentReplyPath, target) -> {
+        IntentCompat.getParcelableExtra(intent, extraPublicationGeneration, PendingIntent::class.java)
+      }
+
+      // v2026.9.1's mutable Reply envelope cannot authenticate a generation added by its sender.
+      conversationNotificationIntentData(legacyNotificationIntentReplyPath, target) -> {
+        null
+      }
+
+      else -> {
+        return null
+      }
+    }
+  return ConversationNotificationReply(target, generation)
+}
 
 internal fun conversationNotificationReplyIdempotencyKey(target: ConversationNotificationTarget): String =
   "android-notification-reply-" +
@@ -171,25 +190,12 @@ private fun Intent.putConversationTarget(target: ConversationNotificationTarget)
     .putExtra(extraRunId, target.runId)
 
 private fun Intent.readConversationTarget(): ConversationNotificationTarget? {
-  val gatewayStableId = getStringExtra(extraGatewayStableId).validTargetPart() ?: return null
-  val agentId = getStringExtra(extraAgentId).validTargetPart() ?: return null
-  val sessionKey = getStringExtra(extraSessionKey).validTargetPart() ?: return null
-  val runId = getStringExtra(extraRunId).validTargetPart() ?: return null
   return ConversationNotificationTarget(
-    gatewayStableId = gatewayStableId,
-    agentId = agentId,
-    sessionKey = sessionKey,
-    runId = runId,
+    gatewayStableId = getStringExtra(extraGatewayStableId).validTargetPart() ?: return null,
+    agentId = getStringExtra(extraAgentId).validTargetPart() ?: return null,
+    sessionKey = getStringExtra(extraSessionKey).validTargetPart() ?: return null,
+    runId = getStringExtra(extraRunId).validTargetPart() ?: return null,
   )
-}
-
-private fun Intent?.readOwnedConversationTarget(
-  expectedAction: String,
-  identityPath: String,
-): ConversationNotificationTarget? {
-  if (this?.action != expectedAction) return null
-  val target = readConversationTarget() ?: return null
-  return target.takeIf { data == conversationNotificationIntentData(identityPath, target) }
 }
 
 private fun conversationNotificationIntentData(
@@ -243,9 +249,7 @@ internal class ConversationNotificationLaunchStore(
       token = UUID.randomUUID().toString()
     } while (targets.containsKey(token))
     while (targets.size >= capacity) {
-      val iterator = targets.entries.iterator()
-      iterator.next()
-      iterator.remove()
+      targets.remove(targets.keys.first())
     }
     targets[token] = target
     return token
@@ -261,95 +265,89 @@ internal class ConversationNotificationLaunchStore(
 class ConversationNotificationLaunchActivity : Activity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    if (savedInstanceState != null) {
-      finish()
-      return
+    if (savedInstanceState == null) {
+      val target = parseConversationNotificationTrampolineIntent(intent)
+      val app = application as? NodeApp
+      if (target != null && app != null) {
+        val launchToken = app.conversationNotificationLaunchStore.put(target)
+        startActivity(conversationNotificationMainIntent(this, launchToken))
+      }
     }
-    val target = parseConversationNotificationTrampolineIntent(intent)
-    val app = application as? NodeApp
-    if (target == null || app == null) {
-      finish()
-      return
-    }
-    val launchToken = app.conversationNotificationLaunchStore.put(target)
-    startActivity(conversationNotificationMainIntent(this, launchToken))
     finish()
   }
 }
 
-internal fun canPostConversationNotifications(
-  sdkInt: Int,
-  permissionGranted: () -> Boolean,
-): Boolean = sdkInt < Build.VERSION_CODES.TIRAMISU || permissionGranted()
-
 internal suspend fun routeConversationNotificationTarget(
   target: ConversationNotificationTarget,
-  activeGatewayStableId: () -> String?,
-  switchGateway: suspend (String) -> Boolean,
-  awaitGatewayReady: suspend (String) -> Boolean = { true },
-  isCurrent: () -> Boolean = { true },
-  switchSession: (sessionKey: String, agentId: String) -> Unit,
-): Boolean {
-  if (!isCurrent()) return false
-  if (activeGatewayStableId() != target.gatewayStableId && !switchGateway(target.gatewayStableId)) {
-    return false
-  }
-  if (!isCurrent() || !awaitGatewayReady(target.gatewayStableId) || !isCurrent()) {
-    return false
-  }
-  switchSession(target.sessionKey, target.agentId)
-  return true
+  switchGateway: suspend (String) -> GatewayTargetSelection,
+  awaitGatewayReady: suspend (GatewayTargetSelection.Selected) -> Boolean = { true },
+  isCurrent: () -> Boolean,
+): GatewayTargetSelection {
+  if (!isCurrent()) return GatewayTargetSelection.Retired
+  val selection = switchGateway(target.gatewayStableId)
+  if (!isCurrent()) return GatewayTargetSelection.Retired
+  if (selection !is GatewayTargetSelection.Selected) return selection
+  if (!selection.isCurrent()) return GatewayTargetSelection.Retired
+  val ready = awaitGatewayReady(selection)
+  if (!isCurrent() || !selection.isCurrent()) return GatewayTargetSelection.Retired
+  if (!ready) return GatewayTargetSelection.Unavailable
+  if (!selection.selectSession(target.sessionKey, target.agentId, isCurrent)) return GatewayTargetSelection.Retired
+  return selection
 }
 
 internal suspend fun routeConversationNotificationReply(
   target: ConversationNotificationTarget,
   reply: String,
   idempotencyKey: String,
-  activeGatewayStableId: () -> String?,
-  switchGateway: suspend (String) -> Boolean,
-  awaitGatewayReady: suspend (String) -> Boolean,
-  switchSession: (sessionKey: String, agentId: String) -> Unit,
-  send: suspend (owner: ChatComposerOwner, message: String, idempotencyKey: String) -> Boolean,
+  switchGateway: suspend (String) -> GatewayTargetSelection,
+  isCurrent: () -> Boolean,
+  send: suspend (owner: ChatComposerOwner, message: String, idempotencyKey: String, canAdmit: () -> Boolean) -> Boolean,
 ): Boolean {
-  if (
-    !routeConversationNotificationTarget(
+  val selection =
+    routeConversationNotificationTarget(
       target = target,
-      activeGatewayStableId = activeGatewayStableId,
       switchGateway = switchGateway,
-      awaitGatewayReady = awaitGatewayReady,
-      switchSession = switchSession,
+      awaitGatewayReady = { it.awaitReady() },
+      isCurrent = isCurrent,
     )
-  ) {
-    return false
-  }
-  return send(target.toComposerOwner(), reply, idempotencyKey)
+  return selection is GatewayTargetSelection.Selected &&
+    isCurrent() && selection.isCurrent() &&
+    send(target.toComposerOwner(), reply, idempotencyKey) { isCurrent() && selection.isCurrent() }
+}
+
+internal enum class ConversationNotificationReplyOutcome {
+  Admitted,
+  NotAdmitted,
+  Unknown,
 }
 
 internal suspend fun sendConversationNotificationReplyWithRecovery(
   timeoutMs: Long,
   send: suspend () -> Boolean,
-  wasAdmitted: suspend () -> Boolean,
-): Boolean {
-  val sent =
-    try {
-      withTimeout(timeoutMs) { send() }
-    } catch (_: TimeoutCancellationException) {
-      false
-    } catch (err: CancellationException) {
-      throw err
-    } catch (_: Throwable) {
-      false
-    }
-  if (sent) return true
+  wasAdmitted: suspend () -> Boolean?,
+): ConversationNotificationReplyOutcome {
+  if (boundedConversationReplyStep(timeoutMs, send) == true) {
+    return ConversationNotificationReplyOutcome.Admitted
+  }
+  return when (boundedConversationReplyStep(replyRecoveryTimeoutMs, wasAdmitted)) {
+    true -> ConversationNotificationReplyOutcome.Admitted
+    false -> ConversationNotificationReplyOutcome.NotAdmitted
+    null -> ConversationNotificationReplyOutcome.Unknown
+  }
+}
 
-  return try {
-    wasAdmitted()
+// Only this step's timeout is an unknown result; caller cancellation still ends the Reply.
+private suspend fun boundedConversationReplyStep(
+  timeoutMs: Long,
+  operation: suspend () -> Boolean?,
+): Boolean? =
+  try {
+    withTimeoutOrNull(timeoutMs) { operation() }
   } catch (err: CancellationException) {
     throw err
   } catch (_: Throwable) {
-    false
+    null
   }
-}
 
 internal class ConversationReplyNotifier(
   private val context: Context,
@@ -358,70 +356,105 @@ internal class ConversationReplyNotifier(
     owner: ChatComposerOwner,
     runId: String,
     assistantText: String,
-  ): Boolean {
-    val target = ConversationNotificationTarget.from(owner, runId) ?: return false
-    val text = assistantText.trim().takeIf(String::isNotEmpty) ?: return false
-    if (!canPostNotifications()) return false
-    ensureChannel()
-    ensureConversationShortcut(target)
-    notificationManager().notify(
-      target.notificationTag,
-      conversationNotificationId,
-      buildAssistantReplyNotification(target, text),
-    )
-    return true
-  }
+  ): Boolean =
+    synchronized(publicationLock) {
+      val target = ConversationNotificationTarget.from(owner, runId) ?: return@synchronized false
+      val text = assistantText.trim().takeIf(String::isNotEmpty) ?: return@synchronized false
+      if (!canPostNotifications()) return@synchronized false
+      val generation = checkNotNull(publicationGeneration(target, PendingIntent.FLAG_CANCEL_CURRENT))
+      try {
+        val contentIntent = contentPendingIntent(target)
+        val assistant = assistantPerson()
+        val style =
+          NotificationCompat
+            .MessagingStyle(Person.Builder().setName(nativeString("You")).build())
+            .setConversationTitle(nativeString("OpenClaw"))
+            .setGroupConversation(false)
+            .addMessage(text, System.currentTimeMillis(), assistant)
+        post(
+          target,
+          baseBuilder(target, contentIntent, generation)
+            .setStyle(style)
+            .setContentText(text)
+            .addPerson(assistant)
+            .addAction(replyAction(target, generation))
+            .build(),
+        )
+        true
+      } catch (err: Throwable) {
+        // Cancel only this token: cancelling an obsolete token can remove its replacement's lookup key.
+        if (generation == publicationGeneration(target, PendingIntent.FLAG_NO_CREATE)) generation.cancel()
+        throw err
+      }
+    }
 
-  fun showSendFailure(target: ConversationNotificationTarget) {
-    if (!canPostNotifications()) return
-    ensureChannel()
-    ensureConversationShortcut(target)
-    notificationManager().notify(
-      target.notificationTag,
-      conversationNotificationId,
-      buildSendFailureNotification(target),
-    )
-  }
+  fun completeReply(
+    notificationReply: ConversationNotificationReply,
+    reply: String,
+    outcome: ConversationNotificationReplyOutcome,
+    isCurrent: () -> Boolean,
+  ): Boolean =
+    synchronized(publicationLock) {
+      val target = notificationReply.target
+      val generation = notificationReply.generation ?: return@synchronized false
+      if (!isCurrent() || generation != publicationGeneration(target, PendingIntent.FLAG_NO_CREATE)) {
+        return@synchronized false
+      }
+      if (!canPostNotifications()) return@synchronized false
+      val contentIntent = contentPendingIntent(target)
+      val text =
+        when (outcome) {
+          ConversationNotificationReplyOutcome.Admitted -> nativeString("Reply queued")
+          ConversationNotificationReplyOutcome.NotAdmitted -> nativeString("Chat failed")
+          ConversationNotificationReplyOutcome.Unknown -> nativeString("Reply status is unknown. Open the conversation before sending again.")
+        }
+      val action =
+        if (outcome == ConversationNotificationReplyOutcome.NotAdmitted) {
+          replyAction(target, generation)
+        } else {
+          NotificationCompat.Action.Builder(0, nativeString("Open conversation"), contentIntent).build()
+        }
+      // Reply outcomes update the notice; Android may retain and re-enqueue a canceled direct reply.
+      post(
+        target,
+        baseBuilder(target, contentIntent, generation)
+          .setSilent(outcome == ConversationNotificationReplyOutcome.Admitted)
+          .setContentText(text)
+          .setStyle(NotificationCompat.BigTextStyle().bigText("$text\n\n${reply.take(maxReplyLength)}"))
+          .addAction(action)
+          .build(),
+      )
+      true
+    }
 
-  fun cancel(target: ConversationNotificationTarget) {
-    notificationManager().cancel(target.notificationTag, conversationNotificationId)
-  }
-
-  internal fun buildAssistantReplyNotification(
+  private fun post(
     target: ConversationNotificationTarget,
-    assistantText: String,
-  ): Notification {
-    val contentIntent = contentPendingIntent(target)
-    val assistant = assistantPerson()
-    val style =
-      NotificationCompat
-        .MessagingStyle(userPerson())
-        .setConversationTitle(nativeString("OpenClaw"))
-        .setGroupConversation(false)
-        .addMessage(assistantText, System.currentTimeMillis(), assistant)
-    return baseBuilder(target, contentIntent)
-      .setStyle(style)
-      .setContentTitle(nativeString("OpenClaw"))
-      .setContentText(assistantText)
-      .addPerson(assistant)
-      .addAction(replyAction(target))
-      .setPublicVersion(publicVersion(contentIntent))
-      .build()
+    notification: Notification,
+  ) {
+    ensureChannel()
+    ensureConversationShortcut(target)
+    notificationManager().notify(target.notificationTag, conversationNotificationId, notification)
   }
 
-  internal fun buildSendFailureNotification(target: ConversationNotificationTarget): Notification {
-    val contentIntent = contentPendingIntent(target)
-    return baseBuilder(target, contentIntent)
-      .setContentTitle(nativeString("OpenClaw"))
-      .setContentText(nativeString("Chat failed"))
-      .addAction(replyAction(target))
-      .setPublicVersion(publicVersion(contentIntent))
-      .build()
-  }
+  // An inert Android token owns publication identity, never permission to send a Reply.
+  private fun publicationGeneration(
+    target: ConversationNotificationTarget,
+    flags: Int,
+  ): PendingIntent? =
+    PendingIntent.getBroadcast(
+      context,
+      conversationGenerationRequestCode,
+      Intent()
+        .setClass(context, ConversationReplyReceiver::class.java)
+        .setAction("ai.openclaw.app.action.CONVERSATION_PUBLICATION_GENERATION")
+        .setData("$notificationIntentScheme://$notificationIntentAuthority/generation/${target.conversationDigest}".toUri()),
+      flags or PendingIntent.FLAG_IMMUTABLE,
+    )
 
   private fun baseBuilder(
     target: ConversationNotificationTarget,
     contentIntent: PendingIntent,
+    generation: PendingIntent,
   ): NotificationCompat.Builder =
     NotificationCompat
       .Builder(context, conversationChannelId)
@@ -429,7 +462,10 @@ internal class ConversationReplyNotifier(
       .setCategory(NotificationCompat.CATEGORY_MESSAGE)
       .setPriority(NotificationCompat.PRIORITY_HIGH)
       .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+      .setContentTitle(nativeString("OpenClaw"))
       .setContentIntent(contentIntent)
+      .setPublicVersion(publicVersion(contentIntent))
+      .addExtras(Bundle().apply { putParcelable(extraPublicationGeneration, generation) })
       .setAutoCancel(true)
       .setOnlyAlertOnce(false)
       .setGroup(conversationGroup)
@@ -447,14 +483,21 @@ internal class ConversationReplyNotifier(
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
       .build()
 
-  private fun replyAction(target: ConversationNotificationTarget): NotificationCompat.Action {
-    val intent = conversationNotificationReplyIntent(context, target)
+  private fun replyAction(
+    target: ConversationNotificationTarget,
+    generation: PendingIntent,
+  ): NotificationCompat.Action {
+    // A repost must not update the generation extras held by an older Reply action.
+    val intent =
+      conversationNotificationReplyIntent(context, target)
+        .setIdentifier(UUID.randomUUID().toString())
+        .putExtra(extraPublicationGeneration, generation)
     val pendingIntent =
       PendingIntent.getBroadcast(
         context,
         conversationReplyRequestCode,
         intent,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE,
+        PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE,
       )
     val remoteInput =
       RemoteInput
@@ -498,15 +541,9 @@ internal class ConversationReplyNotifier(
       .setBot(true)
       .build()
 
-  private fun userPerson(): Person = Person.Builder().setName(nativeString("You")).build()
-
   private fun canPostNotifications(): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
-
-    return canPostConversationNotifications(Build.VERSION.SDK_INT) {
-      ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-        PackageManager.PERMISSION_GRANTED
-    }
+    return context.hasPermission(Manifest.permission.POST_NOTIFICATIONS)
   }
 
   private fun ensureChannel() {
@@ -523,6 +560,11 @@ internal class ConversationReplyNotifier(
   }
 
   private fun notificationManager(): NotificationManager = context.getSystemService(NotificationManager::class.java)
+
+  private companion object {
+    // Android enqueues notifications asynchronously; rotate and check generations in the same owner as every effect.
+    val publicationLock = Any()
+  }
 }
 
 class ConversationReplyReceiver : BroadcastReceiver() {
@@ -530,7 +572,8 @@ class ConversationReplyReceiver : BroadcastReceiver() {
     context: Context,
     intent: Intent,
   ) {
-    val target = parseConversationNotificationReplyIntent(intent) ?: return
+    val notificationReply = parseConversationNotificationReplyIntent(intent) ?: return
+    val target = notificationReply.target
     val reply =
       RemoteInput
         .getResultsFromIntent(intent)
@@ -545,32 +588,40 @@ class ConversationReplyReceiver : BroadcastReceiver() {
       pendingResult.finish()
       return
     }
-    runCatching { NodeForegroundService.resume(context, startNow = true) }
+    val isCurrent = NodeForegroundService.resume(context, startNow = false)
+    runCatching { NodeForegroundService.start(context) }
     app.launchRuntimeTask {
       try {
         val idempotencyKey = conversationNotificationReplyIdempotencyKey(target)
         var runtime: NodeRuntime? = null
-        val sent =
+        val outcome =
           sendConversationNotificationReplyWithRecovery(
             timeoutMs = replyTimeoutMs,
             send = {
-              val resolvedRuntime = app.ensureBackgroundRuntime()
-              runtime = resolvedRuntime
-              resolvedRuntime.sendConversationNotificationReply(
-                target = target,
-                reply = reply,
-                idempotencyKey = idempotencyKey,
-              )
+              if (!isCurrent()) {
+                false
+              } else {
+                val resolvedRuntime = app.ensureBackgroundRuntime()
+                runtime = resolvedRuntime
+                resolvedRuntime.sendConversationNotificationReply(
+                  target = target,
+                  reply = reply,
+                  idempotencyKey = idempotencyKey,
+                  isCurrent = isCurrent,
+                )
+              }
             },
             wasAdmitted = {
-              runtime?.wasChatOutboxCommandAdmitted(idempotencyKey) == true
+              runtime?.chat?.wasOutboxCommandAdmitted(idempotencyKey)
             },
           )
         val notifier = ConversationReplyNotifier(context.applicationContext)
-        if (sent) {
-          runCatching { notifier.cancel(target) }
-        } else {
-          runCatching { notifier.showSendFailure(target) }
+        runCatching {
+          if (!notifier.completeReply(notificationReply, reply, outcome, isCurrent)) {
+            Log.i("OpenClaw", "Inline Reply ${outcome.name}: notification update skipped")
+          }
+        }.onFailure {
+          Log.w("OpenClaw", "Inline Reply notification update failed")
         }
       } finally {
         pendingResult.finish()

@@ -1,47 +1,59 @@
 // Update-phase helpers that gate doctor repairs during package swaps and convergence.
 import { isTruthyEnvValue } from "../../../infra/env.js";
+import { VERSION } from "../../../version.js";
 
 export const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
+/** Managed updaters must opt in to NOCOW rewrites, which change physical store identities. */
+export const DOCTOR_SQLITE_NOCOW_REPAIR_ENV = "OPENCLAW_DOCTOR_SQLITE_NOCOW_REPAIR";
 export const UPDATE_POST_CORE_CONVERGENCE_ENV = "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE";
 export const UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV =
   "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR";
 export const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
-export const UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV =
-  "OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART";
-export const UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV =
-  "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR";
 export const UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV =
   "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION";
 
-/**
- * True iff the caller is the doctor pass that runs WHILE the core package
- * files are actively being swapped (e.g. inside `runGlobalPackageUpdateSteps`'
- * `postVerifyStep`). At this moment npm/pnpm machinery is busy and we must
- * NOT trigger fresh plugin installs that race with the in-flight package
- * manager activity. Configured plugin repair is deferred to the post-core
- * convergence pass.
- *
- * If post-core convergence is also set, treat the call as post-core
- * convergence (post-core wins). This lets a parent process re-enter doctor
- * with both flags set and still get repair behavior.
- *
- * NOTE: only consumers that route through this helper observe the
- * "post-core wins" semantics. Files that still read
- * `OPENCLAW_UPDATE_IN_PROGRESS` directly (`commands/doctor-update.ts`,
- * `commands/doctor-repair-mode.ts`, `commands/doctor.e2e-harness.ts`,
- * `flows/doctor-health-contributions.ts`) treat both flags as
- * "update-in-progress". This is intentional: those paths are control-flow
- * gates (skip warnings, skip checks, e2e shims) where update-in-progress
- * suppression is still the correct behavior even mid-convergence. Migrate
- * a direct reader only when its semantics genuinely diverge between the
- * two phases.
- */
+/** Share the post-swap discovery context through planning and final publication. */
+export function resolvePostCoreConvergenceEnv(
+  env: NodeJS.ProcessEnv | undefined,
+  compatibilityHostVersion?: string,
+): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    OPENCLAW_COMPATIBILITY_HOST_VERSION: compatibilityHostVersion ?? VERSION,
+    [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
+  };
+}
+
+function isExplicitOptOutEnvValue(value: string | undefined): boolean {
+  // Update handoff predates canonical opt-in flags: every non-false value means the
+  // parent opted in, so preserve its broad acceptance until that protocol is retired.
+  const normalized = value?.trim().toLowerCase() ?? "";
+  return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+export function shouldSkipLegacyUpdateDoctorConfigWrite(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isExplicitOptOutEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) &&
+    !isExplicitOptOutEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])
+  );
+}
+
+/** Shipped canaries clear IN_PROGRESS for lint but retain the writable-parent marker. */
+export function isUpdateDoctorLintPass(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]) ||
+    isPostCoreConvergencePass(env) ||
+    isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])
+  );
+}
+
+/** Package swaps defer plugin installation to avoid racing the package manager.
+ * Post-core convergence wins when both markers are present. Direct IN_PROGRESS
+ * readers intentionally retain warning/check suppression during convergence;
+ * only move them here when they need to distinguish those phases. */
 export function isUpdatePackageSwapInProgress(env: NodeJS.ProcessEnv): boolean {
-  if (isPostCoreConvergencePass(env)) {
-    return false;
-  }
-  return isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]);
+  return !isPostCoreConvergencePass(env) && isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]);
 }
 
 /**
@@ -72,15 +84,6 @@ export function isLegacyParentWritableUpdateDoctorPass(env: NodeJS.ProcessEnv): 
     isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]) &&
     !isTruthyEnvValue(env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV])
   );
-}
-
-/**
- * True iff this newer doctor is running under an older updater that does not
- * advertise any post-core handoff marker. Those parents set only
- * `OPENCLAW_UPDATE_IN_PROGRESS`, so configured plugin repair must happen now.
- */
-export function isLegacyPackageUpdateDoctorPass(env: NodeJS.ProcessEnv): boolean {
-  return isUpdatePackageSwapInProgress(env) && !shouldDeferConfiguredPluginInstallRepair(env);
 }
 
 /**

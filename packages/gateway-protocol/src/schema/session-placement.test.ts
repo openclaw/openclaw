@@ -137,13 +137,24 @@ describe("session dispatch protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts only a session selector for worker reclaim", () => {
+  it("accepts a session selector and exact failed generation for Gateway recovery", () => {
     expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", agentId: "main" })).toBe(
       true,
     );
     expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", profileId: "dev" })).toBe(
       false,
     );
+    expect(
+      validateSessionsReclaimParams({
+        key: "agent:main:dispatch",
+        recoverToGateway: { expectedGeneration: 3 },
+      }),
+    ).toBe(true);
+    for (const recoverToGateway of [{}, { expectedGeneration: -1 }, { expectedGeneration: 0.5 }]) {
+      expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", recoverToGateway })).toBe(
+        false,
+      );
+    }
   });
 
   it("accepts exactly the reclaim owner's terminal outcomes", () => {
@@ -173,6 +184,23 @@ describe("session dispatch protocol schemas", () => {
     }
   });
 
+  it("exposes only canonical worker inference on active placement", () => {
+    const active = { state: "active", ...basePlacement, ...workerOwnedFields };
+    expect(Value.Check(SessionPlacementSchema, { ...active, inference: "worker" })).toBe(true);
+    for (const inference of ["gateway", "runtime-local", "unknown"]) {
+      expect(Value.Check(SessionPlacementSchema, { ...active, inference })).toBe(false);
+    }
+    for (const state of ["local", "requested", "draining", "reconciling", "reclaimed", "failed"]) {
+      const placement =
+        state === "local" || state === "requested"
+          ? { state, ...basePlacement }
+          : { ...active, state, ...(state === "failed" ? { recoveryError: "stopped" } : {}) };
+      expect(Value.Check(SessionPlacementSchema, { ...placement, inference: "worker" })).toBe(
+        false,
+      );
+    }
+  });
+
   it("keeps placement states closed", () => {
     for (const state of placementStates) {
       expect(Value.Check(SessionPlacementStateSchema, state)).toBe(true);
@@ -199,6 +227,72 @@ describe("session dispatch protocol schemas", () => {
         workerBundleHash,
       }),
     ).toBe(false);
+    for (const state of ["local", "requested"]) {
+      expect(
+        Value.Check(SessionPlacementSchema, {
+          state,
+          ...basePlacement,
+          machine: { class: "medium" },
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("carries optional machine identity through worker and terminal placements", () => {
+    for (const placement of [
+      { state: "provisioning" },
+      { state: "syncing", ...environmentFields },
+      { state: "starting", ...environmentFields, ...workspaceFields },
+      { state: "active", ...workerOwnedFields },
+      { state: "draining", ...workerOwnedFields },
+      { state: "reconciling", ...workerOwnedFields },
+      { state: "reclaimed" },
+      { state: "failed", recoveryError: "worker unavailable" },
+    ]) {
+      for (const machine of [
+        { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
+        { class: "medium" },
+        { os: "windows/wsl2" },
+        {
+          class: "x".repeat(128),
+          os: "x".repeat(64),
+          osLabel: "x".repeat(64),
+          cpu: 65_536,
+          memoryGb: 65_536,
+        },
+      ]) {
+        expect(
+          Value.Check(SessionPlacementSchema, { ...basePlacement, ...placement, machine }),
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("keeps machine identity closed and bounded", () => {
+    for (const machine of [
+      { class: "" },
+      { class: "x".repeat(129) },
+      { os: "" },
+      { os: "x".repeat(65) },
+      { osLabel: "" },
+      { osLabel: "x".repeat(65) },
+      { cpu: 0 },
+      { cpu: 1.5 },
+      { cpu: 65_537 },
+      { memoryGb: 0 },
+      { memoryGb: 1.5 },
+      { memoryGb: 65_537 },
+      { class: "medium", extra: true },
+    ]) {
+      expect(
+        Value.Check(SessionPlacementSchema, {
+          state: "active",
+          ...basePlacement,
+          ...workerOwnedFields,
+          machine,
+        }),
+      ).toBe(false);
+    }
   });
 
   it("allows only the optional reserved environment while provisioning", () => {
@@ -420,8 +514,10 @@ describe("session dispatch protocol schemas", () => {
       Value.Check(SessionPlacementSchema, {
         ...failed,
         recoveryAction: "restart",
+        retryOnSend: true,
       }),
     ).toBe(true);
+    expect(Value.Check(SessionPlacementSchema, { ...failed, retryOnSend: false })).toBe(false);
     expect(
       Value.Check(SessionPlacementSchema, {
         ...failed,

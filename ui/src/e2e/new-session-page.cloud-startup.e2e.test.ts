@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
@@ -15,8 +16,6 @@ import {
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 const suite = createNewSessionPageE2eSuite();
-const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
-  /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
 
 suite.define(() => {
   it("clears cloud placement when the selected agent changes", async () => {
@@ -64,7 +63,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
@@ -85,7 +84,7 @@ suite.define(() => {
         .poll(() =>
           page
             .locator("wa-popover.new-session-page__where-popover")
-            .getByRole("button", { name: "Cloud · aws" })
+            .locator('[data-value="cloud:aws"]')
             .isDisabled(),
         )
         .toBe(true);
@@ -163,7 +162,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.evaluate(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
@@ -232,7 +231,10 @@ suite.define(() => {
       );
       expect(startupError).toContain("send outcome unknown");
       let recoveryRuntimeRequested = false;
-      await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
+      const recoveryRuntimeRequest = controlUiE2eBuiltModuleRequest(
+        "ui/src/app/session-placement-startup.runtime.ts",
+      );
+      await page.route(recoveryRuntimeRequest, async (route) => {
         recoveryRuntimeRequested = true;
         await recoveryRuntimeLoad.promise;
         await route.continue();
@@ -410,7 +412,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.locator(".new-session-page__message").fill("start another cloud task");
       await expect

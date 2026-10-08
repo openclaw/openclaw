@@ -10,6 +10,8 @@ type LiveTerminalIdentity = {
 };
 
 const liveTerminalIdentities = new WeakMap<object, LiveTerminalIdentity>();
+// Outcomes land beside published history arrays; caches keyed by them key this too.
+let liveTerminalRevision = 0;
 const authoritativeTerminals = new WeakMap<object, AuthoritativeTerminal>();
 
 type AuthoritativeTerminal = {
@@ -32,34 +34,35 @@ export function rememberLiveTerminalRun(
       ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
       ...(disposition ? { disposition } : {}),
     });
+    liveTerminalRevision += 1;
   }
   return message;
 }
 
+export function readLiveTerminalRevision(): number {
+  return liveTerminalRevision;
+}
+
 export function isLiveTerminalForRun(message: unknown, runId: string): boolean {
-  return Boolean(
-    message && typeof message === "object" && liveTerminalIdentities.get(message)?.runId === runId,
-  );
+  return readLiveTerminalRunId(message) === runId;
+}
+
+function readLiveTerminalIdentity(message: unknown): LiveTerminalIdentity | undefined {
+  return message && typeof message === "object" ? liveTerminalIdentities.get(message) : undefined;
 }
 
 export function readLiveTerminalRunId(message: unknown): string | null {
-  return message && typeof message === "object"
-    ? (liveTerminalIdentities.get(message)?.runId ?? null)
-    : null;
+  return readLiveTerminalIdentity(message)?.runId ?? null;
 }
 
 export function readLiveTerminalAfterBoundaryRunId(message: unknown): string | null {
-  return message && typeof message === "object"
-    ? (liveTerminalIdentities.get(message)?.afterBoundaryRunId ?? null)
-    : null;
+  return readLiveTerminalIdentity(message)?.afterBoundaryRunId ?? null;
 }
 
 export function readLiveTerminalDisposition(
   message: unknown,
 ): LiveTerminalIdentity["disposition"] | null {
-  return message && typeof message === "object"
-    ? (liveTerminalIdentities.get(message)?.disposition ?? null)
-    : null;
+  return readLiveTerminalIdentity(message)?.disposition ?? null;
 }
 
 export function rememberAuthoritativeTerminal(options: {

@@ -1,25 +1,19 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputs,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
 import {
@@ -35,6 +29,16 @@ import { createReplyOperation } from "./reply-run-registry.js";
 import { createTypingController } from "./typing.js";
 
 vi.mock("./agent-runner-execution.js", () => ({ executeAgentTurn: vi.fn() }));
+
+const fault = useSqliteWorkerFault([
+  {
+    name: "fail_second_source",
+    match: /^insert into transcript_events\b/u,
+    sql: `CREATE TEMP TRIGGER fail_second_source BEFORE INSERT ON main.transcript_events
+      WHEN instr(NEW.event_json, 'second:user') > 0
+      BEGIN SELECT RAISE(ABORT, 'injected second source failure'); END;`,
+  },
+]);
 
 describe("followup queue durable input consumption", () => {
   const fixture = useTempSessionsFixture("openclaw-queue-pending-");
@@ -101,14 +105,11 @@ describe("followup queue durable input consumption", () => {
     const first = await createStagedRun("first");
     const second = await createStagedRun("second");
     await persistQueuedRun(first.run);
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope()))).db;
-    database.exec(
-      "CREATE TEMP TRIGGER fail_second_source BEFORE INSERT ON transcript_events WHEN instr(NEW.event_json, 'second:user') > 0 BEGIN SELECT RAISE(ABORT, 'injected second source failure'); END",
-    );
+    fault.enable();
     try {
       await expect(persistQueuedRun(second.run)).rejects.toThrow("injected second source failure");
     } finally {
-      database.exec("DROP TRIGGER fail_second_source");
+      fault.disable();
     }
     expect(first.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
     expect(second.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(false);
@@ -143,7 +144,7 @@ describe("followup queue durable input consumption", () => {
       expect.objectContaining({ content: "first approved", idempotencyKey: "first:user" }),
       expect.objectContaining({ content: "second approved", idempotencyKey: "second:user" }),
     ]);
-    expect(listSessionPendingInputs(scope()).items).toEqual([]);
+    expect((await listSessionPendingInputs(scope())).items).toEqual([]);
     expect(first.beforeMessageWrite).toHaveBeenCalledOnce();
     expect(second.beforeMessageWrite).toHaveBeenCalledOnce();
   });
@@ -204,7 +205,7 @@ describe("followup queue durable input consumption", () => {
         const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
         const typing = createTypingController({});
         try {
-          pendingTotals.push(listSessionPendingInputs(scope()).total);
+          pendingTotals.push((await listSessionPendingInputs(scope())).total);
           await admitFollowupRunLifecycle(run);
           if (abortDuringPreparation) {
             const recorder = second.run.userTurnTranscriptRecorder!;
@@ -234,7 +235,7 @@ describe("followup queue durable input consumption", () => {
             onToolResult: async () => {},
             onCompactionNoticePayload: async () => {},
           });
-          pendingTotals.push(listSessionPendingInputs(scope()).total);
+          pendingTotals.push((await listSessionPendingInputs(scope())).total);
         } catch (error) {
           failures.push(error);
         } finally {
@@ -262,7 +263,7 @@ describe("followup queue durable input consumption", () => {
       if (!abortDuringPreparation) {
         expect(messages[0]?.message).toMatchObject({ role: "user", content: expected });
       }
-      expect(listSessionPendingInputs(scope()).total).toBe(abortDuringPreparation ? 2 : 0);
+      expect((await listSessionPendingInputs(scope())).total).toBe(abortDuringPreparation ? 2 : 0);
       expect(first.beforeMessageWrite).toHaveBeenCalledOnce();
       expect(second.beforeMessageWrite).toHaveBeenCalledOnce();
     },
@@ -291,7 +292,9 @@ describe("followup queue durable input consumption", () => {
       try {
         await admitFollowupRunLifecycle(run);
         await persistQueuedRun(run);
-        pendingRunIds.push(listSessionPendingInputs(scope()).items.map((input) => input.runId));
+        pendingRunIds.push(
+          (await listSessionPendingInputs(scope())).items.map((input) => input.runId),
+        );
       } catch (error) {
         failures.push(error);
       }

@@ -193,7 +193,7 @@ describe("admitFollowupTurn", () => {
         sessionFile: "main",
         modelSelectionLocked: true,
       });
-      expect(result.turn.currentInboundContext).toEqual({ text: "fresh goal" });
+      expect(result.turn.queued.currentInboundContext).toEqual({ text: "fresh goal" });
       expect(result.turn.sendPolicy).toBe("deny");
       expect(result.turn.session.current()).toBe(admittedEntry);
     }
@@ -760,7 +760,6 @@ describe("admitFollowupTurn", () => {
       kind: "admitted",
       turn: {
         sendPolicy: "deny",
-        currentInboundContext: { text: "compacted-session" },
         queued: { currentInboundContext: { text: "compacted-session" } },
       },
     });
@@ -975,23 +974,6 @@ describe("admitFollowupTurn", () => {
     expect(operation.complete).toHaveBeenCalledOnce();
   });
 
-  it("returns a source-suppression-deliverable preflight failure", async () => {
-    const operation = createOperation();
-    state.admitReply.mockResolvedValue({ status: "owned", operation });
-    state.preflight.mockRejectedValue(new Error("preflight failed"));
-
-    const result = await admitFollowupTurn({
-      queued: createRun(),
-      defaults: createDefaults(),
-    });
-
-    expect(result).toMatchObject({
-      kind: "admitted",
-      turn: { preflightFailurePayload: { text: "preflight failed" } },
-    });
-    expect(operation.fail).toHaveBeenCalledWith("run_failed", expect.any(Error));
-  });
-
   it("refreshes send policy before returning a preflight failure", async () => {
     const operation = createOperation();
     const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
@@ -1011,6 +993,7 @@ describe("admitFollowupTurn", () => {
       kind: "admitted",
       turn: { sendPolicy: "deny", preflightFailurePayload: { text: "preflight failed" } },
     });
+    expect(operation.fail).toHaveBeenCalledWith("run_failed", expect.any(Error));
   });
 
   it.each([undefined, "full"] as const)(

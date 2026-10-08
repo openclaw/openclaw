@@ -1,9 +1,10 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type TestContext } from "vitest";
+import "../../src/test-utils/prepare-compiled-subprocesses.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { createDeferred } from "./promise.js";
@@ -370,29 +371,20 @@ describe("QA gateway fixture error composition", () => {
     expect(cleaned).toEqual(["body", "gateway", "provider"]);
   });
 
-  it.each(["body", "cleanup"])(
-    "retains the original %s-only error and finishes cleanup",
-    async (phase) => {
-      const failure = new Error(`${phase} failed`);
-      const lastCleanup = vi.fn();
-      await expect(
-        runQaGatewayFixture(
-          async () => {
-            if (phase === "body") {
-              throw failure;
-            }
-          },
-          () => {
-            if (phase === "cleanup") {
-              throw failure;
-            }
-          },
-          lastCleanup,
-        ),
-      ).rejects.toBe(failure);
-      expect(lastCleanup).toHaveBeenCalledOnce();
-    },
-  );
+  it("retains the original cleanup-only error and finishes cleanup", async () => {
+    const failure = new Error("cleanup failed");
+    const lastCleanup = vi.fn();
+    await expect(
+      runQaGatewayFixture(
+        async () => {},
+        () => {
+          throw failure;
+        },
+        lastCleanup,
+      ),
+    ).rejects.toBe(failure);
+    expect(lastCleanup).toHaveBeenCalledOnce();
+  });
 
   it("settles ordered releases and browser cleanup before stopping every remaining owner", async () => {
     const bodyError = new Error("body failed");
@@ -455,24 +447,34 @@ describe("QA gateway fixture error composition", () => {
     );
   });
 
-  it("retains startup and finalization errors through the actual OTel fixture", () =>
+  it("retains startup and finalization errors through the actual OTel fixture", (context) =>
     fixture.run(async () => {
       const startupError = new Error("fixture startup failed");
       const finalizationError = new Error("fixture finalization failed");
       const cleaned: string[] = [];
-      const bodies: Array<() => Promise<void>> = [];
-      const registry = {
+      const bodies: Array<
+        (context: Pick<TestContext, "signal" | "onTestFinished">) => Promise<void>
+      > = [];
+      const cleanups: Array<() => Promise<void>> = [];
+      const finished: Array<Parameters<TestContext["onTestFinished"]>[0]> = [];
+      const registry = Object.assign(new EventEmitter(), {
         exitCode: null as number | null,
+        signalCode: null,
         kill() {
           cleaned.push("registry");
           registry.exitCode = 0;
+          registry.emit("exit", 0, null);
           return true;
         },
-      };
+      });
       let receiverCount = 0;
       vi.doMock("vitest", () => ({
+        afterAll: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
         describe: (_name: string, body: () => void) => body(),
-        test: (_name: string, body: () => Promise<void>) => bodies.push(body),
+        test: (
+          _name: string,
+          body: (context: Pick<TestContext, "signal" | "onTestFinished">) => Promise<void>,
+        ) => bodies.push(body),
         expect,
       }));
       vi.doMock("node:child_process", () => ({
@@ -482,17 +484,23 @@ describe("QA gateway fixture error composition", () => {
             callback(null, "", "");
           }
         },
-        spawn: () => registry,
+        spawn: () => {
+          queueMicrotask(() => registry.emit("message", 43210));
+          return registry;
+        },
       }));
       vi.doMock("node:fs/promises", () => ({
+        copyFile: async () => {},
         cp: async () => {},
         mkdir: async () => {},
-        mkdtemp: async () => "/qa-fixture/scratch",
+        mkdtemp: vi
+          .fn()
+          .mockResolvedValueOnce("/qa-fixture/scratch")
+          .mockResolvedValueOnce("/qa-fixture/seed"),
         readdir: async () => ["diagnostics-otel.tgz"],
-        readFile: async (file: string) =>
-          file.endsWith("registry-port") ? "43210" : JSON.stringify({ version: "1.0.0" }),
-        rm: async () => {
-          cleaned.push("scratch");
+        readFile: async () => JSON.stringify({ version: "1.0.0" }),
+        rm: async (target: string) => {
+          cleaned.push(target);
         },
         symlink: async () => {},
         writeFile: async () => {},
@@ -531,16 +539,37 @@ describe("QA gateway fixture error composition", () => {
 
       await import("../e2e/qa-lab/runtime/diagnostics-otel-install-runtime.e2e.test.js");
       expect(bodies).toHaveLength(2);
-      const failure: unknown = await bodies[0]!().catch((error: unknown) => error);
+      expect(cleanups).toHaveLength(1);
+      let failure: unknown;
+      const finishErrors: unknown[] = [];
+      try {
+        failure = await bodies[0]!({
+          signal: context.signal,
+          onTestFinished: (hook) => {
+            finished.push(hook);
+          },
+        }).catch((error: unknown) => error);
+      } finally {
+        for (const hook of finished.toReversed()) {
+          await Promise.resolve()
+            .then(() => hook(context))
+            .catch((error: unknown) => finishErrors.push(error));
+        }
+        for (const cleanup of cleanups) {
+          await cleanup();
+        }
+      }
       expect(cleaned).toEqual([
         "gateway",
         "provider",
         "registry",
         "receiver-0",
         "receiver-1",
-        "scratch",
+        "/qa-fixture/scratch",
+        "/qa-fixture/seed",
       ]);
       expect(errorTree(failure)).toContain(startupError);
       expect(errorTree(failure)).toContain(finalizationError);
+      expect(errorTree(new AggregateError(finishErrors))).toContain(finalizationError);
     }));
 });

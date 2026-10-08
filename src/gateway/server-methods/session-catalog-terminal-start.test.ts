@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { catalogStartHandler } from "./session-catalog-terminal-start.js";
+import { sessionCatalogHandlers } from "./session-catalog.js";
 
 vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profiles.js")>()),
@@ -23,9 +24,11 @@ function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatal
 }
 
 let activeProvider: SessionCatalogProvider;
-const handler = catalogStartHandler((catalogId) =>
-  activeProvider.id === catalogId ? activeProvider : undefined,
-);
+vi.mock("./session-catalog-provider-access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-catalog-provider-access.js")>()),
+  catalogRegistrationSnapshot: () => ({ providers: [activeProvider] }),
+}));
+const handler = sessionCatalogHandlers["sessions.catalog.startTerminal"]!;
 
 function startCall(
   params: unknown,
@@ -180,10 +183,7 @@ describe("sessions.catalog.startTerminal", () => {
 
   it("rechecks local cwd after the provider plan resolves", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-catalog-start-"));
-    let releasePlan!: () => void;
-    const planGate = new Promise<void>((resolve) => {
-      releasePlan = resolve;
-    });
+    const { promise: planGate, resolve: releasePlan } = createDeferred();
     const startTerminalSession = vi.fn(async () => {
       await planGate;
       return { kind: "local" as const, argv: ["codex"], cwd };

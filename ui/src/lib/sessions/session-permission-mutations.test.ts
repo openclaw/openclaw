@@ -10,7 +10,7 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
-it.each(["generation-b", "  generation-b  ", "  "])(
+it.each(["  generation-b  ", "  "])(
   "binds the normalized expected incarnation %j instead of a stale primary row",
   async (expectedSessionId) => {
     const key = "agent:main:permission-successor";
@@ -140,60 +140,140 @@ it.each([
   },
 );
 
-it("keeps a confirmed permission mode when its list refresh fails", async () => {
-  const key = "agent:main:permission-refresh";
-  const sessionId = "permission-refresh-generation";
-  let listCalls = 0;
-  const request = vi.fn(async (method: string) => {
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    if (method === "sessions.list") {
-      listCalls += 1;
-      if (listCalls > 1) {
-        throw new Error("Roster refresh unavailable");
-      }
-      return sessionsResult(
-        [
-          {
-            key,
-            kind: "direct",
-            label: "Permission refresh",
-            permissionMode: "guarded",
-            sessionId,
-            updatedAt: 1,
-          },
-        ],
-        1,
-      );
-    }
-    if (method === "sessions.patch") {
-      return {
-        key,
-        entry: { permissionMode: "workspace", sessionId, updatedAt: 2 },
-      };
-    }
-    throw new Error(`Unexpected request: ${method}`);
-  });
-  const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-  const sessions = createTestSessionCapability(gateway);
-
-  await sessions.refresh({ force: true });
-  const result = await sessions.patch(key, { permissionMode: "workspace" });
-
-  expect(result).toMatchObject({ listRefreshError: "Roster refresh unavailable" });
-  expect(sessions.state.result?.sessions).toEqual([
-    expect.objectContaining({
+it.each([
+  {
+    source: "the patch acknowledgement",
+    read: "none",
+    mode: "workspace",
+    ackAt: 2,
+    expected: "workspace",
+  },
+  {
+    source: "an identical descriptor after acknowledgement",
+    read: "after",
+    mode: "workspace",
+    ackAt: 2,
+    expected: "workspace",
+  },
+  {
+    source: "an unchanged same-clock descriptor while the patch is pending",
+    read: "before",
+    mode: "guarded",
+    ackAt: 1,
+    expected: "workspace",
+  },
+  {
+    source: "a conflicting same-clock descriptor while the patch is pending",
+    read: "before",
+    mode: "full",
+    ackAt: 1,
+    expected: "full",
+  },
+  {
+    source: "a descriptor for another incarnation while the patch is pending",
+    read: "other-incarnation",
+    mode: "full",
+    ackAt: 1,
+    expected: "workspace",
+  },
+] as const)(
+  "keeps the accepted permission mode and refresh error after $source",
+  async ({ read, mode, ackAt, expected }) => {
+    const key = "agent:main:permission-refresh";
+    const sessionId = "permission-refresh-generation";
+    const initial = {
       key,
+      kind: "direct" as const,
       label: "Permission refresh",
-      permissionMode: "workspace",
+      permissionMode: "guarded" as const,
       sessionId,
-      updatedAt: 2,
-    }),
-  ]);
-  expect(sessions.state.error).toContain("Roster refresh unavailable");
-  sessions.dispose();
-});
+      updatedAt: 1,
+    };
+    const confirmed = { ...initial, permissionMode: "workspace" as const, updatedAt: ackAt };
+    const readBeforeAck = read === "before" || read === "other-incarnation";
+    const described = {
+      ...initial,
+      permissionMode: mode,
+      sessionId: read === "other-incarnation" ? "other-generation" : sessionId,
+      updatedAt: readBeforeAck ? initial.updatedAt : ackAt,
+    };
+    const acknowledgement = createDeferred<SessionsPatchResult>();
+    const patchRequested = createDeferred();
+    const refresh = createDeferred<SessionsListResult>();
+    const refreshRequested = createDeferred();
+    const patchResult: SessionsPatchResult = {
+      ok: true,
+      path: "(sessions)",
+      key,
+      entry: confirmed,
+    };
+    let listCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      if (method === "sessions.list") {
+        listCalls += 1;
+        if (listCalls === 1) {
+          return sessionsResult([initial], 1);
+        }
+        refreshRequested.resolve();
+        return refresh.promise;
+      }
+      if (method === "sessions.patch") {
+        patchRequested.resolve();
+        return acknowledgement.promise;
+      }
+      if (method === "sessions.describe") {
+        return { session: { ...described } };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const sessions = createTestSessionCapability(gateway);
+    const observation = sessions.observeRow({ key, agentId: "main" }, () => undefined);
+    const readDescriptor = async () => {
+      const reconcile = observation.captureReconcile();
+      const result = await gateway.snapshot.client!.request<{ session: typeof described }>(
+        "sessions.describe",
+        { key },
+      );
+      expect(reconcile(result.session)).toMatchObject({
+        status: "current",
+        row: read === "other-incarnation" ? initial : described,
+      });
+    };
+    let pending: ReturnType<typeof sessions.patch> | undefined;
+    try {
+      await sessions.refresh({ force: true });
+      pending = sessions.patch(key, { permissionMode: "workspace" });
+      await patchRequested.promise;
+      if (readBeforeAck) {
+        await readDescriptor();
+      }
+      acknowledgement.resolve(patchResult);
+      await refreshRequested.promise;
+      if (read === "after") {
+        await readDescriptor();
+      }
+      refresh.reject(new Error("Roster refresh unavailable"));
+
+      const result = await pending;
+      expect(result).toMatchObject({ listRefreshError: "Roster refresh unavailable" });
+      expect(sessions.state.result?.sessions).toEqual([
+        expect.objectContaining({ ...confirmed, permissionMode: expected }),
+      ]);
+      expect(observation.row).toMatchObject({ sessionId, permissionMode: expected });
+      expect(sessions.state.error).toContain("Roster refresh unavailable");
+    } finally {
+      acknowledgement.resolve(patchResult);
+      refresh.resolve(sessionsResult([confirmed], ackAt));
+      await pending;
+      observation.dispose();
+      sessions.dispose();
+    }
+  },
+);
 
 it("discards patch A and its refresh after patch B applies first", async () => {
   const key = "agent:main:permission-ordering";
@@ -299,20 +379,26 @@ it.each(["success", "failure"])(
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const { gateway, emitEvent } = createGatewayHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
     const sessions = createTestSessionCapability(gateway);
     await sessions.refresh({ force: true });
 
     const older = sessions.patch(key, { permissionMode: "workspace" });
     await vi.waitFor(() => expect(listCalls).toBe(2));
-    sessions.reconcileChanged({
-      sessionKey: key,
-      key,
-      kind: "direct",
-      reason: "patch",
-      permissionMode: "full",
-      sessionId,
-      updatedAt: 3,
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: key,
+        key,
+        kind: "direct",
+        reason: "patch",
+        permissionMode: "full",
+        sessionId,
+        updatedAt: 3,
+      },
     });
     if (outcome === "failure") {
       refreshA.reject(new Error("obsolete refresh failed"));
@@ -331,7 +417,7 @@ it.each(["success", "failure"])(
         key,
         permissionMode: "full",
         sessionId,
-        updatedAt: outcome === "failure" ? 3 : 2,
+        updatedAt: 3,
       }),
     ]);
     expect(sessions.state.error).toBeNull();

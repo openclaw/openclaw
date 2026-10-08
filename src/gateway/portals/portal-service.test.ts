@@ -1,15 +1,31 @@
 import { request, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import * as advertisedLanHost from "../../infra/advertised-lan-host.js";
 import { readResponseWithLimit } from "../../infra/http-body.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import * as httpListen from "../server/http-listen.js";
-import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
+import {
+  createGatewayPortalService,
+  createPortalOperations,
+  type GatewayPortalService,
+} from "./portal-service.js";
 
 const services = new Set<GatewayPortalService>();
 
 async function unavailableWorkerConnection(): Promise<Duplex> {
   throw new Error("Worker connection unavailable");
+}
+
+function workerTarget(environmentId = "cloud-a", ownerEpoch = 7) {
+  return {
+    kind: "worker" as const,
+    environmentId,
+    ownerEpoch,
+    remotePort: 3000,
+    connect: unavailableWorkerConnection,
+  };
 }
 
 afterEach(async () => {
@@ -46,6 +62,43 @@ function reportTargetPortCollision(server: Server, targetPort: number): void {
 }
 
 describe("portal open authority fence", () => {
+  it("keeps a scoped stream after request completion and retires it with its resource owner", async () => {
+    await withServer(
+      (_req, res) => {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write("data: live\n\n");
+      },
+      async (targetUrl) => {
+        const { service } = makeService(["127.0.0.1"]);
+        const owner = new AbortController();
+        let requestCurrent = true;
+        const release = vi.fn();
+        const portal = await service.open({
+          targetPort: Number(new URL(targetUrl).port),
+          ownerSignal: owner.signal,
+          assertCurrent: () => {
+            if (!requestCurrent) {
+              throw new Error("request completed");
+            }
+          },
+          onClose: release,
+        });
+        requestCurrent = false;
+        expect(service.list()).toEqual([portal]);
+        expect(await getStatus("127.0.0.1", portal.listenPort, "/")).toBe(401);
+        const response = await fetch(portal.url);
+        const reader = response.body!.getReader();
+        expect((await reader.read()).done).toBe(false);
+        owner.abort();
+        expect(service.list()).toEqual([]);
+        await expect(reader.read()).rejects.toThrow();
+        expect(service.list()).toEqual([]);
+        await service.closeAll();
+        expect(release).toHaveBeenCalledOnce();
+      },
+    );
+  });
+
   it("refuses to mutate a reused portal when the caller's authority lapsed", async () => {
     const { service } = makeService(["127.0.0.1"]);
     const first = await service.open({ targetPort: 41234, title: "Live" });
@@ -65,29 +118,45 @@ describe("portal open authority fence", () => {
     expect(releaseRejected).toHaveBeenCalledOnce();
   });
 
-  it("releases the listener and target when authority is lost during startup", async () => {
+  it.each([
+    ["owner", "session reset"],
+    ["listener", "Worker portal authority changed"],
+    ["LAN", "authority revoked during LAN discovery"],
+  ])("releases unpublished resources after %s authority loss", async (stage, message) => {
+    const owner = new AbortController();
     const actualListen = httpListen.listenGatewayHttpServer;
     let authorityCurrent = true;
     let listener: Server | undefined;
     vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
       listener = params.httpServer;
       await actualListen(params);
-      authorityCurrent = false;
+      if (stage === "owner") {
+        owner.abort(new Error(message));
+      } else if (stage === "listener") {
+        authorityCurrent = false;
+      }
     });
-    const { service, httpServers } = makeService(["127.0.0.1"]);
+    if (stage === "LAN") {
+      vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore").mockImplementation(async () => {
+        authorityCurrent = false;
+        return "192.168.1.20";
+      });
+    }
+    const { service, httpServers } = makeService([stage === "LAN" ? "0.0.0.0" : "127.0.0.1"]);
     const releaseTarget = vi.fn();
 
     await expect(
       service.open({
         targetPort: 3000,
         onClose: releaseTarget,
+        ownerSignal: owner.signal,
         assertCurrent: () => {
           if (!authorityCurrent) {
-            throw new Error("Worker portal authority changed");
+            throw new Error(message);
           }
         },
       }),
-    ).rejects.toThrow("Worker portal authority changed");
+    ).rejects.toThrow(message);
 
     expect(service.list()).toEqual([]);
     expect(httpServers).toEqual([]);
@@ -97,93 +166,78 @@ describe("portal open authority fence", () => {
 });
 
 describe("gateway portal service", () => {
-  it("allocates one port across every frozen bind host", async () => {
-    const { service, httpServers } = makeService(["127.0.0.1", "::1"]);
-    const portal = await service.open({ targetPort: 3000, title: "App" });
+  it.each([false, true])(
+    "owns all listeners after target-port collision exhaustion=%s",
+    async (exhausted) => {
+      await withServer(
+        (_req, res) => res.end("target"),
+        async (targetUrl) => {
+          const targetPort = Number(new URL(targetUrl).port);
+          const actualListen = httpListen.listenGatewayHttpServer;
+          const calls: Array<{ host: string; port: number }> = [];
+          const attemptedServers = new Set<Server>();
+          let primaryAttempt = 0;
+          const listen = vi
+            .spyOn(httpListen, "listenGatewayHttpServer")
+            .mockImplementation(async (params) => {
+              calls.push({ host: params.bindHost, port: params.port });
+              attemptedServers.add(params.httpServer);
+              await actualListen(params);
+              if (params.bindHost === "127.0.0.1" && params.port === 0) {
+                primaryAttempt += 1;
+                if (exhausted || primaryAttempt === 1) {
+                  reportTargetPortCollision(params.httpServer, targetPort);
+                }
+              }
+            });
+          const { service, httpServers } = makeService(
+            exhausted ? ["127.0.0.1"] : ["127.0.0.1", "::1"],
+          );
 
-    expect(portal).toMatchObject({ id: "p3000", port: 3000, title: "App" });
-    expect(portal.listenPort).toBeGreaterThan(0);
-    expect(httpServers).toHaveLength(2);
-    expect(await getStatus("127.0.0.1", portal.listenPort, "/")).toBe(401);
-    expect(await getStatus("::1", portal.listenPort, "/")).toBe(401);
-  });
-
-  it("retries a target-port collision before binding sibling hosts", async () => {
-    await withServer(
-      (_req, res) => res.end("target"),
-      async (targetUrl) => {
-        const targetPort = Number(new URL(targetUrl).port);
-        const actualListen = httpListen.listenGatewayHttpServer;
-        const calls: Array<{ host: string; port: number }> = [];
-        let primaryAttempt = 0;
-        vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
-          calls.push({ host: params.bindHost, port: params.port });
-          await actualListen(params);
-          if (params.bindHost === "127.0.0.1" && params.port === 0) {
-            primaryAttempt += 1;
-            if (primaryAttempt === 1) {
-              reportTargetPortCollision(params.httpServer, targetPort);
-            }
+          if (exhausted) {
+            await expect(service.open({ targetPort })).rejects.toThrow(
+              `Portal listener repeatedly allocated target port ${targetPort}`,
+            );
+            expect(listen).toHaveBeenCalledTimes(10);
+            expect(attemptedServers.size).toBe(1);
+            expect(httpServers).toEqual([]);
+            const [primaryServer] = attemptedServers;
+            expect(primaryServer?.listening).toBe(false);
+            expect(primaryServer?.address()).toBeNull();
+            return;
           }
-        });
-        const { service, httpServers } = makeService(["127.0.0.1", "::1"]);
 
-        const portal = await service.open({ targetPort });
+          const portal = await service.open({ targetPort, title: "App" });
 
-        expect(portal.listenPort).not.toBe(targetPort);
-        expect(calls).toEqual([
-          { host: "127.0.0.1", port: 0 },
-          { host: "127.0.0.1", port: 0 },
-          { host: "::1", port: portal.listenPort },
-        ]);
-        expect(httpServers).toHaveLength(2);
-        expect(httpServers.every((server) => server.listening)).toBe(true);
-        for (const server of httpServers) {
-          expect(server.address()).toMatchObject({ port: portal.listenPort });
-        }
-        const response = await fetch(portal.url);
-        expect(response.status).toBe(200);
-        expect((await readResponseWithLimit(response, 32)).toString("utf8")).toBe("target");
+          expect(portal).toMatchObject({ id: `p${targetPort}`, port: targetPort, title: "App" });
+          expect(portal.listenPort).toBeGreaterThan(0);
+          expect(await getStatus("127.0.0.1", portal.listenPort, "/")).toBe(401);
+          expect(await getStatus("::1", portal.listenPort, "/")).toBe(401);
+          expect(portal.listenPort).not.toBe(targetPort);
+          expect(calls).toEqual([
+            { host: "127.0.0.1", port: 0 },
+            { host: "127.0.0.1", port: 0 },
+            { host: "::1", port: portal.listenPort },
+          ]);
+          expect(httpServers).toHaveLength(2);
+          expect(httpServers.every((server) => server.listening)).toBe(true);
+          for (const server of httpServers) {
+            expect(server.address()).toMatchObject({ port: portal.listenPort });
+          }
+          const response = await fetch(portal.url);
+          expect(response.status).toBe(200);
+          expect((await readResponseWithLimit(response, 32)).toString("utf8")).toBe("target");
 
-        const ownedServers = [...httpServers];
-        await service.closeAll();
-        expect(httpServers).toEqual([]);
-        expect(ownedServers.every((server) => !server.listening && server.address() === null)).toBe(
-          true,
-        );
-      },
-    );
-  });
-
-  it("cleans up when every allocation collides with the target port", async () => {
-    await withServer(
-      (_req, res) => res.end("target"),
-      async (targetUrl) => {
-        const targetPort = Number(new URL(targetUrl).port);
-        const actualListen = httpListen.listenGatewayHttpServer;
-        const attemptedServers = new Set<Server>();
-        const listen = vi
-          .spyOn(httpListen, "listenGatewayHttpServer")
-          .mockImplementation(async (params) => {
-            attemptedServers.add(params.httpServer);
-            await actualListen(params);
-            reportTargetPortCollision(params.httpServer, targetPort);
-          });
-        const { service, httpServers } = makeService(["127.0.0.1"]);
-
-        await expect(service.open({ targetPort })).rejects.toThrow(
-          `Portal listener repeatedly allocated target port ${targetPort}`,
-        );
-
-        expect(listen).toHaveBeenCalledTimes(10);
-        expect(attemptedServers.size).toBe(1);
-        expect(httpServers).toEqual([]);
-        const [primaryServer] = attemptedServers;
-        expect(primaryServer?.listening).toBe(false);
-        expect(primaryServer?.address()).toBeNull();
-      },
-    );
-  });
+          const ownedServers = [...httpServers];
+          await service.closeAll();
+          expect(httpServers).toEqual([]);
+          expect(
+            ownedServers.every((server) => !server.listening && server.address() === null),
+          ).toBe(true);
+        },
+      );
+    },
+  );
 
   it("updates an existing target without replacing its listener or token", async () => {
     const { service, httpServers } = makeService(["127.0.0.1"]);
@@ -227,34 +281,16 @@ describe("gateway portal service", () => {
     const local = await service.open({ targetPort: 3000 });
     const worker = await service.open({
       targetPort: 3000,
-      target: {
-        kind: "worker",
-        environmentId: "cloud/a",
-        ownerEpoch: 7,
-        remotePort: 3000,
-        connect: unavailableWorkerConnection,
-      },
+      target: workerTarget("cloud/a", 7),
       origin: "Cloud worker A",
     });
     const otherWorker = await service.open({
       targetPort: 3000,
-      target: {
-        kind: "worker",
-        environmentId: "cloud-a",
-        ownerEpoch: 7,
-        remotePort: 3000,
-        connect: unavailableWorkerConnection,
-      },
+      target: workerTarget("cloud-a", 7),
     });
     const staleWorker = await service.open({
       targetPort: 3000,
-      target: {
-        kind: "worker",
-        environmentId: "cloud/a",
-        ownerEpoch: 6,
-        remotePort: 3000,
-        connect: unavailableWorkerConnection,
-      },
+      target: workerTarget("cloud/a", 6),
     });
 
     expect(local.id).toBe("p3000");
@@ -273,24 +309,12 @@ describe("gateway portal service", () => {
     const closeCurrentForward = vi.fn();
     const stale = await service.open({
       targetPort: 3000,
-      target: {
-        kind: "worker",
-        environmentId: "cloud-a",
-        ownerEpoch: 6,
-        remotePort: 3000,
-        connect: unavailableWorkerConnection,
-      },
+      target: workerTarget("cloud-a", 6),
       onClose: closeStaleForward,
     });
     const current = await service.open({
       targetPort: 3000,
-      target: {
-        kind: "worker",
-        environmentId: "cloud-a",
-        ownerEpoch: 7,
-        remotePort: 3000,
-        connect: unavailableWorkerConnection,
-      },
+      target: workerTarget("cloud-a", 7),
       onClose: closeCurrentForward,
     });
 
@@ -310,13 +334,7 @@ describe("gateway portal service", () => {
     const environmentId = "w".repeat(256);
     const portal = await service.open({
       targetPort: 3000,
-      target: {
-        kind: "worker",
-        environmentId,
-        ownerEpoch: 7,
-        remotePort: 3000,
-        connect: unavailableWorkerConnection,
-      },
+      target: workerTarget(environmentId, 7),
     });
 
     expect(portal.id.length).toBeLessThanOrEqual(256);
@@ -327,15 +345,22 @@ describe("gateway portal service", () => {
 
   it("revalidates worker close authority immediately before queued removal", async () => {
     const { service } = makeService(["127.0.0.1"]);
-    const portal = await service.open({ targetPort: 3000 });
-    let authorityCurrent = true;
-    const assertCurrent = () => {
-      if (!authorityCurrent) {
-        throw new Error("Worker portal authority changed");
-      }
+    const owner = {
+      environmentId: "cloud-a",
+      ownerEpoch: 1,
+      ownershipError: "Worker portal belongs to another owner",
+      current: true,
+      assertCurrent() {
+        if (!this.current) {
+          throw new Error("Worker portal authority changed");
+        }
+      },
+      prepareTarget: async () => ({ connect: unavailableWorkerConnection, close: vi.fn() }),
     };
-    const closing = service.close(portal.id, assertCurrent);
-    authorityCurrent = false;
+    const operations = createPortalOperations(service, owner);
+    const portal = await operations.open({ port: 3000 });
+    const closing = operations.close(portal.id);
+    owner.current = false;
 
     await expect(closing).rejects.toThrow("Worker portal authority changed");
     expect(service.list()).toEqual([portal]);
@@ -343,36 +368,24 @@ describe("gateway portal service", () => {
 
   it("fences a worker portal whose listener is still opening during owner teardown", async () => {
     const actualListen = httpListen.listenGatewayHttpServer;
-    let notifyBindStarted: (() => void) | undefined;
-    let releaseBind: (() => void) | undefined;
-    const bindStarted = new Promise<void>((resolve) => {
-      notifyBindStarted = resolve;
-    });
-    const bindReleased = new Promise<void>((resolve) => {
-      releaseBind = resolve;
-    });
+    const bindStarted = createDeferred();
+    const bindReleased = createDeferred();
     vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
-      notifyBindStarted?.();
-      await bindReleased;
+      bindStarted.resolve();
+      await bindReleased.promise;
       await actualListen(params);
     });
     const { service } = makeService(["127.0.0.1"]);
     const closeForward = vi.fn();
     const opening = service.open({
       targetPort: 3000,
-      target: {
-        kind: "worker",
-        environmentId: "cloud-a",
-        ownerEpoch: 7,
-        remotePort: 3000,
-        connect: unavailableWorkerConnection,
-      },
+      target: workerTarget("cloud-a", 7),
       onClose: closeForward,
     });
-    await bindStarted;
+    await bindStarted.promise;
 
     const closing = service.closeWorkerPortals("cloud-a", 7);
-    releaseBind?.();
+    bindReleased.resolve();
     await opening;
     await closing;
 
@@ -413,13 +426,32 @@ describe("gateway portal service", () => {
   });
 
   it.each([
-    ["0.0.0.0", "127.0.0.1"],
-    ["::", "[::1]"],
-  ])("maps wildcard bind host %s to openable host %s", async (bindHost, openableHost) => {
-    const { service } = makeService([bindHost]);
-    const portal = await service.open({ targetPort: 3000 });
+    ["127.0.0.1", "192.168.1.20", "127.0.0.1", "/"],
+    ["0.0.0.0", "192.168.1.20", "192.168.1.20", "/app?view=one"],
+    ["::", "192.168.1.20", "192.168.1.20", "/app?view=one"],
+    ["0.0.0.0", null, "127.0.0.1", "/"],
+    ["::", null, "[::1]", "/"],
+  ] as const)("publishes %s with LAN %s as %s", async (bindHost, lanHost, openableHost, path) => {
+    const resolveHost = vi
+      .spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore")
+      .mockResolvedValue(lanHost);
+    const { service, httpServers } = makeService([bindHost]);
+    const portal = await service.open({ targetPort: 3000, path });
 
-    expect(portal.publicUrl).toBe(`http://${openableHost}:${portal.listenPort}/`);
-    expect(portal.url).toBe(`${portal.publicUrl}?${portal.tokenQuery}`);
+    expect(portal.publicUrl).toBe(`http://${openableHost}:${portal.listenPort}${path}`);
+    expect(portal.url).toBe(
+      `${portal.publicUrl}${path.includes("?") ? "&" : "?"}${portal.tokenQuery}`,
+    );
+    if (bindHost === "127.0.0.1") {
+      expect(resolveHost).not.toHaveBeenCalled();
+    } else if (lanHost) {
+      expect(httpServers[0]?.address()).toMatchObject({ address: bindHost });
+      expect(await getStatus("127.0.0.1", portal.listenPort, "/")).toBe(401);
+      // Publication belongs to this listener lifetime, not each listing or caller's hostname.
+      resolveHost.mockResolvedValue("192.168.1.21");
+      expect(service.list()).toEqual([portal]);
+      expect(await service.open({ targetPort: 3000 })).toEqual(portal);
+      expect(resolveHost).toHaveBeenCalledOnce();
+    }
   });
 });

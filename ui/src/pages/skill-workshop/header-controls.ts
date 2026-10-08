@@ -1,11 +1,14 @@
-import { html, type TemplateResult } from "lit";
+import { html } from "lit";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import type { SkillWorkshopMode } from "../../lib/skill-workshop/index.ts";
 import type { SkillWorkshopState } from "./proposals.ts";
 import { renderSelfLearningToggle, type SkillWorkshopSelfLearning } from "./self-learning.ts";
 import { saveSkillWorkshopMode } from "./storage.ts";
+
+registerSkillWorkshopEnglish();
 
 type SkillWorkshopHeaderProps = {
   selfLearning: SkillWorkshopSelfLearning | null;
@@ -28,10 +31,6 @@ export function setSkillWorkshopMode(
   requestUpdate();
 }
 
-function sectionIcon(icon: TemplateResult) {
-  return html`<span class="sw-section-tabs__icon" aria-hidden="true">${icon}</span>`;
-}
-
 export function renderSkillWorkshopHeaderControls(
   state: SkillWorkshopState,
   { selfLearning, automationHref, onSelfLearningToggle, onModeChange }: SkillWorkshopHeaderProps,
@@ -50,24 +49,19 @@ export function renderSkillWorkshopHeaderControls(
       ${renderHubTabs({
         id: "skill-workshop-mode",
         active: state.skillWorkshopMode,
-        tabs: [
-          {
-            value: "skills",
-            count: countOf(state.skillWorkshopInstalledSkills.length),
-            label: html`
-              ${sectionIcon(icons.book)}
-              <span>${t("skillWorkshop.sections.skills")}</span>
-            `,
-          },
-          {
-            value: "suggestions",
-            count: countOf(pending),
-            label: html`
-              ${sectionIcon(icons.wandSparkles)}
-              <span>${t("skillWorkshop.sections.suggestions")}</span>
-            `,
-          },
-        ],
+        tabs: (
+          [
+            ["skills", state.skillWorkshopInstalledSkills.length, icons.book],
+            ["suggestions", pending, icons.wandSparkles],
+          ] as const
+        ).map(([value, count, icon]) => ({
+          value,
+          count: countOf(count),
+          label: html`
+            <span class="sw-section-tabs__icon" aria-hidden="true">${icon}</span>
+            <span>${t(`skillWorkshop.sections.${value}`)}</span>
+          `,
+        })),
         ariaLabel: t("skillWorkshop.sections.aria"),
         panelId: "skill-workshop-mode-panel",
         variant: "sub",

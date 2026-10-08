@@ -32,7 +32,7 @@ function currentPresenter(description: string): WidgetPresenter {
 }
 
 describe("plugin widget presenter registry", () => {
-  it("registers one presenter for a target and rejects a competing owner", () => {
+  it("registers one presenter for a target and rejects a competing owner", async () => {
     const { config, registry } = createPluginRegistryFixture();
     const presenter: WidgetPresenter = {
       target: "node_panel" as const,
@@ -60,9 +60,23 @@ describe("plugin widget presenter registry", () => {
       },
     });
 
-    expect(registry.registry.widgetPresenters).toEqual([
-      expect.objectContaining({ pluginId: "first-presenter", presenter }),
-    ]);
+    expect(registry.registry.widgetPresenters).toHaveLength(1);
+    const selected = registry.registry.widgetPresenters[0]!;
+    expect(selected).toMatchObject({
+      pluginId: "first-presenter",
+      presenter: { target: "node_panel", description: "Show on a connected device panel" },
+    });
+    await expect(selected.presenter.availability({})).resolves.toEqual({
+      ok: true,
+      value: { available: true },
+    });
+    await expect(
+      selected.presenter.present({
+        context: {},
+        document: { kind: "html", html: "<p>Panel</p>" },
+        title: "Panel",
+      }),
+    ).resolves.toEqual({ ok: false, error: { code: "no_eligible_node", message: "none" } });
     expect(registry.registry.diagnostics).toContainEqual(
       expect.objectContaining({
         pluginId: "second-presenter",

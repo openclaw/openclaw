@@ -1,6 +1,4 @@
-import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { stableStringify } from "@openclaw/normalization-core";
 import {
   assertAgentSessionStoreDeletionSafe,
   prepareAgentDeleteDatabases,
@@ -17,6 +15,7 @@ import {
   deleteAgentConfigEntry,
 } from "../gateway/server-methods/agents-config-mutations.js";
 import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import type {
@@ -27,13 +26,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { digestClawAgentConfig } from "./agent-config-digest.js";
+import { digestClawValue } from "./digest.js";
 import { deletionEffects, type ClawCleanupTargets } from "./lifecycle-delete-support.js";
-import {
-  readClawInstallRecordFromDatabase,
-  updateClawInstallRecordStatus,
-  type PersistedClawInstall,
-} from "./provenance.js";
+import { readClawInstallRecordFromDatabase } from "./provenance-read.kernel.js";
+import { updateClawInstallRecordStatus, type PersistedClawInstall } from "./provenance.js";
 
 type ClawAgentConfigRemovalParams = {
   agentId: string;
@@ -56,8 +52,6 @@ type ClawAgentConfigRemovalResult = {
   nextConfig: OpenClawConfig;
 };
 
-export { digestClawAgentConfig } from "./agent-config-digest.js";
-
 export function digestClawAgentRemovalSurface(config: OpenClawConfig, agentId: string): string {
   const normalizedId = normalizeAgentId(agentId);
   const surface = {
@@ -68,7 +62,7 @@ export function digestClawAgentRemovalSurface(config: OpenClawConfig, agentId: s
       (entry) => entry === normalizedId,
     ),
   };
-  return `sha256:${createHash("sha256").update(stableStringify(surface)).digest("hex")}`;
+  return digestClawValue(surface);
 }
 
 async function commitClawAgentConfigRemoval(
@@ -97,7 +91,7 @@ async function commitClawAgentConfigRemoval(
         if (params.expectedState === "missing") {
           throw params.onModified();
         }
-        if (digestClawAgentConfig(agent) !== params.expectedDigest) {
+        if (digestClawValue(agent) !== params.expectedDigest) {
           throw params.onModified();
         }
       },
@@ -146,6 +140,7 @@ async function commitClawAgentConfigRemoval(
 }
 
 type CommittedClawAgentRemoval = ClawAgentConfigRemovalResult & {
+  operationId: string;
   assertCurrent: (database?: OpenClawStateDatabase) => void;
   drainMonitors: () => Promise<void>;
   completeDeletion: (database: OpenClawStateDatabase) => void;
@@ -166,7 +161,7 @@ export async function withClawAgentConfigRemoval<T>(
   };
   return await withAgentDeletion(
     params.agentId,
-    async (begin) => {
+    async (_begin, transact) => {
       const config = params.config ?? getRuntimeConfig();
       assertAgentSessionStoreDeletionSafe(config, params.agentId, stateOptions);
       const effects = deletionEffects(
@@ -182,7 +177,7 @@ export async function withClawAgentConfigRemoval<T>(
           expectedInstall,
         );
       // Validate and claim together: a stale install snapshot must never fence a replacement.
-      const { existingJournal, deletion } = runOpenClawStateWriteTransaction((database) => {
+      const { existingJournal, deletion } = await transact((database, begin) => {
         if (!matchesInstall(database)) {
           throw params.onModified();
         }
@@ -196,7 +191,7 @@ export async function withClawAgentConfigRemoval<T>(
           deleteFiles: previousJournal?.deleteFiles ?? false,
         });
         return { existingJournal: previousJournal, deletion: claimedDeletion };
-      }, stateOptions);
+      });
       let committed = false;
       let monitorEffectsStarted = false;
       const assertCurrent = (database?: OpenClawStateDatabase) => {
@@ -209,7 +204,11 @@ export async function withClawAgentConfigRemoval<T>(
         if (database) {
           check(database);
         } else {
-          runOpenClawStateWriteTransaction(check, stateOptions);
+          const current = openOpenClawStateDatabase(stateOptions);
+          // Worker admission can hold the writer lock while waiting for this read-only authority check.
+          runSqliteDeferredTransactionSync(current.db, () => check(current), {
+            operationLabel: "claws.removal.authority",
+          });
         }
       };
       try {
@@ -221,7 +220,8 @@ export async function withClawAgentConfigRemoval<T>(
           await params.quiesceMonitors(deletion.entry.operationId);
         }
         assertCurrent();
-        prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, stateOptions);
+        await prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, stateOptions);
+        assertCurrent();
         return await apply(async () => {
           assertCurrent();
           const result = await withAgentExecApprovalsRemoved(
@@ -237,6 +237,7 @@ export async function withClawAgentConfigRemoval<T>(
           assertCurrent();
           return {
             ...result,
+            operationId: deletion.entry.operationId,
             assertCurrent,
             drainMonitors: async () => {
               assertCurrent();
@@ -250,7 +251,7 @@ export async function withClawAgentConfigRemoval<T>(
       } finally {
         // Pre-config partial results release only this attempt's fence; committed cleanup retains it.
         if (!committed && !monitorEffectsStarted && !existingJournal) {
-          deletion.rollback();
+          await deletion.rollback();
         }
         if (expectedInstall) {
           // Result construction is pure; only the live operation may publish retry status.
@@ -263,6 +264,7 @@ export async function withClawAgentConfigRemoval<T>(
             updateClawInstallRecordStatus(params.agentId, "partial", {
               ...stateOptions,
               database,
+              deletionOperation: deletion,
             });
           }, stateOptions);
         }

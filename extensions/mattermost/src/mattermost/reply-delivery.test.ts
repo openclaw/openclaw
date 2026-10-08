@@ -424,11 +424,12 @@ describe("deliverMattermostReplyPayload", () => {
             path.join(stateDir, "media"),
             path.join(stateDir, "canvas"),
             path.join(stateDir, "workspace"),
-            path.join(stateDir, "sandboxes"),
             path.join(stateDir, `workspace-${agentId}`),
           ]),
         }),
       );
+      const sendOptions = sendMessage.mock.calls[0]?.[2];
+      expect(sendOptions?.mediaLocalRoots).not.toContain(path.join(stateDir, "sandboxes"));
     } finally {
       await openClawState.cleanup();
     }

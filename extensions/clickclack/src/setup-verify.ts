@@ -1,4 +1,3 @@
-// ClickClack plugin module implements shared setup connection verification.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -15,8 +14,6 @@ type ClickClackSetupConnectionResult =
   | { status: "failed"; error: string }
   | { status: "skipped-env-token" }
   | { status: "skipped-unconfigured" };
-
-type ClickClackGatewayStatus = "running" | "not-running" | "unavailable";
 
 const GATEWAY_RUNNING_MESSAGE = "OpenClaw is running — ClickClack will connect automatically.";
 const GATEWAY_NOT_RUNNING_MESSAGE = "Start OpenClaw to connect: openclaw gateway";
@@ -120,16 +117,16 @@ function isGatewayNotRunningError(error: unknown): boolean {
   return message.includes("econnrefused") || message.includes("connection refused");
 }
 
-async function probeClickClackGatewayStatus(): Promise<ClickClackGatewayStatus> {
+async function probeClickClackGatewayStatus(): Promise<string> {
   try {
     const { callGatewayFromCli } = await import("openclaw/plugin-sdk/gateway-runtime");
     await callGatewayFromCli("health", { timeout: "1000", json: true }, undefined, {
       expectFinal: false,
       progress: false,
     });
-    return "running";
+    return GATEWAY_RUNNING_MESSAGE;
   } catch (error) {
-    return isGatewayNotRunningError(error) ? "not-running" : "unavailable";
+    return isGatewayNotRunningError(error) ? GATEWAY_NOT_RUNNING_MESSAGE : GATEWAY_UNKNOWN_MESSAGE;
   }
 }
 
@@ -153,18 +150,6 @@ function formatClickClackConnectionLog(
   return undefined;
 }
 
-function formatClickClackGatewayLog(status: ClickClackGatewayStatus): string {
-  switch (status) {
-    case "running":
-      return GATEWAY_RUNNING_MESSAGE;
-    case "not-running":
-      return GATEWAY_NOT_RUNNING_MESSAGE;
-    case "unavailable":
-      return GATEWAY_UNKNOWN_MESSAGE;
-  }
-  return GATEWAY_UNKNOWN_MESSAGE;
-}
-
 export async function verifyClickClackAccountAfterSetup(params: {
   cfg: CoreConfig;
   accountId: string;
@@ -186,8 +171,7 @@ export async function verifyClickClackAccountAfterSetup(params: {
   }
 
   try {
-    const status = await probeClickClackGatewayStatus();
-    params.runtime.log(formatClickClackGatewayLog(status));
+    params.runtime.log(await probeClickClackGatewayStatus());
   } catch {
     params.runtime.log(GATEWAY_UNKNOWN_MESSAGE);
   }

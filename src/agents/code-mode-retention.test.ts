@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   codeModeDescriptionRetentionEntrypoint,
   codeModeRetentionEntrypoint,
@@ -9,9 +9,13 @@ import {
 
 it.for([
   {
-    name: "releases completed tool inputs while a real guest remains parked",
+    name: "releases completed inputs and frontier waits across 2,000 calls with a pending sibling",
     entrypoint: codeModeRetentionEntrypoint,
-    expected: { completedInputReleased: true, pendingInputPreserved: true },
+    expected: {
+      completedInputReleased: true,
+      pendingInputPreserved: true,
+      frontierReactionsBounded: true,
+    },
   },
   {
     name: "releases obsolete session wrappers while live descriptions remain synchronized",
@@ -20,7 +24,7 @@ it.for([
   },
 ])("$name", { timeout: 30_000 }, async ({ entrypoint, expected }, { signal }) => {
   const result = await runNodeScript(
-    ["--expose-gc", ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(entrypoint))],
+    (workerArgv) => ["--expose-gc", ...workerArgv(resolveRuntimeWorkerUrl(entrypoint))],
     { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
     15_000,
     {

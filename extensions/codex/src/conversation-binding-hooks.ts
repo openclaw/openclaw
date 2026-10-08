@@ -1,11 +1,13 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
+  PluginConversationBinding,
   PluginConversationBindingResolvedEvent,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
 import { assertCodexBindingMayBeReplaced } from "./app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
@@ -17,7 +19,6 @@ import {
   readCodexConversationBindingData,
   readCodexConversationBindingDataRecord,
 } from "./conversation-binding-data.js";
-import { isIncognitoSessionKey } from "./incognito-session.js";
 import type { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 type CodexConversationRunOptions = {
@@ -34,6 +35,24 @@ const getNodeConversationState = defineCodexBuildState(
   "openclaw.codex.conversationBinding",
   () => ({ queue: new KeyedAsyncQueue() }),
 );
+
+function isCurrentPublicBinding(
+  binding: PluginConversationBinding,
+  service: ReturnType<
+    typeof import("openclaw/plugin-sdk/conversation-binding-runtime").getSessionBindingService
+  >,
+): boolean {
+  return (
+    service.resolveByConversation({
+      channel: binding.channel,
+      accountId: binding.accountId,
+      conversationId: binding.conversationId,
+      ...(binding.parentConversationId
+        ? { parentConversationId: binding.parentConversationId }
+        : {}),
+    })?.bindingId === binding.bindingId
+  );
+}
 
 export async function handleCodexConversationInboundClaim(
   event: PluginHookInboundClaimEvent,
@@ -56,8 +75,8 @@ export async function handleCodexConversationInboundClaim(
     return { handled: true, reply: { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR } };
   }
   const sessionKey = event.sessionKey ?? ctx.sessionKey;
-  if (data.kind === "codex-cli-node-session") {
-    try {
+  try {
+    if (data.kind === "codex-cli-node-session") {
       const result = await getNodeConversationState().queue.enqueue(
         `${data.nodeId}:${data.sessionId}`,
         async () => {
@@ -78,9 +97,20 @@ export async function handleCodexConversationInboundClaim(
               },
             };
           }
+          const { getSessionBindingService } =
+            await import("openclaw/plugin-sdk/conversation-binding-runtime");
+          if (!isCurrentPublicBinding(publicBinding, getSessionBindingService())) {
+            return {
+              reply: {
+                text: "This Codex conversation was detached or changed before its message could run.",
+              },
+            };
+          }
           const resumed = await resume({
             nodeId: data.nodeId,
             sessionId: data.sessionId,
+            agentId: data.agentId,
+            sessionKey,
             prompt,
             cwd: data.cwd,
             timeoutMs: options.timeoutMs,
@@ -91,16 +121,7 @@ export async function handleCodexConversationInboundClaim(
         },
       );
       return { handled: true, reply: result.reply };
-    } catch (error) {
-      return {
-        handled: true,
-        reply: {
-          text: `Codex CLI node turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
-        },
-      };
     }
-  }
-  try {
     const identity = { kind: "conversation" as const, bindingId: data.bindingId };
     // Capture and reserve before any import yields: retirement must not overtake
     // an already-arrived message, even when the execution module is still cold.
@@ -119,17 +140,9 @@ export async function handleCodexConversationInboundClaim(
       const { getSessionBindingService } =
         await import("openclaw/plugin-sdk/conversation-binding-runtime");
       const { runBoundTurnWithMissingThreadRecovery } = await import("./conversation-binding.js");
-      const currentPublicBinding = getSessionBindingService().resolveByConversation({
-        channel: publicBinding.channel,
-        accountId: publicBinding.accountId,
-        conversationId: publicBinding.conversationId,
-        ...(publicBinding.parentConversationId
-          ? { parentConversationId: publicBinding.parentConversationId }
-          : {}),
-      });
       const current = options.bindingStore.read(identity);
       if (
-        currentPublicBinding?.bindingId !== publicBinding.bindingId ||
+        !isCurrentPublicBinding(publicBinding, getSessionBindingService()) ||
         (expected &&
           (!current ||
             current.threadId !== expected.threadId ||
@@ -159,10 +172,11 @@ export async function handleCodexConversationInboundClaim(
     });
     return { handled: true, reply: result.reply };
   } catch (error) {
+    const runtime = data.kind === "codex-cli-node-session" ? "Codex CLI node" : "Codex app-server";
     return {
       handled: true,
       reply: {
-        text: `Codex app-server turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
+        text: `${runtime} turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
       },
     };
   }

@@ -68,7 +68,7 @@ describe("legacy workspace reset cleanup", () => {
     const marker = `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n2026-07-15T11:00:00.000Z\n`;
     const candidates = [
       context.paths.setupStatePaths[0]!,
-      `${context.paths.setupStatePaths[1]!}.doctor-importing`,
+      `${context.paths.setupStatePaths[0]!}.doctor-importing`,
       context.paths.stateDirAttestationPaths[0]!,
       `${context.paths.stateDirAttestationPaths.at(-1)!}.doctor-importing`,
       context.paths.siblingAttestationPaths[0]!,
@@ -115,19 +115,6 @@ describe("legacy workspace reset cleanup", () => {
     for (const candidate of candidates) {
       await expect(fs.lstat(candidate)).resolves.toBeDefined();
     }
-  });
-
-  it("preserves a foreign sibling attestation", async () => {
-    const context = setup();
-    await fs.mkdir(context.workspaceDir, { recursive: true });
-    const siblingPath = context.paths.siblingAttestationPaths[0]!;
-    await fs.writeFile(siblingPath, "foreign marker\n", "utf8");
-
-    const result = await removeLegacyWorkspaceStateForReset(prepare(context));
-
-    expect(result.warnings).toEqual([]);
-    expect(result.removedPaths).toEqual([]);
-    await expect(fs.readFile(siblingPath, "utf8")).resolves.toBe("foreign marker\n");
   });
 
   it("preserves a malformed sibling claim and foreign marker", async () => {

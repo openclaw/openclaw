@@ -1,3 +1,4 @@
+use crate::remote_gateway::{is_private_address, is_private_host};
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -6,7 +7,7 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tauri::{Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::Url;
 
 const GATEWAY_SERVICE_TYPE: &str = "_openclaw-gw._tcp.local.";
 
@@ -73,9 +74,7 @@ impl DiscoveredGateway {
         if addresses.is_empty() {
             return false;
         }
-        self.tls
-            || (is_trusted_plaintext_host(&self.host)
-                && addresses.iter().all(is_trusted_plaintext_address))
+        self.tls || (is_private_host(&self.host) && addresses.iter().all(is_private_address))
     }
 }
 
@@ -206,7 +205,7 @@ impl GatewayDiscovery {
                 .addresses
                 .iter()
                 .filter_map(|address| resolved_ip_address(address))
-                .find(is_trusted_plaintext_address)
+                .find(is_private_address)
                 .ok_or_else(|| {
                     "The discovered gateway does not have a safe resolved address.".to_string()
                 })?;
@@ -231,7 +230,7 @@ impl GatewayDiscovery {
     }
 }
 
-fn gateway_window_label(url: &Url) -> String {
+pub(crate) fn gateway_window_label(url: &Url) -> String {
     let host = url
         .host_str()
         .unwrap_or_default()
@@ -348,32 +347,6 @@ fn resolved_ip_address(address: &str) -> Option<IpAddr> {
         .ok()
 }
 
-fn is_trusted_plaintext_host(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    host == "localhost"
-        || host.ends_with(".local")
-        || host.ends_with(".ts.net")
-        || host
-            .parse::<IpAddr>()
-            .is_ok_and(|address| is_trusted_plaintext_address(&address))
-}
-
-fn is_trusted_plaintext_address(address: &IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => {
-            let [first, second, _, _] = address.octets();
-            address.is_loopback()
-                || address.is_private()
-                || address.is_link_local()
-                || (first == 100 && (64..=127).contains(&second))
-        }
-        IpAddr::V6(address) => {
-            let first = address.segments()[0];
-            address.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
-        }
-    }
-}
-
 fn service_instance_name(fullname: &str) -> String {
     let instance = strip_ascii_suffix(fullname, GATEWAY_SERVICE_TYPE).trim_end_matches('.');
     let name = prettify_instance_name(&decode_bonjour_name(instance));
@@ -453,7 +426,7 @@ pub fn discover_gateways(
 }
 
 #[tauri::command]
-pub fn connect_discovered_gateway(
+pub async fn connect_discovered_gateway(
     app: tauri::AppHandle,
     discovery: tauri::State<'_, GatewayDiscovery>,
     host: String,
@@ -462,27 +435,7 @@ pub fn connect_discovered_gateway(
 ) -> Result<(), String> {
     let url = discovery.dashboard_url(&host, port, tls)?;
     let name = discovery.gateway_name(&host, port, tls)?;
-    let label = gateway_window_label(&url);
-    if let Some(window) = app.get_webview_window(&label) {
-        window
-            .navigate(url)
-            .map_err(|error| format!("Could not refresh Gateway window: {error}"))?;
-        window
-            .show()
-            .map_err(|error| format!("Could not show Gateway window: {error}"))?;
-        window
-            .set_focus()
-            .map_err(|error| format!("Could not focus Gateway window: {error}"))?;
-        return Ok(());
-    }
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
-        .title(format!("{name} — OpenClaw"))
-        .inner_size(1080.0, 720.0)
-        .min_inner_size(720.0, 520.0)
-        .center()
-        .build()
-        .map_err(|error| format!("Could not open Gateway window: {error}"))?;
-    Ok(())
+    crate::gateway_windows::open_discovered(app, url, name).await
 }
 
 #[cfg(test)]

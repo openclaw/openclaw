@@ -1,4 +1,3 @@
-/** Doctor notes for auth profile health, OAuth refresh failures, and legacy Codex config. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import {
@@ -8,7 +7,6 @@ import {
   type AuthHealthSummary,
 } from "../agents/auth-health.js";
 import {
-  type AuthCredentialReasonCode,
   ensureAuthProfileStore,
   findPersistedAuthProfileCredential,
   hasAnyAuthProfileStoreSource,
@@ -39,6 +37,8 @@ import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -48,9 +48,51 @@ const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
 const AUTH_PROFILES_CHECK_ID = "core/doctor/auth-profiles";
+const COPILOT_NOTICE_KEY = "doctor.githubCopilotAmbientTokenNotice";
 const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   [LEGACY_CODEX_PROVIDER_ID]: OPENAI_PROVIDER_ID,
 };
+
+/** Explain the retired ambient-token activation once per state directory. */
+export function noteCopilotAmbientToken(cfg: OpenClawConfig, env = process.env): void {
+  if (
+    !(env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim()) ||
+    env.COPILOT_GITHUB_TOKEN?.trim() ||
+    cfg.models?.providers?.["github-copilot"] ||
+    Object.values(cfg.auth?.profiles ?? {}).some(
+      (profile) => profile.provider === "github-copilot",
+    ) ||
+    readConfigMachineState<boolean>(COPILOT_NOTICE_KEY, { env })
+  ) {
+    return;
+  }
+  const agentDirs = [undefined, ...listAgentIds(cfg).map((id) => resolveAgentDir(cfg, id, env))];
+  for (const agentDir of agentDirs) {
+    const store = loadAuthProfileStoreForRuntime(
+      agentDir,
+      { readOnly: true, allowKeychainPrompt: false },
+      env,
+    );
+    if (Object.values(store.profiles).some((profile) => profile.provider === "github-copilot")) {
+      return;
+    }
+  }
+  let claimed = false;
+  updateConfigMachineState<boolean>(
+    COPILOT_NOTICE_KEY,
+    (shown) => {
+      claimed = shown !== true;
+      return true;
+    },
+    { env },
+  );
+  if (claimed) {
+    note(
+      "GitHub Copilot is no longer enabled by GH_TOKEN/GITHUB_TOKEN. To use Copilot, run `openclaw models auth login --provider github-copilot` or set COPILOT_GITHUB_TOKEN.",
+      "GitHub Copilot",
+    );
+  }
+}
 
 /** Surface the one-time relocation while the legacy shared owner is still active. */
 export function noteSharedAuthStoreStatus(env: NodeJS.ProcessEnv = process.env): void {
@@ -139,21 +181,6 @@ function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
   return lines.join("\n");
 }
 
-function legacyCodexProviderOverrideToHealthFinding(providerOverride: unknown): HealthFinding {
-  const message =
-    "Legacy openai-codex transport override can shadow configured Codex OAuth credentials.";
-  const details = buildCodexProviderOverrideWarning(providerOverride);
-  return {
-    checkId: AUTH_PROFILES_CHECK_ID,
-    severity: "warning",
-    message,
-    path: `models.providers.${LEGACY_CODEX_PROVIDER_ID}`,
-    target: LEGACY_CODEX_PROVIDER_ID,
-    fixHint: details,
-  };
-}
-
-/** Emits a warning when legacy Codex transport overrides can shadow configured Codex OAuth. */
 export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
   const providerOverride = cfg.models?.providers?.[LEGACY_CODEX_PROVIDER_ID];
   if (!providerOverride) {
@@ -168,26 +195,12 @@ export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
   note(buildCodexProviderOverrideWarning(providerOverride), CODEX_OAUTH_WARNING_TITLE);
 }
 
-type AuthIssue = {
-  profileId: string;
-  provider: string;
-  status: string;
-  reasonCode?: AuthCredentialReasonCode;
-  remainingMs?: number;
-};
+type AuthIssue = AuthHealthSummary["profiles"][number];
 
 type AuthProfileHealthTarget = {
   label: string;
   agentDir?: string;
 };
-
-function formatAuthNoteTitle(
-  title: string,
-  target: AuthProfileHealthTarget,
-  labelStores: boolean,
-): string {
-  return labelStores ? `${title} (${target.label})` : title;
-}
 
 function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTarget[] {
   const targets = new Map<string, AuthProfileHealthTarget>();
@@ -208,23 +221,19 @@ function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTar
 function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | null): string {
   switch (reason) {
     case "refresh_token_reused":
-      return "refresh_token_reused";
     case "expired":
-      return "expired";
     case "invalid_grant":
-      return "invalid_grant";
+    case "revoked":
+      return reason;
     case "sign_in_again":
       return "sign in again";
     case "invalid_refresh_token":
       return "invalid refresh token";
-    case "revoked":
-      return "revoked";
     default:
       return "refresh failed";
   }
 }
 
-/** Formats provider OAuth refresh failures as actionable doctor note lines. */
 function formatOAuthRefreshFailureDoctorLine(params: {
   profileId: string;
   provider: string;
@@ -252,7 +261,7 @@ async function resolveAuthIssueHint(
   issue: AuthIssue,
   cfg: OpenClawConfig,
   store: ReturnType<typeof ensureAuthProfileStore>,
-): Promise<string | null> {
+): Promise<string> {
   if (issue.reasonCode === "invalid_expires") {
     return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
   }
@@ -271,49 +280,6 @@ async function resolveAuthIssueHint(
   return buildProviderAuthRecoveryHint({
     provider: issue.provider,
   }).replace(/^Run /, "Re-auth via ");
-}
-
-async function formatAuthIssueLine(
-  issue: AuthIssue,
-  cfg: OpenClawConfig,
-  store: ReturnType<typeof ensureAuthProfileStore>,
-): Promise<string> {
-  const remaining =
-    issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
-  const hint = await resolveAuthIssueHint(issue, cfg, store);
-  const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
-  return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
-}
-
-function resolveAuthProfileStorePath(target: AuthProfileHealthTarget): string {
-  return resolveAuthStorePathForDisplay(target.agentDir);
-}
-
-function authProfileIssueToHealthFinding(params: {
-  issue: AuthIssue;
-  target: AuthProfileHealthTarget;
-  labelStores: boolean;
-  hint: string | null;
-}): HealthFinding {
-  const remaining =
-    params.issue.remainingMs !== undefined
-      ? ` (${formatRemainingShort(params.issue.remainingMs)})`
-      : "";
-  const reason = params.issue.reasonCode ? ` [${params.issue.reasonCode}]` : "";
-  const owner = params.labelStores ? `${params.target.label} auth profile` : "Auth profile";
-  return {
-    checkId: AUTH_PROFILES_CHECK_ID,
-    severity: "warning",
-    message: `${owner} ${params.issue.profileId} is ${params.issue.status}${reason}${remaining}.`,
-    path: resolveAuthProfileStorePath(params.target),
-    target: params.issue.profileId,
-    ...(params.issue.reasonCode ? { requirement: params.issue.reasonCode } : {}),
-    fixHint:
-      params.hint ??
-      (params.issue.status === "expiring"
-        ? "Run `openclaw doctor --fix` to refresh expiring OAuth profiles, or re-authenticate static tokens."
-        : "Run `openclaw doctor --fix` to refresh OAuth profiles, or re-authenticate this provider."),
-  };
 }
 
 type AuthProfileCooldown = {
@@ -352,24 +318,6 @@ function collectAuthProfileCooldowns(store: ReturnType<typeof ensureAuthProfileS
     });
   }
   return cooldowns;
-}
-
-function authProfileCooldownToHealthFinding(
-  params: AuthProfileCooldown & {
-    target: AuthProfileHealthTarget;
-    labelStores: boolean;
-  },
-): HealthFinding {
-  return {
-    checkId: AUTH_PROFILES_CHECK_ID,
-    severity: "warning",
-    message: params.labelStores
-      ? `${params.target.label} auth profile ${params.profileId} is ${params.kind} (${params.remaining}).`
-      : `Auth profile ${params.profileId} is ${params.kind} (${params.remaining}).`,
-    path: resolveAuthProfileStorePath(params.target),
-    target: params.profileId,
-    fixHint: params.hint,
-  };
 }
 
 function isAuthProfileHealthIssue(profile: AuthHealthSummary["profiles"][number]): boolean {
@@ -414,48 +362,8 @@ function loadAuthProfileHealth(params: {
       store: { ...store, profiles },
       cfg: params.cfg,
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
-      allowKeychainPrompt: params.allowKeychainPrompt,
     }),
   };
-}
-
-async function collectAuthProfileHealthFindingsForTarget(params: {
-  cfg: OpenClawConfig;
-  allowKeychainPrompt: boolean;
-  target: AuthProfileHealthTarget;
-  labelStores: boolean;
-}): Promise<readonly HealthFinding[]> {
-  const { store, summary } = loadAuthProfileHealth({ ...params, readOnly: true });
-  const findings: HealthFinding[] = [];
-  for (const cooldown of collectAuthProfileCooldowns(store)) {
-    findings.push(
-      authProfileCooldownToHealthFinding({
-        ...cooldown,
-        target: params.target,
-        labelStores: params.labelStores,
-      }),
-    );
-  }
-
-  const issues = summary.profiles.filter(isAuthProfileHealthIssue);
-  for (const issue of issues) {
-    const authIssue: AuthIssue = {
-      profileId: issue.profileId,
-      provider: issue.provider,
-      status: issue.status,
-      reasonCode: issue.reasonCode,
-      remainingMs: issue.remainingMs,
-    };
-    findings.push(
-      authProfileIssueToHealthFinding({
-        issue: authIssue,
-        target: params.target,
-        labelStores: params.labelStores,
-        hint: await resolveAuthIssueHint(authIssue, params.cfg, store),
-      }),
-    );
-  }
-  return findings;
 }
 
 /** Collects read-only structured findings for auth profile health. */
@@ -467,14 +375,38 @@ export async function collectAuthProfileHealthFindings(params: {
   const findings: HealthFinding[] = [];
   const labelStores = activeTargets.length > 1;
   for (const target of activeTargets) {
-    findings.push(
-      ...(await collectAuthProfileHealthFindingsForTarget({
-        cfg: params.cfg,
-        allowKeychainPrompt: params.allowKeychainPrompt ?? false,
-        target,
-        labelStores,
-      })),
-    );
+    const { store, summary } = loadAuthProfileHealth({
+      cfg: params.cfg,
+      allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+      readOnly: true,
+      target,
+    });
+    const owner = labelStores ? `${target.label} auth profile` : "Auth profile";
+    for (const cooldown of collectAuthProfileCooldowns(store)) {
+      findings.push({
+        checkId: AUTH_PROFILES_CHECK_ID,
+        severity: "warning",
+        message: `${owner} ${cooldown.profileId} is ${cooldown.kind} (${cooldown.remaining}).`,
+        path: resolveAuthStorePathForDisplay(target.agentDir),
+        target: cooldown.profileId,
+        fixHint: cooldown.hint,
+      });
+    }
+    for (const issue of summary.profiles.filter(isAuthProfileHealthIssue)) {
+      const hint = await resolveAuthIssueHint(issue, params.cfg, store);
+      const remaining =
+        issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
+      const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
+      findings.push({
+        checkId: AUTH_PROFILES_CHECK_ID,
+        severity: "warning",
+        message: `${owner} ${issue.profileId} is ${issue.status}${reason}${remaining}.`,
+        path: resolveAuthStorePathForDisplay(target.agentDir),
+        target: issue.profileId,
+        ...(issue.reasonCode ? { requirement: issue.reasonCode } : {}),
+        fixHint: hint,
+      });
+    }
   }
 
   const providerOverride = params.cfg.models?.providers?.[LEGACY_CODEX_PROVIDER_ID];
@@ -483,7 +415,15 @@ export async function collectAuthProfileHealthFindings(params: {
     hasLegacyCodexTransportOverride(providerOverride) &&
     (hasConfiguredCodexOAuthProfile(params.cfg) || hasStoredCodexOAuthProfile())
   ) {
-    findings.push(legacyCodexProviderOverrideToHealthFinding(providerOverride));
+    findings.push({
+      checkId: AUTH_PROFILES_CHECK_ID,
+      severity: "warning",
+      message:
+        "Legacy openai-codex transport override can shadow configured Codex OAuth credentials.",
+      path: `models.providers.${LEGACY_CODEX_PROVIDER_ID}`,
+      target: LEGACY_CODEX_PROVIDER_ID,
+      fixHint: buildCodexProviderOverrideWarning(providerOverride),
+    });
   }
   return findings;
 }
@@ -497,7 +437,7 @@ async function noteAuthProfileHealthForTarget(params: {
 }): Promise<string[]> {
   let { store, summary } = loadAuthProfileHealth(params);
   const noteTitle = (title: string) =>
-    formatAuthNoteTitle(title, params.target, params.labelStores);
+    params.labelStores ? `${title} (${params.target.label})` : title;
   const unusable = collectAuthProfileCooldowns(store).map(
     ({ profileId, kind, remaining, hint }) =>
       `- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`,
@@ -507,16 +447,12 @@ async function noteAuthProfileHealthForTarget(params: {
     note(unusable.join("\n"), noteTitle("Auth profile cooldowns"));
   }
 
-  const findIssues = () => summary.profiles.filter(isAuthProfileHealthIssue);
-
-  let issues = findIssues();
+  let issues = summary.profiles.filter(isAuthProfileHealthIssue);
   if (issues.length === 0) {
     return [];
   }
 
-  const refreshTargets = issues.filter(
-    (issue) => issue.type === "oauth" && ["expired", "expiring", "missing"].includes(issue.status),
-  );
+  const refreshTargets = issues.filter((issue) => issue.type === "oauth");
   const shouldRefresh =
     refreshTargets.length > 0 &&
     (await params.prompter.confirmAutoFix({
@@ -550,13 +486,20 @@ async function noteAuthProfileHealthForTarget(params: {
       note(errors.join("\n"), noteTitle("OAuth refresh errors"));
     }
     ({ store, summary } = loadAuthProfileHealth({ ...params, allowKeychainPrompt: false }));
-    issues = findIssues();
+    issues = summary.profiles.filter(isAuthProfileHealthIssue);
   }
 
-  return Promise.all(issues.map((issue) => formatAuthIssueLine(issue, params.cfg, store)));
+  return Promise.all(
+    issues.map(async (issue) => {
+      const remaining =
+        issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
+      const hint = await resolveAuthIssueHint(issue, params.cfg, store);
+      const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
+      return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
+    }),
+  );
 }
 
-/** Checks configured agent auth stores and emits doctor notes for stale or unusable profiles. */
 export async function noteAuthProfileHealth(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;

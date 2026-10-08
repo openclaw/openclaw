@@ -67,7 +67,7 @@ export function routingPolicyShapeFinding(
       );
     }
     if (ids.has(probe.id.trim())) {
-      return invalid(ctx, `${target}/id`, `routing probe id ${probe.id.trim()} must be unique.`);
+      return invalid(ctx, `${target}/id`, `routing check id ${probe.id.trim()} must be unique.`);
     }
     ids.add(probe.id.trim());
     const routeFinding = routeShapeFinding(probe.route, index, target, ctx);

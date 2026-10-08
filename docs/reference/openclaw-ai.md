@@ -29,6 +29,8 @@ import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 const runtime = createLlmRuntime();
 registerBuiltInApiProviders(runtime.registry);
 
+// `model` (a model descriptor), `messages`, and `apiKey` are supplied by you;
+// see `examples/ai-chat` for concrete values.
 const stream = runtime.streamSimple(model, { messages }, { apiKey });
 for await (const event of stream) {
   if (event.type === "text_delta") process.stdout.write(event.delta);

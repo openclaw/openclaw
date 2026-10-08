@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Removed SDK surfaces and the replacement for each removed or deprecated API"
 read_when:
   - A removed export, hook, or manifest field is breaking your plugin
@@ -16,6 +17,34 @@ bridge, the expired SDK subpath aliases, unused SDK subpaths, and typed-public
 access to bundled-only SDK modules. Private-local build mappings remain for
 repository owners, and production-private JavaScript exports support official
 plugin runtimes. Neither provides typed third-party SDK access.
+
+### Channel, config, and infrastructure compatibility facades
+
+`channel-lifecycle`, `channel-message`, `channel-reply-pipeline`,
+`config-runtime`, and `infra-runtime` were removed with SDK-owner approval on
+September 30, 2026. Channel imports move to focused outbound and inbound
+contracts; config access uses supplied config, snapshots, and mutation helpers;
+infrastructure imports move to the matching focused runtime or injected API.
+System-event snapshot inspection and consumption use `system-event-runtime`.
+
+Some legacy helpers and named types require caller changes rather than an
+import-path substitution. See the [channel mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
+and [config and infrastructure migration steps](/plugins/sdk-migration/how-to-migrate).
+
+### Command, Discord, and Telegram account facades
+
+`command-auth`, `discord`, and `telegram-account` were removed with explicit
+SDK-owner approval on October 2, 2026. Move sender authorization to
+`channel-ingress-runtime`, native command helpers to `command-auth-native`, and
+help builders to `command-status`. Discord and Telegram behavior remains owned
+by their plugins; use generic channel contracts and injected runtime helpers
+from external plugins, and the owning plugin's `api.ts` / `runtime-api.ts`
+barrels for repository consumers.
+
+These are breaking removals for third-party plugins that still import the old
+subpaths, including older published `@openclaw/discord` packages. Upgrade affected
+plugins before upgrading the host. Not every export has a path-only replacement;
+see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
 
 ### Process-global API-provider publication
 
@@ -53,6 +82,23 @@ artifacts, so it was removed before its 2026-07-28 `removeAfter` date. Repositor
 tests use focused subpaths such as `plugin-sdk/plugin-test-runtime`,
 `plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`,
 `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures`.
+
+### Credential prompt builder
+
+`buildCredentialSafetyPrompt` remains available from
+`openclaw/plugin-sdk/agent-harness-runtime`. With an options object whose
+`controlToolsAvailable` is set from the callable `openclaw` and `gateway` tools, it
+returns guidance to use or store user-shared credentials as asked, complete the
+task, and briefly acknowledge their use or storage in the final reply without
+repeating their values. The acknowledgment stays factual and non-alarming. It also
+returns the private login-code handoff guidance and the terminal setup route when
+neither control tool is available.
+
+The legacy string argument is deprecated from 2026-09-09 and remains supported
+through 2026-11-30. It is accepted and ignored: availability is unknown, so the
+helper returns only the private handoff line. Replace strings with
+`{ controlToolsAvailable }`; the string form is eligible for removal starting
+2026-12-01. The helper itself is not deprecated.
 
 ## Migration reference
 
@@ -289,9 +335,10 @@ timeline for current status.
 
     | Migrating surface | Replacement |
     | ----------------- | ----------- |
-    | Deprecated `loadSessionStore(...)`, `updateSessionStore(...)`, and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `getSessionEntry(...)`, `listSessionEntries(...)`, and row-level session mutations. |
-    | Deprecated `resolveSessionFilePath(...)` | Session identity (`sessionKey`, `sessionId`, and SDK runtime target helpers) plus Gateway methods that operate on the current session. |
-    | Deprecated package-root `saveSessionStore(...)` and removed SDK file-store writes | Gateway-owned session runtime APIs; plugin code should request or mutate session state through documented runtime/context helpers instead of writing the active store file. |
+    | Removed `loadSessionStore(...)` and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `getSessionEntry(...)` for one scoped row or `listSessionEntries(...)` for scoped iteration from `openclaw/plugin-sdk/session-store-runtime`. |
+    | Removed `updateSessionStore(...)`, package-root `saveSessionStore(...)`, and SDK file-store writes | `patchSessionEntry(...)`, `upsertSessionEntry(...)`, and `deleteSessionEntry(...)` from `openclaw/plugin-sdk/session-store-runtime`; mutate only the intended rows instead of replacing a detached whole-store snapshot. |
+    | Removed `LoadSessionStoreOptions` and `UpdateSessionStoreOptions` | Parameters accepted by the scoped row APIs; the whole-store cache and callback options no longer apply. |
+    | Removed `resolveSessionFilePath(...)` | Session identity (`agentId`, `sessionKey`, and `sessionId`) with `openclaw/plugin-sdk/session-transcript-runtime`, or Gateway methods that operate on the current session. |
     | Removed `resolveSessionTranscriptPathInDir(...)` and `resolveAndPersistSessionFile(...)` | Session identity and Gateway methods that operate on the current session. |
     | `readLatestAssistantTextFromSessionTranscript(...)` | Identity-backed transcript readers exposed by the current runtime context, or Gateway history/session methods when the plugin is outside the transcript owner path. |
     | `SessionTranscriptUpdate.sessionFile` | `SessionTranscriptUpdate.target` with `agentId`, `sessionKey`, and `sessionId`. |
@@ -302,11 +349,19 @@ timeline for current status.
     support artifacts. They are no longer the steady-state runtime contract for
     active sessions.
 
-    Official plugins released with `v2026.7.1-beta.5` imported the four
-    deprecated helpers above. `openclaw/plugin-sdk/session-store-runtime` keeps
-    that exact bridge through 2026-10-12; new plugins must use the replacements.
-    `resolveStorePath(...)` remains a supported SDK helper and is not part of
-    this deprecation.
+    The official `@openclaw/codex` and `@openclaw/feishu` plugins released with
+    `v2026.7.1-beta.5` imported the retired bridge. SDK-owner approval on
+    September 30, 2026 closed its compatibility window early, replacing the
+    former October 12 deadline. The supported-plugin cutoff excludes that
+    release and any other package still importing the
+    bridge. Upgrade affected plugins to versions using the replacements before
+    upgrading OpenClaw. A newer version number alone is not evidence of migration.
+
+    `openclaw/plugin-sdk/session-store-runtime` and `resolveStorePath(...)`
+    remain supported. Pass the selected `agentId` explicitly to scoped row
+    operations; resolving a path no longer records an agent selection for a
+    later whole-store call. This removal does not change SQLite schemas or
+    legacy-state import and Doctor migrations.
 
     `openclaw plugins inspect --all --runtime` reports non-bundled plugins whose
     load errors or diagnostics still reference these removed file APIs. The
@@ -336,24 +391,23 @@ timeline for current status.
 
   </Accordion>
 
-  <Accordion title="runtime.tasks.flow -> runtime.tasks.managedFlows">
-    **Old**: `runtime.tasks.flow` (singular) returned a live task-flow
-    accessor.
-
-    **New**: `runtime.tasks.managedFlows` keeps the managed TaskFlow mutation
-    runtime for plugins that create, update, cancel, or run child tasks from a
-    flow. Use `runtime.tasks.flows` when the plugin only needs DTO-based
-    reads.
-
-    ```typescript
-    // Before
-    const flow = api.runtime.tasks.flow.fromToolContext(ctx);
-    // After
-    const flow = api.runtime.tasks.managedFlows.fromToolContext(ctx);
-    ```
-
-    The legacy aliases were removed in July 2026.
-
+  <Accordion title="Tasks and TaskFlow APIs removed">
+    The Tasks registry and TaskFlow orchestration APIs have been removed,
+    including `api.runtime.tasks`, `registerDetachedTaskRuntime`, and the
+    `agent-harness-task-runtime` SDK subpath. No compatibility facade remains.
+    Use native subagent launch/wait/history APIs, cron run history, and the
+    ordinary Lobster runner for their respective operations. Harness completion
+    routing uses the completion-only `agent-harness-completion` subpath.
+    This removal does not change the physical database schemas. Existing
+    `task_runs`, `task_delivery_state`, and `flow_runs` tables, columns, and indexes
+    remain unchanged. Cron reads and writes only its `runtime = 'cron'` history
+    rows in `task_runs`; non-Cron Task and TaskFlow rows remain untouched and
+    unused by the runtime. The Codex plugin's
+    [Doctor migration](/gateway/doctor/config-migrations#native-codex-recovery-after-tasks-removal)
+    preserves eligible owner-stamped native recovery facts in existing parent
+    binding metadata, leaving source rows byte-identical. It adds no runtime Task
+    reader or replacement SDK surface; current requester authority still governs
+    completion delivery. See the [versioning contract](/reference/database-schemas/versioning).
   </Accordion>
 
   <Accordion title="Embedded extension factories -> agent tool-result middleware">

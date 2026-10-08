@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { applyDefaultModel, applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
+import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
 
 const providerConfigNormalizer = ({ providerConfig }: { providerConfig: ModelProviderConfig }) =>
   providerConfig;
@@ -75,6 +75,28 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(Object.getPrototypeOf(next).polluted).toBeUndefined();
   });
 
+  it.each(["__proto__", "constructor", "prototype"])(
+    "ignores undefined deletions under blocked %s keys without mutating input",
+    (blockedKey) => {
+      const config = { [blockedKey]: { retained: "before" } };
+      const baseLocal = {
+        plugins: { entries: { example: { config } } },
+      } satisfies OpenClawConfig;
+      const patch = {
+        plugins: {
+          entries: {
+            example: { config: { [blockedKey]: { retained: undefined } } },
+          },
+        },
+      };
+
+      const next = applyProviderAuthConfigPatch(baseLocal, patch);
+
+      expect(config[blockedKey]).toEqual({ retained: "before" });
+      expect(next.plugins?.entries?.example?.config?.[blockedKey]).toEqual({ retained: "before" });
+    },
+  );
+
   it("drops prototype-pollution keys from opt-in model replacement", () => {
     const patch = JSON.parse(
       '{"agents":{"defaults":{"models":{"__proto__":{"polluted":true},"claude-cli/claude-sonnet-4-6":{"alias":"Sonnet","params":{"constructor":{"polluted":true},"maxTokens":12000}}}}}}',
@@ -90,6 +112,54 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(Object.hasOwn(models ?? {}, "__proto__")).toBe(false);
     expect(Object.getPrototypeOf(Object.assign({}, models)).polluted).toBeUndefined();
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("preserves nested merge and replacement contracts without mutating inputs", () => {
+    const config = {
+      merged: { keep: "base", replace: "before" },
+      scalar: "before",
+      array: ["before"],
+      nullified: { keep: "before" },
+      replaced: { keep: "before" },
+      removed: "before",
+    };
+    const baseLocal = {
+      plugins: { entries: { example: { config } } },
+    } satisfies OpenClawConfig;
+    const before = structuredClone(baseLocal);
+    const replacement = JSON.parse(
+      '[{"safe":"after","__proto__":{"polluted":true},"constructor":{"polluted":true},"nested":{"prototype":{"polluted":true},"keep":true}}]',
+    );
+    replacement[0].optional = undefined;
+    const patch = {
+      plugins: {
+        entries: {
+          example: {
+            config: {
+              merged: { replace: "after" },
+              scalar: { added: true, removed: undefined },
+              array: { added: true },
+              nullified: null,
+              replaced: replacement,
+              removed: undefined,
+            },
+          },
+        },
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch(baseLocal, patch);
+
+    expect(next.plugins?.entries?.example?.config).toStrictEqual({
+      merged: { keep: "base", replace: "after" },
+      scalar: { added: true },
+      array: { added: true },
+      nullified: null,
+      replaced: [{ safe: "after", nested: { keep: true }, optional: undefined }],
+    });
+    expect(baseLocal).toEqual(before);
+    expect(Object.hasOwn(replacement[0], "__proto__")).toBe(true);
+    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
   });
 
   it("keeps normal recursive merges for unrelated provider auth patch fields", () => {
@@ -202,9 +272,8 @@ describe("applyProviderAuthConfigPatch", () => {
   it("normalizes retired Google Gemini per-agent refs from provider config patches", () => {
     const patch = {
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             model: {
               primary: "google/gemini-3-pro-preview",
               fallbacks: ["google/gemini-3-pro-preview"],
@@ -215,17 +284,17 @@ describe("applyProviderAuthConfigPatch", () => {
               },
             },
           },
-        ],
+        },
       },
     };
 
     const next = applyProviderAuthConfigPatch({}, patch);
 
-    expect(next.agents?.list?.[0]?.model).toEqual({
+    expect(next.agents?.entries?.ops?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview"],
     });
-    expect(next.agents?.list?.[0]?.models).toEqual({
+    expect(next.agents?.entries?.ops?.models).toEqual({
       "google/gemini-3.1-pro-preview": {
         alias: "ops-gemini",
       },
@@ -307,154 +376,5 @@ describe("applyProviderAuthConfigPatch", () => {
     const next = applyProviderAuthConfigPatch({}, patch, { providerConfigNormalizer });
 
     expect(next.models?.providers?.kilocode?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
-  });
-});
-
-describe("applyDefaultModel", () => {
-  it("sets the primary when none exists", () => {
-    const config = {
-      agents: { defaults: {} },
-    } as OpenClawConfig;
-    const next = applyDefaultModel(config, "openrouter/auto");
-    expect(next.agents?.defaults?.model).toEqual({ primary: "openrouter/auto" });
-  });
-
-  it("overwrites an existing primary by default", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-6" },
-        },
-      },
-    } as OpenClawConfig;
-    const next = applyDefaultModel(config, "openrouter/auto");
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "openrouter/auto",
-    });
-  });
-
-  it("preserves an existing primary when requested", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-6" },
-        },
-      },
-    } as OpenClawConfig;
-    const next = applyDefaultModel(config, "openrouter/auto", {
-      preserveExistingPrimary: true,
-    });
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "anthropic/claude-opus-4-6",
-    });
-    expect(next.agents?.defaults?.models).toEqual({
-      "openrouter/auto": {},
-    });
-  });
-
-  it("normalizes a preserved retired Google Gemini primary", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "google/gemini-3-pro-preview" },
-        },
-      },
-    } as OpenClawConfig;
-    const next = applyDefaultModel(config, "openrouter/auto", {
-      preserveExistingPrimary: true,
-    });
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-    });
-  });
-
-  it("preserves an existing primary and keeps fallbacks", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "anthropic/claude-opus-4-6",
-            fallbacks: ["openai/gpt-5.4"],
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const next = applyDefaultModel(config, "openrouter/auto", {
-      preserveExistingPrimary: true,
-    });
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "anthropic/claude-opus-4-6",
-      fallbacks: ["openai/gpt-5.4"],
-    });
-    expect(next.agents?.defaults?.models).toEqual({
-      "openrouter/auto": {},
-    });
-  });
-
-  it("adds the model to per-model config", () => {
-    const config = {
-      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
-    } as OpenClawConfig;
-    const next = applyDefaultModel(config, "openrouter/auto");
-    expect(next.agents?.defaults?.models).toEqual({
-      "anthropic/claude-sonnet-4-6": {},
-      "openrouter/auto": {},
-    });
-  });
-
-  it("normalizes retired Google Gemini default models before writing config", () => {
-    const config = {
-      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
-    } as OpenClawConfig;
-    const next = applyDefaultModel(config, "google/gemini-3-pro-preview");
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-    });
-    expect(next.agents?.defaults?.models).toEqual({
-      "anthropic/claude-sonnet-4-6": {},
-      "google/gemini-3.1-pro-preview": {},
-    });
-  });
-
-  it("normalizes existing retired Google Gemini model keys before writing defaults", () => {
-    const config = {
-      agents: {
-        defaults: {
-          models: {
-            "google/gemini-3-pro-preview": {
-              alias: "gemini",
-              params: { thinking: "high" },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const next = applyDefaultModel(config, "google/gemini-3.1-pro-preview");
-
-    expect(next.agents?.defaults?.models).toEqual({
-      "google/gemini-3.1-pro-preview": {
-        alias: "gemini",
-        params: { thinking: "high" },
-      },
-    });
-  });
-
-  it("normalizes retired Google Gemini fallbacks when writing config", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "anthropic/claude-opus-4-6",
-            fallbacks: ["google/gemini-3-pro-preview"],
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const next = applyDefaultModel(config, "openrouter/auto");
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "openrouter/auto",
-      fallbacks: ["google/gemini-3.1-pro-preview"],
-    });
   });
 });

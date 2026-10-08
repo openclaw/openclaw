@@ -1,6 +1,3 @@
-/**
- * Normalizes and logs provider-specific tool schemas at runtime.
- */
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
@@ -26,19 +23,26 @@ type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = u
   allowRuntimePluginLoad?: boolean;
 };
 
-function buildProviderToolSchemaContext<TSchemaType extends TSchema = TSchema, TResult = unknown>(
+function buildProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = unknown>(
   params: ProviderToolSchemaParams<TSchemaType, TResult>,
-  provider: string,
 ) {
-  return {
+  const context = {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    provider,
-    modelId: params.modelId,
-    modelApi: params.modelApi,
-    model: params.model,
-    tools: params.tools,
+    provider: params.provider.trim(),
+  };
+  return {
+    ...context,
+    runtimeHandle: params.runtimeHandle,
+    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
+    context: {
+      ...context,
+      modelId: params.modelId,
+      modelApi: params.modelApi,
+      model: params.model,
+      tools: params.tools,
+    },
   };
 }
 
@@ -50,39 +54,17 @@ export function normalizeProviderToolSchemas<
   TSchemaType extends TSchema = TSchema,
   TResult = unknown,
 >(params: ProviderToolSchemaParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
-  const provider = params.provider.trim();
-  const pluginNormalized = normalizeProviderToolSchemasWithPlugin({
-    provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    runtimeHandle: params.runtimeHandle,
-    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
-    context: buildProviderToolSchemaContext(params, provider),
-  });
+  const pluginNormalized = normalizeProviderToolSchemasWithPlugin(
+    buildProviderToolSchemaParams(params),
+  );
   return Array.isArray(pluginNormalized)
     ? (pluginNormalized as AgentTool<TSchemaType, TResult>[])
     : params.tools;
 }
 
-/**
- * Logs provider-owned tool-schema diagnostics after normalization.
- */
 export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParams): void {
-  const provider = params.provider.trim();
-  const diagnostics = inspectProviderToolSchemasWithPlugin({
-    provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    runtimeHandle: params.runtimeHandle,
-    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
-    context: buildProviderToolSchemaContext(params, provider),
-  });
-  if (!Array.isArray(diagnostics)) {
-    return;
-  }
-  if (diagnostics.length === 0) {
+  const diagnostics = inspectProviderToolSchemasWithPlugin(buildProviderToolSchemaParams(params));
+  if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
     return;
   }
 
