@@ -42,11 +42,9 @@ describe("openclaw plugin tool context", () => {
     const result = resolve({
       memoryAudience,
       agentSessionKey: "agent:main:direct:owner",
-      runId: "run-one",
     });
 
     expect(result.context.memoryAudience).toBe(memoryAudience);
-    expect(result.context.runId).toBe("run-one");
     expect(result.context.assertMemoryAudienceCurrent).toEqual(expect.any(Function));
     expect(() => result.context.assertMemoryAudienceCurrent?.()).not.toThrow();
     expect(() => resolve({ memoryAudience, agentSessionKey: "agent:main:other" })).toThrow(

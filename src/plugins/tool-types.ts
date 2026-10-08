@@ -33,8 +33,6 @@ type OpenClawPluginToolContextBase = {
   sessionKey?: string;
   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
-  /** Host run identity, stable across retries and distinct for later conversation turns. */
-  runId?: string;
   /** Out-of-band plugin-owned bindings attached by the current run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Host-prepared repository identities for project-aware tool behavior. */

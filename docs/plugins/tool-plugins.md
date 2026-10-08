@@ -195,12 +195,6 @@ That is the opposite argument order from the declarative
 Reading `params` from the first argument of a factory tool returns the tool
 call ID string instead.
 
-The factory context includes an optional `runId` supplied by the host. It stays
-stable across retries within a run and changes for later conversation turns.
-Scope durable operation keys to the session, run, and tool call ID: providers
-may reuse tool call IDs after earlier calls leave the model context. Standalone
-callers without an agent run may omit `runId`.
-
 Concrete tools can provide `prepareArguments(args)` to normalize input before
 schema validation. The native agent loop also honors
 `executionMode: "sequential"` when tool calls must run one at a time. These
