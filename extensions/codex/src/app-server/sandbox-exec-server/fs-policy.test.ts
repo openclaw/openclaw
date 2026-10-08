@@ -162,9 +162,22 @@ describe("sandbox fs glob matching", () => {
     expect(createGlobReadMatcher("/[😀]")("/a")).toBe(false);
   });
 
+  it("stops globstars at line terminators like the old dot without dotAll", () => {
+    for (const terminator of ["\n", "\r", "\u2028", "\u2029"]) {
+      expect(createGlobReadMatcher("/work/**")(`/work/a${terminator}b`)).toBe(false);
+      expect(createGlobReadMatcher("/work/**/secret")(`/work/a${terminator}b/secret`)).toBe(false);
+    }
+    expect(createGlobReadMatcher("/work/**")("/work/a/b")).toBe(true);
+    expect(createGlobReadMatcher("/work/**/secret")("/work/a/b/secret")).toBe(true);
+    // Single stars, question marks, and classes still match line terminators.
+    expect(createGlobReadMatcher("/work/*")("/work/a\nb")).toBe(true);
+    expect(createGlobReadMatcher("/work/?")("/work/\n")).toBe(true);
+    expect(createGlobReadMatcher("/work/[\n]")("/work/\n")).toBe(true);
+  });
+
   it("rejects a nested star pattern without scanning the whole event loop", () => {
     const matcher = createGlobReadMatcher(`/${"*a".repeat(14)}`);
-    const target = `/work/${"a".repeat(29)}x`;
+    const target = `/${"a".repeat(29)}x`;
     const started = Date.now();
     expect(matcher(target)).toBe(false);
     expect(Date.now() - started).toBeLessThan(250);
@@ -186,13 +199,26 @@ describe("sandbox fs glob matching", () => {
   it("matches repeated globstar-slash tokens without rescanning per cursor", () => {
     const matcher = createGlobReadMatcher(`/${"**/".repeat(2000)}`);
     const started = Date.now();
-    expect(matcher(`/${"/".repeat(2000)}`)).toBe(true);
+    expect(matcher(`/${"a/".repeat(2000)}`)).toBe(true);
     expect(Date.now() - started).toBeLessThan(250);
   });
 
   it("agrees with the legacy regex compiler on small fuzz inputs", () => {
-    const patternTokens = ["a", "b", "/", "*", "?", "**", "**/", "[a]", "[!a]", "[a-b]", "[]]"];
-    const targetTokens = ["a", "b", "-", "]", "/"];
+    const patternTokens = [
+      "a",
+      "b",
+      "/",
+      "\n",
+      "*",
+      "?",
+      "**",
+      "**/",
+      "[a]",
+      "[!a]",
+      "[a-b]",
+      "[]]",
+    ];
+    const targetTokens = ["a", "b", "-", "]", "/", "\n", "\r", "\u2028", "\u2029"];
     let seed = 0x5eed;
     const nextRandom = () => {
       seed = (seed * 1103515245 + 12345) % 2147483648;

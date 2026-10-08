@@ -289,12 +289,36 @@ function tokenizeSandboxGlobPattern(pattern: string): SandboxGlobToken[] {
 // `pointAtUnit` reverses the map for literal end positions.
 // `slashFollowRanges` precomputes positions just past each separator so `**/`
 // tokens merge them in without rescanning the target per cursor range.
+// `lineTerminators` lists LF/CR/U+2028/U+2029 points: the old regex compiled
+// globstars from `.`, which cannot consume those even with the `u` flag, so
+// globstar reach stops before each of them.
 type SandboxGlobTarget = {
   points: string[];
   unitStarts: number[];
   pointAtUnit: Map<number, number>;
   slashFollowRanges: SandboxGlobCursorRange[];
+  lineTerminators: number[];
 };
+
+function isSandboxGlobLineTerminator(point: string): boolean {
+  return point === "\n" || point === "\r" || point === "\u2028" || point === "\u2029";
+}
+
+function firstLineTerminatorAtOrAfter(target: SandboxGlobTarget, index: number): number {
+  let low = 0;
+  let high = target.lineTerminators.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if ((target.lineTerminators[mid] ?? 0) < index) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low < target.lineTerminators.length
+    ? (target.lineTerminators[low] ?? 0)
+    : target.points.length;
+}
 
 function createSandboxGlobTarget(url: string): SandboxGlobTarget {
   // Array.from iterates Unicode code points, matching the `u`-flag regex the
@@ -303,6 +327,7 @@ function createSandboxGlobTarget(url: string): SandboxGlobTarget {
   const unitStarts: number[] = [];
   const pointAtUnit = new Map<number, number>();
   const slashFollows: number[] = [];
+  const lineTerminators: number[] = [];
   let unit = 0;
   for (let index = 0; index < points.length; index += 1) {
     const point = points[index] ?? "";
@@ -311,6 +336,8 @@ function createSandboxGlobTarget(url: string): SandboxGlobTarget {
     unit += point.length;
     if (point === "/") {
       slashFollows.push(index + 1);
+    } else if (isSandboxGlobLineTerminator(point)) {
+      lineTerminators.push(index);
     }
   }
   pointAtUnit.set(unit, points.length);
@@ -323,7 +350,47 @@ function createSandboxGlobTarget(url: string): SandboxGlobTarget {
       slashFollowRanges.push({ start: follow, end: follow });
     }
   }
-  return { points, unitStarts, pointAtUnit, slashFollowRanges };
+  return { points, unitStarts, pointAtUnit, slashFollowRanges, lineTerminators };
+}
+
+// Merges two sorted, disjoint range lists in linear time; globstar-slash
+// feeds the current ranges plus sorted separator-follows, so a full re-sort
+// per token is unnecessary.
+function mergeSortedSandboxGlobRanges(
+  left: readonly SandboxGlobCursorRange[],
+  right: readonly SandboxGlobCursorRange[],
+): SandboxGlobCursorRange[] {
+  const merged: SandboxGlobCursorRange[] = [];
+  let leftIndex = 0;
+  let rightIndex = 0;
+  while (leftIndex < left.length || rightIndex < right.length) {
+    const leftRange = left[leftIndex];
+    const rightRange = right[rightIndex];
+    const range =
+      rightRange === undefined ||
+      (leftRange !== undefined &&
+        (leftRange.start < rightRange.start ||
+          (leftRange.start === rightRange.start && leftRange.end <= rightRange.end)))
+        ? leftRange
+        : rightRange;
+    if (range === undefined) {
+      break;
+    }
+    if (range === leftRange) {
+      leftIndex += 1;
+    } else {
+      rightIndex += 1;
+    }
+    const last = merged.at(-1);
+    if (last !== undefined && range.start <= last.end + 1) {
+      if (range.end > last.end) {
+        last.end = range.end;
+      }
+    } else {
+      merged.push({ start: range.start, end: range.end });
+    }
+  }
+  return merged;
 }
 
 function mergeSandboxGlobRanges(ranges: SandboxGlobCursorRange[]): SandboxGlobCursorRange[] {
@@ -418,64 +485,60 @@ function starSandboxGlobRanges(
   return mergeSandboxGlobRanges(next);
 }
 
-// `**` may cross separators. Every cursor at or after the earliest reachable
-// position is reachable, so the result is one range.
+// `**` compiles from `.`, which without the dotAll flag stops at line
+// terminators: every cursor reaches each position up to the next line
+// terminator after that cursor's range end.
 function globstarSandboxGlobRanges(
-  points: readonly string[],
+  target: SandboxGlobTarget,
   ranges: readonly SandboxGlobCursorRange[],
 ): SandboxGlobCursorRange[] {
-  let start = points.length + 1;
+  const next: SandboxGlobCursorRange[] = [];
   for (const range of ranges) {
-    if (range.start < start) {
-      start = range.start;
-    }
+    next.push({
+      start: range.start,
+      end: firstLineTerminatorAtOrAfter(target, range.end),
+    });
   }
-  if (start > points.length) {
-    return [];
-  }
-  return [{ start, end: points.length }];
+  return mergeSandboxGlobRanges(next);
 }
 
 // `**/` may match empty or consume through any later separator, so cursors
-// stay put or jump to just past a separator. The reachable set is the current
-// ranges plus every separator-follow at or after the earliest cursor, looked
-// up in the precomputed table instead of rescanning per range.
+// stay put or jump to just past a separator. The consumed prefix compiles
+// from `.` and cannot cross a line terminator, so separator-follows past the
+// next line terminator from a cursor are unreachable from that cursor. Each
+// follow is emitted once: range starts are non-decreasing, so a monotone
+// table pointer covers the union without rescanning per range.
 function globstarSlashSandboxGlobRanges(
   target: SandboxGlobTarget,
   ranges: readonly SandboxGlobCursorRange[],
 ): SandboxGlobCursorRange[] {
-  let minStart = target.points.length + 1;
-  for (const range of ranges) {
-    if (range.start < minStart) {
-      minStart = range.start;
-    }
-  }
-  if (minStart > target.points.length) {
-    return [];
-  }
-  const clip = minStart + 1;
-  let first = 0;
-  while (
-    first < target.slashFollowRanges.length &&
-    (target.slashFollowRanges[first]?.end ?? -1) < clip
-  ) {
-    first += 1;
-  }
-  const next = ranges.map((range) => ({ start: range.start, end: range.end }));
-  const firstFollow = target.slashFollowRanges[first];
-  if (firstFollow !== undefined) {
-    next.push({
-      start: Math.max(firstFollow.start, clip),
-      end: firstFollow.end,
-    });
-    for (let index = first + 1; index < target.slashFollowRanges.length; index += 1) {
-      const follow = target.slashFollowRanges[index];
-      if (follow !== undefined) {
-        next.push({ start: follow.start, end: follow.end });
+  const follows = target.slashFollowRanges;
+  const next: SandboxGlobCursorRange[] = [];
+  const emitted: SandboxGlobCursorRange[] = [];
+  let followIndex = 0;
+  const sortedRanges = ranges.toSorted(
+    (left, right) => left.start - right.start || left.end - right.end,
+  );
+  for (const range of sortedRanges) {
+    next.push({ start: range.start, end: range.end });
+    const bound = firstLineTerminatorAtOrAfter(target, range.end);
+    while (followIndex < follows.length) {
+      const follow = follows[followIndex];
+      if (follow === undefined || follow.start > range.start) {
+        break;
       }
+      followIndex += 1;
+    }
+    while (followIndex < follows.length) {
+      const follow = follows[followIndex];
+      if (follow === undefined || follow.start > bound) {
+        break;
+      }
+      emitted.push({ start: follow.start, end: follow.end });
+      followIndex += 1;
     }
   }
-  return mergeSandboxGlobRanges(next);
+  return mergeSortedSandboxGlobRanges(next, emitted);
 }
 
 // `?` and `[...]` consume exactly one code point, so cursors move to just past
@@ -517,15 +580,25 @@ function singleSandboxGlobRanges(
 function matchSandboxGlobTokens(url: string, tokens: readonly SandboxGlobToken[]): boolean {
   const target = createSandboxGlobTarget(url);
   let ranges: SandboxGlobCursorRange[] = [{ start: 0, end: 0 }];
-  for (const token of tokens) {
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === undefined) {
+      break;
+    }
     if (token.kind === "literal") {
       ranges = literalSandboxGlobRanges(url, target, token.text, ranges);
     } else if (token.kind === "star") {
       ranges = starSandboxGlobRanges(target.points, ranges);
     } else if (token.kind === "globstar") {
-      ranges = globstarSandboxGlobRanges(target.points, ranges);
+      ranges = globstarSandboxGlobRanges(target, ranges);
     } else if (token.kind === "globstarSlash") {
       ranges = globstarSlashSandboxGlobRanges(target, ranges);
+      // A globstar-slash is idempotent on its own output: separator-follows
+      // within reach were already merged, so a run of adjacent tokens
+      // collapses into one pass.
+      while (tokens[index + 1]?.kind === "globstarSlash") {
+        index += 1;
+      }
     } else {
       ranges = singleSandboxGlobRanges(target.points, ranges, token.matches);
     }
