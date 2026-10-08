@@ -61,6 +61,14 @@ import {
 } from "./ci-command-test-plan.mts";
 import { rebalanceMeasuredSerialJobs } from "./ci-measured-compact-packing.mts";
 import {
+  BUNDLED_NODE_TEST_RUNNER,
+  DEFAULT_NODE_TEST_RUNNER,
+  EXTRA_LARGE_NODE_TEST_RUNNER,
+  TOOLING_CONFIG,
+  TOOLING_LARGE_CAPACITY_TEST_FILES,
+  resolveCompactNodeTestRunner,
+} from "./ci-node-test-capacity.mts";
+import {
   COMPACT_EMBEDDED_BASE_GROUP_NAME,
   canSplitWholeConfigGroup,
   listScopedOwnerTestFiles,
@@ -290,9 +298,6 @@ const EXCLUDED_PROJECT_CONFIGS = new Set([
   // checks-ui owns the Chromium project; Node stripes retain Node-driven Playwright tests.
   "test/vitest/vitest.ui-browser.config.ts",
 ]);
-const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
-const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
-const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
 // Startup-core transforms the broad gateway graph before its assertions run.
 // Keep enough CPU here to avoid spending minutes in Vitest imports on 4 vCPU.
 const GATEWAY_STARTUP_CORE_RUNNER = DEFAULT_NODE_TEST_RUNNER;
@@ -1497,16 +1502,8 @@ function expandCompactGroup(
     applyCompactGroupWorkerPins(expandedGroup, runnerBackend),
   );
 }
-const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
 const TOOLING_UNIFIED_DECLARATIONS_TEST_FILE = "test/scripts/write-unified-entry-dts.test.ts";
-const TOOLING_LARGE_CAPACITY_TEST_FILES = new Set([
-  // Generation-retention cases require eight CPUs / 24 GiB; the two-CPU
-  // screen also peaked at 6.05 GiB before those gated cases could run.
-  "test/scripts/vitest-worker-artifacts.ci.test.ts",
-  "test/scripts/write-unified-entry-dts.test.ts",
-  "test/scripts/write-plugin-sdk-entry-dts.test.ts",
-]);
 const TOOLING_ISOLATED_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 // The full matrix is capped at 28 jobs. Admit the consistently slow serial
 // shards first so short alphabetical groups cannot leave them on the tail.
@@ -5424,10 +5421,11 @@ function createCompactNodeTestShardBundles(
   }
   const finalJobs = compactJobs.filter((job) => !retiredJobs.has(job));
   for (const job of finalJobs) {
-    // The 4/8 classes both deliver two CPUs. Routing must not alter placement anchors.
-    if (usesBlacksmithCapacity(job.runner) && job.runner === BUNDLED_NODE_TEST_RUNNER) {
-      job.runner = DEFAULT_NODE_TEST_RUNNER;
-    }
+    job.runner = resolveCompactNodeTestRunner(
+      job,
+      options.runnerBackend,
+      usesBlacksmithCapacity(job.runner),
+    );
   }
 
   // Split/packing admission retains the two-worker retry budget. Once placement
