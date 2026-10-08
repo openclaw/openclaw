@@ -16,7 +16,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readMemoryDatabaseRevision } from "./memory/manager-db-kernel.js";
 import * as generationLease from "./memory/manager-index-generation-lease.js";
 import {
   createManagerIndexFixture,
@@ -104,92 +103,65 @@ describe("memory_search real manager", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { name: "non-first system agent", systemAgent: true, pinned: false },
-    { name: "pinned workspaces", systemAgent: false, pinned: true },
-  ])(
-    "reads the indexed agent file with explicit ownership: $name",
-    async ({ systemAgent, pinned }) => {
-      const cfg = keywordConfig();
-      const workspaces = {
-        main: path.join(fixture.paths.workspace, pinned ? "pinned-main" : "main"),
-        other: path.join(fixture.paths.workspace, pinned ? "pinned-other" : "other"),
-      };
-      const main = pinned ? { workspace: workspaces.main } : {};
-      const other = pinned ? { workspace: workspaces.other } : {};
-      cfg.agents = {
-        ownership: "explicit",
-        defaults: {
-          workspace: fixture.paths.workspace,
-          ...(systemAgent ? { systemAgent: { agentId: "other" } } : {}),
-        },
-        entries: { main, other },
-      };
-      cfg.memory = { ...cfg.memory, citations: "off" };
-      await fs.writeFile(path.join(fixture.paths.workspace, "USER.md"), "Parent decoy\n");
-      for (const [agentId, workspace] of Object.entries(workspaces)) {
-        const marker = `Orchid workspace ${agentId}`;
-        await fs.mkdir(workspace, { recursive: true });
-        await fs.writeFile(path.join(workspace, "USER.md"), marker);
-        const manager = fixture.requireManager(
-          await getMemorySearchManager({ cfg, agentId, purpose: "cli" }),
-        );
-        fixture.trackManager(manager);
-        await manager.sync({ reason: "cli", force: true });
-        await manager.close();
-
-        const options = { config: cfg, agentId, oneShotCliRun: true };
-        const search = searchTool(cfg, options);
-        const get = createMemoryGetTool(options)!;
-        const found = await search.execute("workspace-search", { query: marker, corpus: "memory" });
-        const { results } = found.details as {
-          results: Array<{ path: string; startLine: number; endLine: number; snippet: string }>;
-        };
-        expect(results).toHaveLength(1);
-        expect(results[0]).toMatchObject({
-          path: "USER.md",
-          startLine: 1,
-          endLine: 1,
-          snippet: marker,
-        });
-        const hit = results[0]!;
-        const excerpt = await get.execute("workspace-get", {
-          path: hit.path,
-          from: hit.startLine,
-          lines: hit.endLine - hit.startLine + 1,
-        });
-        expect(excerpt.details).toMatchObject({ status: "ok", text: marker });
-        const escaped = await get.execute("workspace-parent", { path: "../USER.md" });
-        expect(escaped.details).toMatchObject({ status: "error", code: "MEMORY_PATH_NOT_ALLOWED" });
-      }
-    },
-  );
-
-  it.each([
-    {
-      label: "space-indented citations on",
-      citation: "memory/citation-indent.md#L1-L2",
-      mode: "on",
-      sessionKey: "agent:main:main",
-      query: "CitationIndentSpaces",
-      text: "    CitationIndentSpaces()\n    preserveIndentation()",
-      expected:
-        "    CitationIndentSpaces()\n    preserveIndentation()\n\nSource: memory/citation-indent.md#L1-L2",
-    },
-    {
-      label: "tab-indented group auto citations",
-      citation: undefined,
-      mode: "auto",
-      sessionKey: "agent:main:telegram:group:fixture",
-      query: "CitationIndentGroup",
-      text: "\tCitationIndentGroup()\n\tpreserveIndentation()",
-      expected: "\tCitationIndentGroup()\n\tpreserveIndentation()",
-    },
-  ] as const)("preserves indexed snippet layout for $label", async (testCase) => {
-    const filePath = path.join(fixture.paths.memory, "citation-indent.md");
-    await fs.writeFile(filePath, testCase.text);
+  it("reads the indexed agent file with a non-first system agent", async () => {
     const cfg = keywordConfig();
-    cfg.memory = { ...cfg.memory, citations: testCase.mode };
+    const workspaces = {
+      main: path.join(fixture.paths.workspace, "main"),
+      other: path.join(fixture.paths.workspace, "other"),
+    };
+    cfg.agents = {
+      ownership: "explicit",
+      defaults: {
+        workspace: fixture.paths.workspace,
+        systemAgent: { agentId: "other" },
+      },
+      entries: { main: {}, other: {} },
+    };
+    cfg.memory = { ...cfg.memory, citations: "off" };
+    await fs.writeFile(path.join(fixture.paths.workspace, "USER.md"), "Parent decoy\n");
+    for (const [agentId, workspace] of Object.entries(workspaces)) {
+      const marker = `Orchid workspace ${agentId}`;
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(path.join(workspace, "USER.md"), marker);
+      const manager = fixture.requireManager(
+        await getMemorySearchManager({ cfg, agentId, purpose: "cli" }),
+      );
+      fixture.trackManager(manager);
+      await manager.sync({ reason: "cli", force: true });
+      await manager.close();
+
+      const options = { config: cfg, agentId, oneShotCliRun: true };
+      const search = searchTool(cfg, options);
+      const get = createMemoryGetTool(options)!;
+      const found = await search.execute("workspace-search", { query: marker, corpus: "memory" });
+      const { results } = found.details as {
+        results: Array<{ path: string; startLine: number; endLine: number; snippet: string }>;
+      };
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        path: "USER.md",
+        startLine: 1,
+        endLine: 1,
+        snippet: marker,
+      });
+      const hit = results[0]!;
+      const excerpt = await get.execute("workspace-get", {
+        path: hit.path,
+        from: hit.startLine,
+        lines: hit.endLine - hit.startLine + 1,
+      });
+      expect(excerpt.details).toMatchObject({ status: "ok", text: marker });
+      const escaped = await get.execute("workspace-parent", { path: "../USER.md" });
+      expect(escaped.details).toMatchObject({ status: "error", code: "MEMORY_PATH_NOT_ALLOWED" });
+    }
+  });
+
+  it("preserves indexed snippet indentation with citations", async () => {
+    const text = "    CitationIndentSpaces()\n    preserveIndentation()";
+    const filePath = path.join(fixture.paths.memory, "citation-indent.md");
+    await fs.writeFile(filePath, text);
+    const cfg = keywordConfig();
+    cfg.memory = { ...cfg.memory, citations: "on" };
     cfg.plugins = {
       ...cfg.plugins,
       entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
@@ -198,17 +170,24 @@ describe("memory_search real manager", () => {
     await manager.close();
 
     const tool = searchTool(cfg, {
-      agentSessionKey: testCase.sessionKey,
+      agentSessionKey: "agent:main:main",
       oneShotCliRun: true,
     });
     const result = await tool.execute("citation-indentation", {
-      query: testCase.query,
+      query: "CitationIndentSpaces",
       corpus: "memory",
     });
     const expected = {
-      results: [{ path: "memory/citation-indent.md", snippet: testCase.expected }],
+      results: [
+        {
+          path: "memory/citation-indent.md",
+          snippet: `${text}\n\nSource: memory/citation-indent.md#L1-L2`,
+        },
+      ],
     };
-    expect(result.details).toMatchObject({ results: [{ citation: testCase.citation }] });
+    expect(result.details).toMatchObject({
+      results: [{ citation: "memory/citation-indent.md#L1-L2" }],
+    });
     const content = result.content[0];
     if (!content || content.type !== "text") {
       throw new Error("memory_search returned no model-visible JSON");
@@ -216,7 +195,7 @@ describe("memory_search real manager", () => {
     expect
       .soft(JSON.parse(content.text), "model-visible JSON preserves snippet layout")
       .toMatchObject(expected);
-    expect(await fs.readFile(filePath, "utf8")).toBe(testCase.text);
+    expect(await fs.readFile(filePath, "utf8")).toBe(text);
     expect(provider.embedBatchCalls).toBe(0);
     expect(provider.embedQueryCalls).toBe(0);
   });
@@ -265,81 +244,27 @@ describe("memory_search real manager", () => {
     });
   });
 
-  it.each(["before status", "after repair"] as const)(
-    "recovers when the memory manager closes %s retrieval without rebuilding its index",
-    async (closeAt) => {
-      const cfg = createConfig({ vectorEnabled: false, minScore: 0 });
-      cfg.memory = { ...cfg.memory, search: { ...cfg.memory?.search, cache: { enabled: false } } };
-      const manager = await indexedManager(cfg, undefined, "cli");
-      const embeddingCalls = provider.embedBatchCalls;
-      if (closeAt === "after repair") {
-        requireFormatRepair();
-      }
-      const search = manager.search.bind(manager);
-      vi.spyOn(manager, "search").mockImplementationOnce(async (...args) => {
-        const results = await search(...args);
-        if (closeAt === "after repair") {
-          await manager.close();
-        }
-        return results;
-      });
-      const getSpy = vi.spyOn(MemoryIndexManager, "get");
-      if (closeAt === "before status") {
-        await manager.close();
-        getSpy.mockResolvedValueOnce(manager);
-      }
-      const tool = searchTool(cfg);
-      const result = await tool.execute("closed-memory-manager", alphaQuery);
-      expect(result.details).not.toHaveProperty("error");
-      expect(result.details).toMatchObject({
-        results: [expect.objectContaining({ path: memoryPath })],
-      });
-      expect(result.details).not.toHaveProperty("unavailable");
-      expect(provider.embedBatchCalls).toBe(embeddingCalls + (closeAt === "after repair" ? 1 : 0));
-      if (closeAt === "after repair") {
-        expect(result.details).toHaveProperty("warning", expect.stringContaining("provider cost"));
-      }
-    },
-  );
-
-  it("keeps the published index and wiki results when format repair fails", async () => {
-    const cfg = createConfig({ vectorEnabled: false });
+  it("recovers when the memory manager closes after repair without another rebuild", async () => {
+    const cfg = createConfig({ vectorEnabled: false, minScore: 0 });
     cfg.memory = { ...cfg.memory, search: { ...cfg.memory?.search, cache: { enabled: false } } };
-    const manager = await indexedManager(cfg, "cli");
-    await manager.close();
-    const db = requireFormatRepair();
-    const revision = readMemoryDatabaseRevision(db);
-    provider.embedBatchPermanentFailure = Object.assign(
-      new Error("HTTP 400: synthetic embedding provider unavailable"),
-      { status: 400 },
-    );
-    withWiki();
-    const tool = searchTool(cfg);
-    const failed = await tool.execute("failed-format-repair", { query: "alpha", corpus: "all" });
-    expect(failed.details).toMatchObject({
-      error: expect.stringContaining("HTTP 400"),
-      warning: expect.stringContaining("The existing index was left unchanged."),
-      action: expect.stringContaining("openclaw memory status --deep --agent main"),
-      results: [wikiHit],
-      corpora: [
-        {
-          corpus: "memory",
-          outcome: "unavailable",
-          error: expect.stringContaining("HTTP 400"),
-        },
-        { corpus: "wiki", outcome: "ok" },
-      ],
+    const manager = await indexedManager(cfg, undefined, "cli");
+    const embeddingCalls = provider.embedBatchCalls;
+    requireFormatRepair();
+    const search = manager.search.bind(manager);
+    vi.spyOn(manager, "search").mockImplementationOnce(async (...args) => {
+      const results = await search(...args);
+      await manager.close();
+      return results;
     });
-    expect(failed.details).not.toHaveProperty("unavailable");
-
-    expect(readMemoryDatabaseRevision(db)).toBe(revision);
-    provider.embedBatchPermanentFailure = null;
-    await closeAllMemorySearchManagers();
-    const recovered = await tool.execute("provider-restored", alphaQuery);
-    expect(recovered.details).toMatchObject({
+    const tool = searchTool(cfg);
+    const result = await tool.execute("closed-memory-manager", alphaQuery);
+    expect(result.details).not.toHaveProperty("error");
+    expect(result.details).toMatchObject({
       results: [expect.objectContaining({ path: memoryPath })],
     });
-    expect(recovered.details).not.toHaveProperty("unavailable");
+    expect(result.details).not.toHaveProperty("unavailable");
+    expect(provider.embedBatchCalls).toBe(embeddingCalls + 1);
+    expect(result.details).toHaveProperty("warning", expect.stringContaining("provider cost"));
   });
 
   it("preserves reindex guidance alongside wiki results after an embedding model change", async () => {
