@@ -793,14 +793,13 @@ describe("native OpenAI Responses SSE continuation", () => {
       { asyncToolExecution: true, onPayload: (payload) => payload },
       astra,
     );
-    expect(
-      (sseState.requests[0]?.tools as Array<{ name: string; async?: boolean }>).map(
-        ({ name, async }) => ({ name, async }),
-      ),
-    ).toEqual([
-      { name: "exec", async: true },
-      { name: "sessions_yield", async: undefined },
+    expect(sseState.requests[0]?.tools).toEqual([
+      expect.objectContaining({ name: "exec", async: true }),
+      expect.objectContaining({ name: "sessions_yield" }),
     ]);
+    expect(sseState.requests[0]?.tools).not.toContainEqual(
+      expect.objectContaining({ name: "sessions_yield", async: true }),
+    );
   });
 
   it("keeps async tools on full-history encrypted-content recovery", async () => {
