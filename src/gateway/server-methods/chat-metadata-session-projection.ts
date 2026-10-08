@@ -115,7 +115,7 @@ export async function prepareChatMetadataModelProjection(params: {
   // A draft has no persisted session grant: recheck its live human before hydrating private auth.
   await withCurrentReadAuthority(params, () => {});
   // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
-  // models.list control-plane reads so a slow provider cannot delay chat startup.
+  // models.list refresh requests so a slow provider cannot delay chat startup.
   const snapshot = params.facts.modelCatalog;
   const projectorParams: Parameters<typeof createModelCatalogDecisions>[0] = {
     cfg: params.facts.owner.config,

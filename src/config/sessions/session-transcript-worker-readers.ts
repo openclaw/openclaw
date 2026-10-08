@@ -88,6 +88,7 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readCleanup: reader("session-cleanup", "a cleanup snapshot", (value) => value),
     readRawDelta: reader("transcript-raw-delta", "raw transcript delta", (value) => value.result),
     readVisibleDelta: reader(
       "transcript-visible-delta",

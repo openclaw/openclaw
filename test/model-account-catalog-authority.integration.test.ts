@@ -380,6 +380,7 @@ describe("Gateway automatic account dispatch authority", () => {
             request("models.list", {
               agentId: "main",
               view: "configured",
+              refresh: true,
               ...(saved ? { sessionKey } : {}),
             });
           const pending =
@@ -456,6 +457,7 @@ describe("Gateway automatic account dispatch authority", () => {
                 agentId: "main",
                 authProfileId: selected,
                 view: "configured",
+                refresh: true,
               });
               expect(pinned.mock.calls[0]?.[0]).toBe(true);
               expect(requests).toHaveLength(1);

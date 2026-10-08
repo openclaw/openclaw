@@ -45,13 +45,15 @@ function observeSlowWriters(
   const getChildLogger = logging.getChildLogger;
   vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
     const logger = getChildLogger(...args);
-    vi.spyOn(logger, "warn").mockImplementation((message, fields) => {
-      if (message === "slow SQLite session write") {
+    vi.spyOn(logger, "warn").mockImplementation((first: unknown, second: unknown) => {
+      if (second === "slow SQLite session write") {
+        const fields = first;
         assert(fields && typeof fields === "object");
         const operation = "operation" in fields ? fields.operation : undefined;
         operations.push(operation);
         onWarning(operation, fields);
-      } else if (message === "slow SQLite session archive pruning") {
+      } else if (first === "slow SQLite session archive pruning") {
+        const fields = second;
         assert(fields && typeof fields === "object");
         onPruning(fields);
       }
