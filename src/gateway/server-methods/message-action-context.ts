@@ -75,9 +75,6 @@ export function createMessageActionRuntimeAuthority(
     assertReadCurrent ??
     assertScheduledWriteCurrent ??
     params.authorization?.scheduled?.assertCurrent;
-  const assertDeliveryCurrent = !isFencedProviderReadAction(params.request.action)
-    ? params.authorization?.deliveryAttempt?.assertCurrent
-    : undefined;
   const scheduledPolicy =
     assertReadCurrent || assertScheduledWriteCurrent
       ? params.authorization?.scheduled?.policy
@@ -86,11 +83,10 @@ export function createMessageActionRuntimeAuthority(
     params.client,
     params.context,
     params.respond,
-    assertActionCurrent || assertDeliveryCurrent
+    assertActionCurrent
       ? () => {
           params.sessionMutationCommitGuard?.();
-          assertActionCurrent?.();
-          assertDeliveryCurrent?.();
+          assertActionCurrent();
         }
       : params.sessionMutationCommitGuard,
   );
@@ -100,17 +96,9 @@ export function createMessageActionRuntimeAuthority(
         params.assertClientUploadAllowed?.();
       }
     : agentRuntimeAuthority.commitGuard;
-  const beforeDeliveryAttempt = () =>
-    isFencedProviderReadAction(params.request.action)
-      ? undefined
-      : params.authorization?.deliveryAttempt?.beforeAttempt();
   return {
     assertReadCurrent,
     assertScheduledWriteCurrent,
-    beforeDeliveryAttempt,
-    onPlatformSendDispatch: assertDirectAdapterHandoff
-      ? async () => assertDirectAdapterHandoff()
-      : undefined,
     routeAccountId:
       normalizeOptionalString(params.request.accountId) ??
       normalizeOptionalString(params.request.params.accountId) ??

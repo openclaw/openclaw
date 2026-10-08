@@ -656,7 +656,6 @@ describe("buildGatewayCronService", () => {
 
     try {
       await getCronDeps(state).runIsolatedAgentJob({
-        deliveryAttemptFence: null,
         job,
         message: "review",
         abortSignal: abortController.signal,

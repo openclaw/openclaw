@@ -38,8 +38,7 @@ export async function commitCurrentSessionCronCompletion(
   if (!sourceSessionKey) {
     return { ok: false, reason: "current cron delivery is missing its source session binding" };
   }
-  const sourceSessionGeneration = params.sourceSessionGeneration;
-  if (!sourceSessionGeneration) {
+  if (!params.sourceSessionGeneration) {
     return { ok: false, reason: "current cron delivery is missing its source session generation" };
   }
   const transcriptPayloads = buildDirectCronTranscriptMirrorPayloads(params.deliveryPayloads);
@@ -53,11 +52,10 @@ export async function commitCurrentSessionCronCompletion(
   let preparedContent: Record<string, unknown>[] | undefined;
   let appended = false;
   try {
-    await params.deliveryAttemptFence?.beforeAttempt();
     const committed = await commitBackgroundResultToSession({
       agentId: params.agentId,
       sessionKey: sourceSessionKey,
-      expectedGeneration: sourceSessionGeneration,
+      expectedGeneration: params.sourceSessionGeneration,
       text: completionText,
       prepareDisplayContent: async () => {
         const { assistantContent } = await buildAssistantReplyContent({
@@ -90,10 +88,6 @@ export async function commitCurrentSessionCronCompletion(
       provenance: { kind: "cron", jobId: params.job.id, runId },
       config: params.cfgWithAgentDefaults,
       signal: params.abortSignal,
-      assertCurrent: () => {
-        params.abortSignal?.throwIfAborted();
-        params.deliveryAttemptFence?.assertCurrent();
-      },
       onMessageCommitted: (result, acceptCompletion) => {
         // Promote before publication; retries own the original committed blocks.
         // Preserve committed media even when promotion or the later drain fails.

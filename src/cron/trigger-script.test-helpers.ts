@@ -42,7 +42,6 @@ export function createCronScriptRuntimeFixture(deps: RuntimeDeps) {
   return {
     evaluateTrigger: (params: ScriptFixture) =>
       runtime.evaluateTrigger({
-        deliveryAttemptFence: null,
         job: job(params, { kind: "agentTurn", message: "condition payload" }),
         script: params.script,
         state: params.state,
@@ -52,7 +51,6 @@ export function createCronScriptRuntimeFixture(deps: RuntimeDeps) {
       }),
     executePayload: (params: ScriptFixture) =>
       runtime.executePayload({
-        deliveryAttemptFence: null,
         job: job(params, {
           kind: "script",
           script: params.script,

@@ -440,7 +440,6 @@ it.each<ScheduledLifetimeCase>([
           sessionId: runId,
           sessionKey,
           jobId,
-          deliveryAttemptFence: { beforeAttempt: vi.fn(async () => {}), assertCurrent: vi.fn() },
           toolsAllow: ["message"],
           scheduledToolPolicy,
         });

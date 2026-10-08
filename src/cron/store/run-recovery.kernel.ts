@@ -9,7 +9,6 @@ import {
 import type { CronJobPolicyContext, DeferredCronNotifications } from "../service/state.js";
 import type { CronJob } from "../types.js";
 import { deleteCronJobRowInDatabase, upsertCronJobRow } from "./row-codec.js";
-import { readCronDeliveryAttemptStateInDatabase } from "./run-receipt-delivery.js";
 import {
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceiptInDatabase,
@@ -148,15 +147,7 @@ export function repairCronRunInDatabase(params: {
         taskRunId: task.taskRunId,
         runningAtMs: proposal.runningAtMs,
         nowMs,
-        recoverInterruptedOneShot:
-          params.mode === "startup" &&
-          readCronDeliveryAttemptStateInDatabase({
-            database: database.db,
-            storeKey,
-            jobId: job.id,
-            receiptId: job.state.runningReceiptId ?? currentReceipt?.receiptId,
-            startedAtMs: proposal.runningAtMs,
-          }) === "not-started",
+        recoverInterruptedOneShot: params.mode === "startup",
         deferredNotifications: notifications,
       });
       replacementAtMs = interrupted.replacementAtMs;
@@ -168,7 +159,7 @@ export function repairCronRunInDatabase(params: {
           deferredNotifications: notifications,
         });
       }
-      if (params.mode === "startup" && job.schedule.kind === "at" && job.enabled) {
+      if (params.mode === "startup" && job.schedule.kind === "at") {
         // Commit the pending occurrence with receipt retirement, so another
         // restart before admission cannot consume it as terminal run history.
         job.state.startupCatchupAtMs = job.state.nextRunAtMs;
@@ -224,7 +215,7 @@ export function repairCronRunInDatabase(params: {
     notifications,
     ...(replacementAtMs === undefined &&
     proposal.runningAtMs !== undefined &&
-    !(params.mode === "startup" && interrupted && job.schedule.kind === "at" && job.enabled)
+    !(params.mode === "startup" && interrupted && job.schedule.kind === "at")
       ? { skipStartupCatchup: true }
       : {}),
   };

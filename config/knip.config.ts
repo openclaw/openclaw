@@ -29,13 +29,7 @@ const repositoryScriptEntries = [
   // tsdown builds this private macOS app worker protocol entry by path.
   "src/node-host/mac-worker-entry.ts!",
   // Retained beta updaters import these stable private dist entries after package replacement.
-  "src/cli/update-cli/update-command-immutable.ts!",
-  "src/daemon/launchd-update-compat.ts!",
-  "src/infra/update-immutable-activation.ts!",
-  "src/infra/update-managed-service-handoff-current.ts!",
-  "src/infra/update-recovery-baseline-capture.ts!",
   "src/plugins/plugin-lifecycle-lease.ts!",
-  "src/state/openclaw-state-lease-worker-operation.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
   ".github/actions/git-owner/test-prerequisites.mjs!",
   // The frozen Node compatibility action invokes this exact-candidate repair by path.

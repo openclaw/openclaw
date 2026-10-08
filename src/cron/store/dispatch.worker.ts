@@ -30,7 +30,6 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
       "cron.reserveRuns",
       "cron.activateRun",
       "cron.releaseReservations",
-      "cron.markDeliveryStarted",
       "cron.finishReceipt",
       "cron.removeStaleFamily",
     ].includes(String(type)) &&
@@ -67,7 +66,6 @@ export function isCronStateWorkerCommand(command: {
     case "cron.recordRun":
     case "cron.activateRun":
     case "cron.releaseReservations":
-    case "cron.markDeliveryStarted":
     case "cron.finishReceipt":
     case "cron.removeStaleFamily":
     case "cron.loadMutable":
@@ -104,7 +102,6 @@ export function executeCronStateCommand(
     case "cron.reserveRuns":
     case "cron.activateRun":
     case "cron.releaseReservations":
-    case "cron.markDeliveryStarted":
     case "cron.finishReceipt":
     case "cron.removeStaleFamily":
       if (!admission) {
@@ -117,8 +114,6 @@ export function executeCronStateCommand(
           return admission.activateCronRunInWorker(database, command.input);
         case "cron.releaseReservations":
           return admission.releaseCronReservationsInWorker(database, command.input);
-        case "cron.markDeliveryStarted":
-          return admission.markCronDeliveryStartedInWorker(database, command.input);
         case "cron.finishReceipt":
           return admission.finishCronReceiptInWorker(database, command.input);
         case "cron.removeStaleFamily":

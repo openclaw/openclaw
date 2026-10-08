@@ -154,7 +154,6 @@ for version in "${SOURCE_VERSIONS[@]}"; do
 
   echo "Running packaged updater first-hop compatibility Docker E2E (${version:-explicit source})..."
   docker_e2e_run_with_harness \
-    -e OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 \
     -e OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 \
     -e OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR=/tmp/openclaw-update-first-hop-artifacts \
     -e OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK="$expected_missing_chunk" \

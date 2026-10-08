@@ -15,7 +15,6 @@ import {
   loadCronRows,
   upsertCronJobRow,
 } from "./row-codec.js";
-import { markCronDeliveryStartedInDatabase } from "./run-receipt-delivery.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import {
   activateCronRunReceiptInDatabase,
@@ -315,39 +314,6 @@ export function finishCronReceiptInWorker(
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.run-receipt.finish" },
-  );
-}
-
-export function markCronDeliveryStartedInWorker(
-  database: OpenClawStateDatabase,
-  input: CronRuntimeWorkerOperations["cron.markDeliveryStarted"]["input"],
-) {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      if (input.storeKey !== input.handle.storeKey) {
-        throw new CronRunReceiptRevisionError(input.handle.receiptId);
-      }
-      const deletionBlocked = isAgentDeletionBlocked(input.handle.agentId, {}, db);
-      const preparation = prepareCronRuntimeMutation("cron.markDeliveryStarted", input.nonce, {
-        deletionBlocked,
-      });
-      if (deletionBlocked) {
-        throw new CronRunReceiptRevisionError(
-          input.handle.receiptId,
-          "cron agent is unavailable",
-          "owner-unavailable",
-        );
-      }
-      markCronDeliveryStartedInDatabase({
-        database: db,
-        handle: input.handle,
-        allowMissingJob: preparation.allowMissingJob,
-        resolveAgentId: (job) => resolveCronJobEffectiveAgentId(job, preparation.defaultAgentId),
-      });
-      return retainCronRuntimeMutationOutcome("cron.markDeliveryStarted", db, input.nonce, {});
-    },
-    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-    { operationLabel: "cron.run-receipt.mark-delivery-started" },
   );
 }
 

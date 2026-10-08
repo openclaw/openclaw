@@ -391,7 +391,6 @@ export interface CronJobs {
 export interface CronRunReceipts {
   agent_id: string;
   config_revision: string;
-  delivery_attempt_state: Generated<string>;
   error_text: string | null;
   finished_at_ms: number | null;
   job_id: string;

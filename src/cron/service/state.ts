@@ -10,7 +10,6 @@ import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
-import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
@@ -124,7 +123,6 @@ export type CronServiceDeps = {
   /** List enabled, configured channel ids without exposing channel machinery to cron core. */
   listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
   evaluateCronTrigger?: (params: {
-    deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronStoredJob;
     script: string;
     state: unknown;
@@ -194,7 +192,6 @@ export type CronServiceDeps = {
     opts: HeartbeatWakeRequest & { agentId: string },
   ) => number | undefined;
   runIsolatedAgentJob: (params: {
-    deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronJob;
     admissionSource?: AdmittedRunContext["admissionSource"];
     message: string;
@@ -213,12 +210,10 @@ export type CronServiceDeps = {
       }
   >;
   runCommandJob?: (params: {
-    deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronJob;
     abortSignal?: AbortSignal;
   }) => Promise<CronRunOutcome & CronRunDeliveryResult>;
   runScriptJob?: (params: {
-    deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronStoredJob;
     streamBatch?: string;
     abortSignal?: AbortSignal;
@@ -239,7 +234,6 @@ export type CronServiceDeps = {
     event: CronEvent;
     abortSignal: AbortSignal;
     onDeliveryState: (outcome: CronWebhookDeliveryOutcome) => void;
-    assertCurrent?: () => void;
   }) => Promise<CronWebhookDeliveryOutcome>;
   cleanupTimedOutAgentRun?: (params: {
     job: CronJob;

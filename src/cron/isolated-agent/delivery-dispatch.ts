@@ -318,9 +318,6 @@ export async function dispatchCronDelivery(
           }
         : undefined;
       const runDelivery = async () => {
-        await params.deliveryAttemptFence?.beforeAttempt();
-        params.abortSignal?.throwIfAborted();
-        params.deliveryAttemptFence?.assertCurrent();
         attemptedPayloadsForMirror.length = 0;
         const send = await sendDurableMessageBatchCore({
           cfg: params.cfgWithAgentDefaults,
@@ -338,7 +335,6 @@ export async function dispatchCronDelivery(
           completionRetention: DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
           deps: createOutboundSendDeps(params.deps),
           signal: params.abortSignal,
-          assertDirectAdapterHandoff: params.deliveryAttemptFence?.assertCurrent,
           onError,
           onPayload: (payload) => {
             attemptedPayloadsForMirror.push(payload);

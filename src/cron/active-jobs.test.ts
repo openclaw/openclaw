@@ -87,7 +87,6 @@ describe("cron message action authority", () => {
         sessionId: "persistent-message-session",
         sessionKey: "cron:long-message-read",
         jobId,
-        deliveryAttemptFence: { beforeAttempt: vi.fn(async () => {}), assertCurrent: vi.fn() },
         toolsAllow: ["message"],
         scheduledToolPolicy: { version: 1, mode: "trusted" },
       });

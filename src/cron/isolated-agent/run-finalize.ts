@@ -352,7 +352,6 @@ export async function finalizeCronRun(params: {
     cfgWithAgentDefaults: prepared.cfgWithAgentDefaults,
     deps: prepared.input.deps,
     job: prepared.input.job,
-    deliveryAttemptFence: prepared.input.deliveryAttemptFence,
     agentId: prepared.agentId,
     agentSessionKey: prepared.agentSessionKey,
     sourceSessionKey: prepared.sourceSessionKey,

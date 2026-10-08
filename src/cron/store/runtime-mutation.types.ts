@@ -58,12 +58,6 @@ export type CronRuntimeMutationContracts = {
       logs: CronRunRecoveryOutcome["logs"];
     };
   };
-  "cron.markDeliveryStarted": {
-    input: CronRuntimeMutationInputs["cron.markDeliveryStarted"];
-    facts: { deletionBlocked: boolean };
-    preparation: { allowMissingJob: boolean; defaultAgentId?: string };
-    outcome: Record<string, never>;
-  };
   "cron.finishReceipt": {
     input: CronRuntimeMutationInputs["cron.finishReceipt"];
     facts: Record<string, never>;

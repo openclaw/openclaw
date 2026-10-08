@@ -242,22 +242,9 @@ describe("CronService restart catch-up", () => {
         }),
       ],
       async (cron, deps) => {
-        const recovered = cron.getJob("restart-job");
-        expect(recovered).toMatchObject({
-          enabled: false,
-          deleteAfterRun: true,
-          schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
-          state: {
-            lastRunAtMs: runningAtMs,
-            lastRunStatus: "error",
-            lastDeliveryStatus: "unknown",
-          },
-        });
-        expect(recovered?.state.runningAtMs).toBeUndefined();
-        expect(recovered?.state.nextRunAtMs).toBeUndefined();
-        expect(recovered?.state.startupCatchupAtMs).toBeUndefined();
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(cron.getJob("restart-job")).toBeUndefined();
+        expect(deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+        expect(deps.requestHeartbeat).toHaveBeenCalledOnce();
         expect(deps.onEvent).toHaveBeenCalledWith(
           expect.objectContaining({
             jobId: "restart-job",

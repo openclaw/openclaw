@@ -14,6 +14,9 @@ import {
 } from "./lib/update-compat-chunks.mts";
 
 const DEFAULT_OUTPUT = "scripts/lib/update-compat-inventory.json";
+const TARGET_VERSION: string = JSON.parse(
+  fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version;
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
 
 function npmView(packageName: string, field: string): unknown {
@@ -37,6 +40,27 @@ function sortedReleases<T extends { version: string }>(releases: T[]): T[] {
   });
 }
 
+// Post-swap bridges support upgrades into this candidate, not newer-release downgrades.
+function isSupportedSource(version: string): boolean {
+  const comparison = compareReleaseVersions(version, TARGET_VERSION);
+  if (comparison === null) {
+    throw new Error(
+      `Invalid compatibility source or target version: ${version}, ${TARGET_VERSION}`,
+    );
+  }
+  return comparison <= 0;
+}
+
+function assertSupportedSources(inventory: UpdateCompatibilityInventory): void {
+  for (const { version } of inventory.releases) {
+    if (!isSupportedSource(version)) {
+      throw new Error(
+        `Update compatibility source ${version} is newer than target ${TARGET_VERSION}; downgrade compatibility is not supported.`,
+      );
+    }
+  }
+}
+
 function shellArgument(value: string): string {
   return /^[A-Za-z0-9_./=+-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -53,7 +77,9 @@ function checkRegistryCoverage(inventory: UpdateCompatibilityInventory, output: 
     if (typeof version !== "string" || parseReleaseVersion(version)?.version !== version) {
       throw new Error(`npm OpenClaw dist-tag ${tag} is missing or invalid`);
     }
-    taggedVersions.push(version);
+    if (isSupportedSource(version)) {
+      taggedVersions.push(version);
+    }
   }
   const missing = [...new Set(taggedVersions)].filter(
     (version) => !inventory.releases.some((release) => release.version === version),
@@ -116,6 +142,7 @@ function runUpdateCompatibilityInventory(args: string[] = process.argv.slice(2))
         }),
       ),
     });
+    assertSupportedSources(inventory);
     const contents = `${JSON.stringify(inventory, null, 2)}\n`;
     if (values.check) {
       readUpdateCompatibilityInventory(output);
@@ -128,6 +155,7 @@ function runUpdateCompatibilityInventory(args: string[] = process.argv.slice(2))
     }
   } else if (values.check) {
     inventory = readUpdateCompatibilityInventory(output);
+    assertSupportedSources(inventory);
     checkRegistryCoverage(inventory, values.output);
   } else {
     throw new Error(

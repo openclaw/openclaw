@@ -99,6 +99,12 @@ The scheduler declares `anthropic-api-key` for this lane, and both full-chunk an
 targeted-lane preflights require `ANTHROPIC_API_KEY` specifically; OAuth credentials
 remain accepted for the other Anthropic lanes that support them.
 
+First-hop compatibility covers published source versions no newer than the
+candidate. A maintenance release does not require downgrade compatibility with a
+newer beta on npm. The 2026.9.9 release retains shared state schema 19 from
+2026.9.8; databases already migrated to schema 20 by the October beta remain
+incompatible and are refused without mutation.
+
 First-hop compatibility lanes share a 3,200-second inner container budget and a
 3,500-second outer lane budget. Hosted 4-vCPU run `36506342273` spent about 1,558
 seconds before its final candidate hop; another 560 seconds for that hop and about

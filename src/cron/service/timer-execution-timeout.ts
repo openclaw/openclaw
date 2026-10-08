@@ -5,7 +5,6 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/se
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
-import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import type { CronRunReceiptSettlementDisposition } from "../store/run-receipt-store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type {
@@ -122,7 +121,6 @@ export type StartupCatchupExecution =
   | { ok: false; outcomes: TimedCronRunOutcome[]; error: unknown };
 
 export type ExecuteJobCoreOptions = {
-  deliveryAttemptFence?: CronCompletionDeliveryFence;
   activeJobMarker?: CronActiveJobMarker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   onPayloadExecutionStarted?: () => void;
