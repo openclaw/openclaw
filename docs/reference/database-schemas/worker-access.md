@@ -3061,8 +3061,13 @@ Visibility and public-share patches preserve typed request-source authority thro
 the entry writer's preparation, exact-row comparison, transaction, and commit grants.
 The Gateway still owns manager and visibility policy; visibility eligibility is
 checked after the source assertion. Publication and response recheck the live caller
-after worker and lifecycle cleanup. Revocation can withhold a token response without
-replaying or undoing an already acknowledged write. Opaque and cross-store source
+and the exact stored row after worker and lifecycle cleanup. These final-authority
+reads retain the existing synchronous reader while foreign-process and released
+SDK writers can change ownership without publishing revocation facts. They retire
+at the next Plugin SDK major when writer publications cover those changes. Public
+tokens are minted only after the final manager check confirms the acknowledged
+grant is still current. Revocation can withhold a token response without replaying
+or undoing an already acknowledged write. Opaque and cross-store source
 guards retain their existing native transaction contract, and incognito keeps its
 production native owner until its separate activation.
 

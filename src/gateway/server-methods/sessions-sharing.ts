@@ -334,9 +334,10 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      let publicShare: SessionPublicShare | undefined;
+      let publicShareGrant: ReturnType<typeof resolveSessionPublicShare>;
+      let tokenCodec: PublicSessionShareTokenCodec | undefined;
       await runExclusiveSharingMutation(managed, access.lifecycleStorePath, async () => {
-        const tokenCodec = params.enabled ? await loadPublicSessionShareTokenCodec() : undefined;
+        tokenCodec = params.enabled ? await loadPublicSessionShareTokenCodec() : undefined;
         const { target: current } = access.current();
         let changed = false;
         let inspected = false;
@@ -356,18 +357,9 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
             }
             access.assertEntryManageable(entry);
             const previous = resolveSessionPublicShare(entry);
-            const publicShareGrant = params.enabled
+            publicShareGrant = params.enabled
               ? prepareSessionPublicShareGrant(entry, current.canonicalKey)
               : undefined;
-            publicShare =
-              publicShareGrant && tokenCodec
-                ? projectPublicSessionShare({
-                    agentId: current.agentId,
-                    sessionKey: current.canonicalKey,
-                    grant: publicShareGrant,
-                    codec: tokenCodec,
-                  })
-                : undefined;
             changed = publicShareGrant?.id !== previous?.id;
             return changed ? { publicShare: publicShareGrant } : null;
           },
@@ -380,8 +372,8 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         if (!inspected) {
           throw new Error("session changed before sharing mutation");
         }
-        access.assertCurrent();
         if (changed) {
+          access.currentStored();
           emitSessionsChanged(context, {
             reason: "sharing",
             sessionKey: current.canonicalKey,
@@ -389,7 +381,20 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           });
         }
       });
-      access.assertCurrent();
+      const { target: published } = access.currentStored();
+      const currentGrant = resolveSessionPublicShare(published.entry);
+      if (currentGrant?.id !== publicShareGrant?.id) {
+        throw new Error("session publication changed before sharing response");
+      }
+      const publicShare =
+        currentGrant && tokenCodec
+          ? projectPublicSessionShare({
+              agentId: published.agentId,
+              sessionKey: published.canonicalKey,
+              grant: currentGrant,
+              codec: tokenCodec,
+            })
+          : undefined;
       respond(
         true,
         {
@@ -418,6 +423,12 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       }
       const managed = access.target;
       const visibility = params.visibility;
+      const assertVisibilityCurrent = () => {
+        const { target } = access.currentStored();
+        if (resolveSessionVisibility(target.entry) !== visibility) {
+          throw new Error("session visibility changed before sharing response");
+        }
+      };
       if (!isSessionVisibilityAllowed(context.getRuntimeConfig(), visibility)) {
         respond(
           false,
@@ -465,12 +476,12 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         if (!inspected) {
           throw new Error("session changed before sharing mutation");
         }
-        access.assertCurrent();
         if (!changed) {
           return;
         }
         const now = Date.now();
         const actor = actorIdentity(client);
+        assertVisibilityCurrent();
         publishSharingChange({
           context,
           agentId: current.agentId,
@@ -484,7 +495,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           },
         });
       });
-      access.assertCurrent();
+      assertVisibilityCurrent();
       respond(true, { ok: true, sessionKey: managed.canonicalKey, visibility }, undefined);
     },
   ),

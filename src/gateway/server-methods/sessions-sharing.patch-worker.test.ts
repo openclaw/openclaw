@@ -16,6 +16,7 @@ import { loadPublicSessionShareTokenCodec } from "../control-ui-public-session-t
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
+import * as sharingAuthority from "./sessions-sharing-authority.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import { identifiedClient, sessionSharingTestContext } from "./sessions-sharing.test-support.js";
 import type { RespondFn } from "./types.js";
@@ -43,7 +44,7 @@ async function fixture() {
     client,
     context,
     codec,
-    async call(method: PatchMethod, patch: Record<string, unknown>) {
+    async call(method: PatchMethod, patch: Record<string, unknown>, respond = vi.fn<RespondFn>()) {
       const params = {
         ...scope,
         ...(method === "session.publicShare.set" ? { expectedSessionId: sessionId } : {}),
@@ -57,7 +58,6 @@ async function fixture() {
         requestParams: params,
       });
       expect(error).toBeNull();
-      const respond = vi.fn<RespondFn>();
       await sessionSharingHandlers[method]!({
         req: { type: "req", id: "sharing-patch", method, params },
         params,
@@ -72,10 +72,28 @@ async function fixture() {
   };
 }
 
-it("patches visibility and public shares without caller-thread SQLite", async () => {
+it("limits sharing caller-thread SQLite to the final stored-authority read", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = await fixture();
     const sql = observeMainThreadSql();
+    const prepareAccess = sharingAuthority.prepareManagedSessionAccess;
+    let finalReadSqlCalls = 0;
+    vi.spyOn(sharingAuthority, "prepareManagedSessionAccess").mockImplementation(async (params) => {
+      const access = await prepareAccess(params);
+      if (access) {
+        const read = access.currentStored;
+        vi.spyOn(access, "currentStored").mockImplementation(() => {
+          sql.expectIdle();
+          try {
+            return read();
+          } finally {
+            finalReadSqlCalls += sql.count();
+            sql.clear();
+          }
+        });
+      }
+      return access;
+    });
     try {
       for (const visibility of ["draft", "shared"]) {
         const response = await f.call("session.visibility.set", { visibility });
@@ -112,6 +130,7 @@ it("patches visibility and public shares without caller-thread SQLite", async ()
         }
       }
       sql.expectIdle();
+      expect(finalReadSqlCalls).toBeGreaterThan(0);
     } finally {
       sql.restore();
     }
@@ -163,26 +182,92 @@ it.each([
   },
 );
 
-it("withholds a committed public-share token if the caller is revoked during lifecycle cleanup", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = await fixture();
-    const run = lifecycle.runExclusiveSessionLifecycleMutation;
-    let committed = false;
-    vi.spyOn(lifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
-      async (operation, params) => {
-        const result = await run(operation, params);
-        committed = true;
-        f.client.invalidated = true;
-        return result;
-      },
-    );
-    await expect(f.call("session.publicShare.set", { enabled: true })).rejects.toThrow();
-    expect(committed).toBe(true);
-    expect((await readSessionMembersInWorker(f.scope)).entry?.publicShare?.sessionId).toBe(
-      f.sessionId,
-    );
-  });
-});
+it.each(["caller", "foreign row", "revoked grant", "deleted row", "replaced generation"] as const)(
+  "withholds a committed public-share token if %s authority is revoked during lifecycle cleanup",
+  async (revoked) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = await fixture();
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      await readSessionMembersInWorker(f.scope);
+      const run = lifecycle.runExclusiveSessionLifecycleMutation;
+      let acknowledgedShareId: string | undefined;
+      vi.spyOn(lifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
+        async (operation, params) => {
+          const result = await run(operation, params);
+          const committed = (await readSessionMembersInWorker(f.scope)).entry?.publicShare;
+          expect(committed?.sessionId).toBe(f.sessionId);
+          acknowledgedShareId = committed?.id;
+          if (revoked === "caller") {
+            f.client.invalidated = true;
+          } else {
+            const writer = new DatabaseSync(database.path);
+            try {
+              if (revoked === "deleted row") {
+                writer.exec("PRAGMA foreign_keys = ON");
+              }
+              const changed =
+                revoked === "foreign row"
+                  ? writer
+                      .prepare(
+                        "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdActor.id', ?, '$.visibility', 'draft') WHERE session_key = ?",
+                      )
+                      .run("replacement-owner", f.scope.sessionKey)
+                  : revoked === "revoked grant"
+                    ? writer
+                        .prepare(
+                          "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.publicShare') WHERE session_key = ?",
+                        )
+                        .run(f.scope.sessionKey)
+                    : revoked === "deleted row"
+                      ? writer
+                          .prepare("DELETE FROM session_nodes WHERE session_key = ?")
+                          .run(f.scope.sessionKey)
+                      : writer
+                          .prepare(
+                            "UPDATE session_nodes SET current_session_id = ?, entry_json = json_set(entry_json, '$.sessionId', ?) WHERE session_key = ?",
+                          )
+                          .run("replacement-session", "replacement-session", f.scope.sessionKey);
+              expect(changed.changes).toBe(1);
+            } finally {
+              writer.close();
+            }
+          }
+          return result;
+        },
+      );
+      const respond = vi.fn<RespondFn>();
+      const refusal =
+        revoked === "revoked grant"
+          ? "session publication changed before sharing response"
+          : revoked === "deleted row" || revoked === "replaced generation"
+            ? "session changed before sharing mutation"
+            : "session ownership changed before sharing mutation";
+      await expect(f.call("session.publicShare.set", { enabled: true }, respond)).rejects.toThrow(
+        refusal,
+      );
+      expect(acknowledgedShareId).toEqual(expect.any(String));
+      expect(respond).not.toHaveBeenCalled();
+      const entry = (await readSessionMembersInWorker(f.scope)).entry;
+      if (revoked === "deleted row") {
+        expect(entry).toBeUndefined();
+      } else if (revoked === "revoked grant") {
+        expect(entry?.sessionId).toBe(f.sessionId);
+        expect(entry?.publicShare).toBeUndefined();
+      } else if (revoked === "replaced generation") {
+        expect(entry?.sessionId).toBe("replacement-session");
+      } else {
+        expect(entry?.publicShare).toMatchObject({
+          id: acknowledgedShareId,
+          sessionId: f.sessionId,
+        });
+      }
+      if (revoked === "foreign row") {
+        expect(entry?.createdActor?.id).toBe("replacement-owner");
+        expect(entry?.visibility).toBe("draft");
+      }
+    });
+  },
+);
 
 it.each(["session.visibility.set", "session.publicShare.set"] as const)(
   "refuses %s after a foreign ownership change between preparation and commit",
