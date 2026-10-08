@@ -123,9 +123,8 @@ function captureRequestAuthorityAssertion(options: RequestMutationOptions) {
   );
 }
 
-function captureRequestMutationOptions(options: GatewayRequestOptions) {
-  const { req, client, context, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } =
-    options;
+function captureRequestMutationOptions(options: GatewayRequestOptions, client = options.client) {
+  const { req, context, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } = options;
   return {
     transport: { req, client, signal, hasCurrentClientAuthority, sessionMutationCommitGuard },
     assertCurrent: () => {
@@ -237,16 +236,13 @@ export function bindWebSocketRequestMutationAuthority<T extends GatewayRequestOp
   ) {
     return options;
   }
-  const { req, context, signal, hasCurrentClientAuthority } = options;
+  const captured = captureRequestMutationOptions(options, client);
+  const { signal, hasCurrentClientAuthority } = captured.transport;
   const assertWorkerCurrent = () => {
     signal?.throwIfAborted();
     const acceptedSource = readAcceptedGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
+    captured.assertCurrent();
     if (
-      options.req !== req ||
-      options.client !== client ||
-      options.context !== context ||
-      options.signal !== signal ||
-      options.hasCurrentClientAuthority !== hasCurrentClientAuthority ||
       options.sessionMutationCommitGuard !== undefined ||
       !hasCurrentDeviceRevocation() ||
       client.internal?.agentRuntimeIdentity

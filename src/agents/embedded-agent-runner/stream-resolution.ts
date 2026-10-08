@@ -116,6 +116,15 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
       authStorage: params.authStorage,
       assertCurrent: params.assertCurrent,
     });
+  const wrapCredentialedStream = (
+    streamFn: StreamFn,
+    options: Parameters<typeof wrapEmbeddedAgentStreamFn>[1],
+    strategy: string,
+  ) => ({
+    streamFn: wrapEmbeddedAgentStreamFn(streamFn, options),
+    strategy,
+    wrapApiKey: wrapRunApiKey,
+  });
   // Vertex and session-owned streams resolve their own auth.
   const keepStreamAuth = (streamFn: StreamFn) => streamFn;
   const stripCacheBoundary = (context: Parameters<StreamFn>[1]) =>
@@ -123,12 +132,8 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
       ? { ...context, systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt) }
       : context;
   if (params.providerStreamFn) {
-    return {
-      // Provider stream creation owns the plugin's cache-boundary capability.
-      streamFn: wrapEmbeddedAgentStreamFn(params.providerStreamFn, wrapOptions),
-      strategy: "provider",
-      wrapApiKey: wrapRunApiKey,
-    };
+    // Provider stream creation owns the plugin's cache-boundary capability.
+    return wrapCredentialedStream(params.providerStreamFn, wrapOptions, "provider");
   }
 
   const currentStreamFn = params.currentStreamFn ?? llmRuntime.streamSimple;
@@ -155,15 +160,11 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
     (isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, llmRuntime) ||
       getStreamLlmRuntime(params.currentStreamFn) === llmRuntime)
   ) {
-    return {
-      streamFn: wrapEmbeddedAgentStreamFn(currentStreamFn, {
-        ...wrapOptions,
-        sessionId: params.sessionId,
-        transformContext: stripCacheBoundary,
-      }),
-      strategy: "openclaw-native-codex-responses",
-      wrapApiKey: wrapRunApiKey,
-    };
+    return wrapCredentialedStream(
+      currentStreamFn,
+      { ...wrapOptions, sessionId: params.sessionId, transformContext: stripCacheBoundary },
+      "openclaw-native-codex-responses",
+    );
   }
 
   const isDefault = isDefaultOpenClawStreamFnForModel(
@@ -181,14 +182,11 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   ) {
     const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
     if (boundaryAwareStreamFn) {
-      return {
-        streamFn: wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
-          ...wrapOptions,
-          sessionId: params.sessionId,
-        }),
-        strategy: `boundary-aware:${params.model.api}`,
-        wrapApiKey: wrapRunApiKey,
-      };
+      return wrapCredentialedStream(
+        boundaryAwareStreamFn,
+        { ...wrapOptions, sessionId: params.sessionId },
+        `boundary-aware:${params.model.api}`,
+      );
     }
   }
 

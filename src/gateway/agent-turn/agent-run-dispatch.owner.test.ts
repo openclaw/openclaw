@@ -98,7 +98,7 @@ describe("Gateway dispatch run ownership", () => {
     return { f, owner, dispatch };
   }
 
-  it.each(["command", "commentary-media"] as const)(
+  it.each(["command", "media"] as const)(
     "joins a captured terminal save when %s startup fails before its delivery hook",
     async (startup) => {
       const { entry, params } = createDispatch(true);
@@ -115,7 +115,7 @@ describe("Gateway dispatch run ownership", () => {
       const { emitFinal } = params.io;
       const completion = dispatchAgentRunFromGateway({
         ...params,
-        loadCommentaryMedia: startup === "commentary-media" ? failStartup : undefined,
+        loadMedia: startup === "media" ? failStartup : undefined,
       });
       try {
         const producer = entry.resolveTerminalProducer?.();

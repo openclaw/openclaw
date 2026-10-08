@@ -84,7 +84,6 @@ export async function prepareEmbeddedRunRuntime(input: {
     modelRegistry,
   } = modelSetup;
   let agentHarness = modelSetup.agentHarness;
-  let pluginHarnessOwnsTransport = modelSetup.pluginHarnessOwnsTransport;
   let preparedThinkingCapabilityReady = false;
   const resolveEffectiveModel = (candidate: typeof model) =>
     resolveEmbeddedRunEffectiveModel({
@@ -148,7 +147,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   input.notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
   agentHarness = selectHarness(models.effective);
-  pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
+  let pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
   const authStages = log.isEnabled("trace") ? createStageTimingTracker(Date.now) : undefined;
   const preparedAuthPlan = await prepareEmbeddedRunAuthPlan({
     assertCurrent: input.assertCurrent,

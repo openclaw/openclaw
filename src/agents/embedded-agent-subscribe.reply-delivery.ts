@@ -357,23 +357,6 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     if (!params.onBlockReply) {
       return;
     }
-    const recordDeliveredReply = () => {
-      if (!payload.isReasoning && hasAssistantVisibleReply(payload)) {
-        state.visibleBlockReplyCount += 1;
-        if (options?.pendingToolMedia) {
-          state.pendingToolMediaDeliveryFailed = false;
-          state.hasToolMediaBlockReply = true;
-        }
-        for (const url of options?.autoDeliveryMediaUrls ?? []) {
-          state.toolAutoDeliveryMediaUrls.delete(url);
-        }
-      }
-    };
-    const recordDeliveryFailure = () => {
-      if (options?.pendingToolMedia) {
-        restorePendingToolMediaReply(state, options.pendingToolMedia);
-      }
-    };
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
     runBestEffortCallback({
       callback: () =>
@@ -383,8 +366,23 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       label: "block reply",
       log,
       pending: pendingBlockReplyTasks,
-      onSuccess: recordDeliveredReply,
-      onError: recordDeliveryFailure,
+      onSuccess: () => {
+        if (!payload.isReasoning && hasAssistantVisibleReply(payload)) {
+          state.visibleBlockReplyCount += 1;
+          if (options?.pendingToolMedia) {
+            state.pendingToolMediaDeliveryFailed = false;
+            state.hasToolMediaBlockReply = true;
+          }
+          for (const url of options?.autoDeliveryMediaUrls ?? []) {
+            state.toolAutoDeliveryMediaUrls.delete(url);
+          }
+        }
+      },
+      onError: () => {
+        if (options?.pendingToolMedia) {
+          restorePendingToolMediaReply(state, options.pendingToolMedia);
+        }
+      },
     });
   };
   const emitBlockReply: EmbeddedAgentSubscribeContext["emitBlockReply"] = (payload, options) => {

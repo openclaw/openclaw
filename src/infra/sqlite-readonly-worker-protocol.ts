@@ -52,6 +52,7 @@ export type SqliteAuthProfileReadOptions = {
   mode: "auth-profile-rows";
   source: "canonical" | "snapshot";
   expectedIdentity: string;
+  artifactPreserving?: true;
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   stagingRoot?: never;

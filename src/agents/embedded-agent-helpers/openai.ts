@@ -79,7 +79,7 @@ function rewriteAssistantContent(
   }
   let changed = false;
   const content = message.content.map((block) => {
-    const next = rewrite(block);
+    const next = block && typeof block === "object" ? rewrite(block) : block;
     changed ||= !Object.is(next, block);
     return next;
   });
@@ -116,9 +116,6 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
       return rewriteAssistantContent(assistantMsg, (block) => {
-        if (!block || typeof block !== "object") {
-          return block;
-        }
         const toolCallBlock = block as OpenAIToolCallBlock;
         if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
           return block;
@@ -168,10 +165,6 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
       const localRewrittenIds = new Map<string, string>();
       let seenReplayableReasoning = false;
       const next = rewriteAssistantContent(assistantMsg, (block) => {
-        if (!block || typeof block !== "object") {
-          return block;
-        }
-
         const thinkingBlock = block as OpenAIThinkingBlock;
         if (
           thinkingBlock.type === "thinking" &&
