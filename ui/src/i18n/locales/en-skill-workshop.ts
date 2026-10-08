@@ -36,9 +36,9 @@ const enSkillWorkshop = {
     },
     unused: {
       badge: "Unused {days}d",
-      title: "Learned skills unused for {days} days are archived automatically.",
+      title: "Unused-skill cleanup can archive learned skills after {days} idle days.",
       notice:
-        "Unused for {days} days. Learned skills unused for {limit} days are archived automatically; using it resets the clock.",
+        "Unused for {days} days. Unused-skill cleanup can archive learned skills after {limit} idle days on agents where it runs; using the skill resets the clock.",
     },
     tabs: {
       aria: "Skill sections",

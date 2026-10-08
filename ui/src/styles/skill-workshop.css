@@ -190,8 +190,8 @@
 }
 
 .sw-badge--warning {
-  background: color-mix(in srgb, var(--warn, #d9a441) 16%, transparent);
-  color: var(--warn, #d9a441);
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
 }
 
 .sw-link-button {
@@ -279,7 +279,7 @@
 }
 
 .sw-notice--warning {
-  background: color-mix(in srgb, var(--warn, #d9a441) 12%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
   color: var(--text);
 }
 
@@ -380,11 +380,11 @@
 }
 
 .sw-diff__key--remove::before {
-  background: color-mix(in srgb, var(--danger, #e5534b) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 45%, transparent);
 }
 
 .sw-diff__key--add::before {
-  background: color-mix(in srgb, var(--ok, #3fb950) 45%, transparent);
+  background: color-mix(in srgb, var(--ok) 45%, transparent);
 }
 
 .sw-diff__lines {
@@ -414,11 +414,11 @@
 }
 
 .sw-diff__line--remove {
-  background: color-mix(in srgb, var(--danger, #e5534b) 14%, transparent);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
 .sw-diff__line--add {
-  background: color-mix(in srgb, var(--ok, #3fb950) 14%, transparent);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
 }
 
 .sw-diff__sign {

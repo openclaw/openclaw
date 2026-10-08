@@ -214,8 +214,9 @@ and why) lives in the state database and keeps the newest 500 entries per agent.
 
 - **Control UI:** open **Plugins → Skill workshop**. Learned skills are listed
   most used first (or by recent activity or name), each with its latest change
-  and **Undo**; skills idle for two weeks are flagged before cleanup archives
-  them. Selecting a skill shows its instructions, support files, and history.
+  and **Undo**; skills idle for two weeks are flagged, since
+  [unused-skill cleanup](#unused-skill-cleanup) may archive them at 30 days.
+  Selecting a skill shows its instructions, support files, and history.
   From the history you can compare an earlier version with today's, restore it,
   or undo a change. **Archive** and **Restore** switch a skill between the
   Active and Archived lists. The page header holds the learning mode switch and
