@@ -390,15 +390,26 @@ Recovery does not create backup repositories, archives, or permanent refs. A sta
 own Git objects or bundle do not count as another copy. Live or uncertain owners,
 unrecorded writer settlement, interrupted recovery ownership, substituted metadata,
 other boot/process namespaces, and historical unmarked directories remain protected.
-Recovery is limited to the same boot and a known PID namespace; even a reboot of
-the same computer leaves earlier copies protected. Full worktrees also remain
+Producer-absence recovery is limited to the same boot and a known PID namespace;
+even a reboot of the same computer leaves earlier non-idle copies protected.
+Idle mirrors retain their separate exclusive-lock recovery contract. Directory
+ownership records include the canonical path, inode, birthtime, and macOS volume
+UUID, so APFS device-number changes across reboots do not invalidate that identity.
+Legacy device/inode records accept a macOS device-only change only when the
+directory predates its receipt and the existing path and ownership checks pass.
+Inspection never rewrites receipts; successful owner updates persist the stronger
+identity and retain the original timestamp bound for remaining legacy evidence.
+Changed identities, unknown siblings, and incomplete metadata remain protected.
+If a recorded volume UUID cannot currently be verified, recovery also remains
+protected until the OS volume lookup succeeds.
+Full worktrees also remain
 protected because hooks, filters, and raw source require separate proof. Their
 ordinary cleanup retains the remaining staging if exact Git registration removal
 fails, including its receipt when registration was eligible. Repo-local copies
 remain unmarked. There is no global worktree prune or force-recovery option.
 
 Source-transfer commands inspect at most 64 bounded headers with a 250-ms soft
-discovery budget. This scan does not hash payloads, search Git history, or query a
+discovery budget after the initial volume lookup. This scan does not hash payloads, search Git history, or query a
 provider. A temporary cursor advances subsequent scans past protected entries;
 `staging inspect --after <nextCursor>` also pages the local report. After successful
 normal completion the wrapper attempts at most one discovered candidate. Help,

@@ -1703,7 +1703,7 @@ if(!interrupted)throw new Error('fixture did not interrupt artifact publication'
             `
 const passes=[];
 for(let pass=0;pass<128&&fs.existsSync(${JSON.stringify(stage.root)});pass++){
-  counters={headers:0,bytes:0,payload:0,commands:0,hashes:0,osReads:0,osBytes:0,osCommands:0,osHashes:0,osHashBytes:0};phase='discover';
+  counters={headers:0,bytes:0,payload:0,commands:0,hashes:0,osReads:0,osBytes:0,osCommands:0,volumeCommands:0,volumeBytes:0,osHashes:0,osHashBytes:0};phase='discover';
   const discovery=discoverStaging(ctx.staging);phase='recover';
   const metrics={...counters,entries:discovery.entries.length,elapsedMs:discovery.elapsedMs,statuses:discovery.entries.map(entry=>entry.status)};
   const result=await recoverDiscoveredStaging(ctx.staging,discovery,{binary:ctx.cli,cwd:ctx.repository});
@@ -1711,7 +1711,7 @@ for(let pass=0;pass<128&&fs.existsSync(${JSON.stringify(stage.root)});pass++){
 }
 console.log(JSON.stringify({passes,remaining:fs.existsSync(${JSON.stringify(stage.root)})}));`,
             `
-let phase='idle';let counters;let observedBoot='',observedNamespace='';const descriptors=new Map();
+let phase='idle';let counters;let observedBoot='',observedNamespace='',observedDevice='';const descriptors=new Map();
 const originalOpen=fs.openSync,originalRead=fs.readSync,originalClose=fs.closeSync;
 fs.openSync=(path,...args)=>{const fd=originalOpen(path,...args);descriptors.set(fd,String(path));if(phase==='discover'){if(basename(String(path))==='staging.json')counters.headers++;if(String(path).includes('/payload'))counters.payload++;}return fd;};
 fs.readSync=(fd,...args)=>{const count=originalRead(fd,...args);if(phase==='discover'&&descriptors.has(fd)){if(descriptors.get(fd)==='/proc/sys/kernel/random/boot_id'){counters.osReads++;counters.osBytes+=count;if(Buffer.isBuffer(args[0])&&args[0].length<=128)observedBoot=args[0].subarray(0,count).toString('utf8').trim();}else counters.bytes+=count;}return count;};
@@ -1719,7 +1719,7 @@ fs.closeSync=(fd)=>{descriptors.delete(fd);return originalClose(fd);};
 const originalReadlink=fs.readlinkSync;fs.readlinkSync=(path,...args)=>{const value=originalReadlink(path,...args);if(phase==='discover'&&path==='/proc/self/ns/pid'){counters.osReads++;counters.osBytes+=Buffer.byteLength(String(value));if(Buffer.byteLength(String(value))<=128)observedNamespace=String(value);}return value;};
 for(const name of ['lstatSync','statSync','readFileSync','readdirSync','readlinkSync']){const original=fs[name];fs[name]=(path,...args)=>{if(phase==='discover'&&String(path).includes('/payload'))counters.payload++;return original(path,...args);};}
 ${orderedDirectories([basename(stage.root)], "last")}
-for(const name of ['spawn','spawnSync','execFileSync']){const original=cp[name];cp[name]=(...args)=>{const options=args[2];const bootProbe=phase==='discover'&&process.platform==='darwin'&&name==='spawnSync'&&args[0]==='/usr/sbin/sysctl'&&JSON.stringify(args[1])===JSON.stringify(['-n','kern.bootsessionuuid'])&&options?.encoding==='utf8'&&options.env&&Object.keys(options.env).length===0&&options.timeout>0&&options.timeout<=1000&&options.maxBuffer>0&&options.maxBuffer<=1024;if(phase==='discover'){if(bootProbe)counters.osCommands++;else counters.commands++;}const result=original(...args);if(bootProbe&&typeof result.stdout==='string'){observedBoot=result.stdout.trim();counters.osBytes+=Buffer.byteLength(result.stdout);}return result;};}
+for(const name of ['spawn','spawnSync','execFileSync']){const original=cp[name];cp[name]=(...args)=>{const options=args[2];const bootProbe=phase==='discover'&&process.platform==='darwin'&&name==='spawnSync'&&args[0]==='/usr/sbin/sysctl'&&JSON.stringify(args[1])===JSON.stringify(['-n','kern.bootsessionuuid'])&&options?.encoding==='utf8'&&options.env&&Object.keys(options.env).length===0&&options.timeout>0&&options.timeout<=1000&&options.maxBuffer>0&&options.maxBuffer<=1024;const volumeProbe=phase==='discover'&&process.platform==='darwin'&&name==='spawnSync'&&options?.encoding==='utf8'&&options.env&&Object.keys(options.env).length===0&&options.timeout>0&&options.timeout<=5000&&options.maxBuffer>0&&options.maxBuffer<=1024*1024&&((args[0]==='/usr/bin/stat'&&JSON.stringify(args[1])===JSON.stringify(['-f','%Sd',fs.realpathSync(ctx.staging)]))||(args[0]==='/usr/sbin/diskutil'&&/^disk[0-9]+(?:s[0-9]+)*$/.test(observedDevice)&&JSON.stringify(args[1])===JSON.stringify(['info','-plist',observedDevice])));if(phase==='discover'){if(bootProbe)counters.osCommands++;else if(volumeProbe)counters.volumeCommands++;else counters.commands++;}const result=original(...args);if(volumeProbe&&typeof result.stdout==='string'){counters.volumeBytes+=Buffer.byteLength(result.stdout);if(args[0]==='/usr/bin/stat')observedDevice=result.stdout.trim();}if(bootProbe&&typeof result.stdout==='string'){observedBoot=result.stdout.trim();counters.osBytes+=Buffer.byteLength(result.stdout);}return result;};}
 const originalHash=crypto.createHash;crypto.createHash=(algorithm,...args)=>{const hash=originalHash(algorithm,...args);if(phase==='discover'){const metrics=counters;metrics.hashes++;const update=hash.update.bind(hash),digest=hash.digest.bind(hash);let updates=0,identity=false,size=0,finished=false;hash.update=(data,...options)=>{updates++;size=typeof data==='string'?Buffer.byteLength(data):0;identity=updates===1&&algorithm==='sha256'&&typeof data==='string'&&size<=256&&observedBoot.length===36&&(process.platform==='darwin'||observedNamespace.startsWith('pid:['))&&data===process.platform+':'+observedBoot.toLowerCase()+':'+observedNamespace;return update(data,...options);};hash.digest=(...options)=>{if(!finished&&identity){metrics.hashes--;metrics.osHashes++;metrics.osHashBytes+=size;}finished=true;return digest(...options);};}return hash;};`,
             120_000,
           );
@@ -1734,6 +1734,8 @@ const originalHash=crypto.createHash;crypto.createHash=(algorithm,...args)=>{con
               osReads: number;
               osBytes: number;
               osCommands: number;
+              volumeCommands: number;
+              volumeBytes: number;
               osHashes: number;
               osHashBytes: number;
               entries: number;
@@ -1747,7 +1749,7 @@ const originalHash=crypto.createHash;crypto.createHash=(algorithm,...args)=>{con
           expect(report.passes.length).toBeGreaterThan(1);
           expect(report.passes[0]!.statuses.every((status) => status === "protected")).toBe(true);
           expect(report.passes.filter((pass) => pass.recovered)).toHaveLength(1);
-          // Classify only the observed boot/PID-namespace digest as bounded OS
+          // Classify only the exact boot/PID-namespace and volume probes as bounded OS
           // metadata. No discovery pass is run before measurement or prewarmed.
           expect(report.passes.reduce((sum, pass) => sum + pass.osHashes, 0)).toBe(1);
           expect(report.passes.reduce((sum, pass) => sum + pass.osCommands, 0)).toBe(
@@ -1761,6 +1763,8 @@ const originalHash=crypto.createHash;crypto.createHash=(algorithm,...args)=>{con
             expect(pass.osReads).toBeLessThanOrEqual(2);
             expect(pass.osBytes).toBeLessThanOrEqual(256);
             expect(pass.osHashBytes).toBeLessThanOrEqual(256);
+            expect(pass.volumeCommands).toBeLessThanOrEqual(process.platform === "darwin" ? 2 : 0);
+            expect(pass.volumeBytes).toBeLessThanOrEqual(1024 * 1024 + 256);
           }
           expect(readFileSync(f.calls, "utf8").trim().split("\n")).toHaveLength(2);
           console.info(
