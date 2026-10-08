@@ -343,7 +343,7 @@ export type TranscriptMessageAppendResult<TMessage> = {
 
 /** Transcript update fields supplied by callers; the target is resolved here. */
 export type TranscriptUpdatePayload = Partial<SessionTranscriptUpdate> &
-  Pick<InternalSessionTranscriptUpdate, "lifecycleRevision">;
+  Pick<InternalSessionTranscriptUpdate, "lifecycleRevision" | "assistantItemIds">;
 
 export type LatestTranscriptAssistantText = {
   id?: string;

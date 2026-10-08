@@ -82,12 +82,7 @@ function finalizeAssistantExtraction(errorContext: boolean, extracted: string): 
 function prepareEmbeddedAssistantTextForPhase(
   msg: AssistantMessage,
   requestedPhase: AssistantPhase,
-  prepareText?: (
-    text: string,
-    final: boolean,
-    phase?: AssistantPhase,
-    contentIndex?: number,
-  ) => string,
+  prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
 ): () => string {
   const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
   if (typeof msg.content === "string") {
@@ -295,13 +290,11 @@ function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   // Avoid false positives: only treat it as structured thinking when it begins
   // with a think tag (common for local/OpenAI-compat providers that emulate
   // reasoning blocks via tags).
-  if (!trimmedStart.startsWith("<")) {
-    return null;
-  }
-  if (!THINKING_TAG_OPEN_RE.test(trimmedStart)) {
-    return null;
-  }
-  if (!THINKING_TAG_CLOSE_RE.test(text)) {
+  if (
+    !trimmedStart.startsWith("<") ||
+    !THINKING_TAG_OPEN_RE.test(trimmedStart) ||
+    !THINKING_TAG_CLOSE_RE.test(text)
+  ) {
     return null;
   }
 
@@ -310,18 +303,11 @@ function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   let thinkingStart = 0;
   const blocks: ThinkTaggedSplitBlock[] = [];
 
-  const pushText = (value: string) => {
-    if (!value) {
-      return;
+  const pushBlock = (type: ThinkTaggedSplitBlock["type"], value: string) => {
+    const content = type === "thinking" ? value.trim() : value;
+    if (content) {
+      blocks.push(type === "thinking" ? { type, thinking: content } : { type, text: content });
     }
-    blocks.push({ type: "text", text: value });
-  };
-  const pushThinking = (value: string) => {
-    const cleaned = value.trim();
-    if (!cleaned) {
-      return;
-    }
-    blocks.push({ type: "thinking", thinking: cleaned });
   };
 
   for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
@@ -329,14 +315,14 @@ function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
     const isClose = match[1]?.includes("/") ?? false;
 
     if (!inThinking && !isClose) {
-      pushText(text.slice(cursor, index));
+      pushBlock("text", text.slice(cursor, index));
       thinkingStart = index + match[0].length;
       inThinking = true;
       continue;
     }
 
     if (inThinking && isClose) {
-      pushThinking(text.slice(thinkingStart, index));
+      pushBlock("thinking", text.slice(thinkingStart, index));
       cursor = index + match[0].length;
       inThinking = false;
     }
@@ -345,7 +331,7 @@ function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   if (inThinking) {
     return null;
   }
-  pushText(text.slice(cursor));
+  pushBlock("text", text.slice(cursor));
 
   const hasThinking = blocks.some((b) => b.type === "thinking");
   if (!hasThinking) {
@@ -369,11 +355,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   let changed = false;
 
   for (const block of message.content) {
-    if (!block || typeof block !== "object" || !("type" in block)) {
-      next.push(block);
-      continue;
-    }
-    if (block.type !== "text") {
+    if (!block || typeof block !== "object" || !("type" in block) || block.type !== "text") {
       next.push(block);
       continue;
     }

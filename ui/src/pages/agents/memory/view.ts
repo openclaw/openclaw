@@ -159,11 +159,7 @@ const DREAM_PHRASE_KEYS = [
   "dreaming.phrases.whisperingVectorStore",
 ] as const;
 
-const DREAM_PHASE_LABEL_KEYS = {
-  light: "dreaming.phase.light",
-  deep: "dreaming.phase.deep",
-  rem: "dreaming.phase.rem",
-} as const;
+const DREAM_PHASES = ["light", "deep", "rem"] as const;
 
 const DREAM_SWAP_MS = 6_000;
 
@@ -293,14 +289,6 @@ function flattenDiaryBody(body: string): string[] {
   );
 }
 
-function formatPhaseNextRun(nextRunAtMs?: number): string {
-  if (!nextRunAtMs) {
-    return "—";
-  }
-  const d = new Date(nextRunAtMs);
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
 function renderScene(props: DreamingProps, dreamText: string) {
   // Keep the sleeper's seeded identity consistent with this agent's sidebar pet.
   const look = createLobsterPetLook(lobsterPetSeed(props.selectedAgentId));
@@ -370,23 +358,26 @@ function renderScene(props: DreamingProps, dreamText: string) {
       </div>
 
       <div class="dreams__phases">
-        ${(Object.keys(DREAM_PHASE_LABEL_KEYS) as (keyof typeof DREAM_PHASE_LABEL_KEYS)[]).map(
-          (phaseId) => {
-            const phase = props.phases?.[phaseId];
-            const hasPhaseStatus = phase !== undefined;
-            const enabled = phase?.enabled === true;
-            const nextRun = formatPhaseNextRun(phase?.nextRunAtMs);
-            const label = t(DREAM_PHASE_LABEL_KEYS[phaseId]);
-            const status = !hasPhaseStatus ? "—" : enabled ? nextRun : t("dreaming.phase.off");
-            return html`
-              <div class="dreams__phase ${hasPhaseStatus && !enabled ? "dreams__phase--off" : ""}">
-                <div class="dreams__phase-dot ${enabled ? "dreams__phase-dot--on" : ""}"></div>
-                <span class="dreams__phase-name">${label}</span>
-                <span class="dreams__phase-next">${status}</span>
-              </div>
-            `;
-          },
-        )}
+        ${DREAM_PHASES.map((phaseId) => {
+          const phase = props.phases?.[phaseId];
+          const hasPhaseStatus = phase !== undefined;
+          const enabled = phase?.enabled === true;
+          const nextRun = phase?.nextRunAtMs
+            ? new Date(phase.nextRunAtMs).toLocaleTimeString([], {
+                hour: "numeric",
+                minute: "2-digit",
+              })
+            : "—";
+          const label = t(`dreaming.phase.${phaseId}`);
+          const status = !hasPhaseStatus ? "—" : enabled ? nextRun : t("dreaming.phase.off");
+          return html`
+            <div class="dreams__phase ${hasPhaseStatus && !enabled ? "dreams__phase--off" : ""}">
+              <div class="dreams__phase-dot ${enabled ? "dreams__phase-dot--on" : ""}"></div>
+              <span class="dreams__phase-name">${label}</span>
+              <span class="dreams__phase-next">${status}</span>
+            </div>
+          `;
+        })}
       </div>
 
       ${
@@ -1183,18 +1174,16 @@ function renderWikiOverviewSection(props: DreamingProps) {
     emptyKey: "dreaming.wiki.emptyWiki",
     emptyHintKey: "dreaming.wiki.emptyWikiHint",
     date: () => {
-      const metadata = [
-        formatWikiCount("page", overview?.totalPages ?? 0),
-        ...((overview?.totalClaims ?? 0) > 0
-          ? [formatWikiCount("claimRow", overview!.totalClaims)]
-          : []),
-        ...((overview?.totalQuestions ?? 0) > 0
-          ? [formatWikiCount("openQuestion", overview!.totalQuestions)]
-          : []),
-        ...((overview?.totalContradictions ?? 0) > 0
-          ? [formatWikiCount("contradiction", overview!.totalContradictions)]
-          : []),
-      ];
+      const metadata = (
+        [
+          ["page", overview?.totalPages ?? 0],
+          ["claimRow", overview?.totalClaims ?? 0],
+          ["openQuestion", overview?.totalQuestions ?? 0],
+          ["contradiction", overview?.totalContradictions ?? 0],
+        ] as const
+      )
+        .filter(([kind, count]) => kind === "page" || count > 0)
+        .map(([kind, count]) => formatWikiCount(kind, count));
       return `${t("dreaming.wiki.vault")} · ${metadata.join(" · ")}`;
     },
     prose: (cluster) => html`

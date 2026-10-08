@@ -1,5 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
+import { resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isWorkshopSkill } from "../../lib/skills-shared.ts";
@@ -93,4 +95,43 @@ export async function clearAgentSkillFilter(
     replacePaths: [`agents.entries.${targetKey}.skills`],
     canDispatch,
   });
+}
+
+export function createAgentSkillActions(params: {
+  getRuntimeConfig: () => RuntimeConfigCapability;
+  getReport: () => SkillStatusReport | null;
+  canUpdate: (agentId: string) => boolean;
+}) {
+  return {
+    onToggle: (agentId: string, skillName: string, enabled: boolean) => {
+      if (!params.canUpdate(agentId)) {
+        return;
+      }
+      const target = params.getRuntimeConfig().agentEntry(agentId, { ensure: true });
+      if (!target || !skillName.trim()) {
+        return;
+      }
+      params.getRuntimeConfig().patchForm(
+        [...target.path, "skills"],
+        nextAgentSkillAllowlist({
+          configured: resolveAgentSkillsFilter(
+            currentConfigObject(params.getRuntimeConfig().state),
+            agentId,
+          ),
+          report: params.getReport(),
+          skillName: skillName.trim(),
+          enabled,
+        }),
+      );
+    },
+    onDisableAll: (agentId: string) => {
+      if (!params.canUpdate(agentId)) {
+        return;
+      }
+      const target = params.getRuntimeConfig().agentEntry(agentId, { ensure: true });
+      if (target) {
+        params.getRuntimeConfig().patchForm([...target.path, "skills"], []);
+      }
+    },
+  };
 }

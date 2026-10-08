@@ -14,11 +14,7 @@ import {
   resolveTelegramNativeCommandThreadContext,
   type TelegramCommandExecutorParams,
 } from "./bot-native-command-dispatch.js";
-import {
-  buildTelegramRoutingTarget,
-  buildTelegramGroupFrom,
-  buildTelegramThreadParams,
-} from "./bot/helpers.js";
+import { buildTelegramRoutingTarget, buildTelegramGroupFrom } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -145,7 +141,7 @@ export async function executeTelegramPluginCommand(
           dispatch.bot.api.sendMessage(
             dispatch.chatId,
             params.candidate.progressMessage!,
-            buildTelegramThreadParams(dispatch.threadSpec),
+            dispatch.threadParams,
           ),
       });
       progressMessageId = sent.message_id;

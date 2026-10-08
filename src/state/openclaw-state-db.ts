@@ -266,8 +266,6 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
   };
 }
 
-/** Open or return a cached shared state database after schema and migration checks. */
-
 function openOpenClawStateDatabaseWithBusyTimeout(
   options: OpenClawStateDatabaseOptions = {},
   busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -365,7 +363,6 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   }
 }
 
-/** Open or return a cached shared state database after schema and migration checks. */
 export function openOpenClawStateDatabase(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabase {

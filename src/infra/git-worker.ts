@@ -136,10 +136,15 @@ function poolFor(
   // Metadata likewise stays responsive while diffs or snapshots await slow Git work.
   return (state[owner] ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitOperations),
-    maxWorkers:
-      owner === "content" || owner === "workspace"
-        ? Math.max(1, Math.min(2, os.availableParallelism() - 1))
-        : 1,
+    workerClass:
+      owner === "reads" || owner === "content"
+        ? "reader"
+        : owner === "workspace"
+          ? "compute"
+          : "writer",
+    // Overlay retains three maximum-size manifests plus its decoded result.
+    workerOptions:
+      owner === "workspace" ? { resourceLimits: { maxOldGenerationSizeMb: 1024 } } : undefined,
     sharedCompute: owner === "workspace",
     idleTimeoutMs: 30_000,
   }));

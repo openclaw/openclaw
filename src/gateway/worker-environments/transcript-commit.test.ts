@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WorkerTranscriptCommitParamsSchema,
   WorkerTranscriptMessageSchema,
-  type WorkerTranscriptCommitParams,
   type WorkerTranscriptMessage,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createNoisyPngBuffer } from "../../../test/helpers/image-fixtures.js";
@@ -55,41 +53,21 @@ import {
 } from "./transcript-commit.kernel.js";
 import {
   createInterruptedCommitter,
+  createRequest,
   createTranscriptCommitIdentity,
   createTurnMessages,
+  messageIdempotencyKey,
   PROVIDER_REPLAY,
+  RUN_EPOCH,
+  SESSION_ID,
   ZERO_USAGE,
 } from "./transcript-commit.test-support.js";
 
 type WorkerTranscriptCommitter = ReturnType<typeof createWorkerTranscriptCommitter>;
 
-const SESSION_ID = "session-worker-transcript";
 const SESSION_KEY = "agent:main:worker-transcript";
-const RUN_EPOCH = 7;
 
 const IDENTITY = createTranscriptCommitIdentity(SESSION_ID, RUN_EPOCH);
-
-function createRequest(
-  params: {
-    baseLeafId?: string | null;
-    messages?: WorkerTranscriptMessage[];
-    seq?: number;
-  } = {},
-): WorkerTranscriptCommitParams {
-  return {
-    runEpoch: RUN_EPOCH,
-    seq: params.seq ?? 1,
-    baseLeafId: params.baseLeafId ?? null,
-    messages: params.messages ?? createTurnMessages(),
-  };
-}
-
-function messageIdempotencyKey(seq: number, index: number): string {
-  const digest = createHash("sha256")
-    .update([SESSION_ID, RUN_EPOCH, seq, index].join("\0"))
-    .digest("base64url");
-  return `worker-commit-${digest}`;
-}
 
 function requireAppendableWorkerMessage(
   message: unknown,
@@ -440,6 +418,57 @@ describe("worker transcript commit application", () => {
     }
   });
 
+  it("recovers an interrupted terminal write after later transcript activity", async () => {
+    const updates: InternalSessionTranscriptUpdate[] = [];
+    unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
+    const interruptedCommitter = createInterruptedCommitter(
+      () => cfg,
+      ledgerStore,
+      "simulated commit-result interruption",
+    );
+    const request = createRequest();
+    expectDefined(
+      request.messages.find((message) => message.role === "assistant"),
+      "assistant occurrence",
+    ).itemId = "worker-assistant-recovered";
+
+    await expect(interruptedCommitter.commit({ ...ADMITTED_OWNER, request })).rejects.toThrow(
+      "simulated commit-result interruption",
+    );
+    const afterInterruption = await SessionManager.openAsync(sessionTarget);
+    const committedEntryIds = afterInterruption.getEntries().map((entry) => entry.id);
+    expect(committedEntryIds).toHaveLength(request.messages.length);
+    const laterLeafId = await afterInterruption.appendMessageAsync({
+      role: "user",
+      content: [{ type: "text", text: "Later local activity" }],
+      timestamp: 400,
+    });
+    updates.length = 0;
+
+    const replay = await committer.commit({ ...ADMITTED_OWNER, request });
+
+    expect(replay).toEqual({
+      ok: true,
+      result: {
+        entryIds: committedEntryIds,
+        newLeafId: committedEntryIds.at(-1),
+      },
+    });
+    const reopened = await SessionManager.openAsync(sessionTarget);
+    expect(reopened.getEntries()).toHaveLength(request.messages.length + 1);
+    expect(reopened.getLeafId()).toBe(laterLeafId);
+    expect(updates).toEqual([
+      expect.objectContaining({
+        assistantItemIds: ["worker-assistant-recovered"],
+        message: expect.objectContaining({ idempotencyKey: messageIdempotencyKey(1, 1) }),
+        messageId: committedEntryIds[1],
+        messageSeq: 2,
+      }),
+    ]);
+    await expect(committer.commit({ ...ADMITTED_OWNER, request })).resolves.toEqual(replay);
+    expect(updates).toHaveLength(1);
+  });
+
   it("replays an interrupted terminal write after its branch is abandoned", async () => {
     cfg = { ...cfg };
     const initialManager = await SessionManager.openAsync(sessionTarget);
@@ -460,6 +489,10 @@ describe("worker transcript commit application", () => {
       baseLeafId,
       messages: createTurnMessages("my key is sk-abcdef1234567890xyz"),
     });
+    expectDefined(
+      request.messages.find((message) => message.role === "assistant"),
+      "assistant occurrence",
+    ).itemId = "worker-assistant-abandoned";
 
     await expect(interruptedCommitter.commit({ ...ADMITTED_OWNER, request })).rejects.toThrow(
       "simulated off-branch terminal interruption",
@@ -493,7 +526,13 @@ describe("worker transcript commit application", () => {
       timestamp: 400,
     });
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
-    unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+    const internalUpdates: InternalSessionTranscriptUpdate[] = [];
+    const offPublic = onSessionTranscriptUpdate((update) => updates.push(update));
+    const offInternal = onInternalSessionTranscriptUpdate((update) => internalUpdates.push(update));
+    unsubscribe = () => {
+      offPublic();
+      offInternal();
+    };
     const entriesBeforeReplay = structuredClone(afterInterruption.getEntries());
     const sessionEntryBeforeReplay = structuredClone(
       loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY, storePath }),
@@ -545,6 +584,7 @@ describe("worker transcript commit application", () => {
     }
     expect(replay.result.entryIds).not.toContain(duplicatePrefixId);
     expect(updates).toEqual([]);
+    expect(internalUpdates).toEqual([]);
   });
 
   it("rolls back the entire transcript batch when commit authority is revoked", async () => {
@@ -691,6 +731,10 @@ describe("worker transcript commit application", () => {
     };
     expect(Buffer.byteLength(image.data)).toBeGreaterThan(64 * 1024);
     const messages = createTurnMessages(literalUserText);
+    expectDefined(
+      messages.find((message) => message.role === "assistant"),
+      "assistant occurrence",
+    ).itemId = "worker-assistant-occurrence";
     const toolResult = messages[2]!;
     if (toolResult.role !== "toolResult") {
       throw new Error("missing read result");
@@ -787,6 +831,15 @@ describe("worker transcript commit application", () => {
     });
     expect(updates[0]?.message).not.toHaveProperty("openclawDelivery");
     expect(updates[1]?.message).not.toHaveProperty("providerReplay");
+    expect(updates[1]?.message).not.toHaveProperty("itemId");
+    expect(updates[1]).not.toHaveProperty("assistantItemIds");
+    expect(reopened.getEntries()[1]).not.toHaveProperty("message.itemId");
+    expect(internalUpdates[1]).toMatchObject({
+      assistantItemIds: ["worker-assistant-occurrence"],
+      message: { idempotencyKey: messageIdempotencyKey(1, 1) },
+      messageId: first.result.entryIds[1],
+      messageSeq: 2,
+    });
     expect(updates[1]).not.toHaveProperty("lifecycleRevision");
     expect(internalUpdates.map((update) => update.lifecycleRevision)).toEqual(
       updates.map(() => "worker-original-revision"),

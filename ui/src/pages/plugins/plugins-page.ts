@@ -147,8 +147,7 @@ class PluginsPage extends OpenClawLightDomElement {
   });
   private readonly catalogTask = new Task(this, {
     autoRun: false,
-    args: () => [this.gateway.connected ? this.gateway.client : null] as const,
-    task: ([client], { signal }) =>
+    task: ([client]: readonly [GatewayPageController["client"]], { signal }) =>
       client ? client.request<PluginListResult>("plugins.list", {}, { signal }) : initialState,
     onComplete: (result) => {
       this.replaceResult(result);

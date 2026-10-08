@@ -22,13 +22,6 @@ function dropEmptyTextBlocks<T>(content: T[]): T[] {
   });
 }
 
-function ensureNonEmptyContent<T>(content: T[]): T[] {
-  if (content.length > 0) {
-    return content;
-  }
-  return [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }] as T[];
-}
-
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,
@@ -56,6 +49,8 @@ export async function sanitizeSessionMessagesImages(
     // Replay does not rewrite stored images, even after a successful reply.
     verifyDecodability: true,
   };
+  const sanitizeImages = (content: ContentBlock[]) =>
+    sanitizeContentBlocksImages(content, label, imageSanitization);
   const sanitizedIds =
     options?.sanitizeToolCallIds === true
       ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
@@ -75,14 +70,14 @@ export async function sanitizeSessionMessagesImages(
       const contentMsg = msg as Extract<AgentMessage, { role: "toolResult" | "user" }>;
       const content = contentMsg.content;
       if (Array.isArray(content) || role === "toolResult") {
-        const nextContent = await sanitizeContentBlocksImages(
-          Array.isArray(content) ? content : [],
-          label,
-          imageSanitization,
+        const nextContent = dropEmptyTextBlocks(
+          await sanitizeImages(Array.isArray(content) ? content : []),
         );
         out.push({
           ...contentMsg,
-          content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)),
+          content: nextContent.length
+            ? nextContent
+            : [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }],
         });
         continue;
       }
@@ -96,10 +91,8 @@ export async function sanitizeSessionMessagesImages(
           assistantMsg.stopReason === "error" || options?.preserveSignatures
             ? content // Keep signatures for Antigravity Claude
             : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
-        const finalContent = (await sanitizeContentBlocksImages(
+        const finalContent = (await sanitizeImages(
           dropEmptyTextBlocks(strippedContent) as unknown as ContentBlock[],
-          label,
-          imageSanitization,
         )) as unknown as typeof assistantMsg.content;
         if (finalContent.length > 0 || assistantMsg.providerReplay) {
           out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));

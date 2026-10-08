@@ -94,7 +94,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: [
       "src/plugin-sdk/memory-core-host-engine-sessions.test.ts",
       "src/plugins/compat/registry.test.ts",
-      "extensions/memory-core/src/memory-forget.participants.test.ts",
+      "extensions/memory-core/src/memory-forget.sources.test.ts",
     ],
     releaseNote:
       "Memory archive discovery and forget target selection can be awaited through worker-backed SDK readers; synchronous readers remain compatible until the next Plugin SDK major.",

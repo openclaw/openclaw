@@ -216,7 +216,7 @@ async function persistTextTurnTranscript(
       runId: params.runId,
       publishWhen: "always",
       touchSessionEntry: true,
-      updateMode: "file-only",
+      updateMode: params.runId ? "inline" : "file-only",
       expectedSessionId:
         params.expectedSessionId ??
         (params.sessionStore && params.storePath ? params.sessionId : undefined),

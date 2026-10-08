@@ -14,8 +14,6 @@ type DurableHistoryReadOperationRequest = Extract<
       | "board-snapshot"
       | "board-widget-document"
       | "transcript-match"
-      | "transcript-search"
-      | "transcript-search-current"
       | "branch-summaries"
       | "session-title-fields"
       | "session-preview"
@@ -51,8 +49,6 @@ export function isSessionHistoryReadOperation(
     case "board-snapshot":
     case "board-widget-document":
     case "transcript-match":
-    case "transcript-search":
-    case "transcript-search-current":
     case "branch-summaries":
     case "session-title-fields":
     case "session-preview":
@@ -282,28 +278,6 @@ async function prepareHistoryRead(
         );
         return { kind: request.kind, result: opened.found ? opened.value : undefined };
       };
-    }
-    case "transcript-search-current": {
-      const { isSessionTranscriptSearchCurrentSync } =
-        await import("./session-transcript-search.js");
-      return () => ({
-        kind: request.kind,
-        current: isSessionTranscriptSearchCurrentSync(request.revision, {
-          ...request.database,
-          env: request.env,
-        }),
-      });
-    }
-    case "transcript-search": {
-      const { searchSessionTranscriptsReadOnlySync } =
-        await import("./session-transcript-search.js");
-      return () => ({
-        kind: request.kind,
-        result: searchSessionTranscriptsReadOnlySync(request.params, {
-          ...request.database,
-          env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
-        }),
-      });
     }
     case "branch-summaries": {
       const { readSessionBranchSnapshot, readSessionBranchSummariesInWorker } =

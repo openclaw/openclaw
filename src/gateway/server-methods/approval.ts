@@ -416,16 +416,13 @@ export function createApprovalHandlers(
       };
       let resolution: ApplyApprovalDecisionResult<ApprovalPayload>;
       try {
-        const decisionParams = {
+        resolution = await applyApprovalDecision<ApprovalPayload>({
           id: record.id,
           decision: requestedDecision,
           forceMalformedDeny,
           resolver,
           localResolvedBy,
           guard: { family: approvalGuard.family, assertCurrent },
-        };
-        resolution = await applyApprovalDecision<ApprovalPayload>({
-          ...decisionParams,
           manager:
             record.kind === "exec"
               ? params.execApprovalManager

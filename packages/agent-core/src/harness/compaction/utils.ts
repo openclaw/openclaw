@@ -285,13 +285,6 @@ export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): st
   return sender ? ` sender=${JSON.stringify(sender)}` : "";
 }
 
-function formatConversationSpeaker(message: Message): string {
-  if (message.role !== "user") {
-    return message.role === "toolResult" ? "Tool result" : "User";
-  }
-  return `User${formatPersistedSenderSuffix(message)}`;
-}
-
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
   const parts: string[] = [];
@@ -317,7 +310,9 @@ export function serializeConversation(messages: Message[]): string {
         .filter(Boolean)
         .join("\n");
       if (content) {
-        parts.push(`[${formatConversationSpeaker(msg)}]: ${content}`);
+        const speaker =
+          msg.role === "toolResult" ? "Tool result" : `User${formatPersistedSenderSuffix(msg)}`;
+        parts.push(`[${speaker}]: ${content}`);
       }
     } else if (msg.role === "assistant") {
       const textParts: string[] = [];

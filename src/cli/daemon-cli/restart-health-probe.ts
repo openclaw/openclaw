@@ -205,31 +205,22 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
   });
 }
 
-type ChannelProbeResult = { id: string } & (
-  | { status: "healthy" }
-  | { status: "unhealthy" | "timed-out"; error: string }
-);
-
-function readChannelProbeResults(health: unknown): ChannelProbeResult[] {
+function readChannelProbeFailures(health: unknown) {
+  const errors: GatewayReachability["channelProbeErrors"] = [];
+  const timeouts: GatewayReachability["channelProbeErrors"] = [];
   const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  return Object.entries(channels ?? {}).flatMap<ChannelProbeResult>(([id, summary]) => {
+  for (const [id, summary] of Object.entries(channels ?? {})) {
     const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
-    if (!probe) {
-      return [];
+    if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
+      continue;
     }
     // Retain the explicit timeout marker from older Gateways that also sent ok:false.
-    if (probe.timedOut === true || probe.ok === false) {
-      return [
-        {
-          id,
-          status: probe.timedOut === true ? "timed-out" : "unhealthy",
-          error:
-            typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
-        },
-      ];
-    }
-    return probe.ok === true ? [{ id, status: "healthy" }] : [];
-  });
+    (probe.timedOut === true ? timeouts : errors).push({
+      id,
+      error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
+    });
+  }
+  return { errors, timeouts };
 }
 
 function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {
@@ -309,13 +300,8 @@ export async function confirmGatewayReachable(params: {
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
     result.unavailablePlugins = readUnavailablePlugins(health);
-    const channelProbes = readChannelProbeResults(health);
-    result.channelProbeErrors = channelProbes.flatMap((probe) =>
-      probe.status === "unhealthy" ? [{ id: probe.id, error: probe.error }] : [],
-    );
-    const timeouts = channelProbes.flatMap((probe) =>
-      probe.status === "timed-out" ? [{ id: probe.id, error: probe.error }] : [],
-    );
+    const { errors, timeouts } = readChannelProbeFailures(health);
+    result.channelProbeErrors = errors;
     if (timeouts.length) {
       result.channelProbeTimeouts = timeouts;
     }

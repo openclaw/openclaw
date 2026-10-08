@@ -13,6 +13,7 @@ import {
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { captureDiagnosticToolProgress } from "../logging/diagnostic-run-activity.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { copyBeforeToolCallWrapperMetadata } from "./agent-tool-metadata.js";
 import {
@@ -501,6 +502,7 @@ export function wrapToolWithBeforeToolCallHook(
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
+      const recordProgress = captureDiagnosticToolProgress(eventBase);
       recordToolExecutionStarted(toolCallId, ctx?.runId);
       const liveness = startToolExecutionLiveness(eventBase, hookOptions.emitDiagnostics, signal);
       const startedAt = Date.now();
@@ -542,6 +544,9 @@ export function wrapToolWithBeforeToolCallHook(
           rememberPendingTerminalPresentation(preparedTerminalPresentation, ctx?.runId, toolCallId);
         }
         const terminalDiagnostic = resolveToolResultTerminalDiagnostic(result, durationMs);
+        if (terminalDiagnostic.type === "tool.execution.completed" && !signal?.aborted) {
+          recordProgress?.();
+        }
         const skillMatch = findSkillUsageMatch({
           toolName: normalizedToolName,
           toolParams: executeParams,

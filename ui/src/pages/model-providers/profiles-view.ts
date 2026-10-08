@@ -57,20 +57,11 @@ const logoutIcon = strokeIcon(svg` <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-
   <polyline points="16 17 21 12 16 7" />
   <line x1="21" x2="9" y1="12" y2="12" />`);
 
-function profileSource(profile: ProviderProfile): string | undefined {
-  switch (profile.source) {
-    case "config":
-      return t("modelProviders.profiles.sourceConfig");
-    case "external":
-      return profile.displayName || t("modelProviders.profiles.sourceExternal");
-    case "inherited":
-      return t("modelProviders.profiles.sourceInherited");
-    case "saved":
-      return t("modelProviders.profiles.sourceSaved");
-    default:
-      return undefined;
-  }
-}
+const PROFILE_SOURCE_LABELS = new Map([
+  ["config", "modelProviders.profiles.sourceConfig"],
+  ["inherited", "modelProviders.profiles.sourceInherited"],
+  ["saved", "modelProviders.profiles.sourceSaved"],
+]);
 
 export function apiKeySource(card: ModelProviderCard): string | undefined {
   if (card.apiKey?.source === "config") {
@@ -94,7 +85,13 @@ function profileOrderLockMessage(lock: ModelProviderProfileOrderLock): string {
 
 function profileMeta(profile: ProviderProfile): string {
   const parts: string[] = [];
-  const source = profileSource(profile);
+  const sourceKey = PROFILE_SOURCE_LABELS.get(profile.source ?? "");
+  const source =
+    profile.source === "external"
+      ? profile.displayName || t("modelProviders.profiles.sourceExternal")
+      : sourceKey
+        ? t(sourceKey)
+        : undefined;
   if (source && profile.source !== "saved") {
     parts.push(source);
   }
