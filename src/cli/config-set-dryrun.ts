@@ -6,7 +6,7 @@ import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 export type ConfigSetDryRunInputMode = "value" | "json" | "builder" | "unset";
 
 export type ConfigSetDryRunError = {
-  kind: "missing-path" | "schema" | "resolvability" | "model" | "conflict";
+  kind: "missing-path" | "schema" | "resolvability" | "model" | "conflict" | "write-safety";
   message: string;
   ref?: string;
 };
@@ -84,6 +84,11 @@ function formatDryRunFailureMessage(params: {
   const resolveErrors = params.errors.filter((error) => error.kind === "resolvability");
   const modelErrors = params.errors.filter((error) => error.kind === "model");
   const lines: string[] = missingPathErrors.map((error) => terminalText`${error.message}`);
+  lines.push(
+    ...params.errors
+      .filter((error) => error.kind === "write-safety")
+      .map((error) => terminalText`${error.message}`),
+  );
   if (schemaErrors.length > 0) {
     lines.push(
       "Dry run failed: config schema validation failed.",
