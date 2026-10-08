@@ -25,6 +25,8 @@ Embedded OpenClaw compaction uses the provider's compaction thinking preference,
 
 Each summarization request uses one primary format. Safeguard history summaries use its structured checkpoint format, while split-turn prefixes use the prefix format. Operator focus and identifier-preservation guidance remain additional instructions; they do not add a competing set of required headings.
 
+When safeguard compaction updates a previous summary or summarizes older history, its main summary request also includes preserved recent turns and split-turn progress from the prepared window. The instructions require explicit corrections and observed results to update the main decisions and task status, not just appear in an appended context section. Superseded facts may remain as labeled history or verbatim excerpts; they must not remain competing current decisions.
+
 Branch-navigation summaries budget the text actually sent for summarization,
 including bounded tool output, instructions, and output headroom. An older
 summary cannot override that budget. If visible branch history cannot fit,
