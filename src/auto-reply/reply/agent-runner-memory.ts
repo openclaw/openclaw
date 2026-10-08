@@ -61,6 +61,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPreflightCompactionError } from "./agent-runner-failure-reply.js";
 import {
   readPreflightTranscriptContextMessages,
   readSessionLogSnapshot,
@@ -97,6 +98,7 @@ import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { acknowledgeReplySessionTransition } from "./reply-run-registry.state.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 const MAX_FLUSH_FAILURES = 3;
@@ -328,6 +330,7 @@ async function estimatePromptTokensFromSessionTranscript({
 
 /** Compacts session context before a reply or after a completed direct command. */
 export async function runSessionCompactionIfNeeded(params: {
+  replyOperation?: ReplyOperation;
   pendingUserEntryId?: string;
   compactionRequestBudget?: CompactionRequestBudget;
   cfg: OpenClawConfig;
@@ -561,8 +564,7 @@ export async function runSessionCompactionIfNeeded(params: {
       tokenCount: tokenCountForCompaction,
       threshold,
     });
-  const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
-  if (!shouldCompact) {
+  if (!shouldCompactByTokens && !shouldCompactByTranscriptBytes) {
     return entry;
   }
 
@@ -603,6 +605,7 @@ export async function runSessionCompactionIfNeeded(params: {
   };
   // Provider work can outlive the caller; never account against a replacement session row.
   let expectedSession = entry;
+  let admissionTransition: AcceptedCompactionSuccessor["admissionTransition"];
   let hostAccountingCommitted = false;
   const recordCompactionAccounting = async (
     acceptedEntry: SessionEntry,
@@ -761,6 +764,7 @@ export async function runSessionCompactionIfNeeded(params: {
           hostAccountingCommitted = true;
         },
         onCommitted: (accepted) => {
+          admissionTransition = accepted.admissionTransition;
           expectedSession = accepted.entry;
           entry = accepted.entry;
           compactionStore[compactionSessionKey] = accepted.entry;
@@ -779,10 +783,14 @@ export async function runSessionCompactionIfNeeded(params: {
         return entry;
       }
       await notifyCompaction("incomplete");
-      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+      preflightCompactionLog.warn(`preflight compaction failed: ${reason}`);
+      throw createPreflightCompactionError(reason, isCodexRuntime);
     }
 
+    if (params.replyOperation && admissionTransition) {
+      await acknowledgeReplySessionTransition(params.replyOperation, admissionTransition);
+      assertActive();
+    }
     if (!hostAccountingCommitted) {
       await recordCompactionAccounting(
         expectedSession,

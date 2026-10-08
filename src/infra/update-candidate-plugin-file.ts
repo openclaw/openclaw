@@ -24,10 +24,23 @@ export async function copyUpdateCandidatePluginFile(
   request: UpdateCandidatePluginFileRequest,
   destinationRoot: Root,
 ): Promise<void> {
-  const { entry, privateRoot, rootIdentity, destination } = request;
+  const { entry, privateRoot, rootIdentity } = request;
   const assertEntry = async () =>
     assertUpdateCandidatePluginEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
   await assertEntry();
+  await copyUpdateCandidatePluginFileBytes(request, destinationRoot, {
+    // A worker must retain the parent's admitted root, not admit a newer one.
+    assertBeforeMutation: () => assertDirectoryIdentitySync(privateRoot, rootIdentity),
+    assertAfterCopy: assertEntry,
+  });
+}
+
+/** Shared byte publication; each owner supplies its live authority and post-copy inspection. */
+export async function copyUpdateCandidatePluginFileBytes(
+  { entry, privateRoot, destination }: Omit<UpdateCandidatePluginFileRequest, "rootIdentity">,
+  destinationRoot: Root,
+  checks: { assertBeforeMutation: () => void; assertAfterCopy: () => Promise<void> },
+): Promise<void> {
   await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
     overwrite: false,
     // The owner prepares every parent before admitting any concurrent copies.
@@ -39,12 +52,11 @@ export async function copyUpdateCandidatePluginFile(
     mode: entry.mode | 0o600,
     sourceHardlinks: "allow",
     assertBeforeMutation: () => {
-      // A worker must retain the parent's admitted root, not admit a newer one.
-      assertDirectoryIdentitySync(privateRoot, rootIdentity);
+      checks.assertBeforeMutation();
       assertUpdateCandidatePluginEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true }));
     },
   });
-  await assertEntry();
+  await checks.assertAfterCopy();
   const copiedStat = await fs.lstat(destination, { bigint: true });
   if (hashFileMutationSnapshotSync(destination, copiedStat) !== entry.sha256) {
     throw new Error(`Copied plugin bytes differ from snapshot inventory: ${entry.path}`);
@@ -84,23 +96,20 @@ export async function copyUpdateCandidatePluginFiles(
           });
         })()
       : undefined;
-  const copied = await (async () => {
-    try {
-      return await runTasksWithConcurrency({
-        limit: 4,
-        errorMode: "stop",
-        tasks: files.map((entry) => async () => {
-          const request = {
-            entry,
-            privateRoot,
-            rootIdentity,
-            destination: destinationFor(entry.path),
-          };
-          if (!pool) {
-            await copyUpdateCandidatePluginFile(request, destinationRoot);
-            params.onProgress?.();
-            return;
-          }
+  try {
+    const copied = await runTasksWithConcurrency({
+      limit: 4,
+      errorMode: "stop",
+      tasks: files.map((entry) => async () => {
+        const request = {
+          entry,
+          privateRoot,
+          rootIdentity,
+          destination: destinationFor(entry.path),
+        };
+        if (!pool) {
+          await copyUpdateCandidatePluginFile(request, destinationRoot);
+        } else {
           // The enclosing subprocess owns the deadline. Never terminate or replay
           // a file writer on an independent task timer.
           const reply = await pool.run(request, {});
@@ -110,16 +119,16 @@ export async function copyUpdateCandidatePluginFiles(
               ...(reply.details === undefined ? {} : { details: reply.details }),
             });
           }
-          params.onProgress?.();
-        }),
-      });
-    } finally {
-      // The task runner drains accepted copies before retirement; snapshot cleanup
-      // must wait for both the work and confirmed worker exits.
-      await pool?.close();
+        }
+        params.onProgress?.();
+      }),
+    });
+    if (copied.hasError) {
+      throw copied.firstError;
     }
-  })();
-  if (copied.hasError) {
-    throw copied.firstError;
+  } finally {
+    // The task runner drains accepted copies before retirement; snapshot cleanup
+    // must wait for both the work and confirmed worker exits.
+    await pool?.close();
   }
 }

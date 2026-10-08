@@ -3,11 +3,9 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackMonitorEventScope } from "../event-scope.js";
 import type { SlackPinEvent } from "../types.js";
-import {
-  authorizeAndResolveSlackSystemEventContext,
-  resolveSlackListenerEventScope,
-} from "./system-event-context.js";
+import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
 export function registerSlackPinEvents(params: {
   ctx: SlackMonitorContext;
@@ -21,7 +19,7 @@ export function registerSlackPinEvents(params: {
       async (args: SlackEventMiddlewareArgs<"pin_added" | "pin_removed"> & AllMiddlewareArgs) => {
         const { event, body, context, client } = args;
         try {
-          const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+          const eventScope = resolveSlackMonitorEventScope({ ctx, body, context, client });
           if (eventScope === null) {
             return;
           }

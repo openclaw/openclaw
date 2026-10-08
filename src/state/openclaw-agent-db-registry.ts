@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
@@ -18,6 +19,7 @@ import {
 import {
   invalidateOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidationsForAgent,
+  setOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
   isPersistentOpenClawAgentDatabasePath,
@@ -70,10 +72,15 @@ export function registerOpenClawAgentDatabase(
     path: string;
     env?: NodeJS.ProcessEnv;
     schemaVersion?: number;
+    /** Supplied only by the opener after integrity and canonical schema admission. */
+    admittedDb?: DatabaseSync;
   },
   observer?: OpenClawAgentDatabaseRegistrationObserver,
 ): void {
   if (!isPersistentOpenClawAgentDatabasePath(params.path, params.env)) {
+    if (params.admittedDb) {
+      setOpenClawAgentDatabaseValidation({ ...params, db: params.admittedDb });
+    }
     return;
   }
   const deletionFence = prepareAgentDeletionPathFence(
@@ -138,7 +145,11 @@ export function registerOpenClawAgentDatabase(
     },
     { env: params.env },
   );
-  invalidateOpenClawAgentDatabaseValidation(params.path);
+  if (params.admittedDb) {
+    setOpenClawAgentDatabaseValidation({ ...params, db: params.admittedDb });
+  } else {
+    invalidateOpenClawAgentDatabaseValidation(params.path);
+  }
 }
 
 export function unregisterOpenClawAgentDatabase(params: {

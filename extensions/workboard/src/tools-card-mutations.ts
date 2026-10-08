@@ -62,7 +62,12 @@ export function workspaceField() {
     strictObject({
       kind: Type.String({ description: "scratch, dir, or worktree." }),
       path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
-      branch: Type.Optional(Type.String({ description: "Suggested branch." })),
+      branch: Type.Optional(
+        Type.String({
+          description:
+            "Optional worktree source base ref. Re-dispatch reuses a retained checkout; use a new card for a different base ref.",
+        }),
+      ),
     }),
   );
 }

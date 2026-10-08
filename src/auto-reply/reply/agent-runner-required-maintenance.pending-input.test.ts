@@ -287,6 +287,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             context: { chatAbortControllers: new Map(), chatQueuedTurns: new Map() },
             entry,
             initialSessionEntry: entry,
+            lifecycleTimestamps: undefined,
             now: Date.now(),
             placement: undefined,
             request,

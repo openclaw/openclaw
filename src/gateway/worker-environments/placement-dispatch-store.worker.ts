@@ -128,7 +128,7 @@ function startWorkerPlacementDispatchInWorker(
       }
       const updated = getRequired(db, identity.sessionId);
       deferSqliteWorkerCommitReceipt(db, updated);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: updated.turnClaim });
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: updated });
       return updated;
     },
     { database },

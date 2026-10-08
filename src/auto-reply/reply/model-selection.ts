@@ -38,6 +38,7 @@ import {
   needsThinkHydration,
   resolveEffectiveAgentRuntime,
 } from "../../agents/thinking-runtime.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelSelection } from "../../config/sessions/model-override-provenance.js";
 import {
@@ -47,6 +48,7 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
+import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessions/auth-profile-preservation.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import * as storedModelOverrides from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -472,7 +474,8 @@ export async function createModelSelectionState(params: {
     sessionKey &&
     sessionEntry.authProfileOverride
   ) {
-    const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
+    const { ensureAuthProfileStore, prepareAuthProfileProvider } =
+      await import("../../agents/auth-profiles.runtime.js");
     const store = ensureAuthProfileStore(
       params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined,
       {
@@ -505,16 +508,57 @@ export async function createModelSelectionState(params: {
           credential: profile,
         }),
       );
-    // Admission rejects a missing personal account; clearing its pin here would bill the next participant.
+    const selection = { ...sessionEntry };
+    const assertSelectionCurrent = () => {
+      operatorAuthority?.assertCurrent();
+      if (
+        sessionStore[sessionKey] !== sessionEntry ||
+        sessionEntry.sessionId !== selection.sessionId ||
+        sessionEntry.authProfileOverride !== selection.authProfileOverride ||
+        sessionEntry.authProfileOverrideSource !== selection.authProfileOverrideSource ||
+        sessionEntry.authProfileOverrideCompactionCount !==
+          selection.authProfileOverrideCompactionCount ||
+        sessionEntry.providerOverride !== selection.providerOverride ||
+        sessionEntry.modelOverride !== selection.modelOverride
+      ) {
+        throw new SessionWorkStartInvalidatedError(
+          "Session account selection changed while preparing authentication. Retry.",
+        );
+      }
+    };
     const missingPersonalProfile =
       !profile && isUserModelAuthProfileId(sessionEntry.authProfileOverride);
-    if (!overrideStillEligible && !missingPersonalProfile) {
+    // Prepare only the missing explicit-pin path; personal and automatic selections keep their owners.
+    const recordedProvider =
+      !profile &&
+      !missingPersonalProfile &&
+      resolveCollapsedSessionAuthPinSource(sessionEntry) === "user"
+        ? await prepareAuthProfileProvider({
+            agentDir: resolveAgentDir(cfg, params.agentId),
+            profileId: sessionEntry.authProfileOverride,
+          })
+        : undefined;
+    assertSelectionCurrent();
+    const preserveUnavailableSelection =
+      missingPersonalProfile ||
+      shouldPreserveUnavailableSessionAuthProfileOverride({
+        store,
+        cfg: authConfig,
+        agentDir: resolveAgentDir(cfg, params.agentId),
+        entry: sessionEntry,
+        currentProvider: sessionEntry.providerOverride ?? defaultProvider,
+        provider,
+        recordedProvider,
+      });
+    if (!overrideStillEligible && !preserveUnavailableSelection) {
       await clearSessionAuthProfileOverride({
         agentId: params.agentId,
         sessionEntry,
         sessionStore,
         sessionKey,
         storePath,
+        assertCommitAllowed: assertSelectionCurrent,
+        expectedSnapshot: selection,
       });
     }
   }

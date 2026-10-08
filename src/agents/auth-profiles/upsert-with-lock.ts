@@ -149,24 +149,21 @@ export async function persistAuthProfileBatch(
     const result = { unrevertedProfileIds: new Set<string>() };
     return { rollback: () => result };
   }
-  const observedProfiles = new Map(
-    [...profiles.keys()].map((profileId) => [
-      profileId,
-      loadAuthProfileWriteAuthority(params, profileId),
-    ]),
-  );
+  const readAuthorities = () =>
+    new Map(
+      [...profiles.keys()].map((profileId) => [
+        profileId,
+        loadAuthProfileWriteAuthority(params, profileId),
+      ]),
+    );
+  const observedProfiles = readAuthorities();
 
   return await withOAuthProfileLocks(
     [...profiles.entries()].flatMap(([profileId, entry]) =>
       entry.credential.type === "oauth" ? [{ profileId, provider: entry.credential.provider }] : [],
     ),
     async () => {
-      const currentAuthorities = new Map(
-        [...profiles.keys()].map((profileId) => [
-          profileId,
-          loadAuthProfileWriteAuthority(params, profileId),
-        ]),
-      );
+      const currentAuthorities = readAuthorities();
       const previousProfiles = new Map<string, AuthProfileCredential | undefined>();
       const previousOrder = new Map<string, readonly string[] | undefined>();
       const appliedProfiles = new Map<string, AuthProfileCredential>();

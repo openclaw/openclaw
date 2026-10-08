@@ -1,3 +1,4 @@
+import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import {
   withOwnedSessionTranscriptWrites,
@@ -465,6 +466,10 @@ export function createEmbeddedRunCompactionRuntime(input: {
     // row still identifies the already-recorded compaction for accounting.
     if (!accepted.previousSessionId) {
       recordAccepted(accepted);
+    }
+    if (params.replyOperation && accepted.admissionTransition) {
+      assertAdmittedActive();
+      await acknowledgeReplySessionTransition(params.replyOperation, accepted.admissionTransition);
     }
     assertRecoveryActive();
     sessionPromptState.notifyCompactionSessionAdopted(accepted.previousSessionId);

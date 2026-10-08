@@ -7,7 +7,9 @@ import { settleProgressVisibilityCallbackResult } from "../../channels/progress-
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -62,7 +64,10 @@ import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import * as replyRunState from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
-import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
+import {
+  captureReplyOperationSessionReader,
+  getReplyOperationSessionReader,
+} from "./reply-run-registry.state.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
@@ -177,12 +182,16 @@ export async function runReplyAgent(
       attributes: traceAttributes,
     });
   const readGeneration = getAgentEventLifecycleGeneration();
-  const assertReadCurrent = () => {
-    assertAgentRunLifecycleGenerationCurrent(readGeneration);
-    followupRun.operatorAuthority?.assertCurrent();
-  };
+  const assertReadCurrent = composeSessionSourceAssertion(
+    [followupRun.operatorAuthority?.assertCurrent],
+    (assertSource) => {
+      assertAgentRunLifecycleGenerationCurrent(readGeneration);
+      assertSource();
+    },
+  );
   const restartRecoverySourceTurnId = readChannelSourceTurnId(sessionCtx);
   let restartRecoveryEntry: typeof activeSessionEntry;
+  let restartRecoveryTarget: SessionEntryTargetPatchScope | undefined;
   try {
     restartRecoveryEntry =
       sessionKey && storePath
@@ -190,6 +199,9 @@ export async function runReplyAgent(
             { agentId: followupRun.run.agentId, storePath, sessionKey },
             assertReadCurrent,
             undefined,
+            (target) => {
+              restartRecoveryTarget = target;
+            },
             getReplyOperationSessionReader(providedReplyOperation),
           )) ?? activeSessionEntry)
         : activeSessionEntry;
@@ -209,12 +221,16 @@ export async function runReplyAgent(
       storePath &&
       hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId)
     ) {
+      if (!restartRecoveryTarget) {
+        releaseAdmissionTicket();
+        typing.cleanup();
+        throw new Error("Restart recovery retirement has no admitted session target");
+      }
       const retired = await retireTerminalRestartRecoverySourceClaim({
-        agentId: followupRun.run.agentId,
+        target: restartRecoveryTarget,
+        assertCurrent: assertReadCurrent,
         sessionId: restartRecoveryEntry.sessionId,
-        sessionKey,
         sourceTurnId: restartRecoverySourceTurnId,
-        storePath,
       });
       if (retired) {
         activeSessionEntry = retired;
@@ -637,7 +653,7 @@ export async function runReplyAgent(
       prepareReplyToolAuthority(
         followupRun,
         undefined,
-        getReplyOperationSessionReader(replyOperation),
+        captureReplyOperationSessionReader(replyOperation),
       ),
     );
     return await executePreparedReplyAgentRun({

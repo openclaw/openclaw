@@ -14,6 +14,7 @@ import {
   archiveAuthProfileMigrationSource,
   createAuthProfileMigrationSourceReceipt,
   digestAuthProfileMigrationValue,
+  finalizeAuthProfileMigrationSource,
   resumePendingAuthProfileMigrationArchives,
 } from "./doctor-auth-migration-receipts.js";
 
@@ -21,21 +22,14 @@ type MigrationReceiptTestApi = {
   recordAuthProfileMigrationImported: (
     receipt: ReturnType<typeof createAuthProfileMigrationSourceReceipt>,
   ) => void;
-  recordAuthProfileMigrationCompleted: (
-    receipt: ReturnType<typeof createAuthProfileMigrationSourceReceipt>,
-  ) => void;
   restoreAuthProfileMigrationArchiveNoClobber: (
     receipt: ReturnType<typeof createAuthProfileMigrationSourceReceipt>,
   ) => "restored" | "source-exists";
 };
 
-const {
-  recordAuthProfileMigrationImported,
-  recordAuthProfileMigrationCompleted,
-  restoreAuthProfileMigrationArchiveNoClobber,
-} = (globalThis as Record<PropertyKey, unknown>)[
-  Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")
-] as MigrationReceiptTestApi;
+const { recordAuthProfileMigrationImported, restoreAuthProfileMigrationArchiveNoClobber } = (
+  globalThis as Record<PropertyKey, unknown>
+)[Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")] as MigrationReceiptTestApi;
 
 describe("auth profile migration receipts", () => {
   const states: OpenClawTestState[] = [];
@@ -224,7 +218,7 @@ describe("auth profile migration receipts", () => {
   it("does not replace a terminal receipt with a replay run", async () => {
     const { receipt } = await makeReceipt();
     recordAuthProfileMigrationImported(receipt);
-    recordAuthProfileMigrationCompleted(receipt);
+    finalizeAuthProfileMigrationSource(receipt);
     const replay = { ...receipt, runId: `${receipt.sourceKey}:replay` };
 
     expect(() => recordAuthProfileMigrationImported(replay)).toThrow(

@@ -466,7 +466,7 @@ function resolvePreparedReplyToolAuthorityFingerprint(
 export function prepareReplyToolAuthority(
   run: ReplyToolAuthorityInput,
   narrow?: (input: ReplyToolAuthorityInput) => ReplyToolAuthorityInput,
-  reader?: SessionEntryCohortReader,
+  resolveReader?: () => SessionEntryCohortReader | undefined,
 ): ReplyToolAuthoritySnapshot &
   Required<Pick<ReplyToolAuthoritySnapshot, "fingerprintAsync" | "projectAsync">> {
   const handoff = run.run.trustedInternalHandoff;
@@ -607,9 +607,9 @@ export function prepareReplyToolAuthority(
     requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
     fingerprint: (route?: ReplyToolAuthorityRoute) =>
       resolveFollowupRunToolAuthorityFingerprint(snapshot, route),
-    fingerprintAsync: (route?: ReplyToolAuthorityRoute) =>
+    fingerprintAsync: async (route?: ReplyToolAuthorityRoute) =>
       withReplyToolAuthorityCohort({
-        reader,
+        reader: resolveReader?.(),
         original: captured,
         readPlan: capturedReadPlan,
         env,

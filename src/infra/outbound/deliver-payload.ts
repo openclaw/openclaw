@@ -227,10 +227,7 @@ function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | 
   if (pin === true) {
     return { enabled: true };
   }
-  if (!pin || typeof pin !== "object" || Array.isArray(pin)) {
-    return undefined;
-  }
-  if (!pin.enabled) {
+  if (!pin || typeof pin !== "object" || Array.isArray(pin) || !pin.enabled) {
     return undefined;
   }
   return {

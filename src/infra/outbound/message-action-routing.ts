@@ -37,7 +37,7 @@ import {
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 
-function addCandidateAndUnprefixedAlias(candidates: Set<string>, value?: string | null) {
+function addTargetCandidates(candidates: Set<string>, value: string, channel?: ChannelId) {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
     return;
@@ -46,6 +46,12 @@ function addCandidateAndUnprefixedAlias(candidates: Set<string>, value?: string 
   const unprefixed = normalized.replace(/^(channel|group|user):/i, "").trim();
   if (unprefixed && unprefixed !== normalized) {
     candidates.add(unprefixed);
+  }
+  if (channel !== undefined) {
+    const target = normalizeTargetForAccountBinding(channel, value);
+    if (target) {
+      addTargetCandidates(candidates, target);
+    }
   }
 }
 
@@ -99,11 +105,7 @@ function resolveTargetBoundAccountId(params: {
   }
 
   const candidates = new Set<string>();
-  addCandidateAndUnprefixedAlias(candidates, target);
-  addCandidateAndUnprefixedAlias(
-    candidates,
-    normalizeTargetForAccountBinding(params.channel, target),
-  );
+  addTargetCandidates(candidates, target, params.channel);
   const [peerId, ...exactPeerIdAliases] = Array.from(candidates);
   return resolveFirstBoundAccountId({
     cfg: params.cfg,
@@ -166,23 +168,11 @@ function isCurrentSourceTargetParam(
     if (!currentTarget) {
       continue;
     }
-    addCandidateAndUnprefixedAlias(currentCandidates, currentTarget);
-    if (provider) {
-      addCandidateAndUnprefixedAlias(
-        currentCandidates,
-        normalizeTargetForAccountBinding(provider, currentTarget),
-      );
-    }
+    addTargetCandidates(currentCandidates, currentTarget, provider);
   }
 
   const explicitCandidates = new Set<string>();
-  addCandidateAndUnprefixedAlias(explicitCandidates, explicitTarget);
-  if (provider) {
-    addCandidateAndUnprefixedAlias(
-      explicitCandidates,
-      normalizeTargetForAccountBinding(provider, explicitTarget),
-    );
-  }
+  addTargetCandidates(explicitCandidates, explicitTarget, provider);
   return Array.from(explicitCandidates).some((candidate) => currentCandidates.has(candidate));
 }
 

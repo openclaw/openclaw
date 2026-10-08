@@ -330,6 +330,7 @@ describe("prepared catalog source composition", () => {
           withRefreshStatus: (catalog) => catalog,
           readFullModelCatalog: () => undefined,
           refreshExpiredModelCatalog: () => {},
+          recheckNativeLogin: () => {},
           readPublishedModels: () => undefined,
           loadFullModelCatalog: async () => catalogFacts.modelCatalog,
           loadNativeModelCatalog: async () => catalogFacts.modelCatalog,

@@ -145,28 +145,22 @@ function buildBucketSelectRow(params: {
   providerPage?: number;
   modelIndex?: number;
 }): Row<StringSelectMenu> | null {
-  if (params.buckets.length <= 1) {
+  const { buckets, currentBucketId, ...state } = params;
+  if (buckets.length <= 1) {
     return null;
   }
-  const options: APISelectMenuOption[] = params.buckets.map((bucket) => ({
+  const options: APISelectMenuOption[] = buckets.map((bucket) => ({
     label: bucket.label,
     value: bucket.id,
-    default: bucket.id === params.currentBucketId,
+    default: bucket.id === currentBucketId,
   }));
   // The select value carries the bucket; derive the provider bucket on interaction
   // to keep long provider and user IDs within Discord's 100-character custom-id cap.
   return createModelSelectRow(
     {
-      command: params.command,
+      ...state,
       action: "bucket",
-      view: params.view,
-      userId: params.userId,
       page: 1,
-      provider: params.provider,
-      runtime: params.runtime,
-      runtimeToken: params.runtimeToken,
-      providerPage: params.providerPage,
-      modelIndex: params.modelIndex,
     },
     options,
     params.view === "providers"
@@ -220,24 +214,22 @@ function buildProviderSelectRow(params: {
   providerBucket?: string;
   showModelCounts?: boolean;
 }): Row<StringSelectMenu> {
-  const options: APISelectMenuOption[] = params.page.items.map((provider) => ({
+  const { page, currentProvider, showModelCounts, ...state } = params;
+  const options: APISelectMenuOption[] = page.items.map((provider) => ({
     label: provider.id,
     value: provider.id,
-    default: provider.id === params.currentProvider,
-    ...(params.showModelCounts
+    default: provider.id === currentProvider,
+    ...(showModelCounts
       ? { description: `${provider.count} ${provider.count === 1 ? "model" : "models"}` }
       : {}),
   }));
   return createModelSelectRow(
     {
-      command: params.command,
+      ...state,
       action: "provider",
       view: "models",
-      provider: params.provider,
-      page: params.page.page,
-      providerPage: params.page.page,
-      providerBucket: params.providerBucket,
-      userId: params.userId,
+      page: page.page,
+      providerPage: page.page,
     },
     options,
     "Select provider",

@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { ChildProcess } from "node:child_process";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type * as VerifierImplementation from "./openclaw-database-verify.impl.js";
 import {
@@ -33,6 +34,45 @@ describe("database verifier shutdown", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("cancels proof publication waiting for startup admission before releasing its writer", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/synthetic/preparation-shutdown" };
+    const pathname = path.resolve("/synthetic/preparing.sqlite");
+    const preparation = createDeferredCore();
+    const entered = createDeferredCore();
+    const release = vi.fn(async () => {});
+    let publication: Promise<boolean> | undefined;
+    mocks.runDatabaseVerifyWorker.mockResolvedValue([{ path: pathname, ok: true }]);
+    mocks.applyOpenClawDatabaseVerificationResults.mockImplementation(async (options) => {
+      await options.onVerified?.(pathname);
+    });
+    requestOpenClawAgentDatabaseIntegrityCheck({
+      check: "full",
+      env,
+      path: pathname,
+      release,
+      proof: {
+        identity: "synthetic",
+        complete: (_assertCurrent, signal) => {
+          publication = racePromiseWithAbortSignal(preparation.promise, signal).then(() => true);
+          entered.resolve();
+          return publication;
+        },
+      },
+    });
+    const verifier = startOpenClawDatabaseIntegrityVerifier({ env });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      await entered.promise;
+      expect(release).not.toHaveBeenCalled();
+      await verifier.stop();
+      await expect(publication).rejects.toMatchObject({ name: "AbortError" });
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      preparation.resolve();
+      await verifier.stop();
+    }
   });
 
   it("releases superseded checks and joins final queued cleanup", async () => {

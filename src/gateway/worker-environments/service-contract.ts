@@ -215,6 +215,11 @@ export type WorkerPlacementDispatchAdmission = <T>(
   signal?: AbortSignal,
 ) => Promise<T>;
 
+export type WorkerPlacementRedispatch = (
+  placement: Extract<WorkerSessionPlacementRecord, { state: "reclaimed" | "failed" }>,
+  options: { assertCurrent: () => void; signal?: AbortSignal },
+) => Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
+
 /** Canonical admission rejected the session owner, not a caller or process cancellation. */
 export class WorkerPlacementAdmissionTargetError extends Error {
   readonly code = "invalid_state";

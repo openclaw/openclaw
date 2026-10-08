@@ -64,6 +64,26 @@ import type {
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
+function bindingWriteOptions(
+  context: OpenClawStateWorkerContext,
+  assertCurrent?: () => void,
+  assertAgentResolved?: () => void,
+) {
+  return {
+    assertCurrent,
+    createAdmission: createSqliteWorkerWriteAdmission(
+      (request) => {
+        context.admission.assertCurrent();
+        assertCurrent?.();
+        if (request.stage === "transaction" && request.facts === true) {
+          assertAgentResolved?.();
+        }
+      },
+      [context.admission.databasePath],
+    ),
+  };
+}
+
 /** Updates one binding from its currently committed row in one synchronous transaction. */
 export function updateCurrentConversationBindingRecord(
   ref: ConversationRef,
@@ -135,13 +155,7 @@ export async function listCurrentConversationBindingRecordsBySessionsAsync(
         type: "conversationBindings.listBySessions",
         input: { targetSessionKeys: keys, ...(capturedScope ? { scope: capturedScope } : {}) },
       }),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(() => {
-        context.admission.assertCurrent();
-        assertCurrent?.();
-      }, [context.admission.databasePath]),
-    },
+    bindingWriteOptions(context, assertCurrent),
   );
   context.admission.assertCurrent();
   assertCurrent?.();
@@ -412,19 +426,7 @@ export function bindCurrentConversationRecordAsync(
   return runOpenClawStateWorkerOperation(
     context,
     (worker) => worker.execute({ type: "conversationBindings.bind", input: captured }),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(
-        (request) => {
-          context.admission.assertCurrent();
-          assertCurrent?.();
-          if (request.stage === "transaction" && request.facts === true) {
-            assertAgentResolved?.();
-          }
-        },
-        [context.admission.databasePath],
-      ),
-    },
+    bindingWriteOptions(context, assertCurrent, assertAgentResolved),
   );
 }
 
@@ -444,13 +446,7 @@ export function removeCurrentConversationBindingsAsync(
   return runOpenClawStateWorkerOperation(
     context,
     (worker) => worker.execute({ type: "conversationBindings.remove", input: captured }),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(() => {
-        context.admission.assertCurrent();
-        assertCurrent?.();
-      }, [context.admission.databasePath]),
-    },
+    bindingWriteOptions(context, assertCurrent),
   );
 }
 
@@ -481,13 +477,7 @@ export async function resolveCurrentConversationBindingRecordAsync(
   const result = await runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "conversationBindings.resolve", input: conversation }),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(() => {
-        context.admission.assertCurrent();
-        assertCurrent?.();
-      }, [context.admission.databasePath]),
-    },
+    bindingWriteOptions(context, assertCurrent),
   );
   context.admission.assertCurrent();
   assertCurrent?.();
@@ -537,13 +527,7 @@ export async function touchCurrentConversationBindingRecordAsync(
   return runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "conversationBindings.touch", input: captured }),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(() => {
-        context.admission.assertCurrent();
-        assertCurrent?.();
-      }, [context.admission.databasePath]),
-    },
+    bindingWriteOptions(context, assertCurrent),
   );
 }
 

@@ -4,7 +4,7 @@ import { resolveActiveEmbeddedRunRecoveryBlocker } from "../../agents/embedded-a
 import { isEmbeddedRunHandleCompacting } from "../../agents/embedded-agent-runner/runs.probes.js";
 import type {
   SessionAdmissionDatabaseClaim,
-  SessionAdmissionInitialization,
+  SessionAdmissionTransition,
 } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -58,7 +58,8 @@ export type ReplyOperationAdmission = {
   readonly databaseIdentity?: OpenClawAgentDatabaseIdentity;
   databaseClaim?: SessionAdmissionDatabaseClaim;
   reader?: SessionEntryCohortReader;
-  afterInitialization?: (initialized: SessionAdmissionInitialization) => Promise<void>;
+  resolveReader?: () => SessionEntryCohortReader | undefined;
+  afterTransition?: (transition: SessionAdmissionTransition) => Promise<void>;
 };
 
 type ReplyRunState = {
@@ -101,12 +102,16 @@ export const lifecycleAdmissionByOperation = (replyRunState.lifecycleAdmissionBy
 export function getReplyOperationSessionReader(operation: ReplyOperation | undefined) {
   return operation ? lifecycleAdmissionByOperation.get(operation)?.reader : undefined;
 }
-/** Called only with the acknowledged initialization commit, never a later row lookup. */
-export function acknowledgeReplySessionInitialization(
+/** Follow acknowledged reader handoffs only within this exact operation admission. */
+export function captureReplyOperationSessionReader(operation: ReplyOperation | undefined) {
+  return operation ? lifecycleAdmissionByOperation.get(operation)?.resolveReader : undefined;
+}
+/** Called only with the acknowledged lifecycle commit, never a later row lookup. */
+export function acknowledgeReplySessionTransition(
   operation: ReplyOperation,
-  initialized: SessionAdmissionInitialization,
+  transition: SessionAdmissionTransition,
 ) {
-  return lifecycleAdmissionByOperation.get(operation)?.afterInitialization?.(initialized);
+  return lifecycleAdmissionByOperation.get(operation)?.afterTransition?.(transition);
 }
 replyRunState.followupAdmissionBarriersByKey ??= new Map();
 replyRunState.successorAdmissionBarriersByKey ??= new Map();

@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError as createSupersededError,
   isAgentRunRestartAbortReason,
@@ -536,11 +537,7 @@ export function createReplyOperation(params: {
       if (!isReplyOperationAbortable(operation)) {
         return false;
       }
-      abortOperation(
-        "user_abort",
-        createAbortError("Reply operation aborted by user"),
-        "aborted_by_user",
-      );
+      abortOperation("user_abort", createAgentRunDirectAbortError(), "aborted_by_user");
       return true;
     },
     abortForRestart() {

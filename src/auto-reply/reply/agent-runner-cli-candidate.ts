@@ -433,7 +433,6 @@ export async function runCliFallbackCandidate(
             replyToMode: cliReplyToMode,
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
-            skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
             skillLibraryAuthoring: params.candidateRun.skillLibraryAuthoring,
             toolAuthorityFingerprint,
             // Native input is already host-authored. Keep its stable delivery

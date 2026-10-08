@@ -37,15 +37,6 @@ function createShortId(prefix: string) {
   return `${prefix}${crypto.randomBytes(6).toString("base64url")}`;
 }
 
-type DiscordSelectMenuByType = {
-  string: StringSelectMenu;
-  user: UserSelectMenu;
-  role: RoleSelectMenu;
-  mentionable: MentionableSelectMenu;
-  channel: ChannelSelectMenu;
-};
-type DiscordSelectMenu = DiscordSelectMenuByType[DiscordComponentSelectType];
-
 const selectMenuConstructors = {
   string: class extends StringSelectMenu {
     customId = "";
@@ -63,16 +54,20 @@ const selectMenuConstructors = {
   channel: class extends ChannelSelectMenu {
     customId = "";
   },
-} satisfies {
-  [Type in DiscordComponentSelectType]: new () => DiscordSelectMenuByType[Type];
 };
+type DiscordSelectMenuByType = {
+  [Type in keyof typeof selectMenuConstructors]: InstanceType<
+    (typeof selectMenuConstructors)[Type]
+  >;
+};
+type DiscordSelectMenu = DiscordSelectMenuByType[DiscordComponentSelectType];
 
 export function createDiscordSelectMenu<Type extends DiscordComponentSelectType>(
   type: Type,
   customId: string,
   options?: DiscordComponentSelectSpec["options"],
 ): DiscordSelectMenuByType[Type] {
-  // SAFETY: the constructor map satisfies the same Type-to-select-class relationship.
+  // SAFETY: the instance map is derived from these constructors.
   const SelectMenu = selectMenuConstructors[type] as new () => DiscordSelectMenuByType[Type];
   const select = new SelectMenu();
   select.customId = customId;

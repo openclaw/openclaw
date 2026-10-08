@@ -250,7 +250,7 @@ extension GatewayIngressControllerTests {
             tls: .init(required: true, expectedFingerprint: server.fingerprint, allowTOFU: false, storeKey: nil)))
         let pending = Task {
             defer { arrivals.continuation.finish() }
-            return try await request(URLRequest(url: origin.url), 1024)
+            return try await request(URLRequest(url: origin.url.appendingPathComponent("policy")), 1024)
         }
         defer { pending.cancel() }
         _ = await arrival.next()

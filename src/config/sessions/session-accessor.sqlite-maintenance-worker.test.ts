@@ -947,6 +947,8 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
     expect((await unchanged).archived).toBe(0);
     expect(await retainedDeadline).toBe(initialDeadline);
     expect(loadSessionEntry(foreignVictim)?.archivedAt).toBeUndefined();
+    expect(loadSessionEntry(managedVictim)?.archivedAt).toBeUndefined();
+    expect(loadSessionEntry(active)?.archivedAt).toBeUndefined();
     vi.restoreAllMocks();
 
     // Managed commit receipts must invalidate the retained Worker age fact even

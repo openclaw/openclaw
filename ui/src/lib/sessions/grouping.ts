@@ -256,18 +256,11 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   const threads: Row[] = [];
   const groups: Row[] = [];
   const coding: Row[] = [];
-  const categories = new Map<string, Row[]>();
-  const knownGroups: string[] = [];
-  const people = new Map<string, SidebarSessionSection<Row>>();
-  const projects = new Map<string, SidebarSessionSection<Row>>();
-  if (grouping === "category") {
-    for (const name of options.knownGroups ?? []) {
-      const trimmed = name.trim();
-      if (trimmed && !categories.has(trimmed)) {
-        categories.set(trimmed, []);
-        knownGroups.push(trimmed);
-      }
-    }
+  const grouped = new Map<string, SidebarSessionSection<Row>>();
+  const knownGroups =
+    grouping === "category" ? normalizeUniqueTrimmedStringList(options.knownGroups) : [];
+  for (const category of knownGroups) {
+    grouped.set(`category:${category}`, { id: `category:${category}`, category, rows: [] });
   }
   for (const row of rows) {
     if (row.pinned === true) {
@@ -278,49 +271,10 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
       threads.push(row);
       continue;
     }
-    // Fold worktree checkouts into their origin repo so gateway sessions and
-    // the harness catalogs agree on what one project is.
-    const projectPath =
-      grouping === "project" && row.workContext
-        ? foldWorktreeCheckoutPath(row.workContext.path)
-        : null;
-    if (projectPath) {
-      const projectSection = projects.get(projectPath);
-      if (projectSection) {
-        projectSection.rows.push(row);
-      } else {
-        projects.set(projectPath, {
-          id: `project:${projectPath}`,
-          project: { name: pathDisplayName(projectPath), path: projectPath },
-          rows: [row],
-        });
-      }
-      continue;
-    }
-    const owner = grouping === "person" ? row.owner?.actor : undefined;
-    const ownerId = owner?.identity?.id;
-    const ownerKey = sessionActorGroupId(owner);
-    if (owner && ownerId && ownerKey) {
-      const personSection = people.get(ownerKey);
-      if (personSection) {
-        personSection.rows.push(row);
-      } else {
-        people.set(ownerKey, {
-          id: `person:${ownerKey}`,
-          personOwner: { ...owner, id: ownerId },
-          rows: [row],
-        });
-      }
-      continue;
-    }
-    const category = grouping === "category" ? row.category?.trim() : undefined;
-    if (category) {
-      const categoryRows = categories.get(category);
-      if (categoryRows) {
-        categoryRows.push(row);
-      } else {
-        categories.set(category, [row]);
-      }
+    const group = sidebarRowGroup(row, grouping, grouped);
+    if (group) {
+      group.rows.push(row);
+      grouped.set(group.id, group);
       continue;
     }
     if (row.kind === "group") {
@@ -338,50 +292,25 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   if (pinned.length > 0) {
     sections.push({ id: "pinned", rows: pinned });
   }
-  sections.push(
-    ...[...people.values()].toSorted((left, right) => {
-      const leftOwner = left.personOwner!;
-      const rightOwner = right.personOwner!;
-      const leftRank =
-        leftOwner.identity?.type === "agent"
-          ? 2
-          : leftOwner.identity?.type === "profile" && leftOwner.id === options.selfOwnerId
-            ? 0
-            : 1;
-      const rightRank =
-        rightOwner.identity?.type === "agent"
-          ? 2
-          : rightOwner.identity?.type === "profile" && rightOwner.id === options.selfOwnerId
-            ? 0
-            : 1;
-      return (
-        leftRank - rightRank ||
-        (leftOwner.label || leftOwner.id).localeCompare(rightOwner.label || rightOwner.id) ||
-        leftOwner.id.localeCompare(rightOwner.id)
-      );
-    }),
-  );
-  // Alphabetical and ahead of the stored zones: project sections have no
-  // persisted order, so a stable name sort keeps them findable.
-  sections.push(
-    ...[...projects.values()].toSorted((left, right) => {
-      const leftProject = left.project!;
-      const rightProject = right.project!;
-      return (
-        leftProject.name.localeCompare(rightProject.name) ||
-        leftProject.path.localeCompare(rightProject.path)
-      );
-    }),
-  );
-  const orderedCategories = [
-    ...knownGroups,
-    ...[...categories.keys()].slice(knownGroups.length).toSorted((a, b) => a.localeCompare(b)),
-  ];
-  const orderedSections: SidebarSessionSection<Row>[] = orderedCategories.map((category) => ({
-    id: `category:${category}`,
-    category,
-    rows: categories.get(category) ?? [],
-  }));
+  const orderedCategories =
+    grouping === "category"
+      ? [
+          ...knownGroups,
+          ...[...grouped.values()]
+            .slice(knownGroups.length)
+            .map((section) => section.category!)
+            .toSorted((a, b) => a.localeCompare(b)),
+        ]
+      : [];
+  const orderedSections = orderedCategories.map((category) => grouped.get(`category:${category}`)!);
+  if (grouping !== "category") {
+    // Derived groups sort ahead of persisted zones; each group's first row owns its metadata.
+    sections.push(
+      ...[...grouped.values()].toSorted((left, right) =>
+        compareSidebarGroups(left, right, options.selfOwnerId),
+      ),
+    );
+  }
   orderedSections.push({ id: "ungrouped", rows: threads });
   const hasGroupsReturnTarget = rows.some((row) => categoryClearReturnsToGroups(row, grouping));
   if (groups.length > 0 || hasGroupsReturnTarget) {
@@ -413,6 +342,68 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   }
   sections.push(...orderedSections);
   return sections;
+}
+
+function sidebarRowGroup<Row extends SidebarGroupableRow>(
+  row: Row,
+  grouping: SidebarSessionsGrouping,
+  groups: ReadonlyMap<string, SidebarSessionSection<Row>>,
+): SidebarSessionSection<Row> | undefined {
+  if (grouping === "project" && row.workContext) {
+    // Worktree checkouts share their origin repo with the harness catalogs.
+    const path = foldWorktreeCheckoutPath(row.workContext.path);
+    if (path) {
+      return (
+        groups.get(`project:${path}`) ?? {
+          id: `project:${path}`,
+          project: { name: pathDisplayName(path), path },
+          rows: [],
+        }
+      );
+    }
+  }
+  const owner = grouping === "person" ? row.owner?.actor : undefined;
+  const ownerId = owner?.identity?.id;
+  const ownerKey = sessionActorGroupId(owner);
+  if (owner && ownerId && ownerKey) {
+    return (
+      groups.get(`person:${ownerKey}`) ?? {
+        id: `person:${ownerKey}`,
+        personOwner: { ...owner, id: ownerId },
+        rows: [],
+      }
+    );
+  }
+  const category = grouping === "category" ? row.category?.trim() : undefined;
+  return category
+    ? (groups.get(`category:${category}`) ?? { id: `category:${category}`, category, rows: [] })
+    : undefined;
+}
+
+function compareSidebarGroups(
+  left: SidebarSessionSection<unknown>,
+  right: SidebarSessionSection<unknown>,
+  selfOwnerId?: string | null,
+): number {
+  if (left.project && right.project) {
+    return (
+      left.project.name.localeCompare(right.project.name) ||
+      left.project.path.localeCompare(right.project.path)
+    );
+  }
+  const rank = (owner: NonNullable<typeof left.personOwner>) =>
+    owner.identity?.type === "agent"
+      ? 2
+      : owner.identity?.type === "profile" && owner.id === selfOwnerId
+        ? 0
+        : 1;
+  const leftOwner = left.personOwner!;
+  const rightOwner = right.personOwner!;
+  return (
+    rank(leftOwner) - rank(rightOwner) ||
+    (leftOwner.label || leftOwner.id).localeCompare(rightOwner.label || rightOwner.id) ||
+    leftOwner.id.localeCompare(rightOwner.id)
+  );
 }
 
 function orderedGroupIds(

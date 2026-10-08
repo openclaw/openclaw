@@ -146,43 +146,32 @@ function humanizeReason(reason: string | undefined): string | undefined {
 }
 
 function formatItemMessage(item: MigrationItem, mode: FormatMode): string | undefined {
-  if (mode === "preview") {
-    if (
-      item.status === "conflict" ||
-      item.status === "skipped" ||
-      item.status === "warning" ||
-      item.status === "error"
-    ) {
-      return humanizeReason(item.reason) ?? item.message;
-    }
-    if (item.kind === "skill" && item.action === "copy") {
-      return "Copy Codex skill into OpenClaw";
-    }
-    if (item.kind === "plugin" && item.action === "install") {
-      return "Install Codex plugin into OpenClaw";
-    }
-    return item.message ?? humanizeReason(item.reason);
-  }
-  if (
+  const installation =
     (item.kind === "skill" && item.action === "copy") ||
-    (item.kind === "plugin" && item.action === "install")
+    (item.kind === "plugin" && item.action === "install");
+  if (
+    item.status === "error" ||
+    item.status === "conflict" ||
+    (item.status === "warning" && (mode === "preview" || !installation)) ||
+    (item.status === "skipped" && mode === "preview")
   ) {
+    return humanizeReason(item.reason) ?? item.message;
+  }
+  if (installation) {
+    if (mode === "preview") {
+      return item.kind === "skill"
+        ? "Copy Codex skill into OpenClaw"
+        : "Install Codex plugin into OpenClaw";
+    }
     if (item.status === "migrated") {
       return "Migrated";
     }
     if (item.status === "skipped") {
       return "Skipped";
     }
-    if (item.status === "warning") {
-      return item.message ?? humanizeReason(item.reason);
+    if (item.status !== "warning") {
+      return undefined;
     }
-    if (item.status === "error" || item.status === "conflict") {
-      return humanizeReason(item.reason) ?? item.message;
-    }
-    return undefined;
-  }
-  if (item.status === "warning" || item.status === "error" || item.status === "conflict") {
-    return humanizeReason(item.reason) ?? item.message;
   }
   return item.message ?? humanizeReason(item.reason);
 }

@@ -17,6 +17,7 @@ function toolDefinitionMetadata<TParams extends TSchema>(
     ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
     prepareArguments: tool.prepareArguments,
     executionMode: tool.executionMode,
+    ...(tool.async === false ? { async: false as const } : {}),
   };
 }
 

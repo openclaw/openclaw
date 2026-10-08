@@ -88,7 +88,7 @@ async function withTitleRows(
     const before = persistedState();
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const queries = trackSqliteStatementExecutions(database.db, ["events"], (sql) =>
-      /^select\b[\s\S]*\bevent_json\b/i.test(sql) ? "events" : null,
+      /^select\b[\s\S]*\bevent_(?:json|zstd)\b/i.test(sql) ? "events" : null,
     );
     try {
       await run({
@@ -166,8 +166,8 @@ test("does not hydrate named transcript payloads for scalar title-only rows", as
 
       // A preview request still reads the same persisted payload and preserves every title.
       const previews = await render(true);
-      expect(queries.counts.events).toBeGreaterThan(0);
-      expect(queries.blobBytes.events).toBeGreaterThan(0);
+      expect(queries.textBytes.events + queries.blobBytes.events).toBeGreaterThan(0);
+      expect(parse.mock.calls.some(([json]) => json.includes(NAMED_PAYLOAD))).toBe(true);
       for (const [index, row] of previews.entries()) {
         expect(
           row.lastMessagePreview?.startsWith(`Preview ${index}. ${NAMED_PAYLOAD_MARKER}`),
@@ -200,6 +200,7 @@ test("keeps unresolved scalar titles aligned between named and missing-session r
       ]);
       expect(queries.textBytes.events).toBeGreaterThan(0);
       expect(queries.textBytes.events).toBeLessThan(4_096);
+      expect(queries.blobBytes.events).toBe(0);
       expect(parse.mock.calls.some(([json]) => json.includes(NAMED_PAYLOAD_MARKER))).toBe(false);
       const previews = await render(true);
       expect(previews.map((row) => row.lastMessagePreview?.slice(0, 10))).toEqual([

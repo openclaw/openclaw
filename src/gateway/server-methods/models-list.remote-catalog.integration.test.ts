@@ -238,11 +238,14 @@ it.for([1, 2])(
           client.request<ModelsListResult>("models.list", { view: "all", refresh: refreshCatalog });
         const kimiIds = (catalog: ModelsListResult) =>
           catalog.models.filter((row) => row.provider === "kimi").map((row) => row.id);
-        const waitForRows = async (model: string) => {
+        const waitForRows = async (
+          model: string,
+          isReady: (catalog: ModelsListResult) => boolean = () => true,
+        ) => {
           const ready = createDeferred<ModelsListResult>();
           const read = () => {
             void list().then((catalog) => {
-              if (kimiIds(catalog).includes(model)) {
+              if (kimiIds(catalog).includes(model) && isReady(catalog)) {
                 ready.resolve(catalog);
               }
             }, ready.reject);
@@ -279,6 +282,15 @@ it.for([1, 2])(
           }
         };
         expect(kimiIds(await list(true))).toContain("remote-first");
+        // Remote rows can precede executable provider publication; admit only its completed pair.
+        await waitForRows(
+          "remote-first",
+          (catalog) =>
+            !catalog.pendingProviders?.length &&
+            catalog.models.some(
+              (row) => row.provider === provider && row.id === "known-provider-model",
+            ),
+        );
         const config = getRuntimeConfig();
         const input = {
           config,
@@ -419,6 +431,7 @@ it.for([1, 2])(
         await settleInterrupted(list(true));
         await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
         expect(kimiIds(await list(true))).toContain("remote-next");
+        await waitForRows("remote-next", () => providerThread !== committedThread);
         expect(providerThread).not.toBe(committedThread);
         expect(currentPrice()).toBe(7);
 
@@ -529,6 +542,7 @@ it.for([1, 2])(
         await settleInterrupted(list(true));
         await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
         expect(kimiIds(await list(true))).not.toContain("remote-last");
+        await waitForRows("remote-first", () => providerThread !== disabledThread);
         expect(currentPrice("remote-last")).toBeUndefined();
         expect(providerThread).not.toBe(disabledThread);
         expect([oldModel.cost.input, newModel.cost.input]).toEqual([1, 7]);

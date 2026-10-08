@@ -13,6 +13,12 @@ import type {
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type {
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
+  SessionTranscriptVisibleMessageDeltaLimits,
+  SessionTranscriptVisibleMessageDeltaResult,
+} from "./session-accessor.sqlite-contract.js";
+import type {
   SessionTranscriptBoundedMessageTailOptions,
   SessionTranscriptBoundedMessageTailPage,
   SessionTranscriptMessageEvent,
@@ -82,6 +88,14 @@ type Reads = {
     output: SessionTranscriptProjectionSelectionResults[Key];
   };
 } & {
+  "raw-delta": {
+    input: { limits: SessionTranscriptRawDeltaLimits };
+    output: SessionTranscriptRawDeltaResult;
+  };
+  "visible-delta": {
+    input: { limits: SessionTranscriptVisibleMessageDeltaLimits };
+    output: SessionTranscriptVisibleMessageDeltaResult;
+  };
   "conversation-binding": {
     input: { conversationRef: string };
     output: SessionConversationBinding | null;

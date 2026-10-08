@@ -63,7 +63,6 @@ export const {
   listRuntimeAuthProfileStoreSnapshotsForSharedOwner,
 } = createRuntimeAuthProfileSnapshotSelection(
   runtimeAuthStoreSnapshots,
-  getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath,
   clearRuntimeAuthProfileStoreSnapshotAtDatabasePath,
 );
 

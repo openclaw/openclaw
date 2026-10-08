@@ -39,7 +39,7 @@ export const execSchema = Type.Object({
   ),
   yieldMs: Type.Optional(
     Type.Number({
-      description: "Milliseconds before backgrounding; default 10000.",
+      description: "Milliseconds before returning an ordinary-command handle; default 10000.",
     }),
   ),
   awaitResults: Type.Optional(
@@ -50,7 +50,8 @@ export const execSchema = Type.Object({
   ),
   background: Type.Optional(
     Type.Boolean({
-      description: "Background now; timeoutSeconds applies.",
+      description:
+        "Start an independent service now; survives request Stop. Use yieldMs for ordinary work. timeoutSeconds applies.",
     }),
   ),
   timeoutSeconds: Type.Optional(

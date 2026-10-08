@@ -43,30 +43,33 @@ extension SettingsProTab {
 
     var diagnosticChecksCard: some View {
         Section("Checks") {
+            let run = self.diagnosticsRunPresentation
             self.diagnosticCheckRow(
                 icon: "stethoscope",
                 title: "Last Run",
                 detail: .verbatim(self.diagnosticsLastRunText),
-                value: .verbatim(self.diagnosticsRunValue),
-                color: self.diagnosticsRunColor)
+                value: .verbatim(run.value),
+                color: run.color)
+            let gateway = self.gatewayStatusPresentation
             self.diagnosticCheckRow(
                 icon: "antenna.radiowaves.left.and.right",
                 title: "Gateway Link",
-                detail: .verbatim(self.gatewayStatusDetail),
-                value: .verbatim(self.gatewayStatusValue),
-                color: self.gatewayStatusColor)
+                detail: .verbatim(gateway.detail),
+                value: .verbatim(gateway.value),
+                color: gateway.color)
             self.diagnosticCheckRow(
                 icon: "dot.radiowaves.left.and.right",
                 title: "Discovery",
                 detail: .verbatim(self.gatewayController.discoveryStatusText),
                 value: .verbatim(self.gatewayController.gateways.count.formatted()),
                 color: self.gatewayController.gateways.isEmpty ? .secondary : OpenClawBrand.accent)
+            let talkConfig = self.gatewayTalkConfigPresentation
             self.diagnosticCheckRow(
                 icon: "waveform",
                 title: "Talk Config",
-                detail: .verbatim(self.gatewayTalkConfigDetail),
-                value: .verbatim(self.gatewayTalkConfigValue),
-                color: self.gatewayTalkConfigColor)
+                detail: .verbatim(talkConfig.detail),
+                value: .verbatim(talkConfig.value),
+                color: talkConfig.color)
             self.diagnosticCheckRow(
                 icon: "bell",
                 title: "Notifications",
@@ -270,8 +273,7 @@ extension SettingsProTab {
             gateway.stableID,
             instanceId: self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines),
             allowManualOverride: false)
-        GatewaySettingsStore.savePreferredGatewayStableID(gateway.stableID)
-        GatewaySettingsStore.saveLastDiscoveredGatewayStableID(gateway.stableID)
+        GatewaySettingsStore.saveDiscoveredGatewayStableID(gateway.stableID, preferred: true)
         if let err = await self.gatewayController.connectWithDiagnostics(gateway) {
             self.setupStatusText = err
         }
@@ -826,23 +828,15 @@ extension SettingsProTab {
         self.gatewayRegistry.entries.isEmpty && !self.appModel.isLocalGatewayFixtureEnabled
     }
 
-    var gatewayStatusDetail: String {
+    var gatewayStatusPresentation: (detail: String, value: String, color: Color) {
         if self.appModel.isAppleReviewDemoModeEnabled {
-            return String(localized: "Apple Review demo mode")
+            return (String(localized: "Apple Review demo mode"), String(localized: "demo"), OpenClawBrand.accent)
         }
-        return self.gatewayConnected
-            ? String(localized: "Connected")
-            : self.appModel.gatewayDisplayStatusText
-    }
-
-    var gatewayStatusValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return String(localized: "demo") }
-        return self.gatewayConnected ? String(localized: "online") : String(localized: "offline")
-    }
-
-    var gatewayStatusColor: Color {
-        if self.appModel.isAppleReviewDemoModeEnabled { return OpenClawBrand.accent }
-        return self.gatewayConnected ? OpenClawBrand.ok : .secondary
+        let connected = self.gatewayConnected
+        return (
+            connected ? String(localized: "Connected") : self.appModel.gatewayDisplayStatusText,
+            connected ? String(localized: "online") : String(localized: "offline"),
+            connected ? OpenClawBrand.ok : .secondary)
     }
 
     var gatewayDiagnosticConnected: Bool {
@@ -866,21 +860,15 @@ extension SettingsProTab {
             : String(localized: "Connect to the gateway.")
     }
 
-    var gatewayTalkConfigDetail: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return String(localized: "Demo mode only") }
-        return self.appModel.talkMode.gatewayTalkTransportLabel
-    }
-
-    var gatewayTalkConfigValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return String(localized: "demo") }
-        return self.appModel.talkMode.gatewayTalkConfigLoaded
-            ? String(localized: "loaded")
-            : String(localized: "missing")
-    }
-
-    var gatewayTalkConfigColor: Color {
-        if self.appModel.isAppleReviewDemoModeEnabled { return .secondary }
-        return self.appModel.talkMode.gatewayTalkConfigLoaded ? OpenClawBrand.ok : .secondary
+    var gatewayTalkConfigPresentation: (detail: String, value: String, color: Color) {
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return (String(localized: "Demo mode only"), String(localized: "demo"), .secondary)
+        }
+        let loaded = self.appModel.talkMode.gatewayTalkConfigLoaded
+        return (
+            self.appModel.talkMode.gatewayTalkTransportLabel,
+            loaded ? String(localized: "loaded") : String(localized: "missing"),
+            loaded ? OpenClawBrand.ok : .secondary)
     }
 
     var gatewayAddress: String {
@@ -938,16 +926,11 @@ extension SettingsProTab {
         return String(localized: "partial")
     }
 
-    var diagnosticsRunValue: String {
-        guard let diagnosticsIssueCount else { return String(localized: "pending") }
-        return diagnosticsIssueCount == 0
-            ? String(localized: "pass")
-            : diagnosticsIssueCount.formatted()
-    }
-
-    var diagnosticsRunColor: Color {
-        guard let diagnosticsIssueCount else { return .secondary }
-        return diagnosticsIssueCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn
+    var diagnosticsRunPresentation: (value: String, color: Color) {
+        guard let diagnosticsIssueCount else { return (String(localized: "pending"), .secondary) }
+        return (
+            diagnosticsIssueCount == 0 ? String(localized: "pass") : diagnosticsIssueCount.formatted(),
+            diagnosticsIssueCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn)
     }
 
     var notificationDisclosureAccepted: Bool {

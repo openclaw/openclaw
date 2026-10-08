@@ -29,6 +29,7 @@ export async function repairWorktreePackIndex(
       beforeRun: assertCurrent,
       killProcessTree: true,
       lowerPriority: true,
+      env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
     };
     const packDirectory = await resolveGitMetadataPath(repoRoot, "objects/pack", options);
     // Git rejects an empty pack directory; inspect only this shallow metadata directory.
@@ -92,6 +93,8 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
                 signal: params.signal,
                 beforeRun: assertCurrent,
                 timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
+                // Missing promisor objects belong to explicit fetches, not hourly housekeeping.
+                env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
               },
             ),
           params.signal,

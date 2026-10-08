@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  isExactAttachedEnvironment,
-  type WorkerDispatchPlacement,
-} from "./placement-dispatch-failure.js";
+import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type {
   WorkerPlacementReclaimBarriers,
@@ -10,6 +7,7 @@ import type {
 } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, reportPlacementTransition } from "./placement-record.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
+import { isExactAttachedEnvironment } from "./placement-target.js";
 import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import type {

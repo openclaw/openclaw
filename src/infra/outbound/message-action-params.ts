@@ -58,6 +58,10 @@ type StructuredAttachmentSource = {
 
 type StructuredAttachmentMode = "selected" | "all";
 
+function readAttachmentContentType(args: Record<string, unknown>): string | undefined {
+  return readToolStringParam(args, "contentType") ?? readToolStringParam(args, "mimeType");
+}
+
 function resolveMediaParamEntry(
   args: Record<string, unknown>,
   key: string,
@@ -122,8 +126,7 @@ export function collectAttachmentSources(
         key: entry.key,
         value: entry.value,
         kind: STRUCTURED_ATTACHMENT_FILE_SOURCE_PARAM_KEYS.has(key) ? "file" : "media",
-        contentType:
-          readToolStringParam(item, "contentType") ?? readToolStringParam(item, "mimeType"),
+        contentType: readAttachmentContentType(item),
         filename: readToolStringParam(item, "filename") ?? readToolStringParam(item, "name"),
       });
     }
@@ -178,15 +181,12 @@ export function collectActionMediaSourceHints(
       sources.push(entry.value);
     }
   }
-  for (const value of readStringArrayParam(args, "mediaUrls") ?? []) {
-    sources.push(value);
-  }
-  sources.push(
-    ...selectStructuredAttachmentSources(args, extraParamKeys, options?.structuredAttachments).map(
+  return sources.concat(
+    readStringArrayParam(args, "mediaUrls") ?? [],
+    selectStructuredAttachmentSources(args, extraParamKeys, options?.structuredAttachments).map(
       (source) => source.value,
     ),
   );
-  return sources;
 }
 
 function resolveAttachmentMaxBytes(params: {
@@ -394,8 +394,7 @@ export async function hydrateAttachmentParamsForAction(params: {
     }
     const normalized = normalizeBase64Payload({
       base64: rawBuffer,
-      contentType:
-        readToolStringParam(args, "contentType") ?? readToolStringParam(args, "mimeType"),
+      contentType: readAttachmentContentType(args),
     });
     if (!normalized.base64) {
       return;
@@ -466,10 +465,7 @@ export async function hydrateAttachmentParamsForAction(params: {
     readToolStringParam(params.args, "path", { trim: false }) ??
     readToolStringParam(params.args, "filePath", { trim: false }) ??
     readToolStringParam(params.args, "fileUrl", { trim: false });
-  const contentTypeParam =
-    readToolStringParam(params.args, "contentType") ??
-    readToolStringParam(params.args, "mimeType") ??
-    attachmentSource?.contentType;
+  const contentTypeParam = readAttachmentContentType(params.args) ?? attachmentSource?.contentType;
   if (attachmentSource?.filename && !readToolStringParam(params.args, "filename")) {
     params.args.filename = attachmentSource.filename;
   }
@@ -502,11 +498,7 @@ export async function hydrateAttachmentParamsForAction(params: {
   const mediaSource = selectedMediaHint || selectedFileHint;
 
   if (!params.dryRun && !rawBuffer && mediaSource) {
-    const maxBytes = resolveAttachmentMaxBytes({
-      cfg: params.cfg,
-      channel: params.channel,
-      accountId: params.accountId,
-    });
+    const maxBytes = resolveAttachmentMaxBytes(params);
     const media = await loadWebMedia(
       mediaSource,
       buildAttachmentMediaLoadOptions({
@@ -548,8 +540,4 @@ export function parseJsonMessageParam(params: Record<string, unknown>, key: stri
   } catch {
     throw new Error(`--${key} must be valid JSON`);
   }
-}
-
-export function parseInteractiveParam(params: Record<string, unknown>): void {
-  parseJsonMessageParam(params, "interactive");
 }

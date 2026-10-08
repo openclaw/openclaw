@@ -583,6 +583,7 @@ async function runPendingMaintenance(
     // A deadline-probe retry cannot restore a completed pass's write protection.
     activeSessionKeys = [];
     if (isCurrent() && owner.generation === generation) {
+      assertInputsCurrent();
       // Reuse only this pass's consumed decision; newer kicks and changes win after settlement.
       nextMaintenanceAt = noFinalization ? verifiedNextAt : await readAge(false);
       if (owner.ageChanges.size > 0) {

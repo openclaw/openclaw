@@ -28,7 +28,7 @@ const edge = vi.hoisted(() => ({
     );
   }),
   load: vi.fn<
-    typeof import("../../config/sessions/session-entry-read-runtime.js").readSessionEntryInWorker
+    typeof import("../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
   >(),
   patch: vi.fn<typeof import("../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
   retire: vi.fn<typeof import("../agent-bundle-mcp-manager-api.js").retireSessionMcpRuntime>(),
@@ -67,8 +67,7 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 }));
 // mock-isolation: The lifetime proof supplies committed rows without opening a database or worker.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
-  readSessionEntryInWorker: edge.load,
-  readSessionEntryReadOnlyInWorker: edge.forbidden,
+  readSessionEntryReadOnlyInWorker: edge.load,
   readSessionEntrySummariesInWorker: edge.forbidden,
 }));
 vi.mock("../../config/sessions/session-store-path.js", () => ({

@@ -99,14 +99,6 @@ async function getAudioDuration(filePath: string): Promise<number> {
   }
 }
 
-async function generateWaveform(filePath: string): Promise<string> {
-  try {
-    return await generateWaveformFromPcm(filePath);
-  } catch {
-    return generatePlaceholderWaveform();
-  }
-}
-
 async function generateWaveformFromPcm(filePath: string): Promise<string> {
   const tempDir = resolvePreferredOpenClawTmpDir();
   const tempPcm = path.join(tempDir, `waveform-${crypto.randomUUID()}.raw`);
@@ -217,7 +209,7 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
  * Wait for waveform cleanup before callers can release the audio input.
  */
 export async function getVoiceMessageMetadata(filePath: string): Promise<VoiceMessageMetadata> {
-  const waveform = generateWaveform(filePath);
+  const waveform = generateWaveformFromPcm(filePath).catch(generatePlaceholderWaveform);
   try {
     return { durationSecs: await getAudioDuration(filePath), waveform: await waveform };
   } finally {

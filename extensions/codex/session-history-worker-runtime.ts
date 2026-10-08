@@ -1,10 +1,8 @@
 import { fileURLToPath } from "node:url";
 import {
   captureCodexSessionContextReader,
-  captureCodexSessionTranscriptReadAdmission,
+  readCodexSessionContextProjection,
   SessionTranscriptReadFenceError,
-  validateCodexSessionTranscriptReadAdmission,
-  validateCodexSessionTranscriptContextVersion,
   type CodexSessionContextReader,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
@@ -106,34 +104,33 @@ export async function projectCodexSettledHistoryInWorker(
     signal?.throwIfAborted();
     return result;
   }
-  const receipt =
-    resolved.kind === "sqlite"
-      ? captureCodexSessionTranscriptReadAdmission(resolved.target)
-      : undefined;
-  const input: CodexHistoryWorkerInput = {
-    target: resolved,
-    sessionId: target.sessionId,
-    ...(receipt ? { admission: { ...receipt } } : {}),
-    evidence: {
-      mirroredMessages: target.mirroredMessages,
-      settledMessages: target.settledMessages,
-      turnId: target.turnId,
-    },
+  const evidence = {
+    mirroredMessages: target.mirroredMessages,
+    settledMessages: target.settledMessages,
+    turnId: target.turnId,
   };
-  // Incognito SQLite is held by this process; run the same lazy operation here.
-  const result =
-    resolved.kind === "sqlite" && isIncognitoSessionKey(resolved.target.sessionKey)
-      ? await runCodexHistoryWorkerInput(input)
-      : await historyReads.run(input, { timeoutMs: 60_000, signal });
-  signal?.throwIfAborted();
   if (resolved.kind === "sqlite") {
     try {
-      if (input.admission) {
-        validateCodexSessionTranscriptReadAdmission(resolved.target, input.admission);
-      } else {
-        validateCodexSessionTranscriptContextVersion(resolved.target, result.version);
-      }
+      return await readCodexSessionContextProjection(
+        resolved.target,
+        async ({ target: captured, admission, physicalSource }) => {
+          const input: CodexHistoryWorkerInput = {
+            target: { kind: "sqlite", target: captured },
+            sessionId: target.sessionId,
+            admission,
+            physicalSource,
+            evidence,
+          };
+          // Legacy process-held incognito cannot be reopened in another worker.
+          const result = isIncognitoSessionKey(captured.sessionKey)
+            ? await runCodexHistoryWorkerInput(input)
+            : await historyReads.run(input, { timeoutMs: 60_000, signal });
+          return { value: result.result, version: result.version };
+        },
+        signal,
+      );
     } catch (error) {
+      signal?.throwIfAborted();
       return {
         status: "rejected",
         reason:
@@ -143,5 +140,12 @@ export async function projectCodexSettledHistoryInWorker(
       };
     }
   }
+  const input: CodexHistoryWorkerInput = {
+    target: resolved,
+    sessionId: target.sessionId,
+    evidence,
+  };
+  const result = await historyReads.run(input, { timeoutMs: 60_000, signal });
+  signal?.throwIfAborted();
   return result.result;
 }
