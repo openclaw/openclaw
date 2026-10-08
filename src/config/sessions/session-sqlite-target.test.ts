@@ -7,6 +7,22 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 
 describe("resolveSqliteTargetFromSessionStorePath", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  it("assigns a new exact SQLite locator to the configured default without caller capture", () => {
+    const databasePath = path.resolve("tmp", "stores", "new-shared.sqlite");
+
+    expect(
+      resolveSqliteTargetFromSessionStorePath(databasePath, {
+        agentId: "worker",
+        defaultAgentId: "ops",
+      }),
+    ).toMatchObject({
+      agentId: "ops",
+      ownerSource: "configured-default",
+      path: databasePath,
+      shared: true,
+    });
+  });
+
   it("keeps a multiply registered exact SQLite locator shared", () => {
     const databasePath = path.resolve("tmp", "stores", "existing-shared.sqlite");
 
@@ -39,12 +55,84 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     ).toEqual({ agentId: "ops", path: databasePath });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "does not normalize a missing registered symlink target into ownership",
-    () => {
+  it("keeps custom store targets distinct when templates share a directory", () => {
+    const dir = path.join("tmp", "stores");
+
+    expect(resolveSqliteTargetFromSessionStorePath(path.join(dir, "main.json"))).toMatchObject({
+      path: path.resolve(dir, "main.sqlite"),
+    });
+    expect(resolveSqliteTargetFromSessionStorePath(path.join(dir, "worker.json"))).toMatchObject({
+      path: path.resolve(dir, "worker.sqlite"),
+    });
+  });
+
+  it("keeps shared custom store targets distinct by agent", () => {
+    const storePath = path.join("tmp", "stores", "shared-sessions.json");
+
+    expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" })).toMatchObject({
+      path: path.resolve("tmp", "stores", "shared-sessions.sqlite"),
+    });
+    expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "work" })).toMatchObject({
+      path: path.resolve("tmp", "stores", "shared-sessions.work.sqlite"),
+    });
+  });
+
+  it("keeps basename-matching non-owners on a distinct suffixed target", () => {
+    const storePath = path.join("tmp", "stores", "ops.json");
+
+    expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path).toBe(
+      path.resolve("tmp", "stores", "ops.sqlite"),
+    );
+    expect(
+      resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "ops",
+        defaultAgentId: "main",
+      }).path,
+    ).toBe(path.resolve("tmp", "stores", "ops.ops.sqlite"));
+  });
+
+  it.each(["ops.sqlite", `${path.sep}ops.sqlite`, `ops.sqlite${path.sep}`])(
+    "lets the registered owner retain the unsuffixed target through input spelling %j",
+    (registeredSuffix) => {
+      const missingDir = path.join(tempDirs.make("openclaw-registered-session-target-"), "future");
+      const storePath = path.join(missingDir, "ops.json");
+      const registeredDatabases = [
+        { agentId: "ops", path: `${missingDir}${path.sep}${registeredSuffix}` },
+      ];
+
+      expect(
+        resolveSqliteTargetFromSessionStorePath(storePath, {
+          agentId: "ops",
+          defaultAgentId: "main",
+          registeredDatabases,
+        }),
+      ).toMatchObject({
+        path: path.join(missingDir, "ops.sqlite"),
+        ownerSource: "database-registry",
+        unsuffixedOwnerAgentId: "ops",
+      });
+      expect(
+        resolveSqliteTargetFromSessionStorePath(storePath, {
+          agentId: "main",
+          defaultAgentId: "main",
+          registeredDatabases,
+        }),
+      ).toMatchObject({
+        path: path.join(missingDir, "ops.main.sqlite"),
+        ownerSource: "database-registry",
+        unsuffixedOwnerAgentId: "ops",
+      });
+    },
+  );
+
+  it
+    .runIf(process.platform !== "win32")
+    .each([`missing${path.sep}${path.sep}ops.sqlite`, `missing${path.sep}ops.sqlite${path.sep}`])(
+    "does not normalize a missing registered symlink target %j into ownership",
+    (target) => {
       const dir = tempDirs.make("openclaw-registered-session-symlink-");
       const aliasPath = path.join(dir, "alias.sqlite");
-      fs.symlinkSync(`missing${path.sep}ops.sqlite${path.sep}`, aliasPath);
+      fs.symlinkSync(target, aliasPath);
 
       expect(
         resolveSqliteTargetFromSessionStorePath(path.join(dir, "missing", "ops.json"), {
@@ -60,33 +148,71 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     },
   );
 
-  it("rejects inconclusive ownership for a json locator and retries after recovery", () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-inconclusive-session-owner-"));
-    const occupiedNames = Array.from("bcdefghijklmnopqrstuvwxyz0123456789");
-    for (const name of occupiedNames) {
-      fs.writeFileSync(path.join(root, name), "preserve");
-    }
-    const missingDirectory = path.join(root, "a");
-    const resolve = () =>
-      resolveSqliteTargetFromSessionStorePath(path.join(missingDirectory, "shared.json"), {
+  it("skips a conventional suffix persisted for another owner", () => {
+    const storePath = path.join("tmp", "stores", "shared.json");
+    const occupiedPath = path.resolve("tmp", "stores", "shared.worker.sqlite");
+
+    expect(
+      resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "worker",
+        defaultAgentId: "main",
+        registeredDatabases: [{ agentId: "ops", path: occupiedPath }],
+      }).path,
+    ).toBe(path.resolve("tmp", "stores", "shared.worker.2.sqlite"));
+  });
+
+  it.each([
+    { extension: "sqlite", registeredAgentId: "ops" },
+    { extension: "json", registeredAgentId: "main" },
+  ])(
+    "rejects inconclusive ownership for a $extension locator and retries after recovery",
+    ({ extension, registeredAgentId }) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-inconclusive-session-owner-"));
+      const occupiedNames = Array.from("bcdefghijklmnopqrstuvwxyz0123456789");
+      for (const name of occupiedNames) {
+        fs.writeFileSync(path.join(root, name), "preserve");
+      }
+      const missingDirectory = path.join(root, "a");
+      const resolve = () =>
+        resolveSqliteTargetFromSessionStorePath(
+          path.join(missingDirectory, `shared.${extension}`),
+          {
+            agentId: "main",
+            defaultAgentId: "main",
+            registeredDatabases: [
+              { agentId: registeredAgentId, path: path.join(missingDirectory, "unrelated.sqlite") },
+            ],
+          },
+        );
+
+      expect(resolve).toThrow("Cannot determine whether database paths alias");
+      expect(fs.readdirSync(root).toSorted()).toEqual(occupiedNames.toSorted());
+      for (const name of occupiedNames) {
+        fs.unlinkSync(path.join(root, name));
+      }
+      expect(resolve()).toMatchObject({
         agentId: "main",
+        ownerSource: "configured-default",
+        path: path.join(missingDirectory, "shared.sqlite"),
+      });
+      expect(fs.readdirSync(root)).toEqual([]);
+    },
+  );
+
+  it("does not treat ambiguous suffix registration as ownership", () => {
+    const storePath = path.join("tmp", "stores", "shared.json");
+    const ambiguousPath = path.resolve("tmp", "stores", "shared.worker.sqlite");
+
+    expect(
+      resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "worker",
         defaultAgentId: "main",
         registeredDatabases: [
-          { agentId: "main", path: path.join(missingDirectory, "unrelated.sqlite") },
+          { agentId: "worker", path: ambiguousPath },
+          { agentId: "ops", path: ambiguousPath },
         ],
-      });
-
-    expect(resolve).toThrow("Cannot determine whether database paths alias");
-    expect(fs.readdirSync(root).toSorted()).toEqual(occupiedNames.toSorted());
-    for (const name of occupiedNames) {
-      fs.unlinkSync(path.join(root, name));
-    }
-    expect(resolve()).toMatchObject({
-      agentId: "main",
-      ownerSource: "configured-default",
-      path: path.join(missingDirectory, "shared.sqlite"),
-    });
-    expect(fs.readdirSync(root)).toEqual([]);
+      }).path,
+    ).toBe(path.resolve("tmp", "stores", "shared.worker.2.sqlite"));
   });
 
   it("does not assign an ambiguously registered unsuffixed target to the default", () => {
@@ -160,6 +286,19 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     ).toBe(path.resolve("tmp", "stores", "shared.worker.2.sqlite"));
   });
 
+  it.runIf(process.platform !== "win32")("treats dangling suffix symlinks as occupied", () => {
+    const dir = tempDirs.make("openclaw-session-suffix-symlink-");
+    const storePath = path.join(dir, "shared.json");
+    fs.symlinkSync(path.join(dir, "missing-target.sqlite"), path.join(dir, "shared.worker.sqlite"));
+
+    expect(
+      resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "worker",
+        defaultAgentId: "main",
+      }).path,
+    ).toBe(path.join(dir, "shared.worker.2.sqlite"));
+  });
+
   it.runIf(process.platform !== "win32")(
     "does not assign a dangling unsuffixed symlink to the default",
     () => {
@@ -188,6 +327,24 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
       }),
     ).toThrow(expect.objectContaining({ code: "ENOTDIR" }));
   });
+
+  it.each(["sqlite", "json"])(
+    "propagates path inspection errors for a registered %s locator",
+    (extension) => {
+      const dir = tempDirs.make("openclaw-registered-session-inspection-");
+      const storePath = path.join(dir, `invalid\0.${extension}`);
+
+      expect(() =>
+        resolveSqliteTargetFromSessionStorePath(storePath, {
+          registeredDatabases: [
+            { agentId: "main", path: path.join(dir, "invalid\0.sqlite") },
+            { agentId: "main", path: path.join(dir, "invalid\0.main.sqlite") },
+          ],
+          isSameDatabasePath: (left, right) => left === right,
+        }),
+      ).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
+    },
+  );
 
   it("keeps shared custom sessions.json targets distinct by agent", () => {
     const storePath = path.join("tmp", "stores", "sessions.json");

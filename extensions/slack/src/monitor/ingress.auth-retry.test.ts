@@ -31,6 +31,7 @@ function attachIngress(params: {
 
 describe("Slack ingress authorization failures", () => {
   it.each([
+    { name: "rate limit", status: 429 },
     { name: "service outage", status: 503 },
     { name: "connection reset", status: 0 },
   ])("replays a $name during Bolt authorization after restart", async ({ status }) => {

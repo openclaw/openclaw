@@ -103,58 +103,66 @@ describe("memory_search real manager", () => {
     vi.restoreAllMocks();
   });
 
-  it("reads the indexed agent file with a non-first system agent", async () => {
-    const cfg = keywordConfig();
-    const workspaces = {
-      main: path.join(fixture.paths.workspace, "main"),
-      other: path.join(fixture.paths.workspace, "other"),
-    };
-    cfg.agents = {
-      ownership: "explicit",
-      defaults: {
-        workspace: fixture.paths.workspace,
-        systemAgent: { agentId: "other" },
-      },
-      entries: { main: {}, other: {} },
-    };
-    cfg.memory = { ...cfg.memory, citations: "off" };
-    await fs.writeFile(path.join(fixture.paths.workspace, "USER.md"), "Parent decoy\n");
-    for (const [agentId, workspace] of Object.entries(workspaces)) {
-      const marker = `Orchid workspace ${agentId}`;
-      await fs.mkdir(workspace, { recursive: true });
-      await fs.writeFile(path.join(workspace, "USER.md"), marker);
-      const manager = fixture.requireManager(
-        await getMemorySearchManager({ cfg, agentId, purpose: "cli" }),
-      );
-      fixture.trackManager(manager);
-      await manager.sync({ reason: "cli", force: true });
-      await manager.close();
-
-      const options = { config: cfg, agentId, oneShotCliRun: true };
-      const search = searchTool(cfg, options);
-      const get = createMemoryGetTool(options)!;
-      const found = await search.execute("workspace-search", { query: marker, corpus: "memory" });
-      const { results } = found.details as {
-        results: Array<{ path: string; startLine: number; endLine: number; snippet: string }>;
+  it.each([
+    { name: "non-first system agent", systemAgent: true, pinned: false },
+    { name: "pinned workspaces", systemAgent: false, pinned: true },
+  ])(
+    "reads the indexed agent file with explicit ownership: $name",
+    async ({ systemAgent, pinned }) => {
+      const cfg = keywordConfig();
+      const workspaces = {
+        main: path.join(fixture.paths.workspace, pinned ? "pinned-main" : "main"),
+        other: path.join(fixture.paths.workspace, pinned ? "pinned-other" : "other"),
       };
-      expect(results).toHaveLength(1);
-      expect(results[0]).toMatchObject({
-        path: "USER.md",
-        startLine: 1,
-        endLine: 1,
-        snippet: marker,
-      });
-      const hit = results[0]!;
-      const excerpt = await get.execute("workspace-get", {
-        path: hit.path,
-        from: hit.startLine,
-        lines: hit.endLine - hit.startLine + 1,
-      });
-      expect(excerpt.details).toMatchObject({ status: "ok", text: marker });
-      const escaped = await get.execute("workspace-parent", { path: "../USER.md" });
-      expect(escaped.details).toMatchObject({ status: "error", code: "MEMORY_PATH_NOT_ALLOWED" });
-    }
-  });
+      const main = pinned ? { workspace: workspaces.main } : {};
+      const other = pinned ? { workspace: workspaces.other } : {};
+      cfg.agents = {
+        ownership: "explicit",
+        defaults: {
+          workspace: fixture.paths.workspace,
+          ...(systemAgent ? { systemAgent: { agentId: "other" } } : {}),
+        },
+        entries: { main, other },
+      };
+      cfg.memory = { ...cfg.memory, citations: "off" };
+      await fs.writeFile(path.join(fixture.paths.workspace, "USER.md"), "Parent decoy\n");
+      for (const [agentId, workspace] of Object.entries(workspaces)) {
+        const marker = `Orchid workspace ${agentId}`;
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(path.join(workspace, "USER.md"), marker);
+        const manager = fixture.requireManager(
+          await getMemorySearchManager({ cfg, agentId, purpose: "cli" }),
+        );
+        fixture.trackManager(manager);
+        await manager.sync({ reason: "cli", force: true });
+        await manager.close();
+
+        const options = { config: cfg, agentId, oneShotCliRun: true };
+        const search = searchTool(cfg, options);
+        const get = createMemoryGetTool(options)!;
+        const found = await search.execute("workspace-search", { query: marker, corpus: "memory" });
+        const { results } = found.details as {
+          results: Array<{ path: string; startLine: number; endLine: number; snippet: string }>;
+        };
+        expect(results).toHaveLength(1);
+        expect(results[0]).toMatchObject({
+          path: "USER.md",
+          startLine: 1,
+          endLine: 1,
+          snippet: marker,
+        });
+        const hit = results[0]!;
+        const excerpt = await get.execute("workspace-get", {
+          path: hit.path,
+          from: hit.startLine,
+          lines: hit.endLine - hit.startLine + 1,
+        });
+        expect(excerpt.details).toMatchObject({ status: "ok", text: marker });
+        const escaped = await get.execute("workspace-parent", { path: "../USER.md" });
+        expect(escaped.details).toMatchObject({ status: "error", code: "MEMORY_PATH_NOT_ALLOWED" });
+      }
+    },
+  );
 
   it("preserves indexed snippet indentation with citations", async () => {
     const text = "    CitationIndentSpaces()\n    preserveIndentation()";

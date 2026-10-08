@@ -5,7 +5,12 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as storage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { openOpenClawAgentDatabase, tableExists } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  openOpenClawAgentDatabase,
+  openNodeSqliteDatabase,
+  resolveOpenClawAgentSqlitePath,
+  tableExists,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -97,6 +102,63 @@ describe("memory forget source removal", () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
     }
   });
+
+  it.each([
+    [
+      "missing required table",
+      /Session metadata unavailable \(table-missing: memory_index_chunks\)/,
+    ],
+    ["newer schema", /uses newer schema version 999/],
+    ["unreadable source", /file is not a database/],
+  ] as const)(
+    "refuses %s during read planning without repairing its source",
+    async (failure, message) => {
+      openOpenClawAgentDatabase({ agentId: "main" });
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      await closeOpenClawAgentDatabasesAsync(fixture.stateDir);
+      closeOpenClawAgentDatabasesForTest(fixture.stateDir);
+      const original = await fs.readFile(databasePath);
+      try {
+        if (failure === "unreadable source") {
+          await fs.writeFile(databasePath, "not a SQLite database");
+        } else {
+          const setup = openNodeSqliteDatabase(databasePath);
+          try {
+            setup.exec(
+              failure === "newer schema"
+                ? "PRAGMA user_version = 999"
+                : "DROP TABLE memory_index_chunks",
+            );
+          } finally {
+            setup.close();
+          }
+        }
+        const beforeRead = await fs.readFile(databasePath);
+        const reading = async () =>
+          failure === "missing required table"
+            ? pruneMemoryEntryOrigins({
+                workspaceDir: fixture.workspaceDir,
+                agentIds: ["main"],
+                entryKeys: ["candidate"],
+                retainedEntryKeys: new Set(),
+              })
+            : listMemoryEntryOrigins({ agentId: "main" });
+        await expect(reading()).rejects.toThrow(message);
+        await expect(
+          planMemoryIndex(indexSelection(), {
+            agentId: "main",
+            path: databasePath,
+            env: { OPENCLAW_STATE_DIR: fixture.stateDir },
+          }),
+        ).rejects.toThrow(message);
+        expect(await fs.readFile(databasePath)).toEqual(beforeRead);
+      } finally {
+        await closeOpenClawAgentDatabasesAsync(fixture.stateDir);
+        closeOpenClawAgentDatabasesForTest(fixture.stateDir);
+        await fs.writeFile(databasePath, original);
+      }
+    },
+  );
 
   it.each(["removed", "new mixed contributor"] as const)(
     "keeps selected file provenance when another workspace leaves lineage %s during planning",

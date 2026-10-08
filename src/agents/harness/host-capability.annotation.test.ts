@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../../../packages/ai/src/openai-completions-messages.js";
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
@@ -13,6 +14,7 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
+  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -21,6 +23,7 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.js";
+import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessions/session-transcript-index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
@@ -190,6 +193,21 @@ async function holdTranscriptWriter(target: Parameters<typeof resolveSqliteTrans
 }
 
 describe("host-owned current admission annotation", () => {
+  it("preserves admitted provenance after transcript persistence", async () => {
+    const provenance = { kind: "inter_session" as const, sourceTool: "heartbeat" };
+    await withAdmission(
+      async (f) => {
+        await f.annotate();
+        expect(f.recorder.getPersistedMessage?.()).toMatchObject({
+          content: "prompt",
+          provenance,
+          __openclaw: { mirrorIdentity: "native-turn:prompt" },
+        });
+      },
+      { input: { text: "prompt", provenance }, beforeMessageWrite: ({ message }) => message },
+    );
+  });
+
   it("refreshes only the admitted collected input while preserving source custody", async () => {
     const hook = vi.fn<NonNullable<CreateUserTurnTranscriptRecorderParams["beforeMessageWrite"]>>(
       ({ message }) => message,
@@ -522,48 +540,62 @@ describe("host-owned current admission annotation", () => {
     });
   });
 
-  it.each(["admission-close", "abort", "writer", "lifecycle", "session", "blocked"] as const)(
-    "refuses a queued write after %s revocation",
-    async (reason) => {
-      await withAdmission(async (f) => {
-        const before = await loadTranscriptEvents(f.target);
-        const release = await holdTranscriptWriter(f.target);
-        const updates = vi.fn();
-        const unsubscribe = onInternalSessionTranscriptUpdate(updates);
-        const pending = f.annotate();
-        const refused = expect(pending).rejects.toThrow();
-        try {
-          if (reason === "admission-close") {
-            f.closeAdmission();
-          }
-          if (reason === "abort") {
-            f.controller.abort();
-          }
-          if (reason === "writer") {
-            f.patchSession({ activeWriterRunId: "successor" });
-          }
-          if (reason === "lifecycle") {
-            f.patchSession({ lifecycleRevision: "successor" });
-          }
-          if (reason === "session") {
-            f.patchSession({ sessionId: "successor" });
-          }
-          if (reason === "blocked") {
-            f.recorder.markBlocked();
-          }
-        } finally {
-          await release();
+  it.each([
+    "host-close",
+    "admission-close",
+    "abort",
+    "writer",
+    "lifecycle",
+    "session",
+    "replacement",
+    "blocked",
+  ] as const)("refuses a queued write after %s revocation", async (reason) => {
+    await withAdmission(async (f) => {
+      const before = await loadTranscriptEvents(f.target);
+      const release = await holdTranscriptWriter(f.target);
+      const updates = vi.fn();
+      const unsubscribe = onInternalSessionTranscriptUpdate(updates);
+      const pending = f.annotate();
+      const refused = expect(pending).rejects.toThrow();
+      try {
+        if (reason === "host-close") {
+          f.closeHost();
         }
-        try {
-          await refused;
-          expect(await loadTranscriptEvents(f.target)).toEqual(before);
-          expect(updates).not.toHaveBeenCalled();
-        } finally {
-          unsubscribe();
+        if (reason === "admission-close") {
+          f.closeAdmission();
         }
-      });
-    },
-  );
+        if (reason === "abort") {
+          f.controller.abort();
+        }
+        if (reason === "writer") {
+          f.patchSession({ activeWriterRunId: "successor" });
+        }
+        if (reason === "lifecycle") {
+          f.patchSession({ lifecycleRevision: "successor" });
+        }
+        if (reason === "session") {
+          f.patchSession({ sessionId: "successor" });
+        }
+        if (reason === "blocked") {
+          f.recorder.markBlocked();
+        }
+        if (reason === "replacement") {
+          const replacement = await createAdmittedHostCapabilityTestFixture(f.attempt);
+          replacement.closeHost();
+          replacement.closeAdmission();
+        }
+      } finally {
+        await release();
+      }
+      try {
+        await refused;
+        expect(await loadTranscriptEvents(f.target)).toEqual(before);
+        expect(updates).not.toHaveBeenCalled();
+      } finally {
+        unsubscribe();
+      }
+    });
+  });
 
   it("revalidates the captured host-owned worker claim inside the write transaction", async () => {
     await withAdmission(async (f) => {
@@ -635,6 +667,56 @@ describe("host-owned current admission annotation", () => {
     });
   });
 
+  it("refuses a stale active projection even when the old anchor still matches", async () => {
+    await withAdmission(async (f) => {
+      const before = await loadTranscriptEvents(f.target);
+      runOpenClawAgentWriteTransaction(
+        (database) => markSessionTranscriptIndexDirtyInTransaction(database.db, f.target.sessionId),
+        { agentId: "main" },
+      );
+      await expect(f.annotate()).rejects.toThrow();
+      expect(await loadTranscriptEvents(f.target)).toEqual(before);
+    });
+  });
+
+  it("does not annotate after an external edit", async () => {
+    await withAdmission(async (f) => {
+      const events = await loadTranscriptEvents(f.target);
+      const event = expectDefined(asOptionalRecord(events.at(-1)), "transcript event");
+      event.message = { ...f.recorder.getPersistedMessage?.(), content: "edited" };
+      await replaceTranscriptEvents(f.target, events);
+      const before = await loadTranscriptEvents(f.target);
+      await expect(f.annotate()).rejects.toThrow();
+      expect(await loadTranscriptEvents(f.target)).toEqual(before);
+    });
+  });
+
+  it("refuses conflicting native provenance without rewriting again", async () => {
+    await withAdmission(async (f) => {
+      await f.annotate();
+      const before = await loadTranscriptEvents(f.target);
+      await expect(
+        f.annotate({ ...nativeAnnotation(), mirrorIdentity: "conflict" }),
+      ).rejects.toThrow();
+      expect(await loadTranscriptEvents(f.target)).toEqual(before);
+    });
+  });
+
+  it("does not rerun admission hooks or bless their content edits", async () => {
+    const hook = vi.fn<NonNullable<CreateUserTurnTranscriptRecorderParams["beforeMessageWrite"]>>(
+      ({ message }) => ({ ...message, content: "hook changed" }),
+    );
+    await withAdmission(
+      async (f) => {
+        const before = await loadTranscriptEvents(f.target);
+        await expect(f.annotate()).rejects.toThrow("admitted content");
+        expect(await loadTranscriptEvents(f.target)).toEqual(before);
+        expect(hook).toHaveBeenCalledOnce();
+      },
+      { beforeMessageWrite: hook },
+    );
+  });
+
   it("never restores upstream text removed by storage redaction", async () => {
     await withAdmission(
       async (f) => {
@@ -664,6 +746,15 @@ describe("host-owned current admission annotation", () => {
         host.close();
       }
     });
+  });
+
+  it("does not issue current-row authority for an excluded recorder", async () => {
+    await withAdmission(
+      async (f) => {
+        expect(f.hostCapabilities.annotateCurrentUserTurn).toBeUndefined();
+      },
+      { input: { display: false, excludeFromContext: true, text: "prompt" } },
+    );
   });
 
   it("revokes annotation when steering is confirmed without waiting on its own runtime promise", async () => {

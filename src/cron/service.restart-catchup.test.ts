@@ -116,6 +116,33 @@ describe("CronService restart catch-up", () => {
     );
   });
 
+  it("does not defer an isolated cron job whose persisted due slot finished as skipped", async () => {
+    vi.setSystemTime(time("2025-12-13T11:00:00Z"));
+    await withRestartedCron(
+      [
+        job({
+          schedule: { kind: "cron", expr: "10 9 * * *", tz: "UTC" },
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "daily reminder" },
+          state: {
+            nextRunAtMs: time("2025-12-13T09:10:00Z"),
+            lastRunAtMs: time("2025-12-13T09:10:30Z"),
+            lastRunStatus: "skipped",
+          },
+        }),
+      ],
+      async (cron, deps) => {
+        expect(deps.runIsolatedAgentJob).not.toHaveBeenCalled();
+        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(cron.getJob("restart-job")?.state).toMatchObject({
+          lastRunStatus: "skipped",
+          nextRunAtMs: time("2025-12-14T09:10:00Z"),
+        });
+      },
+    );
+  });
+
   it("replays a cron slot due exactly at restart behind a completed persisted slot", async () => {
     vi.setSystemTime(time("2025-12-13T04:02:00Z"));
     await withRestartedCron(
@@ -134,6 +161,40 @@ describe("CronService restart catch-up", () => {
           expect.objectContaining({ agentId: "main" }),
         );
         expect(deps.requestHeartbeat).toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("marks interrupted recurring jobs failed instead of replaying them on startup", async () => {
+    const runningAtMs = time("2025-12-13T16:30:00Z");
+    await withRestartedCron(
+      [
+        job({
+          schedule: { kind: "cron", expr: "0 16 * * *", tz: "UTC" },
+          state: { nextRunAtMs: time("2025-12-13T16:00:00Z"), runningAtMs },
+        }),
+      ],
+      async (cron, deps) => {
+        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        const stored = cron.getJob("restart-job");
+        expect(stored?.state.runningAtMs).toBeUndefined();
+        expect(stored?.state).toMatchObject({
+          lastStatus: "error",
+          lastRunStatus: "error",
+          lastRunAtMs: runningAtMs,
+          lastError: "cron: job interrupted by gateway restart",
+        });
+        expect(stored?.state.nextRunAtMs).toBeGreaterThan(Date.now());
+        expect(deps.onEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            jobId: "restart-job",
+            action: "finished",
+            status: "error",
+            error: "cron: job interrupted by gateway restart",
+            runAtMs: runningAtMs,
+          }),
+        );
       },
     );
   });
@@ -236,6 +297,31 @@ describe("CronService restart catch-up", () => {
     );
   });
 
+  it("keeps past-due retries paused with lastRunStatus-only history and run-end backoff", async () => {
+    vi.setSystemTime(time("2025-12-13T04:01:59Z"));
+    await withRestartedCron(
+      [
+        job({
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: time("2025-12-13T04:00:00Z") },
+          state: {
+            nextRunAtMs: time("2025-12-13T04:00:30Z"),
+            lastRunAtMs: time("2025-12-13T04:00:00Z"),
+            lastDurationMs: 90_000,
+            lastRunStatus: "error",
+            consecutiveErrors: 1,
+          },
+        }),
+      ],
+      async (cron, deps) => {
+        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(cron.getJob("restart-job")?.state.nextRunAtMs).toBe(time("2025-12-13T04:02:00Z"));
+        expect(cron.getJob("restart-job")?.state.lastRunStatus).toBe("error");
+        expect(cron.getJob("restart-job")?.state.lastStatus).toBeUndefined();
+      },
+    );
+  });
+
   it("stagger-limits overdue disabled-heartbeat one-shot retries after restart", async () => {
     const now = Date.now();
     const jobs = [now - 60_000, now - 45_000].map((nextRunAtMs, index) =>
@@ -276,6 +362,14 @@ describe("CronService restart catch-up", () => {
   });
 
   it.each([
+    {
+      label: "the first second of a slot",
+      restart: "2025-12-13T04:02:00.500Z",
+      last: "2025-12-13T04:01:00Z",
+      next: "2025-12-13T04:03:00Z",
+      expr: "* * * * *",
+      tz: "UTC",
+    },
     {
       label: "a daylight-saving fold",
       restart: "2026-11-01T06:05:00Z",

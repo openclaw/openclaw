@@ -66,6 +66,7 @@ afterEach(async () => {
 });
 
 it.each([
+  "continues",
   "redirtied",
   "retires",
   "retires-between-batches",
@@ -133,95 +134,106 @@ it.each([
     let sweepFailure: unknown;
     const controller = new AbortController();
     const runOperation = workerStore.runSqliteWorkerStoreOperation;
-    const operationSpy = vi
-      .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-      .mockImplementation(
-        <Operations extends SqliteWorkerOperations, T>(
-          target: SqliteWorkerStore<Operations>,
-          operation: (worker: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-          stateContext?: Parameters<typeof runOperation>[2],
-          assertCurrent?: Parameters<typeof runOperation>[3],
-          createAdmission?: Parameters<typeof runOperation>[4],
-        ) =>
-          runOperation(
-            target,
-            (worker) =>
-              operation({
-                execute: async (command, commandOptions) => {
-                  const publication =
-                    command.type === "database.domain.publish" &&
-                    isRecord(command.input) &&
-                    isRecord(command.input.command)
-                      ? command.input.command
-                      : undefined;
-                  const sweep = publication?.type === "sweep";
-                  if (sweep) {
-                    sweepDispatches++;
-                    if (continuation === "retires-between-batches" && sweepDispatches === 2) {
-                      closing = closeOpenClawAgentDatabasesAsync(stateDir);
-                    }
-                  }
-                  const result = await worker
-                    .execute(command, commandOptions)
-                    .catch((error: unknown) => {
-                      if (failsBeforeCancellation && sweep) {
-                        sweepFailure = error;
-                        controller.abort(new Error("caller cancelled after native sweep failure"));
-                      }
-                      throw error;
-                    });
-                  if (
-                    publication?.type === "finalize" &&
-                    isRecord(publication.input) &&
-                    isRecord(publication.input.plan) &&
-                    publication.input.plan.sessionId === "first" &&
-                    isRecord(result) &&
-                    result.finalized === true
-                  ) {
-                    if (continuation === "redirtied" && !dirtiedAgain) {
-                      dirtiedAgain = true;
-                      dirty.run("first");
-                      database.db
-                        .prepare("DELETE FROM session_transcript_fts_rows WHERE session_id = ?")
-                        .run("first");
-                    } else if (failsBeforeCancellation && !orphanInserted) {
-                      orphanInserted = true;
-                      database.db
-                        .prepare("INSERT INTO session_transcript_fts_rows (session_id) VALUES (?)")
-                        .run("orphan-sweep-failure");
-                    }
-                  }
-                  if (sweep) {
-                    sweepResults++;
-                    if (continuation === "retires") {
-                      expect(result).toMatchObject({
-                        sessionIds: ["second"],
-                        hasMore: false,
-                      });
-                      // Revocation is immediate; awaiting close would join this operation.
-                      closing = closeOpenClawAgentDatabasesAsync(stateDir);
-                    } else if (continuation === "retires-between-batches") {
-                      expect(result).toMatchObject({
-                        hasMore: true,
-                        traversalComplete: false,
-                      });
-                    } else if (closesPool && !closing) {
-                      expect(result).toMatchObject({
-                        sessionIds: ["second"],
-                        hasMore: false,
-                      });
-                      // Closing joins this accepted task; await it after the owner settles.
-                      closing = closeSessionTranscriptReconcileWorkerPool();
-                    }
-                  }
-                  return result;
-                },
-              }),
-            stateContext,
-            assertCurrent,
-            createAdmission,
-          ),
-      );
+    const operationSpy =
+      continuation !== "continues"
+        ? vi
+            .spyOn(workerStore, "runSqliteWorkerStoreOperation")
+            .mockImplementation(
+              <Operations extends SqliteWorkerOperations, T>(
+                target: SqliteWorkerStore<Operations>,
+                operation: (
+                  worker: Pick<SqliteWorkerStore<Operations>, "execute">,
+                ) => T | Promise<T>,
+                stateContext?: Parameters<typeof runOperation>[2],
+                assertCurrent?: Parameters<typeof runOperation>[3],
+                createAdmission?: Parameters<typeof runOperation>[4],
+              ) =>
+                runOperation(
+                  target,
+                  (worker) =>
+                    operation({
+                      execute: async (command, commandOptions) => {
+                        const publication =
+                          command.type === "database.domain.publish" &&
+                          isRecord(command.input) &&
+                          isRecord(command.input.command)
+                            ? command.input.command
+                            : undefined;
+                        const sweep = publication?.type === "sweep";
+                        if (sweep) {
+                          sweepDispatches++;
+                          if (continuation === "retires-between-batches" && sweepDispatches === 2) {
+                            closing = closeOpenClawAgentDatabasesAsync(stateDir);
+                          }
+                        }
+                        const result = await worker
+                          .execute(command, commandOptions)
+                          .catch((error: unknown) => {
+                            if (failsBeforeCancellation && sweep) {
+                              sweepFailure = error;
+                              controller.abort(
+                                new Error("caller cancelled after native sweep failure"),
+                              );
+                            }
+                            throw error;
+                          });
+                        if (
+                          publication?.type === "finalize" &&
+                          isRecord(publication.input) &&
+                          isRecord(publication.input.plan) &&
+                          publication.input.plan.sessionId === "first" &&
+                          isRecord(result) &&
+                          result.finalized === true
+                        ) {
+                          if (continuation === "redirtied" && !dirtiedAgain) {
+                            dirtiedAgain = true;
+                            dirty.run("first");
+                            database.db
+                              .prepare(
+                                "DELETE FROM session_transcript_fts_rows WHERE session_id = ?",
+                              )
+                              .run("first");
+                          } else if (failsBeforeCancellation && !orphanInserted) {
+                            orphanInserted = true;
+                            database.db
+                              .prepare(
+                                "INSERT INTO session_transcript_fts_rows (session_id) VALUES (?)",
+                              )
+                              .run("orphan-sweep-failure");
+                          }
+                        }
+                        if (sweep) {
+                          sweepResults++;
+                          if (continuation === "retires") {
+                            expect(result).toMatchObject({
+                              sessionIds: ["second"],
+                              hasMore: false,
+                            });
+                            // Revocation is immediate; awaiting close would join this operation.
+                            closing = closeOpenClawAgentDatabasesAsync(stateDir);
+                          } else if (continuation === "retires-between-batches") {
+                            expect(result).toMatchObject({
+                              hasMore: true,
+                              traversalComplete: false,
+                            });
+                          } else if (closesPool && !closing) {
+                            expect(result).toMatchObject({
+                              sessionIds: ["second"],
+                              hasMore: false,
+                            });
+                            // Closing joins this accepted task; await it after the owner settles.
+                            closing = closeSessionTranscriptReconcileWorkerPool();
+                          }
+                        }
+                        return result;
+                      },
+                    }),
+                  stateContext,
+                  assertCurrent,
+                  createAdmission,
+                ),
+            )
+        : undefined;
     try {
       let reconciliation:
         | ReturnType<typeof reconcileSessionTranscriptIndexes>

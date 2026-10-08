@@ -808,6 +808,26 @@ describe("google-meet plugin", () => {
     );
   });
 
+  it("registers the node-host command used by chrome-node transport", () => {
+    const { nodeHostCommands, nodeInvokePolicies } = setup();
+
+    const command = nodeHostCommands.find(
+      (entry): entry is Record<string, unknown> =>
+        isRecord(entry) && entry.command === "googlemeet.chrome",
+    );
+    if (!command) {
+      throw new Error("expected googlemeet.chrome node host command");
+    }
+    expect(command.cap).toBe("google-meet");
+    expect(command.dangerous).toBe(true);
+    expect(typeof command.handle).toBe("function");
+    expect(nodeInvokePolicies).toHaveLength(1);
+    expect(nodeInvokePolicies[0]).toMatchObject({
+      commands: ["googlemeet.chrome"],
+      dangerous: true,
+    });
+  });
+
   it("keeps local Chrome talk-back available on Linux and blocks unsupported hosts", async () => {
     const { cliRegistrations, methods, tools } = setup(undefined, { registerPlatform: "linux" });
     const tool = getMeetTool({ tools });

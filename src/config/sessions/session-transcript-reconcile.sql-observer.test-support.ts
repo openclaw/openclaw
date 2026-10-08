@@ -3,7 +3,17 @@ import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 
-type Boundary = "constructor" | "prepare" | "exec" | "get" | "all" | "run" | "iterate" | "close";
+const methods = [
+  "constructor",
+  "prepare",
+  "exec",
+  "get",
+  "all",
+  "run",
+  "iterate",
+  "close",
+] as const;
+type Boundary = (typeof methods)[number];
 type Bucket = "data" | "unknown";
 
 /** No path is exempt: classification supplements the unfiltered native-call ledger. */
@@ -84,6 +94,10 @@ export function observeReconcileHostSqlite(paths: { data: string[] }) {
   ];
   return {
     calls,
+    counts: () =>
+      Object.fromEntries(
+        methods.map((method) => [method, calls.filter((call) => call.method === method).length]),
+      ),
     restore() {
       spies.forEach((spy) => spy.mockRestore());
       Object.defineProperty(sqlite, "DatabaseSync", descriptor);

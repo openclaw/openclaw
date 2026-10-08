@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { readAgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.read.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../../state/openclaw-agent-db.test-support.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -62,6 +64,60 @@ function observe(context: OpenClawStateWorkerContext, agentPath: string) {
     data: [context.admission.databasePath, agentPath],
   });
 }
+
+it.each([false, true])(
+  "initializes runtime without inventing deletion history for a custom agent, serving Gateway owner=%s",
+  async (owned) => {
+    await withOpenClawTestState(
+      { scenario: "external-service", label: "reconcile-first-creation" },
+      async (state) => {
+        const agentPath = state.path("agent", "agent.sqlite");
+        createCurrentOpenClawAgentDatabaseFixtures(state.path("template.sqlite"), [
+          { agentId: "main", path: agentPath },
+        ]);
+        const originalBytes = fs.readFileSync(agentPath);
+        const context = captureOpenClawStateWorkerContext();
+        expect(context.admission.identity.key).toMatch(/^path:/u);
+        expect(fs.existsSync(context.admission.databasePath)).toBe(false);
+        const parent = owned
+          ? acquireGatewayStateOwner({
+              databasePath: context.admission.databasePath,
+              payload: {
+                pid: process.pid,
+                createdAt: new Date().toISOString(),
+                configPath: state.configPath,
+                stateDir: state.stateDir,
+                role: "gateway",
+              },
+            })
+          : undefined;
+        const observation = observe(context, agentPath);
+        try {
+          await expect(runDiskTask(context, agentPath)).resolves.toEqual([
+            "done",
+            "lease-released",
+          ]);
+          context.admission.assertCurrent();
+          expect(context.admission.identity).toEqual(
+            readDatabasePathIdentitySync(context.admission.databasePath),
+          );
+          expect(context.admission.identity.key).toMatch(/^file:/u);
+          await closeSessionTranscriptReconcileWorkerPool();
+          expect(observation.calls).toEqual([]);
+          expect(Object.values(observation.counts())).toEqual(Array(8).fill(0));
+        } finally {
+          await closeSessionTranscriptReconcileWorkerPool();
+          observation.restore();
+          parent?.release();
+        }
+        expect(
+          readAgentDatabaseDeletionSnapshot(context.environment, "runtime")?.retainedDeletions,
+        ).toMatchObject({ status: "unavailable", cause: "missing" });
+        expect(fs.readFileSync(agentPath)).toEqual(originalBytes);
+      },
+    );
+  },
+);
 
 it("refuses an agent replacement during canonical first creation", async () => {
   await withOpenClawTestState(
