@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachBrokerNativeResource } from "./resource-client.js";
-import type { BrokerResourceAttachment } from "./resource-protocol.js";
+import { spawnBrokerStartupNowMs, type BrokerResourceAttachment } from "./resource-protocol.js";
 import { createBrokerResourceSocket } from "./resource-socket.js";
 
 type Peer = ReturnType<typeof createBrokerResourceSocket>;
@@ -87,7 +87,7 @@ function makeAttachment(
     id: 7,
     moduleUrl: "file:///native-resource.js",
     ownerPort: true,
-    startupDeadline: Date.now() + 10_000,
+    startupDeadline: spawnBrokerStartupNowMs() + 10_000,
     ...overrides,
   };
 }
@@ -284,7 +284,9 @@ describe("spawn broker native resource client", () => {
     // timer before the server accepts.
     const { endpoint, accepted } = await brokerEndpoint();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const attachment = makeAttachment(endpoint, { startupDeadline: Date.now() + 50 });
+    const attachment = makeAttachment(endpoint, {
+      startupDeadline: spawnBrokerStartupNowMs() + 50,
+    });
     const target = makeTarget();
     const record = makeRecord();
     makeOwner(record, attachment, target.port);
