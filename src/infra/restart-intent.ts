@@ -433,7 +433,7 @@ export function clearGatewayRestartIntentSync(
 /** Consume the exact row once, after the shared writer's earlier accepted work. */
 export function prepareGatewayRestartIntentConsumption(
   env: NodeJS.ProcessEnv = process.env,
-  now: number | undefined = undefined,
+  now?: number,
   assertCurrent?: () => void,
 ): () => Promise<GatewayRestartIntent | null> {
   const source = prepareOpenClawStateReadSource({ path: resolveOpenClawStateSqlitePath(env), env });

@@ -142,7 +142,10 @@ export async function runGatewayLoop(params: {
     params.runtime.exit(hostExitRequested && code === 0 ? Number(process.exitCode ?? 0) : code);
   };
   const exitProcessAfterSignals = async (code: number) => {
-    while (!forcedExitStarted && signals.pending) {
+    for (;;) {
+      if (forcedExitStarted || !signals.pending) {
+        break;
+      }
       await signals.pending;
     }
     exitProcess(code);
@@ -163,7 +166,10 @@ export async function runGatewayLoop(params: {
     let commitOutcome = initialOutcome;
     await loopExit.prepareGatewayExit(eagerLifecycleRuntime, gatewayLog, foregroundUpdateClosed);
     for (;;) {
-      while (!forcedExitStarted && signals.pending) {
+      for (;;) {
+        if (forcedExitStarted || !signals.pending) {
+          break;
+        }
         await signals.pending;
       }
       if (hostStopOwner && hostLifecycle !== hostStopOwner) {
@@ -188,7 +194,10 @@ export async function runGatewayLoop(params: {
         sameManagedUpdateOwner(owner, ownerToCommit) &&
         eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner) &&
         (await eagerLifecycleRuntime.commitManagedServiceUpdateHandoff(owner, commitOutcome));
-      while (!forcedExitStarted && signals.pending) {
+      for (;;) {
+        if (forcedExitStarted || !signals.pending) {
+          break;
+        }
         await signals.pending;
       }
       if (

@@ -71,12 +71,18 @@ export function createGatewayRunSignals(params: {
     signalStoreOpening = undefined;
   };
   const drainRestartSignals = async () => {
-    while (signalSettlement) {
+    for (;;) {
+      if (!signalSettlement) {
+        break;
+      }
       await signalSettlement;
     }
   };
   const settleRestartSignals = async () => {
-    while (signalSettlement) {
+    for (;;) {
+      if (!signalSettlement) {
+        break;
+      }
       await signalSettlement;
     }
     // Captured signals wait for close to settle before reacquiring this file.
@@ -127,7 +133,10 @@ export function createGatewayRunSignals(params: {
         if (preparationFailure) {
           throw preparationFailure.error;
         }
-        while (consumeIntent && !signalStoreOpen) {
+        for (;;) {
+          if (!consumeIntent || signalStoreOpen) {
+            break;
+          }
           await signalStoreOpening;
           if (!isCurrent()) {
             return;
