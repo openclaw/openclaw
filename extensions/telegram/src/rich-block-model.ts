@@ -214,97 +214,85 @@ function measureRichBlockCaption(
   }
 }
 
-function measureRichBlockChildren(
-  children: readonly InputRichBlock[],
-  size: RichBlockMeasurement,
-  depth: number,
-  pending: Array<{ children: readonly InputRichBlock[]; depth: number }>,
-): void {
-  // Empty containers still contribute their nesting edge; plain text leaves do not add one.
-  size.nesting = Math.max(size.nesting, depth);
-  for (const block of children) {
-    size.blocks += 1;
-    switch (block.type) {
-      case "paragraph":
-      case "heading":
-      case "footer":
-        measureRichBlockText(block.text, size, depth);
-        break;
-      case "pre":
-        size.chars += block.text.length;
-        break;
-      case "mathematical_expression":
-        size.chars += block.expression.length;
-        break;
-      case "pullquote":
-        measureRichBlockText(block.text, size, depth);
-        if (block.credit) {
-          measureRichBlockText(block.credit, size, depth);
-        }
-        break;
-      case "blockquote":
-        pending.push({ children: block.blocks, depth: depth + 1 });
-        if (block.credit) {
-          measureRichBlockText(block.credit, size, depth + 1);
-        }
-        break;
-      case "details":
-        pending.push({ children: block.blocks, depth: depth + 1 });
-        measureRichBlockText(block.summary, size, depth + 1);
-        break;
-      case "collage":
-      case "slideshow":
-        pending.push({ children: block.blocks, depth: depth + 1 });
-        measureRichBlockCaption(block.caption, size, depth + 1);
-        break;
-      case "list":
-        size.blocks += block.items.length;
-        size.nesting = Math.max(size.nesting, depth + 1);
-        for (const item of block.items) {
-          pending.push({ children: item.blocks, depth: depth + 1 });
-        }
-        break;
-      case "table":
-        size.blocks += block.cells.length;
-        size.nesting = Math.max(size.nesting, depth + 1);
-        if (block.caption) {
-          measureRichBlockText(block.caption, size, depth + 1);
-        }
-        for (const row of block.cells) {
-          for (const cell of row) {
-            const text = cell.text;
-            if (text) {
-              measureRichBlockText(text, size, depth + 1);
-            }
-          }
-        }
-        break;
-      case "photo":
-      case "video":
-      case "audio":
-      case "animation":
-      case "voice_note":
-        size.media += 1;
-        measureRichBlockCaption(block.caption, size, depth + 1);
-        break;
-      case "map":
-        // Live-verified: maps do not consume the 50-attachment budget.
-        measureRichBlockCaption(block.caption, size, depth + 1);
-        break;
-      case "anchor":
-      case "divider":
-        break;
-    }
-  }
-}
-
 /** Bot API budgets: UTF-16 text, nested blocks/items/rows, media, and formatting edges. */
 export function measureInputRichBlocks(blocks: readonly InputRichBlock[]) {
   const size = { chars: 0, blocks: 0, media: 0, nesting: 0 };
   const pending = [{ children: blocks, depth: 0 }];
   while (pending.length > 0) {
-    const frame = pending.pop()!;
-    measureRichBlockChildren(frame.children, size, frame.depth, pending);
+    const { children, depth } = pending.pop()!;
+    // Empty containers still contribute their nesting edge; plain text leaves do not add one.
+    size.nesting = Math.max(size.nesting, depth);
+    for (const block of children) {
+      size.blocks += 1;
+      switch (block.type) {
+        case "paragraph":
+        case "heading":
+        case "footer":
+          measureRichBlockText(block.text, size, depth);
+          break;
+        case "pre":
+          size.chars += block.text.length;
+          break;
+        case "mathematical_expression":
+          size.chars += block.expression.length;
+          break;
+        case "pullquote":
+          measureRichBlockCaption(block, size, depth);
+          break;
+        case "blockquote":
+          pending.push({ children: block.blocks, depth: depth + 1 });
+          if (block.credit) {
+            measureRichBlockText(block.credit, size, depth + 1);
+          }
+          break;
+        case "details":
+          pending.push({ children: block.blocks, depth: depth + 1 });
+          measureRichBlockText(block.summary, size, depth + 1);
+          break;
+        case "collage":
+        case "slideshow":
+          pending.push({ children: block.blocks, depth: depth + 1 });
+          measureRichBlockCaption(block.caption, size, depth + 1);
+          break;
+        case "list":
+          size.blocks += block.items.length;
+          size.nesting = Math.max(size.nesting, depth + 1);
+          for (const item of block.items) {
+            pending.push({ children: item.blocks, depth: depth + 1 });
+          }
+          break;
+        case "table":
+          size.blocks += block.cells.length;
+          size.nesting = Math.max(size.nesting, depth + 1);
+          if (block.caption) {
+            measureRichBlockText(block.caption, size, depth + 1);
+          }
+          for (const row of block.cells) {
+            for (const cell of row) {
+              const text = cell.text;
+              if (text) {
+                measureRichBlockText(text, size, depth + 1);
+              }
+            }
+          }
+          break;
+        case "photo":
+        case "video":
+        case "audio":
+        case "animation":
+        case "voice_note":
+          size.media += 1;
+          measureRichBlockCaption(block.caption, size, depth + 1);
+          break;
+        case "map":
+          // Live-verified: maps do not consume the 50-attachment budget.
+          measureRichBlockCaption(block.caption, size, depth + 1);
+          break;
+        case "anchor":
+        case "divider":
+          break;
+      }
+    }
   }
   return size;
 }
@@ -331,12 +319,13 @@ export function richTextToPlainString(text: RichText): string {
   return parts.join("");
 }
 
-function captionToPlainText(caption: RichBlockCaption | undefined): string {
-  if (!caption) {
-    return "";
-  }
+function richTextWithCreditToPlainText(caption: RichBlockCaption): string {
   const credit = caption.credit ? ` — ${richTextToPlainString(caption.credit)}` : "";
-  return `${richTextToPlainString(caption.text)}${credit}`.trim();
+  return `${richTextToPlainString(caption.text)}${credit}`;
+}
+
+function captionToPlainText(caption: RichBlockCaption | undefined): string {
+  return caption ? richTextWithCreditToPlainText(caption).trim() : "";
 }
 
 export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): string {
@@ -386,11 +375,7 @@ export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): s
         push(block.expression);
         break;
       case "pullquote":
-        push(
-          block.credit
-            ? `${richTextToPlainString(block.text)} — ${richTextToPlainString(block.credit)}`
-            : richTextToPlainString(block.text),
-        );
+        push(richTextWithCreditToPlainText(block));
         break;
       case "blockquote":
         visit(block.blocks, listDepth, (text) => {
@@ -463,6 +448,13 @@ export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): s
   return result;
 }
 
+function normalizeRichCaption(caption: RichBlockCaption, depth: number): RichBlockCaption {
+  return {
+    text: normalizeRichText(caption.text, depth),
+    ...(caption.credit === undefined ? {} : { credit: normalizeRichText(caption.credit, depth) }),
+  };
+}
+
 /** Bound caller-supplied blocks before recursive splitting or wire serialization. */
 export function normalizeInputRichBlocks(
   blocks: readonly InputRichBlock[],
@@ -479,13 +471,7 @@ export function normalizeInputRichBlocks(
       case "footer":
         return { ...block, text: normalizeRichText(block.text, textDepth) };
       case "pullquote":
-        return {
-          ...block,
-          text: normalizeRichText(block.text, textDepth),
-          ...(block.credit === undefined
-            ? {}
-            : { credit: normalizeRichText(block.credit, textDepth) }),
-        };
+        return { ...block, ...normalizeRichCaption(block, textDepth) };
       case "blockquote":
         return {
           ...block,
@@ -536,14 +522,7 @@ export function normalizeInputRichBlocks(
             : {}),
           ...(block.caption === undefined
             ? {}
-            : {
-                caption: {
-                  text: normalizeRichText(block.caption.text, textDepth),
-                  ...(block.caption.credit === undefined
-                    ? {}
-                    : { credit: normalizeRichText(block.caption.credit, textDepth) }),
-                },
-              }),
+            : { caption: normalizeRichCaption(block.caption, textDepth) }),
         };
       default:
         return block;

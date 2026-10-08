@@ -352,7 +352,7 @@ function policyAttestationFindings(
   ];
 }
 
-function toAttestedFinding(finding: HealthFinding): Record<string, unknown> {
+export function toAttestedFinding(finding: HealthFinding) {
   return {
     checkId: finding.checkId,
     severity: finding.severity,

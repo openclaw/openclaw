@@ -58,10 +58,9 @@ internal fun rememberOverlayWindowGeometry(
         sample()
         true
       }
-    val activityObserver = activityView.viewTreeObserver
-    val overlayObserver = overlayView.viewTreeObserver
-    activityObserver.addOnPreDrawListener(observer)
-    overlayObserver.addOnPreDrawListener(observer)
+    val views = listOf(activityView, overlayView)
+    val observers = views.map { it.viewTreeObserver }
+    observers.forEach { it.addOnPreDrawListener(observer) }
     val attachment =
       object : View.OnAttachStateChangeListener {
         override fun onViewAttachedToWindow(view: View) = sample()
@@ -73,15 +72,12 @@ internal fun rememberOverlayWindowGeometry(
     // The dialog retains its original initial/pre-draw behavior. Terminal sheets additionally
     // need direct detach delivery, before disposal or conflatable composition can run.
     if (onPublication != null) {
-      activityView.addOnAttachStateChangeListener(attachment)
-      overlayView.addOnAttachStateChangeListener(attachment)
+      views.forEach { it.addOnAttachStateChangeListener(attachment) }
     }
     sample()
     onDispose {
-      if (activityObserver.isAlive) activityObserver.removeOnPreDrawListener(observer)
-      if (overlayObserver.isAlive) overlayObserver.removeOnPreDrawListener(observer)
-      activityView.removeOnAttachStateChangeListener(attachment)
-      overlayView.removeOnAttachStateChangeListener(attachment)
+      observers.forEach { if (it.isAlive) it.removeOnPreDrawListener(observer) }
+      views.forEach { it.removeOnAttachStateChangeListener(attachment) }
       deliver?.invoke(null)
     }
   }

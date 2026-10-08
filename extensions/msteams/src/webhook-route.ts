@@ -31,7 +31,7 @@ export function resolveMSTeamsWebhookPathIssue({
   const reason = protectedPath
     ? "requires Gateway authentication on the main HTTP listener"
     : probe !== "namespace" && probe !== "outside"
-      ? "is reserved for Gateway probes"
+      ? "is reserved for Gateway checks"
       : /[:*{}\\]/.test(path)
         ? "uses Express pattern syntax that requires the compatibility listener"
         : undefined;

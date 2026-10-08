@@ -67,6 +67,7 @@ import type {
   WorkboardAttachmentInput,
   WorkboardNotificationSubscribeInput,
   WorkboardProofInput,
+  WorkboardWorkerLogInput,
 } from "./store-inputs.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
 
@@ -198,32 +199,6 @@ export function normalizePriority(value: unknown, fallback: WorkboardPriority): 
     return value as WorkboardPriority;
   }
   throw new Error(`priority must be one of: ${WORKBOARD_PRIORITIES.join(", ")}.`);
-}
-
-export function normalizeLabels(value: unknown, fallback: string[] = []): string[] {
-  if (value == null) {
-    return fallback;
-  }
-  const entries =
-    typeof value === "string" ? value.split(",") : Array.isArray(value) ? value : undefined;
-  if (!entries) {
-    throw new Error("labels must be an array or comma-separated string.");
-  }
-  const labels: string[] = [];
-  for (const entry of entries) {
-    const label = normalizeOptionalString(entry);
-    if (!label || labels.includes(label)) {
-      continue;
-    }
-    if (label.length > 40) {
-      throw new Error("labels must be 40 characters or fewer.");
-    }
-    labels.push(label);
-    if (labels.length >= 12) {
-      break;
-    }
-  }
-  return labels;
 }
 
 export function normalizeStringList(value: unknown, fieldName: string, maxLength = 80): string[] {
@@ -617,6 +592,15 @@ function normalizeWorkerLog(record: Record<string, unknown>): WorkboardWorkerLog
   if (!id || !message || !createdAt) {
     return null;
   }
+  return workerLogEntry(record, message, createdAt, id);
+}
+
+export function workerLogEntry(
+  record: WorkboardWorkerLogInput,
+  message: string,
+  createdAt: number,
+  id?: string,
+): WorkboardWorkerLog {
   const level =
     record.level === "warning" || record.level === "error" || record.level === "info"
       ? record.level
@@ -624,7 +608,7 @@ function normalizeWorkerLog(record: Record<string, unknown>): WorkboardWorkerLog
   const sessionKey = normalizeBoundedString(record.sessionKey, undefined, 240, "session key");
   const runId = normalizeBoundedString(record.runId, undefined, 160, "run id");
   return {
-    id,
+    id: id ?? randomUUID(),
     level,
     message,
     createdAt,

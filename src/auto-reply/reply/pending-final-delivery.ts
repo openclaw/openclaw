@@ -67,7 +67,7 @@ export function resolvePendingFinalDeliveryCompletion(
   payloads: readonly ReplyPayload[] | undefined,
 ): Extract<DurableDeliveryCompletion, { kind: "pending-final" }> | undefined {
   const metadata = payloads
-    ?.map((payload) => getReplyPayloadMetadata(payload))
+    ?.map(getReplyPayloadMetadata)
     .find((candidate) => candidate?.pendingFinalDeliveryCompletion);
   const completion = metadata?.pendingFinalDeliveryCompletion;
   return completion

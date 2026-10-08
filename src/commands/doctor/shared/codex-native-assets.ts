@@ -1,5 +1,4 @@
 // Doctor scan for personal Codex CLI assets that native Codex-mode agents do not auto-load.
-import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -57,10 +56,6 @@ async function isDirectory(filePath: string): Promise<boolean> {
   }
 }
 
-async function safeReadDir(dir: string): Promise<Dirent[]> {
-  return await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-}
-
 async function discoverDirectoryAssets(
   root: string,
   kind: "skill" | "plugin",
@@ -85,7 +80,7 @@ async function discoverDirectoryAssets(
       hits.push({ kind, path: dir });
       return;
     }
-    for (const entry of await safeReadDir(dir)) {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
       if (entry.isDirectory()) {
         await visit(path.join(dir, entry.name), depth + 1);
       }
@@ -134,13 +129,14 @@ async function scanCodexNativeAssets(params: {
       record(hit);
     }
   }
-  const configPath = path.join(codexHome, "config.toml");
-  if (await exists(configPath)) {
-    record({ kind: "config", path: configPath });
-  }
-  const hooksPath = path.join(codexHome, "hooks", "hooks.json");
-  if (await exists(hooksPath)) {
-    record({ kind: "hooks", path: hooksPath });
+  for (const [kind, relativePath] of [
+    ["config", "config.toml"],
+    ["hooks", path.join("hooks", "hooks.json")],
+  ] as const) {
+    const assetPath = path.join(codexHome, relativePath);
+    if (await exists(assetPath)) {
+      record({ kind, path: assetPath });
+    }
   }
   return [...hits.values()].toSorted((a, b) => a.path.localeCompare(b.path));
 }

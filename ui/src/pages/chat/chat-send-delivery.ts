@@ -70,7 +70,6 @@ import {
   reconcileChatRunLifecycle,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
@@ -325,9 +324,6 @@ async function sendPreparedChatMessage(
             scope: readChatSessionProjectionScope(host, { sessionKey, agentId: prepared.agentId }),
           },
         );
-        // The dispatched steer owns one live boundary even while custody and its
-        // transcript receipt are in flight. A retry cannot close that interval again.
-        rolloverChatStream(host, { runId: steerTargetRunId, boundaryRunId: runId });
       }
     }
     const ack = await requestChatSend(host, {

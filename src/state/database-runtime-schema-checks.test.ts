@@ -23,6 +23,8 @@ import {
 
 const trace = vi.hoisted(() => ({
   execute: vi.fn<(database: DatabaseSync, sql: string) => void>(),
+  isVersionProbe: (sql: string) =>
+    /^PRAGMA data_version\b|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
 }));
 vi.mock("../infra/kysely-sync-cache-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/kysely-sync-cache-state.js")>();
@@ -30,7 +32,7 @@ vi.mock("../infra/kysely-sync-cache-state.js", async (importOriginal) => {
     ...actual,
     executeWithCachedStatement: (...args: Parameters<typeof actual.executeWithCachedStatement>) => {
       // Count executions, including hits in the prepared-statement cache.
-      if (!/^PRAGMA data_version\b/i.test(args[1])) {
+      if (!trace.isVersionProbe(args[1])) {
         trace.execute(args[0], args[1]);
       }
       return actual.executeWithCachedStatement(...args);
@@ -47,7 +49,7 @@ vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
       vi.spyOn(database, "prepare").mockImplementation((sql) => {
         const statement = prepare(sql);
         // Observe before admission: the state owner retains raw statements outside Kysely.
-        if (/^PRAGMA data_version\b/i.test(sql)) {
+        if (trace.isVersionProbe(sql)) {
           const get = statement.get.bind(statement);
           vi.spyOn(statement, "get").mockImplementation((...bindings) => {
             trace.execute(database, sql);
@@ -91,9 +93,7 @@ beforeAll(async () => {
   expect(trace.execute.mock.calls.some(([, sql]) => /^PRAGMA user_version\b/i.test(sql))).toBe(
     true,
   );
-  expect(trace.execute.mock.calls.some(([, sql]) => /^PRAGMA data_version\b/i.test(sql))).toBe(
-    true,
-  );
+  expect(trace.execute.mock.calls.some(([, sql]) => trace.isVersionProbe(sql))).toBe(true);
   trace.execute.mockClear();
 
   // No await: all 100 reads of each entry point occur in the same event-loop turn.
@@ -109,7 +109,7 @@ beforeAll(async () => {
       owner,
       userVersion: sql.filter((text) => /^PRAGMA user_version\b/i.test(text)).length,
       sqliteMaster: sql.filter((text) => /\bsqlite_(master|schema)\b/i.test(text)).length,
-      dataVersion: sql.filter((text) => /^PRAGMA data_version\b/i.test(text)).length,
+      dataVersion: sql.filter(trace.isVersionProbe).length,
     });
   }
   trace.execute.mockClear();
@@ -121,7 +121,7 @@ beforeAll(async () => {
     owner: "state-readonly",
     userVersion: sql.filter((text) => /^PRAGMA user_version\b/i.test(text)).length,
     sqliteMaster: sql.filter((text) => /\bsqlite_(master|schema)\b/i.test(text)).length,
-    dataVersion: sql.filter((text) => /^PRAGMA data_version\b/i.test(text)).length,
+    dataVersion: sql.filter(trace.isVersionProbe).length,
   });
   console.info("Admitted database checks for 100 reads per entry point:", counts);
 });

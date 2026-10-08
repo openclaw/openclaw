@@ -155,30 +155,24 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     flushMessageSentEvents();
     await runOutboundDeliveryCommitHooks(deliveredResults);
   };
+  const auditBatch = () => ({ payloadCount, results: deliveredResults, payloadOutcomes });
   const failedTerminals = (failureStage: AuditMessageFailureStage) =>
-    failedOutboundAuditTerminals({
-      payloadCount,
-      results: deliveredResults,
-      payloadOutcomes,
-      failureStage,
-    });
+    failedOutboundAuditTerminals({ ...auditBatch(), failureStage });
   const emitFailedTerminals = (failureStage: AuditMessageFailureStage) =>
     emitTerminals(() => failedTerminals(failureStage));
-  const completedTerminals = () =>
-    completedOutboundAuditTerminals({
-      payloadCount,
-      results: deliveredResults,
-      payloadOutcomes,
-    });
+  const completedTerminals = () => completedOutboundAuditTerminals(auditBatch());
+  const finishAck = async (terminals: Parameters<typeof emitTerminals>[0]): Promise<void> => {
+    queuedPostSendState = "acked";
+    await runCommitHooksAfterAck();
+    emitTerminals(terminals);
+  };
   const finishPermanentRejection = async (
     owner: QueuedDeliveryOwner,
     rejection: PlatformMessageNotDispatchedError,
   ): Promise<void> => {
     const terminals = failedTerminals("platform_send");
     if (await rejectQueuedDelivery(owner, rejection, params, terminals)) {
-      queuedPostSendState = "acked";
-      await runCommitHooksAfterAck();
-      emitTerminals(() => terminals);
+      await finishAck(() => terminals);
     }
   };
   let releaseCancelledPreparation: (() => Promise<void>) | undefined;
@@ -459,9 +453,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         } else if (postSendState === "acked") {
           // Direct ack is the fallback when the post-send marker cannot be
           // written. Once the row is gone, recovery cannot run these hooks.
-          queuedPostSendState = postSendState;
-          await runCommitHooksAfterAck();
-          emitFailedTerminals("platform_send");
+          await finishAck(() => failedTerminals("platform_send"));
         }
       } else {
         const postSendState =
@@ -525,9 +517,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                     return false;
                   });
         if (acked) {
-          queuedPostSendState = "acked";
-          await runCommitHooksAfterAck();
-          emitTerminals(completedTerminals);
+          await finishAck(completedTerminals);
         }
       }
     }
@@ -600,9 +590,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
               .then(() => true)
               .catch(() => false)
           ) {
-            queuedPostSendState = "acked";
-            await runCommitHooksAfterAck();
-            emitFailedTerminals("queue");
+            await finishAck(() => failedTerminals("queue"));
           }
         } else if (!platformResultsReturned) {
           const sendEvidence =

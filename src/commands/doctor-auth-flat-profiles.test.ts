@@ -58,7 +58,10 @@ import {
   maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig,
 } from "./doctor-auth-flat-profiles.js";
-import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
+import {
+  makePrompter,
+  withPersistedAuthProfileStoreRead,
+} from "./doctor-auth-flat-profiles.test-support.js";
 import {
   createAuthProfileMigrationSourceReceipt,
   type AuthProfileMigrationSourceReceipt,
@@ -505,22 +508,20 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     const legacyPath = path.join(state.agentDir(), "auth.json");
     let recreated = false;
 
-    const result = await migrateAuthProfiles({
-      env: state.env,
-      deps: {
-        loadPersistedAuthProfileStore(agentDir, options) {
-          if (!recreated && options?.database === undefined) {
-            recreated = true;
-            fs.writeFileSync(
-              legacyPath,
-              `${JSON.stringify({ xai: { type: "api_key", key: "not-a-real" } })}\n`,
-              "utf8",
-            );
-          }
-          return loadPersistedAuthProfileStore(agentDir, options);
-        },
+    const result = await withPersistedAuthProfileStoreRead(
+      (_agentDir, options, original) => {
+        if (!recreated && options?.database === undefined) {
+          recreated = true;
+          fs.writeFileSync(
+            legacyPath,
+            `${JSON.stringify({ xai: { type: "api_key", key: "not-a-real" } })}\n`,
+            "utf8",
+          );
+        }
+        return original();
       },
-    });
+      () => migrateAuthProfiles({ env: state.env }),
+    );
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
@@ -1247,12 +1248,10 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       },
     });
 
-    const result = await migrateAuthProfiles({
-      now: () => 464,
-      deps: {
-        loadPersistedAuthProfileStore: () => createAuthProfileStoreFixture({}),
-      },
-    });
+    const result = await withPersistedAuthProfileStoreRead(
+      () => createAuthProfileStoreFixture({}),
+      () => migrateAuthProfiles({ now: () => 464 }),
+    );
 
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toStrictEqual([
@@ -1300,16 +1299,11 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       },
     } as OpenClawConfig;
 
-    const result = await migrateAuthProfiles({
-      cfg,
-      env: state.env,
-      deps: {
-        loadPersistedAuthProfileStore: (agentDir, options) =>
-          agentDir === undefined
-            ? { version: 1, profiles: {} }
-            : loadPersistedAuthProfileStore(agentDir, options),
-      },
-    });
+    const result = await withPersistedAuthProfileStoreRead(
+      (agentDir, _options, original) =>
+        agentDir === undefined ? { version: 1, profiles: {} } : original(),
+      () => migrateAuthProfiles({ cfg, env: state.env }),
+    );
 
     expect(result.blockedProfileIds).toEqual(new Set(["openai-codex:default"]));
     expect(result.migratedProfileIds).toContain("openai:later");
@@ -1339,15 +1333,13 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       "anthropic:default": createApiKeyCredential("anthropic", "fake-concurrent-key"),
     });
 
-    const result = await migrateAuthProfiles({
-      now: () => 464,
-      deps: {
-        loadPersistedAuthProfileStore: () => {
-          loadCount += 1;
-          return loadCount === 1 ? emptyStore : concurrentStore;
-        },
+    const result = await withPersistedAuthProfileStoreRead(
+      () => {
+        loadCount += 1;
+        return loadCount === 1 ? emptyStore : concurrentStore;
       },
-    });
+      () => migrateAuthProfiles({ now: () => 464 }),
+    );
 
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toEqual([
@@ -1382,14 +1374,13 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     };
     let loadCount = 0;
 
-    const result = await migrateAuthProfiles({
-      deps: {
-        loadPersistedAuthProfileStore: () => {
-          loadCount += 1;
-          return loadCount === 1 ? baseline : concurrent;
-        },
+    const result = await withPersistedAuthProfileStoreRead(
+      () => {
+        loadCount += 1;
+        return loadCount === 1 ? baseline : concurrent;
       },
-    });
+      () => migrateAuthProfiles(),
+    );
 
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toEqual([

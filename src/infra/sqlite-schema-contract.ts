@@ -39,7 +39,12 @@ import {
 
 export type { SqliteSchemaCompatibility, SqliteSchemaIssue } from "./sqlite-schema-issues.js";
 
-type SqliteSchemaContract = Map<string, SqliteTableContract>;
+type SqliteSchemaContract = ReadonlyMap<string, SqliteTableContract>;
+
+export type PreparedSqliteSchemaContract = {
+  schemaSql: string;
+  tables: SqliteSchemaContract;
+};
 
 export type SqliteTableContractReader = (tableName: string) => SqliteTableContract | undefined;
 
@@ -84,6 +89,29 @@ function expectedSchemaContracts(): Map<string, SqliteSchemaContract> {
     setEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY, cache);
     return cache.contracts;
   });
+}
+
+/** Capture only an existing canonical contract; callers must not build it on a host request. */
+export function captureSqliteSchemaContracts(
+  schemaSqls: readonly string[],
+): PreparedSqliteSchemaContract[] {
+  const schemaContractCache = expectedSchemaContracts();
+  return schemaSqls.flatMap((schemaSql) => {
+    const tables = schemaContractCache.get(schemaSql);
+    return tables ? [{ schemaSql, tables }] : [];
+  });
+}
+
+/** Private worker IPC transfers canonical facts under their exact schema SQL cache key. */
+export function adoptSqliteSchemaContracts(
+  contracts: readonly PreparedSqliteSchemaContract[],
+): void {
+  const schemaContractCache = expectedSchemaContracts();
+  for (const contract of contracts) {
+    if (!schemaContractCache.has(contract.schemaSql)) {
+      schemaContractCache.set(contract.schemaSql, contract.tables);
+    }
+  }
 }
 
 /** Reuse actual table facts only within one unchanged read transaction on this connection. */
@@ -473,10 +501,11 @@ function buildSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
 }
 
 function collectSqliteSchemaContract(database: DatabaseSync): SqliteSchemaContract {
+  // Authorize catalog ownership even when there are no tables to inspect.
   const rows = database
     .prepare(
       `
-        SELECT name, sql
+        SELECT name, sql, tbl_name
         FROM main.sqlite_schema
         WHERE type = 'table'
           AND name NOT LIKE 'sqlite_%'

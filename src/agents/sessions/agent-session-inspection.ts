@@ -66,10 +66,9 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
       : -1;
     const compactionIndex = Math.max(clientCompactionIndex, providerCheckpointIndex);
     const providerCheckpoint = providerCheckpointIndex > clientCompactionIndex;
-    let estimateFromContent = false;
+    let usageSource: "unknown" | "content" | "provider" = "unknown";
 
     if (compactionIndex >= 0) {
-      let hasPostCompactionUsage = false;
       for (let index = branchEntries.length - 1; index > compactionIndex; index -= 1) {
         // SAFETY: The reverse index stays within the canonical branch entries.
         const entry = branchEntries[index]!;
@@ -82,27 +81,27 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
               continue;
             }
             if (assistant.usage.contextUsage?.state === "unavailable") {
-              estimateFromContent = true;
+              usageSource = "content";
               continue;
             }
             const contextTokens = calculateContextTokens(assistant.usage);
             if (contextTokens > 0) {
-              hasPostCompactionUsage = true;
-              estimateFromContent = false;
+              usageSource = "provider";
               break;
             }
           }
         }
       }
 
-      if (!hasPostCompactionUsage && (providerCheckpoint || !estimateFromContent)) {
+      if (usageSource !== "provider" && (providerCheckpoint || usageSource !== "content")) {
         return { tokens: null, contextWindow, percent: null };
       }
     }
 
-    const tokens = estimateFromContent
-      ? estimateMessagesFromContent(this.messages)
-      : estimateContextTokens(this.messages).tokens;
+    const tokens =
+      usageSource === "content"
+        ? estimateMessagesFromContent(this.messages)
+        : estimateContextTokens(this.messages).tokens;
     const percent = (tokens / contextWindow) * 100;
 
     return {

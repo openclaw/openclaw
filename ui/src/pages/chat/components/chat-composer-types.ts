@@ -72,6 +72,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
+  /** Provisional/deleted previews must not mount session-scoped extension controllers. */
+  sessionAdmitted?: boolean;
   connected: boolean;
   offline?: boolean;
   queuedOutboxCount?: number;

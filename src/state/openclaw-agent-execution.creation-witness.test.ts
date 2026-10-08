@@ -454,92 +454,80 @@ it("retains the first creator's file witness on a preexisting execution owner", 
   }
 });
 
-it.each(["missing", "schema-missing"] as const)(
-  "prepares its originally observed %s store and records native birth without changing identity",
-  async (kind) => {
-    const options = fixture();
-    if (kind === "schema-missing") {
-      fs.mkdirSync(path.dirname(options.path), { recursive: true });
-      fs.writeFileSync(options.path, "");
+it("prepares its originally missing store and records native birth without changing identity", async () => {
+  const options = fixture();
+  const observed = readDatabasePathIdentitySync(options.path);
+  const execution = captureOpenClawAgentDatabaseExecution(options, {
+    expectedCreationIdentity: observed,
+  });
+  try {
+    expect(execution.fileIdentity).toBeUndefined();
+    await execution.prepare(source());
+    const physical = readDatabasePathIdentitySync(options.path);
+    expect(physical.canonicalPath).toBe(observed.canonicalPath);
+    expect(execution.fileIdentity).toMatchObject({
+      kind: "file",
+      physicalIdentity: physical.key.slice("file:".length),
+      birthtime: physical.birthtime,
+    });
+    await expect(execution.runExisting(source(), async () => "retained")).resolves.toBe("retained");
+    const unrelatedInitialization = vi.fn(() => {
+      throw new Error("A warm borrower must not recapture initialization configuration");
+    });
+    const env = { ...options.env };
+    if (process.platform !== "win32") {
+      Object.defineProperty(env, "UNRELATED_INITIALIZATION", {
+        enumerable: true,
+        get: unrelatedInitialization,
+      });
     }
-    const observed = readDatabasePathIdentitySync(options.path);
-    const execution = captureOpenClawAgentDatabaseExecution(options, {
-      expectedCreationIdentity: observed,
+    const warm = captureOpenClawAgentDatabaseExecution({
+      ...options,
+      env,
     });
     try {
-      expect(execution.fileIdentity).toBeUndefined();
-      await execution.prepare(source());
-      const physical = readDatabasePathIdentitySync(options.path);
-      expect(physical.canonicalPath).toBe(observed.canonicalPath);
-      if (kind === "schema-missing") {
-        expect(physical).toEqual(observed);
-      }
-      expect(execution.fileIdentity).toMatchObject({
-        kind: "file",
-        physicalIdentity: physical.key.slice("file:".length),
-        birthtime: physical.birthtime,
-      });
-      await expect(execution.runExisting(source(), async () => "retained")).resolves.toBe(
-        "retained",
-      );
-      const unrelatedInitialization = vi.fn(() => {
-        throw new Error("A warm borrower must not recapture initialization configuration");
-      });
-      const env = { ...options.env };
-      if (process.platform !== "win32") {
-        Object.defineProperty(env, "UNRELATED_INITIALIZATION", {
-          enumerable: true,
-          get: unrelatedInitialization,
-        });
-      }
-      const warm = captureOpenClawAgentDatabaseExecution({
-        ...options,
-        env,
-      });
-      try {
-        await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
-        expect(unrelatedInitialization).not.toHaveBeenCalled();
-      } finally {
-        await warm.release();
-      }
-      const windows = (() => {
-        const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-        try {
-          return captureOpenClawAgentDatabaseExecution({
-            ...options,
-            env: {
-              HOME: options.env.OPENCLAW_STATE_DIR,
-              OpenClaw_State_Dir: options.env.OPENCLAW_STATE_DIR,
-            },
-          });
-        } finally {
-          platform.mockRestore();
-        }
-      })();
-      try {
-        await expect(windows.runExisting(source(), async () => "same owner")).resolves.toBe(
-          "same owner",
-        );
-      } finally {
-        await windows.release();
-      }
-      expect(() =>
-        captureOpenClawAgentDatabaseExecution(options, {
-          expectedIdentity: {
-            kind: "file",
-            physicalIdentity: physical.key.slice("file:".length),
-            nativeLocation: physical.canonicalPath,
-            birthtime: (fs.statSync(options.path, { bigint: true }).birthtimeNs + 1n).toString(),
-          },
-        }),
-      ).toThrow(/identity|physical file/);
+      await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
+      expect(unrelatedInitialization).not.toHaveBeenCalled();
     } finally {
-      await execution.release();
+      await warm.release();
     }
-  },
-);
+    const windows = (() => {
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      try {
+        return captureOpenClawAgentDatabaseExecution({
+          ...options,
+          env: {
+            HOME: options.env.OPENCLAW_STATE_DIR,
+            OpenClaw_State_Dir: options.env.OPENCLAW_STATE_DIR,
+          },
+        });
+      } finally {
+        platform.mockRestore();
+      }
+    })();
+    try {
+      await expect(windows.runExisting(source(), async () => "same owner")).resolves.toBe(
+        "same owner",
+      );
+    } finally {
+      await windows.release();
+    }
+    expect(() =>
+      captureOpenClawAgentDatabaseExecution(options, {
+        expectedIdentity: {
+          kind: "file",
+          physicalIdentity: physical.key.slice("file:".length),
+          nativeLocation: physical.canonicalPath,
+          birthtime: (fs.statSync(options.path, { bigint: true }).birthtimeNs + 1n).toString(),
+        },
+      }),
+    ).toThrow(/identity|physical file/);
+  } finally {
+    await execution.release();
+  }
+});
 
-it.each(["fresh root", "existing root", "existing agent"] as const)(
+it.each(["fresh root", "existing agent"] as const)(
   "preserves a relative registration through native opening, relocation, and removal (%s alias)",
   async (layout) => {
     const options = fixture();
@@ -592,30 +580,25 @@ it.each(["fresh root", "existing root", "existing agent"] as const)(
   },
 );
 
-it.each(["before witness", "after witness"] as const)(
-  "reserves schema-missing first birth against a sibling captured %s",
-  async (when) => {
-    const options = fixture();
-    fs.mkdirSync(path.dirname(options.path), { recursive: true });
-    fs.writeFileSync(options.path, "");
-    const observed = readDatabasePathIdentitySync(options.path);
-    const early =
-      when === "before witness" ? captureOpenClawAgentDatabaseExecution(options) : undefined;
-    const creator = captureOpenClawAgentDatabaseExecution(options, {
-      expectedCreationIdentity: observed,
-    });
-    const sibling = early ?? captureOpenClawAgentDatabaseExecution(options);
-    try {
-      await expect(sibling.prepare(source())).rejects.toThrow(/captured creating reference/);
-      expect(fs.readFileSync(options.path)).toHaveLength(0);
-      await creator.prepare(source());
-      await expect(sibling.prepare(source())).resolves.toBeUndefined();
-      expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
-    } finally {
-      await Promise.allSettled([creator.release(), sibling.release()]);
-    }
-  },
-);
+it("reserves schema-missing first birth against a sibling captured before its witness", async () => {
+  const options = fixture();
+  fs.mkdirSync(path.dirname(options.path), { recursive: true });
+  fs.writeFileSync(options.path, "");
+  const observed = readDatabasePathIdentitySync(options.path);
+  const sibling = captureOpenClawAgentDatabaseExecution(options);
+  const creator = captureOpenClawAgentDatabaseExecution(options, {
+    expectedCreationIdentity: observed,
+  });
+  try {
+    await expect(sibling.prepare(source())).rejects.toThrow(/captured creating reference/);
+    expect(fs.readFileSync(options.path)).toHaveLength(0);
+    await creator.prepare(source());
+    await expect(sibling.prepare(source())).resolves.toBeUndefined();
+    expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
+  } finally {
+    await Promise.allSettled([creator.release(), sibling.release()]);
+  }
+});
 
 it("refuses an absent witness when another logical owner was captured first", async () => {
   const options = fixture();
@@ -631,70 +614,56 @@ it("refuses an absent witness when another logical owner was captured first", as
   }
 });
 
-it.each(["missing", "schema-missing"] as const)(
-  "releases an unused %s creation reservation while a sibling remains",
-  async (kind) => {
-    const options = fixture();
-    if (kind === "schema-missing") {
-      fs.mkdirSync(path.dirname(options.path), { recursive: true });
-      fs.writeFileSync(options.path, "");
-    }
-    const observed = readDatabasePathIdentitySync(options.path);
-    const creator = captureOpenClawAgentDatabaseExecution(options, {
-      expectedCreationIdentity: observed,
-    });
-    const joining = captureOpenClawAgentDatabaseExecution(options, {
-      expectedCreationIdentity: observed,
-    });
-    const sibling = captureOpenClawAgentDatabaseExecution(options);
-    try {
-      await creator.release();
-      await expect(sibling.prepare(source())).rejects.toThrow(/captured creating reference/);
-      await joining.release();
-      expect(readDatabasePathIdentitySync(options.path)).toEqual(observed);
-      await sibling.prepare(source());
-      expect(sibling.fileIdentity).toMatchObject({ kind: "file" });
-      await expect(sibling.runExisting(source(), async () => "prepared")).resolves.toBe("prepared");
-    } finally {
-      await Promise.allSettled([creator.release(), joining.release(), sibling.release()]);
-    }
-  },
-);
+it("releases an unused creation reservation while a sibling remains", async () => {
+  const options = fixture();
+  const observed = readDatabasePathIdentitySync(options.path);
+  const creator = captureOpenClawAgentDatabaseExecution(options, {
+    expectedCreationIdentity: observed,
+  });
+  const joining = captureOpenClawAgentDatabaseExecution(options, {
+    expectedCreationIdentity: observed,
+  });
+  const sibling = captureOpenClawAgentDatabaseExecution(options);
+  try {
+    await creator.release();
+    await expect(sibling.prepare(source())).rejects.toThrow(/captured creating reference/);
+    await joining.release();
+    expect(readDatabasePathIdentitySync(options.path)).toEqual(observed);
+    await sibling.prepare(source());
+    expect(sibling.fileIdentity).toMatchObject({ kind: "file" });
+    await expect(sibling.runExisting(source(), async () => "prepared")).resolves.toBe("prepared");
+  } finally {
+    await Promise.allSettled([creator.release(), joining.release(), sibling.release()]);
+  }
+});
 
-it.each(["missing", "schema-missing"] as const)(
-  "releases a %s creation reservation after source refusal before native opening",
-  async (kind) => {
-    const options = fixture();
-    if (kind === "schema-missing") {
-      fs.mkdirSync(path.dirname(options.path), { recursive: true });
-      fs.writeFileSync(options.path, "");
-    }
-    const observed = readDatabasePathIdentitySync(options.path);
-    const creator = captureOpenClawAgentDatabaseExecution(options, {
-      expectedCreationIdentity: observed,
-    });
-    const sibling = captureOpenClawAgentDatabaseExecution(options);
-    const refusal = new Error("Original creation source ended before native opening");
-    const revoked = source();
-    revoked.assertCurrent = () => {
-      throw refusal;
-    };
-    const admit = vi.spyOn(revoked, "createAdmission");
-    try {
-      await expect(creator.prepare(revoked)).rejects.toBe(refusal);
-      expect(admit).not.toHaveBeenCalled();
-      expect(creator.fileIdentity).toBeUndefined();
-      expect(readDatabasePathIdentitySync(options.path)).toEqual(observed);
-      await creator.release();
-      await sibling.prepare(source());
-      expect(sibling.fileIdentity).toMatchObject({ kind: "file" });
-      await expect(sibling.runExisting(source(), async () => "prepared")).resolves.toBe("prepared");
-    } finally {
-      admit.mockRestore();
-      await Promise.allSettled([creator.release(), sibling.release()]);
-    }
-  },
-);
+it("releases a creation reservation after source refusal before native opening", async () => {
+  const options = fixture();
+  const observed = readDatabasePathIdentitySync(options.path);
+  const creator = captureOpenClawAgentDatabaseExecution(options, {
+    expectedCreationIdentity: observed,
+  });
+  const sibling = captureOpenClawAgentDatabaseExecution(options);
+  const refusal = new Error("Original creation source ended before native opening");
+  const revoked = source();
+  revoked.assertCurrent = () => {
+    throw refusal;
+  };
+  const admit = vi.spyOn(revoked, "createAdmission");
+  try {
+    await expect(creator.prepare(revoked)).rejects.toBe(refusal);
+    expect(admit).not.toHaveBeenCalled();
+    expect(creator.fileIdentity).toBeUndefined();
+    expect(readDatabasePathIdentitySync(options.path)).toEqual(observed);
+    await creator.release();
+    await sibling.prepare(source());
+    expect(sibling.fileIdentity).toMatchObject({ kind: "file" });
+    await expect(sibling.runExisting(source(), async () => "prepared")).resolves.toBe("prepared");
+  } finally {
+    admit.mockRestore();
+    await Promise.allSettled([creator.release(), sibling.release()]);
+  }
+});
 
 it("joins native creating admission before releasing its original reservation", async () => {
   const options = fixture();

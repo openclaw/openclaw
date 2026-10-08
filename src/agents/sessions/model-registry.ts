@@ -492,7 +492,6 @@ export class ModelRegistry {
         );
       }
 
-      const config = parsed;
       const providers =
         options.requireGeneratedCatalog === true
           ? filterGeneratedPluginModelCatalogProviders({
@@ -503,21 +502,20 @@ export class ModelRegistry {
                 hasUsableCustomProviderApiKey(this.config, providerId),
               parsedCatalog: parsed,
               pluginMetadataSnapshot: this.pluginMetadataSnapshot,
-              providers: config.providers,
+              providers: parsed.providers,
             })
-          : config.providers;
-      const configForUse = { ...config, providers };
+          : parsed.providers;
       if (options.requireGeneratedCatalog === true && Object.keys(providers).length === 0) {
         return emptyCustomModelsResult();
       }
 
-      for (const [providerName, providerConfig] of Object.entries(configForUse.providers)) {
+      for (const [providerName, providerConfig] of Object.entries(providers)) {
         this.validateProviderModels(providerName, providerConfig, "catalog");
       }
 
       const generated = options.requireGeneratedCatalog === true;
       let sourceProviders: RegistryProviderSources = {};
-      for (const [providerName, providerConfig] of Object.entries(configForUse.providers)) {
+      for (const [providerName, providerConfig] of Object.entries(providers)) {
         if (!generated && (providerConfig.models ?? []).length > 0) {
           this.storeProviderRequestConfig(providerName, providerConfig);
         }
@@ -622,32 +620,47 @@ export class ModelRegistry {
         }
 
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
-        models.push({
-          id: modelDef.id,
-          name: modelDef.name ?? modelDef.id,
-          api: api as Api,
-          provider: providerName,
-          baseUrl,
-          reasoning: modelDef.reasoning ?? false,
-          thinkingLevelMap: modelDef.thinkingLevelMap,
-          input: runtimeInput,
-          cost: normalizeResolvedPricing(modelDef.cost ?? {}),
-          contextWindow: modelDef.contextWindow ?? 128000,
-          contextTokens: modelDef.contextTokens,
-          contextWindows: modelDef.contextWindows,
-          contextWindowDefault: modelDef.contextWindowDefault,
-          maxTokens: modelDef.maxTokens ?? 16384,
-          ...(modelDef.maxTokens !== undefined
-            ? { maxTokensSource: modelDef.maxTokensSource }
-            : {}),
-          params: modelDef.params,
-          headers: undefined,
-          compat: modelDef.compat,
-        } as Model);
+        models.push(
+          this.createRuntimeModel(providerName, providerConfig, modelDef, api, {
+            baseUrl,
+            input: runtimeInput,
+          }),
+        );
       }
     }
 
     return models;
+  }
+
+  private createRuntimeModel(
+    provider: string,
+    config: ProviderModelCatalog,
+    model: NonNullable<ProviderModelCatalog["models"]>[number],
+    api: string | undefined,
+    catalog?: { baseUrl: string; input: Model["input"] },
+  ): Model {
+    return {
+      id: model.id,
+      name: catalog ? (model.name ?? model.id) : model.name,
+      api: api as Api,
+      provider,
+      baseUrl: catalog ? catalog.baseUrl : (model.baseUrl ?? config.baseUrl!),
+      reasoning: catalog ? (model.reasoning ?? false) : model.reasoning,
+      thinkingLevelMap: model.thinkingLevelMap,
+      input: catalog ? catalog.input : model.input,
+      cost: catalog ? normalizeResolvedPricing(model.cost ?? {}) : model.cost,
+      contextWindow: catalog ? (model.contextWindow ?? 128000) : model.contextWindow,
+      contextTokens: model.contextTokens,
+      contextWindows: model.contextWindows,
+      contextWindowDefault: model.contextWindowDefault,
+      maxTokens: catalog ? (model.maxTokens ?? 16384) : model.maxTokens,
+      ...(catalog && model.maxTokens !== undefined
+        ? { maxTokensSource: model.maxTokensSource }
+        : {}),
+      params: model.params,
+      headers: undefined,
+      compat: model.compat,
+    } as Model;
   }
 
   getAll(): Model[] {
@@ -919,25 +932,7 @@ export class ModelRegistry {
         const api = modelDef.api || config.api;
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
 
-        this.models.push({
-          id: modelDef.id,
-          name: modelDef.name,
-          api: api as Api,
-          provider: providerName,
-          baseUrl: modelDef.baseUrl ?? config.baseUrl!,
-          reasoning: modelDef.reasoning,
-          thinkingLevelMap: modelDef.thinkingLevelMap,
-          input: modelDef.input,
-          cost: modelDef.cost,
-          contextWindow: modelDef.contextWindow,
-          contextTokens: modelDef.contextTokens,
-          contextWindows: modelDef.contextWindows,
-          contextWindowDefault: modelDef.contextWindowDefault,
-          maxTokens: modelDef.maxTokens,
-          params: modelDef.params,
-          headers: undefined,
-          compat: modelDef.compat,
-        } as Model);
+        this.models.push(this.createRuntimeModel(providerName, config, modelDef, api));
       }
 
       if (config.oauth?.modifyModels) {

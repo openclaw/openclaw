@@ -13,8 +13,8 @@ import {
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { captureDiagnosticToolProgress } from "../logging/diagnostic-run-activity.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
-import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { copyBeforeToolCallWrapperMetadata } from "./agent-tool-metadata.js";
 import {
   captureAgentToolExecutionBudget,
@@ -27,12 +27,12 @@ import {
 } from "./agent-tools.before-tool-call.decision.js";
 import {
   buildToolContentPrivateData,
-  emitSkillUsedDiagnostic,
   emitToolBlockedSecurityEvent,
   findSkillUsageMatch,
   prepareToolTerminalPresentation,
   reconcileLoopCallExecutionParams,
   recordLoopOutcome,
+  recordSkillUsed,
   rememberPendingTerminalPresentation,
   resolveToolDiagnosticIdentity,
   resolveToolErrorDiagnostic,
@@ -502,6 +502,7 @@ export function wrapToolWithBeforeToolCallHook(
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
+      const recordProgress = captureDiagnosticToolProgress(eventBase);
       recordToolExecutionStarted(toolCallId, ctx?.runId);
       const liveness = startToolExecutionLiveness(eventBase, hookOptions.emitDiagnostics, signal);
       const startedAt = Date.now();
@@ -543,25 +544,16 @@ export function wrapToolWithBeforeToolCallHook(
           rememberPendingTerminalPresentation(preparedTerminalPresentation, ctx?.runId, toolCallId);
         }
         const terminalDiagnostic = resolveToolResultTerminalDiagnostic(result, durationMs);
+        if (terminalDiagnostic.type === "tool.execution.completed" && !signal?.aborted) {
+          recordProgress?.();
+        }
         const skillMatch = findSkillUsageMatch({
           toolName: normalizedToolName,
           toolParams: executeParams,
           ctx,
         });
         if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
-          recordRunSkillUsage({
-            runId: ctx?.runId,
-            name: skillMatch.skillName,
-            source: skillMatch.skillSource,
-            activation: skillMatch.activation,
-            ...(skillMatch.skillFile ? { skillFile: skillMatch.skillFile } : {}),
-          });
-          emitSkillUsedDiagnostic({
-            ctx,
-            match: skillMatch,
-            toolName: normalizedToolName,
-            toolCallId,
-          });
+          recordSkillUsed({ ctx, match: skillMatch, toolName: normalizedToolName, toolCallId });
         }
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(

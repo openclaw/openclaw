@@ -77,13 +77,7 @@ export function requireVisibleSuggestionRole(params: {
     );
     return null;
   }
-  const role =
-    params.sharing?.roleForTarget(target) ??
-    resolveSessionSharingRole({
-      client: params.client,
-      cfg: params.cfg,
-      target,
-    });
+  const role = sharing?.roleForTarget(target) ?? resolveSessionSharingRole({ client, cfg, target });
   const incognitoError = authorizeIncognitoSessionTarget({
     client: params.client,
     sessionKey: params.sessionKey,
@@ -96,13 +90,9 @@ export function requireVisibleSuggestionRole(params: {
   if (resolveSessionVisibility(target.entry) !== "draft") {
     return role;
   }
-  const error = params.sharing
-    ? params.sharing.authorizeTarget(target)
-    : authorizeSessionSharingTarget({
-        client: params.client,
-        cfg: params.cfg,
-        target,
-      });
+  const error = sharing
+    ? sharing.authorizeTarget(target)
+    : authorizeSessionSharingTarget({ client, cfg, target });
   if (!error) {
     return role;
   }

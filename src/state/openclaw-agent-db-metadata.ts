@@ -2,8 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import {
-  getSqliteReadOperationRevision,
-  type SqliteReadOperationRevision,
+  getSqliteReadScopeRevision,
+  type SqliteReadScopeRevision,
 } from "../infra/sqlite-schema-facts.js";
 import { classifySqliteTableReadError, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
@@ -15,19 +15,14 @@ export type ExistingAgentSchemaMeta = {
 
 const admittedMetadata = new WeakMap<
   DatabaseSync,
-  SqliteReadOperationRevision & { metadata: ExistingAgentSchemaMeta }
+  { revision: SqliteReadScopeRevision; metadata: ExistingAgentSchemaMeta }
 >();
 
 /** Read ownership metadata without loading runtime schema or migration owners. */
 export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSchemaMeta | null {
-  const revision = getSqliteReadOperationRevision(db);
+  const revision = getSqliteReadScopeRevision(db);
   const admitted = admittedMetadata.get(db);
-  if (
-    revision &&
-    admitted?.schema === revision.schema &&
-    admitted.dataVersion === revision.dataVersion &&
-    admitted.mutationRevision === revision.mutationRevision
-  ) {
+  if (revision && admitted?.revision === revision) {
     return { ...admitted.metadata };
   }
   if (!tableExists(db, "schema_meta")) {
@@ -56,6 +51,7 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
     schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
   };
   // Ownership is row data: schema facts alone cannot witness a foreign owner change.
+  // A fresh snapshot with the same data/mutation revisions can reuse these admitted facts.
   if (revision) {
     if (!admitted) {
       // Weak reader references can keep closed keys alive through a long microtask drain.
@@ -64,7 +60,7 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
         unregister();
       });
     }
-    admittedMetadata.set(db, { ...revision, metadata: { ...metadata } });
+    admittedMetadata.set(db, { revision, metadata: { ...metadata } });
   }
   return metadata;
 }

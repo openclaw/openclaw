@@ -2460,7 +2460,7 @@ describe("ci workflow guards", () => {
       const dockerLanes = expectDefined(manifest.outputs.docker_seed_lanes, "Docker lanes").split(
         " ",
       );
-      expect(dockerLanes).toHaveLength(release ? 6 : 1);
+      expect(dockerLanes).toHaveLength(release ? 5 : 1);
       expect(dockerLanes[0]).toBe("published-upgrade-survivor");
       const workflow = readCiWorkflow();
       const context = {
@@ -2527,6 +2527,10 @@ describe("ci workflow guards", () => {
         `#!${testNodeExecPath}`,
         'require("node:fs").appendFileSync(process.env.COMMANDS, JSON.stringify(process.argv.slice(2)) + "\\n");',
       ]);
+      writeExecutable(path.join(bin, "python3"), [
+        `#!${testNodeExecPath}`,
+        'require("node:fs").appendFileSync(process.env.RESTART_COMMANDS, JSON.stringify(process.argv.slice(2)) + "\\n");',
+      ]);
       const job = readCiWorkflow().jobs["ios-build"];
       for (const name of [
         "Run focused iOS voice cleanup simulator tests",
@@ -2537,18 +2541,31 @@ describe("ci workflow guards", () => {
         for (const tier of ["main", "full"]) {
           const commandFile = path.join(root, "commands.jsonl");
           writeFileSync(commandFile, "");
+          const restartFile = path.join(root, "restart-commands.jsonl");
+          writeFileSync(restartFile, "");
           const result = runWorkflowShellScript(step.run, {
             cwd: root,
             env: {
               ...process.env,
               PATH: `${bin}${path.delimiter}${process.env.PATH}`,
               COMMANDS: commandFile,
+              RESTART_COMMANDS: restartFile,
               IOS_CI_PHASE: "tests",
               IOS_MAIN_TIER: String(tier === "main"),
               IOS_SIMULATOR_ID: "fixture-phone",
             },
           });
           expect(result.status, result.stderr).toBe(0);
+          const restarts = readFileSync(restartFile, "utf8")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as string[]);
+          expect(restarts).toEqual(
+            name.includes("lifecycle")
+              ? [["scripts/ios-access-restart-proof.py", "fixture-phone"]]
+              : [],
+          );
           const calls = readFileSync(commandFile, "utf8")
             .trim()
             .split("\n")
@@ -3518,7 +3535,7 @@ describe("ci workflow guards", () => {
       expect(result.outputs.run_docker_seed_e2e).toBe(String(options.expected));
       expect(result.outputs.docker_seed_lanes).toBe(
         options.eventName === "workflow_dispatch" && !options.releaseGate && !options.legacyPlanner
-          ? "published-upgrade-survivor mcp-channels cron-mcp-cleanup mcp-code-mode-gateway update-channel-switch fleet-cache"
+          ? "published-upgrade-survivor mcp-channels cron-mcp-cleanup mcp-code-mode-gateway update-channel-switch"
           : options.expected
             ? "published-upgrade-survivor"
             : "",
@@ -9118,7 +9135,7 @@ describe("ci workflow guards", () => {
     expect(current.outputs.run_qa_smoke_ci).toBe("true");
     expect(current.outputs.run_docker_seed_e2e).toBe("true");
     expect(current.outputs.docker_seed_lanes).toBe(
-      "published-upgrade-survivor mcp-channels cron-mcp-cleanup mcp-code-mode-gateway update-channel-switch fleet-cache",
+      "published-upgrade-survivor mcp-channels cron-mcp-cleanup mcp-code-mode-gateway update-channel-switch",
     );
     expect(current.outputs.run_sqlite_session_lifecycle).toBe("true");
     expect(current.outputs.run_channel_contracts_shards).toBe("true");

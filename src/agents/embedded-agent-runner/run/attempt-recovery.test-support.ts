@@ -164,6 +164,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
   if (scenario.retryAvailable === false) {
     failoverRetryController.observeAttempt({ providerRetryMaxRetries: 0 });
   }
+  vi.spyOn(failoverRetryController, "advanceAuthProfile");
   vi.spyOn(failoverRetryController, "maybeMarkAuthProfileFailure");
   const onAgentEvent = vi.fn();
   const recover = () =>

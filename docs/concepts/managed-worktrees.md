@@ -205,6 +205,8 @@ OpenClaw creates branch `openclaw/<name>` at the requested base ref. Without a b
 
 Git worktree registration, ordinary checkout removal, and source materialization during creation or snapshot restore each have a five-minute timeout, including a creation retry from local `HEAD`. Fetching missing objects for the size estimate uses the same five-minute budget. Other managed-worktree Git commands keep their two-minute timeout, except automatic Git maintenance, which gets 30 minutes. Explicit interrupted-removal recovery joins deletion without a deadline. The separate `.openclaw/worktree-setup.sh` step also keeps its own two-minute timeout.
 
+Background Git maintenance and pack-index repair use only locally available objects. They never fetch missing objects from a partial clone's promisor remote; explicit fetching remains responsible for downloading those objects.
+
 ## Capacity and disk space
 
 Creation and restoration enforce the [count and eviction policy](#capacity-and-eviction) before allocating files. Disk admission independently measures every affected volume.
@@ -358,11 +360,13 @@ Cleanup progress and JSON output report `eligibleCount` (removal candidates that
 
 Idle collection checks registry eligibility, remembered dispositions, owner activity, and run leases before requesting Git inventories. It classifies candidates serially and shares one preliminary lock and branch inventory per repository. Known provisioning ledgers use filesystem checks without Git setup. Ordinary removal rereads the current lock and HEAD and verifies worktree activity under its allocation lease. Cap eviction ranks branch history in the Git worker and checks live removal authority again before deletion. Preliminary inventories never authorize removal. If cleanup cannot acquire the lease, it preserves orphan candidates and expired snapshots for a later pass.
 
-Each cleanup pass batches session-owner activity reads without loading saved prompts or full session entries. Cleanup still rechecks the current session identity, activity, archive state, and worktree binding immediately before mutations. Unreadable or uncertain owner state preserves the checkout.
+Each cleanup pass batches session-owner activity and worker-placement reads in database workers without loading saved prompts or full session entries. Owner classification yields between batches. Cleanup still rechecks the current session identity, activity, archive state, worktree binding, and worker placement immediately before mutations. Unreadable or uncertain owner state preserves the checkout.
 
 Cleanup remembers protected checkouts' deferral reasons and fingerprints instead of repeating unchanged inspections. Managed activity, registry lifecycle changes, and observed checkout or HEAD changes invalidate those decisions. Run `openclaw worktrees gc --retry-deferred` to force another inspection after repairing files or Git metadata. Remembered idle-cleanup protection never exempts a checkout from cap eviction. The nullable derived-state column is added on database admission without a schema-version change; older builds ignore these dispositions and resume their previous inspection behavior. Snapshot retention remains 30 days.
 
 A Git timeout records its removal stage, elapsed milliseconds, attempt count, and next retry time in the existing revision-bound cleanup disposition. Automatic retries wait two hours initially, then double up to 24 hours; passes inside that window skip checkout inventory work. This backoff survives Gateway restarts. An explicit `--retry-deferred` bypasses the wait, while owner activity or a new registry lifecycle invalidates the old disposition. Existing rows require no migration; builds that understand only the deferral reason retain their existing protection behavior. Slow-removal log lines include the checkout path, stage durations, tracked and non-ignored untracked counts when available, and the deferral decision. A timeout during deletion preserves the pending snapshot and prevents a new run from using the potentially partial checkout; use the recovery procedure below.
+
+Missing or corrupt Git objects also use this persisted backoff. One failed idle-cleanup attempt pauses further idle snapshots and Git maintenance for the shared repository, including sibling checkouts in the same sweep. Cleanup reports the repository needing repair and preserves the checkouts. Restore missing objects or repair the clone, then run `openclaw worktrees gc --retry-deferred` to retry immediately. The existing cleanup revision invalidates the remembered failure when its worktree's owner or lifecycle changes; no database migration is required. Explicit removal and capacity eviction retain their existing policies.
 
 Listing and cleanup mark a missing checkout as removed only if its recorded path, activity, and repository identity still match the earlier check. A restore or repository repair that completes during that check preserves the newer live record.
 
@@ -685,6 +689,14 @@ The bundled [Workboard plugin](/plugins/workboard) can materialize a card worksp
 ```
 
 `path` identifies the source git checkout. `branch` is optional and becomes the base ref. For a full-host caller, Workboard creates or reuses `wb-<card-id>`, runs the subagent with the managed checkout as its working directory, and writes the resolved path and branch back to the card. Gateway clients need `operator.admin` for full-host materialization. On run end, Workboard removes the checkout only when it is provably lossless; dirty work or unpushed commits remain available.
+
+A card reuses its retained checkout across dispatches, including its original base
+ref and local work. If you re-specify the card with a different explicit base ref
+while that checkout still exists, dispatch reports the mismatch before starting a
+worker and preserves the checkout. It does not reset or rebase existing work, even
+when the checkout is clean. Use the original base ref to continue that work, or
+create a new card to start from a different base. Reusing the same ref, or omitting
+it, does not refresh the checkout when a branch name advances.
 
 For a workspace-bound caller, `path` and the repository root must exactly match the target agent workspace. Workboard then runs directly in that directory and records a directory workspace instead of host-materializing a managed worktree. The target must use a writable, non-shared Docker sandbox for the same workspace, its live container hash must match the requested mounts and policy, and it must not expose elevated execution, host control, host-wide sessions, persisted host/node execution, or unclassified plugin and MCP tools. If the target policy or live container is broader, dispatch leaves the card unclaimed and reports the incompatible state.
 

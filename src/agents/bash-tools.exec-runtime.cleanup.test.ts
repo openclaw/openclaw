@@ -1,9 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  cancelExecRequestOwners,
+  captureExecRequestOwners,
+  withExecRequestTurn,
+} from "../infra/exec-request-context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { captureExecRequestCancellation } from "./bash-process-control.js";
 import {
   acknowledgeNotifyOnExit,
+  deleteSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
   markBackgrounded,
@@ -25,7 +32,8 @@ const supervisorMock = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: requestHeartbeatMock,
 }));
-vi.mock("../infra/system-events.js", () => ({
+vi.mock(import("../infra/system-events.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   enqueueSystemEventWithReceipt: enqueueSystemEventWithReceiptMock,
 }));
 vi.mock("../process/supervisor/index.js", () => ({
@@ -59,12 +67,45 @@ function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]
 }
 
 it.each([
-  { reason: "manual-cancel" as const, cleanupFails: false, duringFinalize: false },
-  { reason: "overall-timeout" as const, cleanupFails: true, duringFinalize: false },
-  { reason: "manual-cancel" as const, cleanupFails: false, duringFinalize: true },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: false,
+    duringFinalize: false,
+    requestStop: "none" as const,
+  },
+  {
+    reason: "overall-timeout" as const,
+    cleanupFails: true,
+    duringFinalize: false,
+    requestStop: "none" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: false,
+    duringFinalize: true,
+    requestStop: "none" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: false,
+    duringFinalize: true,
+    requestStop: "capture" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: true,
+    duringFinalize: true,
+    requestStop: "capture" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: true,
+    duringFinalize: true,
+    requestStop: "direct" as const,
+  },
 ])(
-  "starts and joins targeted sandbox cleanup for $reason (duringFinalize=$duringFinalize)",
-  async ({ reason, cleanupFails, duringFinalize }) => {
+  "starts and joins targeted sandbox cleanup for $reason (duringFinalize=$duringFinalize, requestStop=$requestStop, cleanupFails=$cleanupFails)",
+  async ({ reason, cleanupFails, duringFinalize, requestStop }) => {
     const termination = createDeferred();
     const artifactFinalization = createDeferred();
     const artifactsEntered = createDeferred();
@@ -124,6 +165,20 @@ it.each([
         wait: () => otherExit.promise,
       }));
     const originalSource = new AbortController();
+    const requestIdentity = {
+      runId: "sandbox-request-stop",
+      sessionKey: "agent:main:targeted-cleanup",
+    };
+    const request =
+      requestStop !== "none"
+        ? await withExecRequestTurn({ identity: requestIdentity }, async () => {
+            const owner = captureExecRequestOwners(requestIdentity)?.[0];
+            if (!owner) {
+              throw new Error("Expected the sandbox command's request owner");
+            }
+            return { owner, cancellation: captureExecRequestCancellation(requestIdentity) };
+          })
+        : undefined;
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
@@ -133,7 +188,12 @@ it.each([
     });
     const guest = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:targeted-cleanup", operatorAuthority: authority },
-      () => runTestExecProcess({ scopeKey: "targeted-cleanup:guest", sandbox }),
+      () =>
+        runTestExecProcess({
+          scopeKey: "targeted-cleanup:guest",
+          sandbox,
+          requestOwners: request ? [request.owner] : undefined,
+        }),
     );
     const other = await runTestExecProcess({ sandbox: otherSandbox });
     markBackgrounded(guest.session);
@@ -147,7 +207,19 @@ it.each([
       if (duringFinalize) {
         guestExit.resolve(createRunExit());
         await artifactsEntered.promise;
-        originalSource.abort(new Error("original invitation revoked during artifact finalization"));
+        if (request) {
+          if (requestStop === "capture") {
+            expect(request.cancellation.cancel()).toBe(true);
+          } else {
+            cancelExecRequestOwners([request.owner]);
+          }
+          expect(originalSource.signal.aborted).toBe(false);
+          expect(guest.session.requestCancelled).toBe(true);
+        } else {
+          originalSource.abort(
+            new Error("original invitation revoked during artifact finalization"),
+          );
+        }
       } else if (reason === "manual-cancel") {
         guest.kill();
       } else {
@@ -180,13 +252,25 @@ it.each([
       }
       termination.resolve();
       const outcome = await joined;
-      expect(outcome.status).toBe(duringFinalize ? "completed" : "failed");
+      expect(outcome.status).toBe(duringFinalize && !cleanupFails ? "completed" : "failed");
       expect(sandbox.terminate).toHaveBeenCalledOnce();
       expect(sandbox.finalizeExec).toHaveBeenCalledOnce();
       expect(releaseSource).toHaveBeenCalledOnce();
       if (cleanupFails) {
         expect(guest.session.finalizationFailed).toBe(true);
         expect(outcome.aggregated).toContain(cleanupError.message);
+      }
+      if (request) {
+        // The command registered after capture; output eviction cannot erase its cleanup verdict.
+        deleteSession(guest.session.id);
+        expect(getFinishedSession(guest.session.id)).toBeUndefined();
+        if (cleanupFails) {
+          await expect(request.cancellation.settle()).rejects.toThrow(
+            "command cleanup could not be confirmed",
+          );
+        } else {
+          await expect(request.cancellation.settle()).resolves.toBeUndefined();
+        }
       }
       expect(other.session.exited).toBe(duringFinalize);
       otherExit.resolve(createRunExit());

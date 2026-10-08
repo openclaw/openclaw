@@ -72,6 +72,7 @@ export function createProgressState(
 ): TelegramProgressStateSlice {
   const progressCompositor = createChannelProgressDraftCompositor({
     preparedItems: true,
+    showWorkStatus: true,
     entry: config.telegramCfg,
     mode: config.streamMode,
     active: Boolean(draftState.answerLane.stream),
@@ -102,31 +103,23 @@ export function createProgressState(
     deleteCurrent: async () => await retireAnswerLane(getTurn(), "clear"),
   });
   const draftLanes = [draftState.answerLane, draftState.reasoningLane];
+  const settleDraftLanes = async (method: "flush" | "discard" | "clear") => {
+    for (const lane of draftLanes) {
+      // Accepted blocks and pagination pages retain custody during cleanup.
+      if (method !== "clear" || !lane.finalized) {
+        await lane.stream?.[method]();
+      }
+    }
+  };
   const previewLifecycle = createLivePreviewLifecycle<ReplyPayload, number>({
     draft: draftLanes.some((lane) => lane.stream)
       ? {
-          flush: async () => {
-            for (const lane of draftLanes) {
-              await lane.stream?.flush();
-            }
-          },
+          flush: () => settleDraftLanes("flush"),
           id: () =>
             draftState.answerLane.stream?.messageId() ??
             draftState.reasoningLane.stream?.messageId(),
-          discardPending: async () => {
-            for (const lane of draftLanes) {
-              await lane.stream?.discard();
-            }
-          },
-          clear: async () => {
-            for (const lane of draftLanes) {
-              // Accepted blocks and pagination pages have physical custody independent
-              // of whether this turn's final answer succeeded.
-              if (!lane.finalized) {
-                await lane.stream?.clear();
-              }
-            }
-          },
+          discardPending: () => settleDraftLanes("discard"),
+          clear: () => settleDraftLanes("clear"),
         }
       : undefined,
     cleanupUndelivered: true,
@@ -222,6 +215,7 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
   };
   const compositor = createChannelProgressDraftCompositor({
     preparedItems: true,
+    showWorkStatus: true,
     entry: turn.telegramCfg,
     mode: "progress",
     active: true,

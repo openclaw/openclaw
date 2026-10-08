@@ -39,49 +39,41 @@ export async function persistReplySessionEntry(
   try {
     persisted = await patchSessionEntryCore(
       { sessionKey: params.sessionKey, storePath: params.storePath },
-      (_entry, context) => {
-        commitEntry = context.existingEntry ?? params.initialEntry;
-        if (!context.existingEntry) {
-          if (params.allowCreate !== true) {
-            lifecycleError = resolveSessionWorkStartError(params.sessionKey, undefined, {
-              expectedSessionId: params.initialEntry.sessionId,
-            });
-            return null;
-          }
+      (_entry, { existingEntry }) => {
+        commitEntry = existingEntry ?? params.initialEntry;
+        if (!existingEntry && params.allowCreate === true) {
           return params.entry;
         }
-        lifecycleError = resolveSessionWorkStartError(params.sessionKey, context.existingEntry, {
+        lifecycleError = resolveSessionWorkStartError(params.sessionKey, existingEntry, {
           expectedSessionId: params.initialEntry.sessionId,
         });
+        if (!existingEntry) {
+          return null;
+        }
         if (lifecycleError) {
-          lifecycleEntry = context.existingEntry;
+          lifecycleEntry = existingEntry;
           return null;
         }
         if (
           params.requireModelSelectionUnlocked === true &&
-          context.existingEntry.modelSelectionLocked === true
+          existingEntry.modelSelectionLocked === true
         ) {
-          lockedEntry = context.existingEntry;
+          lockedEntry = existingEntry;
           return null;
         }
-        if (
-          sessionSnapshotTouchedFieldsConflict({
-            initial: params.initialEntry,
-            next: params.entry,
-            current: context.existingEntry,
-            touchedFields: params.touchedFields,
-          })
-        ) {
+        const changes = {
+          initial: params.initialEntry,
+          next: params.entry,
+          current: existingEntry,
+          touchedFields: params.touchedFields,
+          reassertLiveModelSwitchPending: params.reassertLiveModelSwitchPending,
+        };
+        if (sessionSnapshotTouchedFieldsConflict(changes)) {
           return null;
         }
         // Reply flows persist broad snapshots. Project only reply-owned changes
         // so concurrent lifecycle, policy, and privacy updates remain authoritative.
-        return mergeSessionSnapshotChanges({
-          initial: params.initialEntry,
-          next: params.entry,
-          current: context.existingEntry,
-          reassertLiveModelSwitchPending: params.reassertLiveModelSwitchPending,
-        });
+        return mergeSessionSnapshotChanges(changes);
       },
       {
         fallbackEntry: params.entry,

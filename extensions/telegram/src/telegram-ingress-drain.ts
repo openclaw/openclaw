@@ -310,6 +310,12 @@ type CreateTelegramIngressMonitorParams = {
  * committed spool append into the shared pump.
  */
 export function createTelegramIngressMonitor(params: CreateTelegramIngressMonitorParams) {
+  const inspect: Parameters<typeof createChannelIngressMonitor>[0]["inspect"] = (update, context) =>
+    inspectTelegramSpooledUpdate(
+      update,
+      params.botInfo,
+      context.phase === "claim" ? context.claimedLaneKey : undefined,
+    );
   return createChannelIngressMonitor<
     unknown,
     TelegramSpooledUpdatePayload,
@@ -320,21 +326,13 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
         prepareTelegramPollAnswerContext({ update, accountId: params.accountId });
       }
-      return inspectTelegramSpooledUpdate(
-        update,
-        params.botInfo,
-        context.phase === "claim" ? context.claimedLaneKey : undefined,
-      );
+      return inspect(update, context);
     },
     inspectAsync: async (update, context) => {
       if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
         await prepareTelegramPollAnswerContextAsync({ update, accountId: params.accountId });
       }
-      return inspectTelegramSpooledUpdate(
-        update,
-        params.botInfo,
-        context.phase === "claim" ? context.claimedLaneKey : undefined,
-      );
+      return inspect(update, context);
     },
     payload: {
       version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,

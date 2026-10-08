@@ -170,19 +170,10 @@ export async function writeMemoryCoreWorkspaceEntry<T>(
   );
 }
 
-export async function clearMemoryCoreWorkspaceNamespace(params: {
-  namespace: string;
-  workspaceDir: string;
-}): Promise<void> {
-  const store = openWorkspaceStore(params.namespace);
-  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
-  let completed = 0;
-  for (const entry of await readWorkspaceStoreEntries(store, workspaceKey)) {
-    await store.delete(entry.key);
-    if (++completed % WORKSPACE_STATE_YIELD_EVERY === 0) {
-      await yieldToEventLoop();
-    }
-  }
+export async function clearMemoryCoreWorkspaceNamespace(
+  params: MemoryCoreWorkspaceParams,
+): Promise<void> {
+  await writeMemoryCoreWorkspaceEntries({ ...params, entries: [] });
 }
 
 export async function deleteMemoryCoreWorkspaceEntry(params: {
