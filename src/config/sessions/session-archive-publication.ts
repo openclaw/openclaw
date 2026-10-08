@@ -78,7 +78,8 @@ export function publishSessionStateArchivesInWorker(params: {
       for (const plan of plans) {
         if (
           plan.agentId !== database.agentId ||
-          nativeLocation === undefined || path.resolve(plan.databasePath) !== path.resolve(nativeLocation)
+          nativeLocation === undefined ||
+          path.resolve(plan.databasePath) !== path.resolve(nativeLocation)
         ) {
           throw new Error("Session archive publication changed its captured database owner");
         }

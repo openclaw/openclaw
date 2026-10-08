@@ -225,7 +225,7 @@ describe("agent deletion database cleanup authority", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.statePath("retirement.sqlite");
       const cfg = {
-        agents: { entries: { worker: {}, kept: {} } },
+        agents: { ownership: "explicit" as const, entries: { worker: {}, kept: {} } },
         session: { store: storePath, maintenance: { mode: "warn" as const } },
       };
       await state.writeConfig(cfg);
@@ -238,6 +238,7 @@ describe("agent deletion database cleanup authority", () => {
         env: state.env,
       };
       const aged = { ...removed, agentId: "kept", sessionKey: "agent:kept:aged" };
+      const disposable = { ...aged, sessionKey: "agent:kept:hook:maintenance" };
       runOpenClawAgentWriteTransaction(() => {
         for (let index = 0; index < 64; index++) {
           replaceSessionEntrySync(
@@ -249,12 +250,16 @@ describe("agent deletion database cleanup authority", () => {
           sessionId: "aged-survivor",
           updatedAt: Date.now() - 3 * 86_400_000,
         });
+        replaceSessionEntrySync(disposable, {
+          sessionId: "maintenance-hook",
+          updatedAt: Date.now() - 3 * 86_400_000,
+        });
         appendTranscriptEventSync(
           { ...removed, sessionId: "retired-0" },
           { type: "proof", data: "primary archive proof" },
         );
         appendTranscriptEventSync(
-          { ...aged, sessionId: "aged-survivor" },
+          { ...disposable, sessionId: "maintenance-hook" },
           { type: "proof", data: "maintenance archive proof" },
         );
       }, options);
@@ -295,9 +300,14 @@ describe("agent deletion database cleanup authority", () => {
           { env: state.env },
         );
         expect(loadSessionEntryReadOnly(removed)).toBeUndefined();
-        expect(loadSessionEntryReadOnly(aged)).toBeUndefined();
+        expect(loadSessionEntryReadOnly(aged)).toMatchObject({
+          sessionId: "aged-survivor",
+          archiveReason: "age-retention",
+          archivedAt: expect.any(Number),
+        });
+        expect(loadSessionEntryReadOnly(disposable)).toBeUndefined();
         expectPublishedArchive(storePath, "retired-0", "primary archive proof");
-        expectPublishedArchive(storePath, "aged-survivor", "maintenance archive proof");
+        expectPublishedArchive(storePath, "maintenance-hook", "maintenance archive proof");
         expect(
           await warnings.findText("SQLite session maintenance cleanup failed"),
         ).toBeUndefined();
