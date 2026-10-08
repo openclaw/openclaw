@@ -230,7 +230,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     params.modelRoutingProvenance?.stage === "fallback" ||
     Boolean(fallbackReason);
   const attemptContextEngine =
-    nativeModelOwned && contextEngine.info.id === "legacy" ? undefined : contextEngine;
+    nativeModelOwned && contextEngine?.info.id === "legacy" ? undefined : contextEngine;
   const attemptAbortController = new AbortController();
   input.setPostCompactionAbortController(attemptAbortController);
   const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
