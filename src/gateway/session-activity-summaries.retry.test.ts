@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -109,6 +109,14 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       prepareModel: prepare,
       completeModel: complete,
     });
+  const restartWithClock = async () => {
+    await service.dispose();
+    await scheduler.stop();
+    const time = createGatewaySchedulerClock(Date.now());
+    scheduler = createTestGatewayScheduler(time.clock);
+    service = createService();
+    return time;
+  };
 
   beforeEach(async () => {
     testState = await createOpenClawTestState({ scenario: "minimal" });
@@ -378,14 +386,88 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     },
   );
 
+  it.for(["wake", "terminal", "ensure", "archive", "unarchive"] as const)(
+    "coalesces the first automatic recap without postponing its wake (trigger: %s)",
+    async (trigger, { signal }) => {
+      const time = await restartWithClock();
+      const target = await addSession(1);
+      if (trigger === "unarchive") {
+        await patchSessionEntryCore(scope(target), () => ({ archivedAt: 1 }), {
+          preserveActivity: true,
+        });
+      }
+      const published = createDeferred();
+      changed.mockImplementation(() => {
+        if (view(target)?.state === "current") {
+          published.resolve();
+        }
+      });
+      fakeTime();
+      service.handleTranscript({ target: scope(target) });
+      const refreshAt = time.clock.now() + 90_000;
+      expect(time.armedAtMs).toBe(refreshAt);
+      expect(view(target)?.state).toBe("updating");
+
+      await time.advanceBy(30_000);
+      await appendWork(target);
+      service.handleTranscript({ target: scope(target) });
+      expect(time.armedAtMs).toBe(refreshAt);
+      await time.advanceTo(refreshAt - 1);
+      for (let index = 0; index < 10; index += 1) {
+        service.handleTranscript({ target: scope(target) });
+      }
+      expect(time.armedAtMs).toBe(refreshAt);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+
+      if (trigger === "wake") {
+        await time.advanceBy(1);
+      } else if (trigger === "terminal") {
+        service.handleEvent({
+          runId: "first-recap-run",
+          sessionKey: target.key,
+          agentId: target.agentId,
+          seq: 1,
+          ts: time.clock.now(),
+          stream: "lifecycle",
+          data: { phase: "end" },
+        });
+      } else if (trigger === "ensure") {
+        expect(service.ensure(target)).toMatchObject({ state: "updating" });
+      } else {
+        await patchSessionEntryCore(
+          scope(target),
+          () => ({ archivedAt: trigger === "archive" ? time.clock.now() : undefined }),
+          { preserveActivity: true },
+        );
+        service.handleLifecycle({
+          sessionKey: target.key,
+          agentId: target.agentId,
+          reason: trigger,
+        });
+      }
+      await withinTest(published.promise, signal);
+      expect(time.clock.now()).toBe(trigger === "wake" ? refreshAt : refreshAt - 1);
+      expect(view(target)).toMatchObject({ state: "current", text: result.text });
+      expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
+        coveredMessages: 2,
+        totalMessages: 2,
+      });
+      expect(JSON.parse(complete.mock.calls[0]![0].prompt)).toMatchObject({
+        previousRecap: "",
+        messages: ["user: Request 1", "assistant: Verified additional work."],
+      });
+      await time.advanceTo(refreshAt + 90_000);
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(time.armedAtMs).toBeNull();
+    },
+  );
+
   it.each(["complete", "shutdown", "continuation"] as const)(
     "coalesces a late refresh wake and joins its model work on %s",
     async (outcome) => {
-      await service.dispose();
-      await scheduler.stop();
-      const time = createGatewaySchedulerClock(Date.now());
-      scheduler = createTestGatewayScheduler(time.clock);
-      service = createService();
+      const time = await restartWithClock();
       const target = await addSession(1);
       const initial = createDeferred();
       changed.mockImplementation(() => {
@@ -496,9 +578,9 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     const overflow = targets[256]!;
     service.ensure(overflow);
     await vi.waitFor(() => expect(view(overflow)?.state).toBe("current"));
-    await service.dispose();
-    service = createService();
+    const time = await restartWithClock();
     complete.mockClear();
+    prepare.mockClear();
     const first = createDeferred<typeof result>();
     const remaining = createDeferred<typeof result>();
     const drained = createDeferred();
@@ -532,6 +614,17 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       expect(respond.mock.calls.at(-1)?.[0]).toBe(true);
     };
     try {
+      for (const target of targets.slice(0, 256)) {
+        service.handleTranscript({ target: scope(target) });
+      }
+      service.handleTranscript({ target: scope(overflow) });
+      expect(targets.slice(0, 256).every((target) => view(target)?.state === "updating")).toBe(
+        true,
+      );
+      expect(time.armedAtMs).toBe(time.clock.now() + 90_000);
+      expect(view(overflow)?.state).toBe("current");
+      expect(prepare).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
       for (let index = 0; index < 100; index += 20) {
         await ensure(targets.slice(index, index + 20));
       }

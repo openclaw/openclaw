@@ -90,7 +90,7 @@ type Tracked = ActivitySummaryTarget & {
   inFlight: boolean;
   dirty: boolean;
   immediate: boolean;
-  lastStartedAt: number;
+  refreshNotBefore: number;
   retryAt: number;
   windowStart: number;
   calls: number;
@@ -231,7 +231,8 @@ export function createSessionActivitySummaries(deps: {
       inFlight: false,
       dirty: false,
       immediate: false,
-      lastStartedAt: 0,
+      // Anchor the first window at admission; transcript notifications must not postpone it.
+      refreshNotBefore: now() + REFRESH_MS,
       retryAt: 0,
       windowStart: now(),
       calls: 0,
@@ -296,7 +297,7 @@ export function createSessionActivitySummaries(deps: {
     state.readyAt = Math.max(
       now(),
       state.retryAt,
-      state.immediate ? 0 : state.lastStartedAt + REFRESH_MS,
+      state.immediate ? 0 : state.refreshNotBefore,
       state.calls >= MAX_CALLS_PER_HOUR ? state.windowStart + HOUR_MS : 0,
     );
     publish(state, "updating");
@@ -356,7 +357,7 @@ export function createSessionActivitySummaries(deps: {
         text = text.slice(0, -OMISSION_NOTICE.length).trimEnd();
       }
       if (notes.length || (restyle && text)) {
-        state.lastStartedAt = now();
+        state.refreshNotBefore = now() + REFRESH_MS;
         state.calls += 1;
         const controller = new AbortController();
         state.controller = controller;
