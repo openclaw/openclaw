@@ -114,21 +114,29 @@ type ChannelInstallParams = {
   timeoutMs?: number;
 };
 
-function resolveCoreBoundNpmSpec(params: ChannelInstallParams): string | undefined {
-  const target = resolveDefaultNpmSpec(params.spec);
-  if (target && params.officialPackageName === target.name) {
-    const coreVersion = params.coreVersion?.trim();
-    if (!coreVersion || !isExactSemverVersion(coreVersion)) {
-      const policy =
-        params.updateChannel === "extended-stable" ? "Extended-stable" : "Version-bound";
-      throw new Error(
-        `${policy} plugin resolution for ${target.name} requires an exact core version.`,
-      );
+function resolveCoreBoundNpmSpec(
+  params: ChannelInstallParams,
+  preferCoreVersion = false,
+): string | undefined {
+  if (
+    params.updateChannel === "extended-stable" ||
+    (params.updateChannel === "stable" && (params.versionBoundToCore || preferCoreVersion))
+  ) {
+    const target = resolveDefaultNpmSpec(params.spec);
+    if (target && params.officialPackageName === target.name) {
+      const coreVersion = params.coreVersion?.trim();
+      if (!coreVersion || !isExactSemverVersion(coreVersion)) {
+        const policy =
+          params.updateChannel === "extended-stable" ? "Extended-stable" : "Version-bound";
+        throw new Error(
+          `${policy} plugin resolution for ${target.name} requires an exact core version.`,
+        );
+      }
+      const installVersion = params.versionBoundToCore
+        ? resolveOpenClawReleaseCohortVersion(coreVersion)
+        : coreVersion;
+      return `${target.name}@${installVersion}`;
     }
-    const installVersion = params.versionBoundToCore
-      ? resolveOpenClawReleaseCohortVersion(coreVersion)
-      : coreVersion;
-    return `${target.name}@${installVersion}`;
   }
   return undefined;
 }
@@ -136,12 +144,7 @@ function resolveCoreBoundNpmSpec(params: ChannelInstallParams): string | undefin
 export async function resolveNpmInstallSpecsForUpdateChannel(
   params: ChannelInstallParams,
 ): Promise<ChannelInstallSpecs> {
-  const selectedSpec =
-    params.installSpecOverride ??
-    (params.updateChannel === "extended-stable" ||
-    (params.updateChannel === "stable" && params.versionBoundToCore)
-      ? resolveCoreBoundNpmSpec(params)
-      : undefined);
+  const selectedSpec = params.installSpecOverride ?? resolveCoreBoundNpmSpec(params);
   const target = parseRegistryNpmSpec(params.spec);
   const selector = target?.selector?.toLowerCase();
   if (
@@ -201,22 +204,29 @@ export function resolveClawHubInstallSpecsForUpdateChannel(params: {
   officialPackageName?: string;
   coreVersion?: string;
   versionBoundToCore?: boolean;
+  /** Managed installs may prefer the host build; updates retain their registry target. */
+  preferCoreVersion?: boolean;
 }): ChannelInstallSpecs {
   const parsed = parseClawHubPluginSpec(params.spec);
   if (
     parsed &&
     params.officialPackageName === parsed.name &&
-    (params.updateChannel === "extended-stable" || params.updateChannel === "stable")
+    (params.updateChannel === "extended-stable" ||
+      (params.updateChannel === "stable" &&
+        (params.versionBoundToCore || params.preferCoreVersion)))
   ) {
-    const npmSpec = resolveCoreBoundNpmSpec({
-      ...params,
-      spec: `${parsed.name}${parsed.version ? `@${parsed.version}` : ""}`,
-    });
+    const npmSpec = resolveCoreBoundNpmSpec(
+      {
+        ...params,
+        spec: `${parsed.name}${parsed.version ? `@${parsed.version}` : ""}`,
+      },
+      params.preferCoreVersion,
+    );
     const installSpec = npmSpec ? `clawhub:${npmSpec}` : params.spec;
     return {
       installSpec,
       recordSpec: params.spec,
-      ...(npmSpec && params.updateChannel === "stable"
+      ...(npmSpec && params.updateChannel === "stable" && params.preferCoreVersion
         ? { fallbackSpec: params.spec, fallbackLabel: installSpec }
         : {}),
     };

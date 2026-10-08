@@ -185,6 +185,7 @@ async function resolveOfficialManagedInstallSpec(params: {
           updateChannel,
           officialPackageName: packageName,
           coreVersion: resolveCompatibilityHostVersion(),
+          preferCoreVersion: true,
         })
       : await resolveNpmInstallSpecsForUpdateChannel({
           spec: request.spec,
