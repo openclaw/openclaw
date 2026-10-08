@@ -153,6 +153,9 @@ export async function prepareCliHistoryBoundary(
     assertCurrent: assertWriterCurrent,
     assertReadable: () => {
       assertWriterCurrent();
+      // Execution requires synchronous authority immediately before its effect.
+      // SDK sync writers bypass the FIFO; the connection-local witness misses
+      // foreign commits. Retain this fence until the next SDK major retires them.
       const current: InternalSessionEntry | undefined = loadSessionEntryReadOnly(target);
       const proof = current?.cliHistoryBoundary;
       const tip = readSessionTranscriptWatermark(target);

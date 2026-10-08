@@ -498,40 +498,30 @@ async function inspectMemorySearchHealthForAgent(
   }
 
   const openAICompatible = isOpenAICompatibleMemoryProvider(provider, cfg);
-  if (
+  const missingBaseUrl =
     openAICompatible &&
     !(
       normalizeOptionalString(resolved.remote?.baseUrl) ??
       normalizeOptionalString(findNormalizedProviderValue(cfg.models?.providers, provider)?.baseUrl)
-    )
-  ) {
-    report(
-      [
-        `Memory search provider is set to "${provider}" but no OpenAI-compatible embeddings endpoint was configured.`,
-        "Set memory.search.remote.baseUrl to the /v1 endpoint for your embeddings server.",
-        "",
-        "Fix:",
-        `- ${formatCliCommand("openclaw config set memory.search.remote.baseUrl http://127.0.0.1:1234/v1")}`,
-        "",
-        `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-      ].join("\n"),
-      "memory.search.remote.baseUrl",
     );
-    return;
-  }
-
-  if (openAICompatible && !normalizeOptionalString(resolved.model)) {
+  if (openAICompatible && (missingBaseUrl || !normalizeOptionalString(resolved.model))) {
+    const configPath = missingBaseUrl ? "memory.search.remote.baseUrl" : "memory.search.model";
+    const description = missingBaseUrl ? "embeddings endpoint" : "embedding model";
+    const guidance = missingBaseUrl
+      ? "the /v1 endpoint for your embeddings server"
+      : "the embedding model id your server expects";
+    const example = missingBaseUrl ? "http://127.0.0.1:1234/v1" : "text-embedding-bge-m3";
     report(
       [
-        `Memory search provider is set to "${provider}" but no OpenAI-compatible embedding model was configured.`,
-        "Set memory.search.model to the embedding model id your server expects.",
+        `Memory search provider is set to "${provider}" but no OpenAI-compatible ${description} was configured.`,
+        `Set ${configPath} to ${guidance}.`,
         "",
         "Fix:",
-        `- ${formatCliCommand("openclaw config set memory.search.model text-embedding-bge-m3")}`,
+        `- ${formatCliCommand(`openclaw config set ${configPath} ${example}`)}`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
       ].join("\n"),
-      "memory.search.model",
+      configPath,
     );
     return;
   }

@@ -78,6 +78,9 @@ describe("canonical proof on physical database validation", () => {
           db,
           ["data_version", "schema_version", "user_version"],
           (sql) => {
+            if (/FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)) {
+              return "data_version";
+            }
             const name = /^PRAGMA (data_version|schema_version|user_version);?$/iu.exec(sql)?.[1];
             return name === "data_version" || name === "schema_version" || name === "user_version"
               ? name

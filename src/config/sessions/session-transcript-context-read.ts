@@ -1,4 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
@@ -11,14 +12,91 @@ import {
   prepareIncognitoSessionHistoryRead,
   type IncognitoSessionHistoryBinding,
 } from "./session-incognito-history-read.js";
-import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
 import {
+  readSessionTranscriptAnchorsAsync,
+  readSessionTranscriptAnchorsFromSource,
+} from "./session-transcript-anchor-read.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+import {
+  resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+
+export type SessionTranscriptContextProjectionSource = {
+  target: SessionTranscriptRuntimeTarget;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+  /** Presence pins a durable source; undefined identity means the captured file was absent. */
+  physicalSource?: { expectedIdentity: DatabaseFileIdentity | undefined };
+};
+
+/** Keep a worker's bounded projection attached to its physical source until final acceptance. */
+export async function readSessionTranscriptContextProjectionAsync<T>(
+  target: SessionTranscriptRuntimeTarget,
+  project: (
+    source: SessionTranscriptContextProjectionSource,
+  ) => Promise<{ value: T; version?: SessionTranscriptContextVersion }>,
+  signal?: AbortSignal,
+): Promise<T> {
+  const captured = { ...target };
+  const admission = resolveSessionTranscriptReadFence(captured);
+  const capturedAdmission = admission && structuredClone(admission);
+  return withSessionTranscriptReadSource(
+    captured,
+    async (scope) => {
+      const result = await project({
+        target: { ...captured, ...scope },
+        admission: capturedAdmission,
+      });
+      let accepted = false;
+      await readSessionTranscriptAnchorsAsync(
+        { ...scope, sessionKey: captured.sessionKey },
+        {
+          entryIds: [],
+          contextValidation: { version: result.version, admission: capturedAdmission },
+        },
+        signal,
+        (facts) => {
+          accepted = facts.contextValidated === true || (!result.version && !capturedAdmission);
+        },
+      );
+      if (!accepted) {
+        throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+      }
+      return result.value;
+    },
+    async (source) => {
+      const scope = { ...source.scope, sessionKey: captured.sessionKey };
+      const result = await project({
+        target: { ...captured, ...scope },
+        admission: capturedAdmission,
+        physicalSource: { expectedIdentity: source.expectedIdentity },
+      });
+      source.assertCurrent();
+      let accepted = false;
+      await readSessionTranscriptAnchorsFromSource(
+        { ...source, scope },
+        {
+          entryIds: [],
+          contextValidation: { version: result.version, admission: capturedAdmission },
+        },
+        signal,
+        (facts) => {
+          source.assertCurrent();
+          accepted = facts.contextValidated === true || (!result.version && !capturedAdmission);
+        },
+      );
+      if (!accepted) {
+        throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+      }
+      return result.value;
+    },
+    signal,
+  );
+}
 
 /** Accept consumed results while the original writer FIFO and native witness remain current. */
 export function readSessionTranscriptModelContextAsync<T>(

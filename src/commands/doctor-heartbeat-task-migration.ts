@@ -36,6 +36,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { shortenHomePath } from "../utils.js";
+import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
 import { analyzeLegacyHeartbeatTasks, type LegacyHeartbeatTask } from "./heartbeat-task-legacy.js";
 
 type HeartbeatTaskMigrationResult = { changes: string[]; warnings: string[] };
@@ -450,9 +451,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
   }
 
   if (!params.shouldRepair || candidates.length === 0) {
-    if (warnings.length > 0) {
-      note(warnings.join("\n"), "Doctor warnings");
-    }
+    noteDoctorMigrationResult({ warnings });
     return { changes, warnings };
   }
 
@@ -588,11 +587,6 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
     }
   }
 
-  if (changes.length > 0) {
-    note(changes.join("\n"), "Doctor changes");
-  }
-  if (warnings.length > 0) {
-    note(warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorMigrationResult({ changes, warnings });
   return { changes, warnings };
 }
