@@ -177,12 +177,12 @@ export async function assertOpenClawDatabasesReady(
 
 /** Read schema headers and optionally verify current schema shape without repairing it. */
 export async function preflightOpenClawDatabaseSchemas(
-  input: OpenClawDatabasePreflightOptions,
+  inputOptions: OpenClawDatabasePreflightOptions,
   purpose: AgentDeletionJournalPurpose = "maintenance",
 ): Promise<OpenClawDatabaseSchemaPreflight> {
   const options = isArtifactPreservingStateRead("agent")
-    ? { ...input, preserveSourceArtifacts: true }
-    : input;
+    ? { ...inputOptions, preserveSourceArtifacts: true }
+    : inputOptions;
   options.signal?.throwIfAborted();
   const supportedVersions = options.supportedVersions ?? {
     state: OPENCLAW_STATE_SCHEMA_VERSION,
