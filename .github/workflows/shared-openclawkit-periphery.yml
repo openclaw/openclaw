@@ -189,6 +189,7 @@ jobs:
           if [ ! -s "$output_dir/periphery.json" ]; then
             cp "$output_dir/periphery.stdout.json" "$output_dir/periphery.json"
           fi
+          exit "$periphery_status"
 
       # Failed-job reruns retain successful producer artifacts from the original attempt.
       # Keep artifact slots run-scoped; rerun producers overwrite their slot.
@@ -250,26 +251,16 @@ jobs:
           ./scripts/install-periphery.sh "$periphery_dir"
           echo "$periphery_dir" >> "$GITHUB_PATH"
 
-      - name: Build macOS consumer index
+      - name: Scan shared kit
         run: |
           set -euo pipefail
           output_dir="$RUNNER_TEMP/shared-periphery-macos"
           mkdir -p "$output_dir"
           cd apps/macos
-          swift package --scratch-path ../../.cache/periphery-swift clean
-          /usr/bin/time -p swift build --build-system native --scratch-path ../../.cache/periphery-swift --build-tests --enable-index-store \
-            2>&1 | tee "$output_dir/build.log"
-
-      - name: Scan shared kit
-        run: |
-          set -euo pipefail
-          output_dir="$RUNNER_TEMP/shared-periphery-macos"
-          cd apps/macos
           set +e
           periphery scan \
             --config .periphery.yml \
-            --skip-build \
-            --index-store-path ../../.cache/periphery-swift/debug/index/store \
+            --clean-build \
             --format json \
             --report-include '../shared/OpenClawKit/Sources/**' \
             --retain-files '../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift' \
@@ -282,6 +273,7 @@ jobs:
           if [ ! -s "$output_dir/periphery.json" ]; then
             cp "$output_dir/periphery.stdout.json" "$output_dir/periphery.json"
           fi
+          exit "$periphery_status"
 
       - name: Upload macOS consumer report
         if: always()

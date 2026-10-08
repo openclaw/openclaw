@@ -347,6 +347,11 @@ The macOS Periphery configuration retains the native SwiftPM backend because
 Periphery 3.8 reads its `.build/debug/index/store` layout. Native test
 crashes emit noninteractive Swift backtraces, without register dumps.
 
+The shared macOS scan lets Periphery own the clean build and index selection.
+Both shared consumer jobs preserve their result and status artifacts, then exit
+with the scanner's status. A scanner crash therefore fails its producer so a
+failed-job rerun rebuilds that consumer instead of reusing its failed report.
+
 Ordinary Markdown and MDX pages under `docs/`, plus root `README.md`, retain
 their separate `check-docs` coverage beside precise pull-request Node tests.
 Page deletions and renames preserve this targeting. Explicit Node owners for
