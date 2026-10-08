@@ -542,7 +542,7 @@ importers:
         version: 7.1.3
       nostr-tools:
         specifier: 2.25.2
-        version: 2.25.2(typescript@7.1.0-dev.20260920.1)
+        version: 2.25.2(typescript@7.1.0-dev.20260922.1)
       oxfmt:
         specifier: 0.71.0
         version: 0.71.0
@@ -581,10 +581,10 @@ importers:
         version: 8.3.0
       stylelint:
         specifier: 17.16.0
-        version: 17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260920.1)
+        version: 17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260922.1)
       stylelint-config-recommended:
         specifier: 18.0.0
-        version: 18.0.0(stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260920.1))
+        version: 18.0.0(stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260922.1))
       tinyglobby:
         specifier: 0.2.17
         version: 0.2.17
@@ -593,13 +593,13 @@ importers:
         version: 0.25.1
       tsdown:
         specifier: 0.23.0
-        version: 0.23.0(tsx@4.23.15)(typescript@7.1.0-dev.20260920.1)(unrun@0.3.1)
+        version: 0.23.0(tsx@4.23.15)(typescript@7.1.0-dev.20260922.1)(unrun@0.3.1)
       tsx:
         specifier: 4.23.15
         version: 4.23.15
       typescript:
-        specifier: 7.1.0-dev.20260920.1
-        version: 7.1.0-dev.20260920.1
+        specifier: 7.1.0-dev.20260922.1
+        version: 7.1.0-dev.20260922.1
       unrun:
         specifier: 0.3.1
         version: 0.3.1
@@ -828,7 +828,7 @@ importers:
     dependencies:
       nostr-tools:
         specifier: 2.25.2
-        version: 2.25.2(typescript@7.1.0-dev.20260920.1)
+        version: 2.25.2(typescript@7.1.0-dev.20260922.1)
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -1794,7 +1794,7 @@ importers:
     dependencies:
       nostr-tools:
         specifier: 2.25.2
-        version: 2.25.2(typescript@7.1.0-dev.20260920.1)
+        version: 2.25.2(typescript@7.1.0-dev.20260922.1)
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -6373,44 +6373,44 @@ packages:
   '@types/yargs-parser@21.0.3':
     resolution: {integrity: sha512-I4q9QU9MQv4oEOz4tAHJtNz1cwuLxn2F3xcc2iV5WdqLPpUnj30aUuxt1mAxYTG+oe8CZMV/+6rU4S4gRDzqtQ==}
 
-  '@typescript/typescript-darwin-arm64@7.1.0-dev.20260920.1':
-    resolution: {integrity: sha512-0KZLj5/VP1f77InjhsIou9wok+bCxZCr4r/SkyQF4GRxl9DqMTLGfEt91Zy5SbjusgZ0QComiqfrdWZY5Z4axw==}
+  '@typescript/typescript-darwin-arm64@7.1.0-dev.20260922.1':
+    resolution: {integrity: sha512-Yp+LWe9FJBnOmTo4ImaWwwRQqfyTMyq1jDu5EH4IWRAVxdm982LRB4j30bCBycre4ReFzA+Is5Uc+i6jvem0Dg==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [darwin]
 
-  '@typescript/typescript-darwin-x64@7.1.0-dev.20260920.1':
-    resolution: {integrity: sha512-+6rUIK5ic1m3/QhmfMdcV/dlI9U+SO6MqtfpAAfTjtOcWHIQGLrtXkLJ1TGJx/VfToxzryZiHjrL3H7MkUVElQ==}
+  '@typescript/typescript-darwin-x64@7.1.0-dev.20260922.1':
+    resolution: {integrity: sha512-G8iU8StWDoUOu+n1INfCI46iS/0Tu/rUw0bWCJxCv5TjDzlzR9v2riA+BeDcKSwGgzYnFSCc9HRu4rnrCwFtag==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [darwin]
 
-  '@typescript/typescript-linux-arm64@7.1.0-dev.20260920.1':
-    resolution: {integrity: sha512-yoURYqZHC3Tlk02D/tC3DJQH49M+iOVN6krqZDE57fmX0WbD/7/yE4LSR/7wx31lyJbWKSYM/psxNzh6U7b7MA==}
+  '@typescript/typescript-linux-arm64@7.1.0-dev.20260922.1':
+    resolution: {integrity: sha512-6+dj4AsWeserJ5/5f3DgI+ibzJBr3l7pXEGxMUuv+lwoQ6QDVZ1tOGaJdsZy4Hg5atMZi/m7iuDFJPvWbYYMxQ==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [linux]
 
-  '@typescript/typescript-linux-arm@7.1.0-dev.20260920.1':
-    resolution: {integrity: sha512-niXTqU2j0NdBHMbxaU2JNCLeb7+QxmUZoaTtW2EfaG5ODRjE5tAhXHXJu96G4jDiXiuNAfr7b36L9JBiUy9UjQ==}
+  '@typescript/typescript-linux-arm@7.1.0-dev.20260922.1':
+    resolution: {integrity: sha512-4w+Ztlff1U5INtBEeYnNBvBkDkAjH+lwQspxBEmVKxcvDDigYYIH6JpRx7zt3znxsR9Z3Fk5JQAgW5U8ve1tZg==}
     engines: {node: '>=16.20.0'}
     cpu: [arm]
     os: [linux]
 
-  '@typescript/typescript-linux-x64@7.1.0-dev.20260920.1':
-    resolution: {integrity: sha512-V300mgrCdnyFn37jmM97+m9Pb5pUzV/AxBGMZF3UIV3y9meU9ov3QbiOb/qkxF0W4DJZEziod2ID7fPOcfSM2w==}
+  '@typescript/typescript-linux-x64@7.1.0-dev.20260922.1':
+    resolution: {integrity: sha512-E4/JVTP1bJFk99cdsIG+AjLAuQEPpRDlwyhUExb6n6tqCPBeI4QlQa9bHZwv3xAMwRpYx5yHyYde2G5Isou7Dg==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [linux]
 
-  '@typescript/typescript-win32-arm64@7.1.0-dev.20260920.1':
-    resolution: {integrity: sha512-VG4RUrdKvFXkoDhRejF4VFJBL08oOqOQMYCkjBnwe5Ze7gqv3++pMYs+iC1qUESTNGADcHVKLDUJYB0FjYb62A==}
+  '@typescript/typescript-win32-arm64@7.1.0-dev.20260922.1':
+    resolution: {integrity: sha512-0LE0ikOpuZN2RGqGfOJHjtHFGVsQ0QWUcLxqaA02kpHhs95wuPjbgSJTp1bTCw86CMsTR3RLj/N1NGtw0IC6tw==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [win32]
 
-  '@typescript/typescript-win32-x64@7.1.0-dev.20260920.1':
-    resolution: {integrity: sha512-LoBcpahjQK9AnWoA/s3C1vz1TYxdttG+jm4ndiD3YYwWjNaLURnGLbUvek164SUvEI1y+KH45gL/FqbOZbU9kg==}
+  '@typescript/typescript-win32-x64@7.1.0-dev.20260922.1':
+    resolution: {integrity: sha512-EysfoTSY19NBoG9RAdTz6/YT0HisIFzBak359KEvjeGMEggawBgWrjCfxjsWFuMd3fTt13USQ7W5aPH6+VrZpA==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [win32]
@@ -10210,8 +10210,8 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  typescript@7.1.0-dev.20260920.1:
-    resolution: {integrity: sha512-ljRXAaWoHs11KCWSImmvNRX9OF9ELw60r0oMvh9gmgbZ5sht3PlCFPPxtBMFA1I/SlvqB0Jv0HB+htkb2tTbXg==}
+  typescript@7.1.0-dev.20260922.1:
+    resolution: {integrity: sha512-m8MHrUEVO3XMp+5fsI15IiSCFVKLIVQxltwRYiI3VVpLIgjKZYy6Ec5JnzoQ6i9vC9B7FfCU3cmOj0uZP4HU/g==}
     engines: {node: '>=16.20.0'}
     hasBin: true
 
@@ -14317,25 +14317,25 @@ snapshots:
 
   '@types/yargs-parser@21.0.3': {}
 
-  '@typescript/typescript-darwin-arm64@7.1.0-dev.20260920.1':
+  '@typescript/typescript-darwin-arm64@7.1.0-dev.20260922.1':
     optional: true
 
-  '@typescript/typescript-darwin-x64@7.1.0-dev.20260920.1':
+  '@typescript/typescript-darwin-x64@7.1.0-dev.20260922.1':
     optional: true
 
-  '@typescript/typescript-linux-arm64@7.1.0-dev.20260920.1':
+  '@typescript/typescript-linux-arm64@7.1.0-dev.20260922.1':
     optional: true
 
-  '@typescript/typescript-linux-arm@7.1.0-dev.20260920.1':
+  '@typescript/typescript-linux-arm@7.1.0-dev.20260922.1':
     optional: true
 
-  '@typescript/typescript-linux-x64@7.1.0-dev.20260920.1':
+  '@typescript/typescript-linux-x64@7.1.0-dev.20260922.1':
     optional: true
 
-  '@typescript/typescript-win32-arm64@7.1.0-dev.20260920.1':
+  '@typescript/typescript-win32-arm64@7.1.0-dev.20260922.1':
     optional: true
 
-  '@typescript/typescript-win32-x64@7.1.0-dev.20260920.1':
+  '@typescript/typescript-win32-x64@7.1.0-dev.20260922.1':
     optional: true
 
   '@typespec/ts-http-runtime@0.3.9(supports-color@10.2.2)':
@@ -15019,14 +15019,14 @@ snapshots:
     dependencies:
       layout-base: 2.0.1
 
-  cosmiconfig@9.0.2(typescript@7.1.0-dev.20260920.1):
+  cosmiconfig@9.0.2(typescript@7.1.0-dev.20260922.1):
     dependencies:
       env-paths: 2.2.1
       import-fresh: 3.3.1
       js-yaml: 4.3.2
       parse-json: 5.2.0
     optionalDependencies:
-      typescript: 7.1.0-dev.20260920.1
+      typescript: 7.1.0-dev.20260922.1
 
   crelt@1.0.7: {}
 
@@ -17322,7 +17322,7 @@ snapshots:
 
   normalize-path@3.0.0: {}
 
-  nostr-tools@2.25.2(typescript@7.1.0-dev.20260920.1):
+  nostr-tools@2.25.2(typescript@7.1.0-dev.20260922.1):
     dependencies:
       '@noble/ciphers': 2.1.1
       '@noble/curves': 2.0.1
@@ -17332,7 +17332,7 @@ snapshots:
       '@scure/bip39': 2.0.1
       nostr-wasm: 0.1.0
     optionalDependencies:
-      typescript: 7.1.0-dev.20260920.1
+      typescript: 7.1.0-dev.20260922.1
 
   nostr-wasm@0.1.0: {}
 
@@ -17902,7 +17902,7 @@ snapshots:
 
   robust-predicates@3.0.3: {}
 
-  rolldown-plugin-dts@0.28.6(rolldown@1.2.9)(typescript@7.1.0-dev.20260920.1):
+  rolldown-plugin-dts@0.28.6(rolldown@1.2.9)(typescript@7.1.0-dev.20260922.1):
     dependencies:
       dts-resolver: 3.0.0
       get-tsconfig: 5.0.0-beta.6
@@ -17912,7 +17912,7 @@ snapshots:
       yuku-codegen: 0.10.2
       yuku-parser: 0.10.2
     optionalDependencies:
-      typescript: 7.1.0-dev.20260920.1
+      typescript: 7.1.0-dev.20260922.1
     transitivePeerDependencies:
       - oxc-resolver
 
@@ -18280,11 +18280,11 @@ snapshots:
     dependencies:
       inline-style-parser: 0.2.7
 
-  stylelint-config-recommended@18.0.0(stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260920.1)):
+  stylelint-config-recommended@18.0.0(stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260922.1)):
     dependencies:
-      stylelint: 17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260920.1)
+      stylelint: 17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260922.1)
 
-  stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260920.1):
+  stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260922.1):
     dependencies:
       '@csstools/css-calc': 3.4.0(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.1))(@csstools/css-tokenizer@4.0.1)
       '@csstools/css-parser-algorithms': 4.0.0(@csstools/css-tokenizer@4.0.1)
@@ -18294,7 +18294,7 @@ snapshots:
       '@csstools/selector-resolve-nested': 4.0.1(postcss-selector-parser@7.1.6)
       '@csstools/selector-specificity': 6.0.0(postcss-selector-parser@7.1.6)
       colord: 2.10.0
-      cosmiconfig: 9.0.2(typescript@7.1.0-dev.20260920.1)
+      cosmiconfig: 9.0.2(typescript@7.1.0-dev.20260922.1)
       css-functions-list: 3.3.3
       css-tree: 3.2.1
       debug: 4.4.3(supports-color@10.2.2)
@@ -18466,7 +18466,7 @@ snapshots:
 
   ts-simple-type@2.0.0-next.0: {}
 
-  tsdown@0.23.0(tsx@4.23.15)(typescript@7.1.0-dev.20260920.1)(unrun@0.3.1):
+  tsdown@0.23.0(tsx@4.23.15)(typescript@7.1.0-dev.20260922.1)(unrun@0.3.1):
     dependencies:
       cac: 7.0.0
       defu: 6.1.7
@@ -18476,7 +18476,7 @@ snapshots:
       obug: 2.2.1
       picomatch: 4.0.7
       rolldown: 1.2.9
-      rolldown-plugin-dts: 0.28.6(rolldown@1.2.9)(typescript@7.1.0-dev.20260920.1)
+      rolldown-plugin-dts: 0.28.6(rolldown@1.2.9)(typescript@7.1.0-dev.20260922.1)
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
       tree-kill: 1.2.2
@@ -18484,7 +18484,7 @@ snapshots:
       verkit: 0.4.1
     optionalDependencies:
       tsx: 4.23.15
-      typescript: 7.1.0-dev.20260920.1
+      typescript: 7.1.0-dev.20260922.1
       unrun: 0.3.1
     transitivePeerDependencies:
       - '@typescript/native-preview'
@@ -18534,15 +18534,15 @@ snapshots:
 
   typescript@5.9.3: {}
 
-  typescript@7.1.0-dev.20260920.1:
+  typescript@7.1.0-dev.20260922.1:
     optionalDependencies:
-      '@typescript/typescript-darwin-arm64': 7.1.0-dev.20260920.1
-      '@typescript/typescript-darwin-x64': 7.1.0-dev.20260920.1
-      '@typescript/typescript-linux-arm': 7.1.0-dev.20260920.1
-      '@typescript/typescript-linux-arm64': 7.1.0-dev.20260920.1
-      '@typescript/typescript-linux-x64': 7.1.0-dev.20260920.1
-      '@typescript/typescript-win32-arm64': 7.1.0-dev.20260920.1
-      '@typescript/typescript-win32-x64': 7.1.0-dev.20260920.1
+      '@typescript/typescript-darwin-arm64': 7.1.0-dev.20260922.1
+      '@typescript/typescript-darwin-x64': 7.1.0-dev.20260922.1
+      '@typescript/typescript-linux-arm': 7.1.0-dev.20260922.1
+      '@typescript/typescript-linux-arm64': 7.1.0-dev.20260922.1
+      '@typescript/typescript-linux-x64': 7.1.0-dev.20260922.1
+      '@typescript/typescript-win32-arm64': 7.1.0-dev.20260922.1
+      '@typescript/typescript-win32-x64': 7.1.0-dev.20260922.1
 
   uc.micro@2.1.0: {}
 
