@@ -153,7 +153,7 @@ function readPool(state: ReadRuntime, admitted: boolean): ReadPool {
       {
         workerUrl: state.workerUrl,
         workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-        maxWorkers: 2,
+        workerClass: "reader",
         idleTimeoutMs: SQLITE_IDLE_HANDLE_TTL_MS,
         maxPendingTasks: DEFAULT_WORKER_PENDING_TASKS,
         maxPendingBytes: DEFAULT_WORKER_PENDING_BYTES,
