@@ -1,4 +1,4 @@
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { isTransientNetworkError, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   isRecord,
   normalizeOptionalString as normalizeString,
@@ -104,8 +104,37 @@ export function formatFeishuApiError(
   });
 }
 
+const FEISHU_MESSAGE_IN_PROGRESS_CODE = 230049;
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
+
+function isFeishuSendTransientError(error: unknown): boolean {
+  if (!isRecord(error)) {
+    return false;
+  }
+
+  if (error.retryable === false) {
+    return false;
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  const responseData = isRecord(response?.data) ? response.data : undefined;
+  if (responseData?.code === FEISHU_MESSAGE_IN_PROGRESS_CODE) {
+    return true;
+  }
+  const status = response?.status;
+  if (
+    typeof status === "number" &&
+    (status === 408 || status === 425 || (status >= 500 && status <= 599))
+  ) {
+    return true;
+  }
+
+  return readString(error.code)?.toUpperCase() === "ERR_NETWORK" || isTransientNetworkError(error);
+}
+
+function isFeishuMessageInProgressResponse(value: unknown): boolean {
+  return isRecord(value) && value.code === FEISHU_MESSAGE_IN_PROGRESS_CODE;
+}
 
 export async function requestFeishuApi<T>(
   request: () => Promise<T>,
@@ -113,6 +142,8 @@ export async function requestFeishuApi<T>(
   options: {
     includeConfigParams?: boolean;
     includeNestedErrorLogId?: boolean;
+    /** Only enable for requests with an idempotency key. */
+    retryTransient?: boolean;
   } = {},
 ): Promise<T> {
   const assertSendAuthority = captureFeishuSendAuthority();
@@ -121,16 +152,16 @@ export async function requestFeishuApi<T>(
       async () => {
         assertSendAuthority?.();
         const result = await request();
-        // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
-        // instead of throwing. Rethrow it in the AxiosError response shape so
-        // getFeishuSendRateLimitCode classifies it retryable and exhaustion
-        // wraps it exactly like an SDK throw.
+        // Feishu SDK may fulfill with a retryable business-error body instead
+        // of throwing. Convert it to the same shape as a rejected SDK request.
         const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
-        if (fulfilledRateLimit !== undefined) {
-          throw Object.assign(
-            new Error(`Request fulfilled with rate-limit code ${fulfilledRateLimit}`),
-            { response: { status: 200, data: result } },
-          );
+        const fulfilledMessageInProgress =
+          options.retryTransient === true && isFeishuMessageInProgressResponse(result);
+        if (fulfilledRateLimit !== undefined || fulfilledMessageInProgress) {
+          const fulfilledCode = fulfilledRateLimit ?? FEISHU_MESSAGE_IN_PROGRESS_CODE;
+          throw Object.assign(new Error(`Request fulfilled with retryable code ${fulfilledCode}`), {
+            response: { status: 200, data: result },
+          });
         }
         return result;
       },
@@ -140,7 +171,9 @@ export async function requestFeishuApi<T>(
         // matches the previous linear attempt*base backoff exactly; revisit
         // the delay curve if FEISHU_SEND_MAX_RETRIES grows.
         minDelayMs: FEISHU_SEND_RETRY_BASE_MS,
-        shouldRetry: (error) => getFeishuSendRateLimitCode(error) !== undefined,
+        shouldRetry: (error) =>
+          getFeishuSendRateLimitCode(error) !== undefined ||
+          (options.retryTransient === true && isFeishuSendTransientError(error)),
       },
     );
   } catch (error) {

@@ -1,12 +1,14 @@
 // Feishu tests cover send.reply fallback plugin behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuSendTargetMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send-target.js", () => ({
   resolveFeishuSendTarget: resolveFeishuSendTargetMock,
 }));
+
+import { withFeishuSendContext } from "./send-context.js";
 
 let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
@@ -24,6 +26,9 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(createMock).toHaveBeenCalledTimes(1);
     expect(result.messageId).toBe(expectedMessageId);
     expect(result.receipt?.replyToId).toBeUndefined();
+    expect(createMock.mock.calls[0]?.[0]?.data?.uuid).not.toBe(
+      replyMock.mock.calls[0]?.[0]?.data?.uuid,
+    );
   }
 
   beforeAll(async () => {
@@ -35,8 +40,10 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     vi.resetModules();
   });
 
+  afterEach(() => vi.useRealTimers());
+
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     resolveFeishuSendTargetMock.mockReturnValue({
       client: {
         im: {
@@ -49,6 +56,57 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       receiveId: "ou_target",
       receiveIdType: "open_id",
     });
+  });
+
+  it.each([false, true])(
+    "replays an accepted message after a lost response (reply=%s)",
+    async (reply) => {
+      vi.useFakeTimers();
+      const sent = new Map<string, string>();
+      const requests: string[] = [];
+      const sender = reply ? replyMock : createMock;
+      sender.mockImplementation(async ({ data }: { data: { uuid: string } }) => {
+        requests.push(data.uuid);
+        if (!sent.has(data.uuid)) {
+          sent.set(data.uuid, "om_accepted");
+          throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+        }
+        return { code: 0, data: { message_id: sent.get(data.uuid) } };
+      });
+      const result = sendMessageFeishu({
+        cfg: {},
+        to: "user:ou_target",
+        text: "hello",
+        ...(reply ? { replyToMessageId: "om_parent", replyInThread: true } : {}),
+      });
+      await vi.runAllTimersAsync();
+      await expect(result).resolves.toMatchObject({ messageId: "om_accepted" });
+      expect(requests).toHaveLength(2);
+      expect(requests[0]).toMatch(/^[0-9a-f-]{36}$/);
+      expect(requests[1]).toBe(requests[0]);
+      expect(sent.size).toBe(1);
+      if (reply) {
+        expect(sender.mock.calls[1]?.[0]?.data?.reply_in_thread).toBe(true);
+      }
+    },
+  );
+
+  it("stops dispatch immediately when the sender is cancelled during backoff", async () => {
+    vi.useFakeTimers();
+    const abort = new AbortController();
+    createMock.mockRejectedValue(
+      Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+    );
+    const result = withFeishuSendContext({ signal: abort.signal }, () =>
+      sendMessageFeishu({ cfg: {}, to: "user:ou_target", text: "hello" }),
+    ).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(createMock).toHaveBeenCalledOnce();
+    abort.abort();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await result).toBeInstanceOf(Error);
+    expect(createMock).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("preserves Feishu diagnostics when direct sends reject before response checks", async () => {
@@ -184,6 +242,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       data: {
         content: '{"zh_cn":{"content":[[{"tag":"md","text":"hello"}]]}}',
         msg_type: "post",
+        uuid: expect.any(String),
         reply_in_thread: true,
       },
     });
@@ -193,6 +252,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
         content: '{"zh_cn":{"content":[[{"tag":"md","text":"hello"}]]}}',
         receive_id: "oc_group_1",
         msg_type: "post",
+        uuid: expect.any(String),
       },
     });
   });

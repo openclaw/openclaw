@@ -312,6 +312,44 @@ describe("FeishuStreamingSession", () => {
     return { authTokens, client, deps };
   }
 
+  it("retries streaming message creation with one uuid and preserves receipt-free acceptance", async () => {
+    vi.useFakeTimers();
+    const { client, deps } = mockStreamingTokenStart(() => ({
+      code: 0,
+      msg: "ok",
+      tenant_access_token: "token",
+      expire: 7200,
+    }));
+    const create = vi.mocked(client.im.message.create);
+    const firstDispatch = Promise.withResolvers<void>();
+    create
+      .mockImplementationOnce(async () => {
+        firstDispatch.resolve();
+        throw Object.assign(new Error("network error"), { code: "ERR_NETWORK" });
+      })
+      .mockResolvedValueOnce({ code: 0, msg: "ok", data: {} });
+    const session = createStreamingSession(
+      client,
+      { appId: "streaming-retry", appSecret: "secret" },
+      undefined,
+      deps,
+    );
+    const start = session.start("chat_id", "open_id", { rootId: "om_root" });
+    await firstDispatch.promise;
+    await vi.runAllTimersAsync();
+    await start;
+    expect(create).toHaveBeenCalledTimes(2);
+    const first = create.mock.calls[0]?.[0]?.data;
+    expect(first?.uuid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(create.mock.calls[1]?.[0]?.data).toEqual(first);
+    expect(first).toMatchObject({ root_id: "om_root" });
+    await session.update("Accepted answer");
+    await expect(session.closeWithResult()).resolves.toEqual({
+      visibleReplySent: true,
+      content: "Accepted answer",
+    });
+  });
+
   function mockAcceptedStreamingCard(params: {
     accountId: string;
     response?: { code: number; msg: string; data?: { message_id?: string } };

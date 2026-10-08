@@ -8,7 +8,6 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
 import { createFeishuClient } from "./client.js";
-import { requestFeishuApi } from "./comment-shared.js";
 import { createConfiguredFeishuClient } from "./configured-client.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
 import {
@@ -21,9 +20,9 @@ import {
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { parseMergeForwardContent } from "./message-content.js";
+import { sendIdempotentFeishuMessage } from "./message-send.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import { renderPostContent } from "./post.js";
-import { withFeishuMessageDispatch } from "./send-context.js";
 import { resolveFeishuReceiptKind, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import {
@@ -93,21 +92,15 @@ export async function sendReplyOrFallbackDirect(
 ): Promise<FeishuSendResult> {
   const { client, receiveId, receiveIdType } = target;
   const sendDirect = async (): Promise<FeishuSendResult> => {
-    const response = await requestFeishuApi(
-      () =>
-        withFeishuMessageDispatch(() =>
-          client.im.message.create({
-            params: { receive_id_type: receiveIdType },
-            data: {
-              receive_id: receiveId,
-              content: params.content,
-              msg_type: params.msgType,
-            },
-          }),
-        ),
-      params.directErrorPrefix,
-      { includeNestedErrorLogId: true },
-    );
+    const response = await sendIdempotentFeishuMessage({
+      client,
+      receiveId,
+      receiveIdType,
+      content: params.content,
+      msgType: params.msgType,
+      errorPrefix: params.directErrorPrefix,
+      includeNestedErrorLogId: true,
+    });
     assertFeishuApiSuccess(response, params.directErrorPrefix);
     return toFeishuSendResult(
       response,
@@ -129,21 +122,17 @@ export async function sendReplyOrFallbackDirect(
 
   let response: { code?: number; msg?: string; data?: { message_id?: string } };
   try {
-    response = await requestFeishuApi(
-      () =>
-        withFeishuMessageDispatch(() =>
-          client.im.message.reply({
-            path: { message_id: params.replyToMessageId! },
-            data: {
-              content: params.content,
-              msg_type: params.msgType,
-              ...(params.replyInThread ? { reply_in_thread: true } : {}),
-            },
-          }),
-        ),
-      params.replyErrorPrefix,
-      { includeNestedErrorLogId: true },
-    );
+    response = await sendIdempotentFeishuMessage({
+      client,
+      receiveId,
+      receiveIdType,
+      content: params.content,
+      msgType: params.msgType,
+      errorPrefix: params.replyErrorPrefix,
+      replyToMessageId: params.replyToMessageId,
+      replyInThread: params.replyInThread,
+      includeNestedErrorLogId: true,
+    });
   } catch (err) {
     if (!isWithdrawnReplyError(err)) {
       throw err;

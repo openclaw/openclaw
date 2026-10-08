@@ -114,4 +114,31 @@ describe("requestFeishuApi", () => {
     await expect(result).resolves.toBe(response);
     expect(request).toHaveBeenCalledTimes(3);
   });
+  it.each([
+    Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+    Object.assign(new Error("network error"), { code: "ERR_NETWORK" }),
+    ...[408, 425, 500, 503, 599].map((status) => axiosError(undefined, status)),
+    axiosError(230049, 200),
+  ])("only retries a transient rejection when idempotency is enabled: %j", async (error) => {
+    const request = vi.fn().mockRejectedValueOnce(error).mockResolvedValue({ code: 0 });
+    const result = requestFeishuApi(request, "Send failed", { retryTransient: true });
+    await vi.runAllTimersAsync();
+    await expect(result).resolves.toEqual({ code: 0 });
+    expect(request).toHaveBeenCalledTimes(2);
+    request.mockReset().mockRejectedValue(error);
+    await expect(requestFeishuApi(request, "Upload failed")).rejects.toThrow("Upload failed");
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("retries fulfilled message-in-progress responses only for idempotent sends", async () => {
+    const busy = { code: 230049, msg: "message is being sent" };
+    const request = vi.fn().mockResolvedValueOnce(busy).mockResolvedValue({ code: 0 });
+    const result = requestFeishuApi(request, "Send failed", { retryTransient: true });
+    await vi.runAllTimersAsync();
+    await expect(result).resolves.toEqual({ code: 0 });
+    expect(request).toHaveBeenCalledTimes(2);
+    request.mockReset().mockResolvedValue(busy);
+    await expect(requestFeishuApi(request, "Upload failed")).resolves.toBe(busy);
+    expect(request).toHaveBeenCalledOnce();
+  });
 });
