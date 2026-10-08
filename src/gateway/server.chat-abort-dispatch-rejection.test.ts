@@ -352,72 +352,117 @@ describe("gateway WebSocket chat abort ownership", () => {
     );
   });
 
-  test("does not let a late abort replace an established dispatch error", async () => {
-    const sessionDirectory = temporaryDirectories.make("openclaw-chat-error-late-abort-");
-    const storePath = path.join(sessionDirectory, "sessions.json");
-    testState.sessionStorePath = storePath;
-    await writeMainSession("sess-main");
+  test.each([false, true])(
+    "retains dispatch failure and rejects late abort after yielded waiting end=%s",
+    async (yielded) => {
+      const sessionDirectory = temporaryDirectories.make("openclaw-chat-error-late-abort-");
+      const storePath = path.join(sessionDirectory, "sessions.json");
+      testState.sessionStorePath = storePath;
+      await writeMainSession("sess-main");
 
-    const socket = await gateway.openWs();
-    const dispatchEntered = createDeferred();
-    const dispatchRelease = createDeferred();
-    const runId = "real-websocket-dispatch-error-before-late-abort";
-    const terminalStates = trackChatTerminalStates(socket, runId);
-    let admissionRelease: Promise<void> | undefined;
+      const socket = await gateway.openWs();
+      const dispatchEntered = createDeferred();
+      const dispatchRelease = createDeferred();
+      const runId = `real-websocket-dispatch-error-before-late-abort-${yielded}`;
+      const terminalStates = trackChatTerminalStates(socket, runId);
+      let admissionRelease: Promise<void> | undefined;
 
-    try {
-      await connectOk(socket);
-      dispatchInboundMessageMock.mockImplementationOnce(async () => {
-        dispatchEntered.resolve();
-        await dispatchRelease.promise;
-        throw new Error("dispatch rejected before a late abort");
-      });
+      try {
+        await connectOk(socket);
+        dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+          const { replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
+          await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+          if (yielded) {
+            replyOptions?.onAgentRunStart?.(runId);
+          }
+          dispatchEntered.resolve();
+          await dispatchRelease.promise;
+          throw new Error("dispatch rejected before a late abort");
+        });
 
-      const sendParameters = {
-        sessionKey: "main",
-        message: "reject this dispatched message before the abort",
-        idempotencyKey: runId,
-      };
-      const started = await rpcReq(socket, "chat.send", sendParameters);
-      expect(started.ok).toBe(true);
-      expect(started.payload).toMatchObject({ runId, status: "started" });
-      await dispatchEntered.promise;
-      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      admissionRelease = getSessionWorkAdmissionRelease({
-        scope: storePath,
-        identities: ["main", "agent:main:main", "sess-main"],
-      });
-      if (!admissionRelease) {
-        throw new Error("Held dispatch must retain its session admission");
+        const sendParameters = {
+          sessionKey: "main",
+          message: "reject this dispatched message before the abort",
+          idempotencyKey: runId,
+        };
+        const started = await rpcReq(socket, "chat.send", sendParameters);
+        expect(started.ok).toBe(true);
+        expect(started.payload).toMatchObject({ runId, status: "started" });
+        await dispatchEntered.promise;
+        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        admissionRelease = getSessionWorkAdmissionRelease({
+          scope: storePath,
+          identities: ["main", "agent:main:main", "sess-main"],
+        });
+        if (!admissionRelease) {
+          throw new Error("Held dispatch must retain its session admission");
+        }
+        if (yielded) {
+          const yieldedFrame = onceMessage(
+            socket,
+            (frame) =>
+              frame.event === "chat" &&
+              frame.payload?.runId === runId &&
+              frame.payload?.yielded === true,
+          );
+          expect(
+            emitAgentEventIfCurrent({
+              runId,
+              stream: "lifecycle",
+              sessionKey: "agent:main:main",
+              sessionId: "sess-main",
+              agentId: "main",
+              data: {
+                phase: "end",
+                yielded: true,
+                livenessState: "paused",
+                stopReason: "end_turn",
+              },
+            }),
+          ).toBe(true);
+          await yieldedFrame;
+        }
+        dispatchRelease.resolve();
+        await admissionRelease;
+
+        // Admission release follows error persistence/publication; the replay response
+        // follows that error event on this socket, without timing the persistence work.
+        const established = await rpcReq(socket, "chat.send", sendParameters);
+        expect(established.ok).toBe(false);
+        expect(established.payload).toMatchObject({ runId, status: "error" });
+        expect(terminalStates).toEqual(yielded ? ["final", "error"] : ["error"]);
+        const history = await rpcReq<{ messages: unknown[] }>(socket, "chat.history", {
+          sessionKey: "main",
+        });
+        expect(history.payload?.messages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "custom",
+              customType: "run-failed-before-reply",
+              content: expect.stringContaining("dispatch rejected before a late abort"),
+            }),
+          ]),
+        );
+
+        const lateAbort = await rpcReq(socket, "chat.abort", {
+          sessionKey: "main",
+          runId,
+        });
+        expect(lateAbort.ok).toBe(true);
+        expect(lateAbort.payload).toMatchObject({ ok: true, aborted: false, runIds: [] });
+
+        const replay = await rpcReq(socket, "chat.send", sendParameters);
+        expect(replay.ok).toBe(false);
+        expect(replay.payload).toEqual(established.payload);
+        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        expect(terminalStates).toEqual(yielded ? ["final", "error"] : ["error"]);
+      } finally {
+        dispatchRelease.resolve();
+        await admissionRelease;
+        socket.close();
       }
-      dispatchRelease.resolve();
-      await admissionRelease;
-
-      // Admission release follows error persistence/publication; the replay response
-      // follows that error event on this socket, without timing the persistence work.
-      const established = await rpcReq(socket, "chat.send", sendParameters);
-      expect(established.ok).toBe(false);
-      expect(established.payload).toMatchObject({ runId, status: "error" });
-      expect(terminalStates).toEqual(["error"]);
-
-      const lateAbort = await rpcReq(socket, "chat.abort", {
-        sessionKey: "main",
-        runId,
-      });
-      expect(lateAbort.ok).toBe(true);
-      expect(lateAbort.payload).toMatchObject({ ok: true, aborted: false, runIds: [] });
-
-      const replay = await rpcReq(socket, "chat.send", sendParameters);
-      expect(replay.ok).toBe(false);
-      expect(replay.payload).toEqual(established.payload);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      expect(terminalStates).toEqual(["error"]);
-    } finally {
-      dispatchRelease.resolve();
-      await admissionRelease;
-      socket.close();
-    }
-  });
+    },
+  );
 
   test.for([false, true])(
     "keeps a signal-only lifecycle terminal as the only chat terminal (restart=%s)",

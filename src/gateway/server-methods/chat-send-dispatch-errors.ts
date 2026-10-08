@@ -211,8 +211,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
   ) => {
     if (
       !hidden &&
-      (params.isReplyDispatchRun?.() ||
-        activeRunAbort.entry?.projectSessionTerminalObservedAt === undefined)
+      (params.isReplyDispatchRun?.() || activeRunAbort.entry?.terminalOutcomeObserved !== true)
     ) {
       broadcastChatError({ context, runId: clientRunId, sessionKey, agentId, ...error });
     }
@@ -238,7 +237,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     const abortedAtDispatchReject = activeRunAbort.controller.signal.aborted;
     const abortMarkerAtDispatchReject = context.chatRunState.runs.get(clientRunId)?.abortMarker;
     const agentTerminalOwnedAtDispatchReject =
-      activeRunAbort.entry?.projectSessionTerminalObservedAt !== undefined;
+      activeRunAbort.entry?.terminalOutcomeObserved === true;
 
     if (abortedAtDispatchReject && abortMarkerAtDispatchReject !== undefined) {
       // chat.abort has already emitted the canonical terminal lifecycle and

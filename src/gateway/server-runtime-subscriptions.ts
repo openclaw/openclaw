@@ -1,4 +1,5 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
+import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { isDefinitiveRunLifecycle } from "../agents/agent-run-terminal-outcome.js";
 import {
   isAuditLedgerEnabled,
@@ -19,7 +20,11 @@ import {
   onAgentAuditEvent,
   onAgentRuntimeEvent,
 } from "../infra/agent-events.js";
-import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-registry.js";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  getAgentRunContextOwnerStatus,
+} from "../infra/agent-run-registry.js";
 import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
@@ -49,6 +54,7 @@ import {
   bindChatAbortTerminalDispatch,
   isCurrentChatAbortTerminalDispatch,
   markChatAbortTerminalPersistenceError,
+  markChatAbortTerminalOutcome,
   type ChatAbortTerminalDispatch,
 } from "./chat-abort-lifecycle-internal.js";
 import {
@@ -461,6 +467,13 @@ export function startGatewayEventSubscriptions(params: {
         : undefined;
     if (lifecyclePhase === "start" || lifecyclePhase === "end" || lifecyclePhase === "error") {
       const terminal = lifecyclePhase !== "start";
+      const definitiveTerminal =
+        terminal && isDefinitiveRunLifecycle({ phase: lifecyclePhase, data: evt.data });
+      const terminalOwnerCurrent =
+        !evt.contextClaimId ||
+        (evt.lifecycleGeneration &&
+          getAgentRunContextOwnerStatus(evt.runId, evt.contextClaimId, evt.lifecycleGeneration) ===
+            "active");
       const chatLink = evt.contextClaimId
         ? undefined
         : params.chatRunState.registry.peek(evt.runId);
@@ -482,6 +495,13 @@ export function startGatewayEventSubscriptions(params: {
         ) {
           entry.projectSessionTerminalPending = terminal;
           entry.projectSessionTerminalObservedAt = observedAt;
+          if (
+            definitiveTerminal &&
+            terminalOwnerCurrent &&
+            !isAgentLifecycleYieldedWaiting(evt.data)
+          ) {
+            markChatAbortTerminalOutcome(entry);
+          }
           if (terminal) {
             (terminalEntries ??= new Map()).set(candidateRunId, entry);
           }
@@ -518,7 +538,7 @@ export function startGatewayEventSubscriptions(params: {
           trackedEntry.lifecycleGeneration === eventLifecycleGeneration;
         const claimIsComplete = !evt.contextClaimId || terminalAuthority !== undefined;
         const canPersistTerminal =
-          isDefinitiveRunLifecycle({ phase: lifecyclePhase, data: evt.data }) &&
+          definitiveTerminal &&
           evt.projectSessionLifecycle !== false &&
           trackedOwnerIsCurrent &&
           claimIsComplete;

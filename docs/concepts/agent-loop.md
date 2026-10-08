@@ -190,6 +190,10 @@ prior outcome before preparation. Later workflow errors or aborts cannot
 reclassify completed execution; cron persistence, delivery, and yielded-parent
 continuation retain their separate outcomes.
 
+A yielded end while the parent task is waiting does not commit a terminal outcome.
+If dispatch then fails, the Gateway still publishes and retains that failure for
+chat replay and conversation history.
+
 History keeps a run active while its terminal session write is pending. Once
 that write succeeds, history and session activity show the recorded end time
 and duration without waiting for retry grace.

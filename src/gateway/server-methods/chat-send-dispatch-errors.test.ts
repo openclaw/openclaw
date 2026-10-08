@@ -25,6 +25,7 @@ import {
 } from "../../state/agent-database-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { markChatAbortTerminalOutcome } from "../chat-abort-lifecycle-internal.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { createChatRunState } from "../server-chat-state.js";
@@ -801,7 +802,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       if (!registration.entry) {
         throw new Error("expected the chat abort controller to be registered");
       }
-      registration.entry.projectSessionTerminalObservedAt = Date.now();
+      markChatAbortTerminalOutcome(registration.entry);
       registration.entry.projectSessionTerminalPersisted = persisted;
       const terminalEntry = {
         ts: Date.now(),

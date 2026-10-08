@@ -17,6 +17,15 @@ export function isCurrentChatAbortExecution(entry: object): boolean {
   return current === entry && current.executionSettlement?.status === "pending";
 }
 
+/** Terminal publication retains its producer's entry, even after registration cleanup. */
+export function markChatAbortTerminalOutcome(
+  entry: Pick<ChatAbortControllerEntry, "terminalOutcomeObserved"> | undefined,
+): void {
+  if (entry) {
+    entry.terminalOutcomeObserved = true;
+  }
+}
+
 /** Capture one exact registration; a same-key successor is never its completion owner. */
 export function captureChatAbortExecution(params: {
   entries: ReadonlyMap<string, ChatAbortControllerEntry>;
