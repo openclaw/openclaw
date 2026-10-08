@@ -1,6 +1,8 @@
 {
   "id": "srt-sandbox",
-  "categories": ["security"],
+  "categories": [
+    "security"
+  ],
   "activation": {
     "onStartup": true
   },
@@ -17,11 +19,17 @@
       },
       "network": {
         "type": "string",
-        "enum": ["deny", "allow"]
+        "enum": [
+          "deny",
+          "allow"
+        ]
       },
       "allowedDomains": {
         "type": "array",
-        "items": { "type": "string", "minLength": 1 }
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
       },
       "writablePaths": {
         "type": "array",
@@ -36,22 +44,41 @@
         "minimum": 1,
         "maximum": 2147000
       },
-      "perSessionNetwork": { "type": "boolean" },
+      "perSessionNetwork": {
+        "type": "boolean"
+      },
       "parentProxy": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "http": { "type": "string", "format": "uri" },
-          "https": { "type": "string", "format": "uri" },
-          "noProxy": { "type": "string", "minLength": 1 }
+          "http": {
+            "type": "string",
+            "format": "uri"
+          },
+          "https": {
+            "type": "string",
+            "format": "uri"
+          },
+          "noProxy": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "windows": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "srtWinPath": { "type": "string", "minLength": 1, "pattern": "^(?:/|[A-Za-z]:[\\\\/]|\\\\\\\\)" },
-          "proxyPortBase": { "type": "integer", "minimum": 1024, "maximum": 60000 }
+          "srtWinPath": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?:/|[A-Za-z]:[\\\\/]|\\\\\\\\)"
+          },
+          "proxyPortBase": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 60000
+          }
         }
       }
     }
@@ -64,11 +91,11 @@
     },
     "network": {
       "label": "Network",
-      "help": "Network posture for sandboxed commands. 'deny' blocks all outbound network (default); 'allow' leaves it open."
+      "help": "Network posture for sandboxed commands. 'deny' blocks all outbound network (default); 'allow' leaves it open. macOS/Linux only; Windows execution rejects every network mode before native setup."
     },
     "allowedDomains": {
       "label": "Allowed Domains",
-      "help": "Domains allowed when network is deny. An empty list denies all outbound network.",
+      "help": "Domains allowed when network is deny. An empty list denies all outbound network. macOS/Linux only; Windows execution rejects every network mode before native setup.",
       "advanced": true
     },
     "writablePaths": {
@@ -83,17 +110,17 @@
     },
     "perSessionNetwork": {
       "label": "Per-session Network",
-      "help": "Run each session with an isolated SRT network broker.",
+      "help": "Run each session with an isolated SRT network broker. macOS/Linux only; Windows execution rejects every network mode before native setup.",
       "advanced": true
     },
     "parentProxy": {
       "label": "Parent Proxy",
-      "help": "Optional upstream HTTP/HTTPS proxy for per-session network brokers.",
+      "help": "Optional upstream HTTP/HTTPS proxy for per-session network brokers. macOS/Linux only; Windows execution rejects every network mode before native setup.",
       "advanced": true
     },
     "windows": {
       "label": "Windows",
-      "help": "Windows srt-win path and proxy-port settings. SRT 0.0.76 admits one sandbox scope at a time and fails closed on concurrent scopes.",
+      "help": "Reserved Windows discovery settings. Native execution is disabled with SRT 0.0.76 because shared account, credential, WFP and ACL setup has no exclusive ownership or retirement-safe rollback contract. proxyPortBase has no runtime effect.",
       "advanced": true
     }
   }

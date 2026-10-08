@@ -50,7 +50,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-66 plugins
+67 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 

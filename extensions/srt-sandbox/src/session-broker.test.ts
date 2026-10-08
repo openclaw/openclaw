@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-// Tests for the per-session network broker (Stage S4-P1, XIN-1936 — Candidate 2).
+// Tests for the per-session network broker (Stage S4-P1).
 //
 // Two concerns:
 //   1. Pure-unit — broker config shape, parentProxy hot-swap guard, and the

@@ -3,7 +3,7 @@
 // Two concerns:
 //  1. Registration self-verify — the backend registers via
 //     registerSandboxBackend() and resolves through getSandboxBackendFactory().
-//  2. macOS Seatbelt minimal path — reproduces the XIN-1912 8/8 matrix
+//  2. macOS Seatbelt minimal path — reproduces the eight-case permission matrix
 //     (specified directory writable, everything else read-only). Gated to
 //     darwin; on other platforms the backend fails closed by design.
 import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";

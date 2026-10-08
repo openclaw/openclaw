@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 // SRT sandbox filesystem bridge (Stage S3, design v8 §1–§3).
 //
 // Implements the OpenClaw SandboxFsBridge contract
@@ -20,8 +22,7 @@
 // held-pin table enforces single-flight per canonical path, a per-scope cap on
 // concurrent unfinalized pins, a max pin depth, and an idle timeout so a resolve
 // with no following mutate can never leak fds.
-import fs from "node:fs";
-import path from "node:path";
+import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import type {
   SandboxBackendHandle,
   SandboxFsBridge,
@@ -29,6 +30,7 @@ import type {
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { PinOwnerClient } from "./pin-owner-client.js";
+import { buildSrtFilesystemPolicy } from "./srt-runtime-config.js";
 
 /** Context the backend hands the bridge factory (derived from the SDK type). */
 type SandboxFsBridgeContext = Parameters<
@@ -55,6 +57,7 @@ export type SrtFsBridgeDeps = {
   sandbox: SandboxFsBridgeContext;
   /** Writable roots — the exact allowWrite set the pin owner is sandboxed to. */
   writableRoots: readonly string[];
+  filesystem?: SandboxRuntimeConfig["filesystem"];
   /** Pin-owner RPC client (owns spawn/respawn + transport). */
   client: PinOwnerClient;
   limits?: SrtPinLimits;
@@ -115,6 +118,8 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
   private readonly workspaceDir: string;
   private readonly workspaceFlavor: PathFlavor;
   private readonly writableRoots: CanonicalRoot[];
+  private readonly deniedWrites: CanonicalRoot[];
+  private readonly deniedReads: CanonicalRoot[];
   private readonly client: PinOwnerClient;
   private readonly limits: SrtPinLimits;
   private readonly heldPins = new Map<string, HeldPin>();
@@ -128,24 +133,40 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     this.workspaceDir = normalizeAbsolute(deps.sandbox.workspaceDir, this.workspaceFlavor);
     this.client = deps.client;
     this.limits = deps.limits ?? DEFAULT_SRT_PIN_LIMITS;
-    this.writableRoots = deps.writableRoots
-      .map((root) => {
-        const flavor = absolutePathFlavor(root) ?? this.workspaceFlavor;
-        return { logical: normalizeAbsolute(root, flavor), flavor };
-      })
-      .map(({ logical, flavor }) => {
-        let canonical = logical;
-        const nativeFlavor = process.platform === "win32" ? "win32" : "posix";
-        if (flavor === nativeFlavor) {
-          try {
-            canonical = normalizeAbsolute(fs.realpathSync(logical), flavor);
-          } catch {
-            // A not-yet-created writable root canonicalizes to itself; the owner
-            // fails closed later if the anchor genuinely does not exist.
+    const filesystem =
+      deps.filesystem ??
+      buildSrtFilesystemPolicy(
+        {
+          workspaceDir: deps.sandbox.workspaceDir,
+          agentWorkspaceDir: deps.sandbox.agentWorkspaceDir,
+          skillsWorkspaceDir: deps.sandbox.skillsWorkspaceDir,
+          workspaceAccess: deps.sandbox.workspaceAccess,
+          readOnlyResourceMounts: deps.sandbox.readOnlyResourceMounts,
+        },
+        deps.writableRoots,
+      );
+    const canonicalize = (roots: readonly string[]) =>
+      roots
+        .map((root) => {
+          const flavor = absolutePathFlavor(root) ?? this.workspaceFlavor;
+          return { logical: normalizeAbsolute(root, flavor), flavor };
+        })
+        .map(({ logical, flavor }) => {
+          let canonical = logical;
+          const nativeFlavor = process.platform === "win32" ? "win32" : "posix";
+          if (flavor === nativeFlavor) {
+            try {
+              canonical = normalizeAbsolute(fs.realpathSync(logical), flavor);
+            } catch {
+              // A not-yet-created writable root canonicalizes to itself; the owner
+              // fails closed later if the anchor genuinely does not exist.
+            }
           }
-        }
-        return { logical, canonical, flavor };
-      });
+          return { logical, canonical, flavor };
+        });
+    this.writableRoots = canonicalize(filesystem.allowWrite);
+    this.deniedWrites = canonicalize(filesystem.denyWrite);
+    this.deniedReads = canonicalize(filesystem.denyRead);
   }
 
   // --- path planning ---------------------------------------------------------
@@ -166,6 +187,37 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     };
   }
 
+  private assertNotDenied(
+    target: string,
+    flavor: PathFlavor,
+    roots: CanonicalRoot[],
+    ancestors = false,
+  ): void {
+    for (const root of roots) {
+      if (root.flavor !== flavor) {
+        continue;
+      }
+      for (const denied of [root.logical, root.canonical]) {
+        if (isInside(denied, target, flavor) || (ancestors && isInside(target, denied, flavor))) {
+          throw new Error(`Sandbox path is read-only or hidden: ${target}`);
+        }
+      }
+    }
+  }
+
+  private assertReadable(target: string, flavor: PathFlavor): void {
+    this.assertNotDenied(target, flavor, this.deniedReads);
+    if (flavor === (process.platform === "win32" ? "win32" : "posix")) {
+      let canonical: string;
+      try {
+        canonical = fs.realpathSync(target);
+      } catch {
+        return;
+      }
+      this.assertNotDenied(canonical, flavor, this.deniedReads);
+    }
+  }
+
   private matchWritableRoot(
     targetAbs: string,
     flavor: PathFlavor,
@@ -184,8 +236,14 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     throw new Error(`Sandbox path is read-only or outside the writable roots: ${targetAbs}`);
   }
 
-  private planTarget(filePath: string, cwd: string | undefined, mode: "file" | "dir"): TargetPlan {
+  private planTarget(
+    filePath: string,
+    cwd: string | undefined,
+    mode: "file" | "dir",
+    destructive = false,
+  ): TargetPlan {
     const { absolute: targetAbs, flavor } = this.resolveAbsolute(filePath, cwd);
+    this.assertNotDenied(targetAbs, flavor, this.deniedWrites, destructive);
     const { base, canonical } = this.matchWritableRoot(targetAbs, flavor);
     const api = pathApi(flavor);
     const relFull = api.relative(base, targetAbs);
@@ -193,6 +251,7 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
       throw new Error(`Sandbox path escapes the writable root: ${targetAbs}`);
     }
     const pinnedPath = relFull === "" ? canonical : api.normalize(api.join(canonical, relFull));
+    this.assertNotDenied(pinnedPath, flavor, this.deniedWrites, destructive);
 
     if (mode === "dir") {
       const depth = relFull === "" ? 0 : relFull.split(api.sep).length;
@@ -359,6 +418,7 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
       params.filePath,
       params.cwd,
       params.action === "mkdir" ? "dir" : "file",
+      params.action === "remove",
     );
     await this.holdForResolve(plan);
     return { policyPath: plan.policyPath, pinnedPath: plan.pinnedPath };
@@ -371,7 +431,8 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     maxBytes?: number;
   }): Promise<Buffer> {
     params.signal?.throwIfAborted();
-    const { absolute: abs } = this.resolveAbsolute(params.filePath, params.cwd);
+    const { absolute: abs, flavor } = this.resolveAbsolute(params.filePath, params.cwd);
+    this.assertReadable(abs, flavor);
     return this.client.read(abs, params.maxBytes);
   }
 
@@ -427,7 +488,8 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<void> {
     params.signal?.throwIfAborted();
-    const { absolute: sourceAbs } = this.resolveAbsolute(params.sourcePath, params.cwd);
+    const { absolute: sourceAbs, flavor } = this.resolveAbsolute(params.sourcePath, params.cwd);
+    this.assertReadable(sourceAbs, flavor);
     const data = await this.client.read(sourceAbs);
     const plan = this.planTarget(params.destinationPath, params.cwd, "file");
     this.assertPinnedMatches(params.pinnedPath, plan);
@@ -458,7 +520,7 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<void> {
     params.signal?.throwIfAborted();
-    const plan = this.planTarget(params.filePath, params.cwd, "file");
+    const plan = this.planTarget(params.filePath, params.cwd, "file", true);
     this.assertPinnedMatches(params.pinnedPath, plan);
     await this.runMutation(plan, {
       kind: "remove",
@@ -476,8 +538,8 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<void> {
     params.signal?.throwIfAborted();
-    const fromPlan = this.planTarget(params.from, params.cwd, "file");
-    const toPlan = this.planTarget(params.to, params.cwd, "file");
+    const fromPlan = this.planTarget(params.from, params.cwd, "file", true);
+    const toPlan = this.planTarget(params.to, params.cwd, "file", true);
     await this.client.rename({
       fromRoot: fromPlan.canonicalRoot,
       fromRel: fromPlan.rel,
@@ -494,7 +556,8 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null> {
     params.signal?.throwIfAborted();
-    const { absolute: abs } = this.resolveAbsolute(params.filePath, params.cwd);
+    const { absolute: abs, flavor } = this.resolveAbsolute(params.filePath, params.cwd);
+    this.assertReadable(abs, flavor);
     return this.client.stat(abs);
   }
 

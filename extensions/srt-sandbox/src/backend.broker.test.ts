@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-// Backend wiring for the per-session network broker (Stage S4-P1, XIN-1936).
+// Backend wiring for the per-session network broker (Stage S4-P1).
 //
 // Proves the backend routes commands correctly across the two network postures:
 //   - perSessionNetwork=false (default, P0): runShellCommand takes the unchanged

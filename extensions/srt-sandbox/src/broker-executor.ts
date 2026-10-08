@@ -1,90 +1,14 @@
-// Persistent per-session broker executor (Stage S4-P1, XIN-1936 / Candidate 2).
-//
-// Design authority: S4 spike verdict (XIN-1932) — "one `srt --control-fd`
-// broker process per session". Each `srt` CLI invocation runs its own
-// SandboxManager.initialize() (SRT dist/cli.js:189), so it owns a private
-// proxy + auth token + allowlist + (Linux) network namespace. That is the
-// only place per-session network scope is real: inside a single manager
-// process the proxy/token/allowlist are module-level singletons (R3).
-//
-// This program is the command the broker's `srt -c <cmd>` runs. It is a
-// long-lived executor loop that stays INSIDE the broker's sandbox for the
-// life of the session, so every command it launches is a descendant of the
-// sandboxed shell and therefore inherits the broker's proxy env (baked into
-// the wrap by SRT) and, on Linux, its network namespace. That inheritance —
-// not a discovered port/token — is what routes a session's traffic through
-// its own broker. It speaks a minimal newline-delimited JSON RPC over
-// stdin/stdout (the same transport shape as the S3 pin owner):
-//
-//   ready    -> emitted once at startup so the driver can health-check spawn.
-//   exec     -> run {script} via `bash -c`, feed optional {stdin}, honour an
-//               optional per-call {timeoutMs}, return {code, stdout, stderr}
-//               (stdout/stderr base64 so binary output survives the channel).
-//   ping     -> health probe (pid + executed-command counter).
-//   shutdown -> clean exit; the broker's srt process then exits too.
-//
-// Embedded as a shell literal and run via `python3 -c`, mirroring the S3 pin
-// owner's GUEST idiom (no separate file to ship). Reads are open under the
-// SRT policy, so selecting python3 and executing bash are both permitted; the
-// broker's filesystem allowlist still confines any writes the command makes.
+// Read-only health channel for the per-session network control process.
+// Commands run under host custody in independent, same-policy sandboxes.
 export const BROKER_EXECUTOR_PYTHON = String.raw`
-import sys, os, json, base64, signal, subprocess
+import sys, os, json
 
 def respond(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
 
-def run_exec(req):
-    script = req.get("script")
-    if not isinstance(script, str):
-        return {"ok": False, "error": "exec requires a string script"}
-    stdin_b64 = req.get("stdin")
-    stdin_bytes = base64.b64decode(stdin_b64) if isinstance(stdin_b64, str) else None
-    timeout = req.get("timeoutMs")
-    timeout_s = (timeout / 1000.0) if isinstance(timeout, (int, float)) and timeout > 0 else None
-    shell = req.get("shell") or "/bin/bash"
-    read_fd, write_fd = os.pipe()
-    launcher = (
-        '{ while IFS= read -r _ <&%d; do :; done; kill -KILL -- "-$$" 2>/dev/null; } '
-        '<&%d 1>&- 2>&- & __srt_live=$!\n%s\n__srt_ec=$?\n'
-        'kill "$__srt_live" 2>/dev/null\nexit "$__srt_ec"'
-    ) % (read_fd, read_fd, script)
-    try:
-        proc = subprocess.Popen(
-            [shell, "-c", launcher],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-            pass_fds=(read_fd,),
-        )
-        os.close(read_fd)
-        stdout, stderr = proc.communicate(input=stdin_bytes, timeout=timeout_s)
-    except subprocess.TimeoutExpired as exc:
-        os.killpg(proc.pid, signal.SIGKILL)
-        stdout, stderr = proc.communicate()
-        err = (stderr or b"") + b"\n[srt-broker] command timed out\n"
-        return {
-            "ok": True,
-            "code": 124,
-            "timedOut": True,
-            "stdout": base64.b64encode(stdout or b"").decode("ascii"),
-            "stderr": base64.b64encode(err).decode("ascii"),
-        }
-    finally:
-        try:
-            os.close(write_fd)
-        except OSError:
-            pass
-    return {
-        "ok": True,
-        "code": proc.returncode,
-        "stdout": base64.b64encode(stdout).decode("ascii"),
-        "stderr": base64.b64encode(stderr).decode("ascii"),
-    }
 
 def main():
-    executed = 0
     # Announce readiness so the driver can distinguish a live broker from a
     # spawn that never reached the sandboxed command (fail-closed health-check).
     respond({"ready": True, "pid": os.getpid()})
@@ -103,16 +27,10 @@ def main():
             respond({"id": rid, "ok": True, "result": "bye"})
             break
         if op == "ping":
-            respond({"id": rid, "ok": True, "pong": True, "pid": os.getpid(), "executed": executed})
+            respond({"id": rid, "ok": True, "pong": True, "pid": os.getpid(), "executed": 0})
             continue
         if op == "exec":
-            try:
-                out = run_exec(req)
-            except Exception as exc:
-                out = {"ok": False, "error": str(exc)}
-            executed += 1
-            out["id"] = rid
-            respond(out)
+            respond({"id": rid, "ok": False, "error": "command execution requires host custody"})
             continue
         respond({"id": rid, "ok": False, "error": "unknown op: " + str(op)})
 
@@ -135,8 +53,7 @@ export const BROKER_EXECUTOR_PYTHON_CANDIDATES = [
  * Build the shell command the broker's `srt -c <cmd>` runs. Selects the first
  * available python3 (fail-closed with exit 127 if none), then execs it on the
  * embedded executor with stdin/stdout as the RPC channel. `srt` wraps this
- * command with the sandbox + proxy env, so the executor and every command it
- * spawns run under the broker's kernel enforcement and network scope.
+ * command with the sandbox + proxy env, so the health channel runs under kernel enforcement.
  */
 export function buildBrokerExecutorCommand(): string {
   const literal = `'${BROKER_EXECUTOR_PYTHON.replaceAll("'", `'\\''`)}'`;

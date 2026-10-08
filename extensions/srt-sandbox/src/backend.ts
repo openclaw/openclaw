@@ -39,17 +39,13 @@ import { PinOwnerClient } from "./pin-owner-client.js";
 import { buildPinOwnerCommand } from "./pin-owner-source.js";
 import { ScopeChildReaper } from "./scope-reaper.js";
 import { SessionBroker } from "./session-broker.js";
-import {
-  buildSrtRuntimeConfig,
-  resolveWritableRoots,
-  type SrtScopePolicyInput,
-} from "./srt-runtime-config.js";
+import { buildSrtRuntimeConfig, type SrtScopePolicyInput } from "./srt-runtime-config.js";
 import {
   acquireSrtRuntime,
   releaseSrtRuntime,
   shutdownSrtRuntime,
 } from "./srt-runtime-lifecycle.js";
-import { WindowsSrtSandboxBackend } from "./windows-backend.js";
+import { WindowsSrtSandboxBackend, windowsScopePolicyKey } from "./windows-backend.js";
 import { resolveWindowsSrtWin } from "./windows-sandbox-config.js";
 
 /** Public backend id used with registerSandboxBackend() and agents.defaults.sandbox.backend. */
@@ -64,7 +60,11 @@ type SrtBackendDependencies = {
  * WindowsSrtSandboxBackend). Both expose the scope key and a dispose() that
  * reaps the scope's sandbox processes, so teardown treats them uniformly.
  */
-type DisposableScopeBackend = { readonly scopeKey: string; dispose(): void | Promise<void> };
+type DisposableScopeBackend = {
+  readonly scopeKey: string;
+  readonly runtimeId?: string;
+  dispose(): void | Promise<void>;
+};
 
 /**
  * Live per-scope backend instances, so scope teardown (manager.removeRuntime)
@@ -74,9 +74,13 @@ type DisposableScopeBackend = { readonly scopeKey: string; dispose(): void | Pro
  */
 const liveScopeBackends = new Set<DisposableScopeBackend>();
 
-/** Monotonic per-scope index (Windows account-pool / port-slot assignment). */
-let windowsScopeCounter = 0;
-let windowsScopeActive = false;
+let windowsScopeOwner:
+  | {
+      generation: number;
+      policyKey: string;
+      promise: Promise<SandboxBackendHandle>;
+    }
+  | undefined;
 
 type PluginLifecycleState =
   | { phase: "stopped" }
@@ -211,7 +215,7 @@ export function shutdownSrtSandboxRuntime(
 /** Dispose the live SRT scope backends for one scope (manager.removeRuntime). */
 export async function disposeSrtScopeBackends(scopeKey: string): Promise<void> {
   for (const backend of Array.from(liveScopeBackends)) {
-    if (backend.scopeKey === scopeKey) {
+    if (backend.scopeKey === scopeKey || backend.runtimeId === scopeKey) {
       await backend.dispose();
     }
   }
@@ -223,6 +227,7 @@ function scopePolicyFromParams(params: CreateSandboxBackendParams): SrtScopePoli
     agentWorkspaceDir: params.agentWorkspaceDir,
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     workspaceAccess: params.cfg.workspaceAccess,
+    readOnlyResourceMounts: params.readOnlyResourceMounts,
   };
 }
 
@@ -300,13 +305,10 @@ class SrtSandboxBackend {
   /** Lazily create the per-session broker for this scope (S4-P1). */
   private ensureSessionBroker(): SessionBroker {
     if (!this.sessionBroker) {
-      const writableRoots = resolveWritableRoots(
-        scopePolicyFromParams(this.params),
-        this.deps.pluginConfig.writablePaths,
-      );
       this.sessionBroker = new SessionBroker({
         reaper: this.reaper,
-        writableRoots,
+        writableRoots: this.runtimeConfig.filesystem.allowWrite,
+        filesystem: this.runtimeConfig.filesystem,
         policy: {
           allowedDomains: this.deps.pluginConfig.allowedDomains,
           parentProxy: this.deps.pluginConfig.parentProxy,
@@ -358,11 +360,9 @@ class SrtSandboxBackend {
   ): Promise<SandboxBackendCommandResult> {
     params.signal?.throwIfAborted();
     const script = withPositionalArgs(params.script, params.args);
-    // S4-P1: per-session isolation routes the command through this scope's own
-    // broker — a private srt process with its own proxy/allowlist/netns. The
-    // executor runs the command INSIDE that sandbox, so its network scope is the
-    // session's, not a shared one. A broker spawn/health failure fails closed
-    // (throws) rather than falling back to the in-process (P0) path.
+    // The session policy controls a fresh SRT sandbox for each command. Host
+    // custody remains outside the guest's process-signal permissions; a failed
+    // health probe rejects execution before any unsandboxed command can start.
     if (this.perSessionNetworkEnabled) {
       const broker = this.ensureSessionBroker();
       const result = await broker.exec({
@@ -443,18 +443,10 @@ class SrtSandboxBackend {
       // S3: AC4 pinned-mutation fs bridge backed by the per-scope pin owner.
       createFsBridge: ({ sandbox }) => {
         if (!this.fsBridge) {
-          const writableRoots = resolveWritableRoots(
-            {
-              workspaceDir: sandbox.workspaceDir,
-              agentWorkspaceDir: sandbox.agentWorkspaceDir,
-              skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
-              workspaceAccess: sandbox.workspaceAccess,
-            },
-            this.deps.pluginConfig.writablePaths,
-          );
           this.fsBridge = createSrtFsBridge({
             sandbox,
-            writableRoots,
+            writableRoots: this.runtimeConfig.filesystem.allowWrite,
+            filesystem: this.runtimeConfig.filesystem,
             client: this.pinOwnerClient,
           });
         }
@@ -472,46 +464,59 @@ export function createSrtSandboxBackendFactory(
   return async (params) => {
     const requestGeneration = assertSrtSandboxAdmission(admissionGeneration);
     admissionGeneration ??= requestGeneration;
+    params.assertRuntimeCurrent?.();
     if (process.platform === "win32") {
-      // S6 Windows path: low-priv account + NTFS ACL + WFP + worker-RPC per-scope
-      // (windows-backend.ts). Additive; the macOS/Linux path below is untouched.
-      if (windowsScopeActive) {
-        throw new Error(
-          "srt-sandbox: SRT 0.0.76 cannot bind concurrent scopes to distinct Windows accounts",
-        );
-      }
-      // Reserve the one supported Windows scope before the first await so two
-      // concurrent factory calls cannot both pass the admission check.
-      windowsScopeActive = true;
-      let backend: WindowsSrtSandboxBackend | undefined;
-      try {
-        const srtWin = resolveWindowsSrtWin(deps.pluginConfig.windows ?? {});
-        await assertSrtSandboxAvailable(srtWin);
-        assertSrtSandboxAdmission(requestGeneration);
-        backend = new WindowsSrtSandboxBackend(params, deps, windowsScopeCounter++);
-        const admittedBackend = backend;
-        const entry: DisposableScopeBackend = {
-          scopeKey: admittedBackend.scopeKey,
-          dispose: () => {
-            try {
-              admittedBackend.dispose();
-            } finally {
-              windowsScopeActive = false;
-              liveScopeBackends.delete(entry);
-            }
-          },
-        };
-        liveScopeBackends.add(entry);
-        return admittedBackend.asHandle();
-      } catch (error) {
-        try {
-          backend?.dispose();
-        } finally {
-          windowsScopeActive = false;
+      const policyKey = windowsScopePolicyKey(params, deps.pluginConfig);
+      if (windowsScopeOwner) {
+        if (
+          windowsScopeOwner.generation !== requestGeneration ||
+          windowsScopeOwner.policyKey !== policyKey
+        ) {
+          throw new Error("srt-sandbox: another Windows scope or policy already owns this runtime");
         }
-        throw error;
+        const handle = await windowsScopeOwner.promise;
+        assertSrtSandboxAdmission(requestGeneration);
+        params.assertRuntimeCurrent?.();
+        return handle;
       }
+      let resolveHandle!: (handle: SandboxBackendHandle) => void;
+      let rejectHandle!: (reason: unknown) => void;
+      const promise = new Promise<SandboxBackendHandle>((resolve, reject) => {
+        resolveHandle = resolve;
+        rejectHandle = reject;
+      });
+      const owner = { generation: requestGeneration, policyKey, promise };
+      windowsScopeOwner = owner;
+      // Keep synchronous admission ownership even while the read-only probe is pending.
+      void (async () => {
+        try {
+          await assertSrtSandboxAvailable(resolveWindowsSrtWin(deps.pluginConfig.windows ?? {}));
+          assertSrtSandboxAdmission(requestGeneration);
+          params.assertRuntimeCurrent?.();
+          const backend = new WindowsSrtSandboxBackend(params);
+          const entry: DisposableScopeBackend = {
+            scopeKey: backend.scopeKey,
+            runtimeId: backend.runtimeId,
+            dispose: () => {
+              backend.dispose();
+              if (windowsScopeOwner === owner) {
+                windowsScopeOwner = undefined;
+              }
+              liveScopeBackends.delete(entry);
+            },
+          };
+          liveScopeBackends.add(entry);
+          resolveHandle(backend.asHandle());
+        } catch (error) {
+          if (windowsScopeOwner === owner) {
+            windowsScopeOwner = undefined;
+          }
+          rejectHandle(error);
+        }
+      })();
+      return promise;
     }
+
     await assertSrtSandboxAvailable();
     assertSrtSandboxAdmission(requestGeneration);
     const backend = new SrtSandboxBackend(params, deps);

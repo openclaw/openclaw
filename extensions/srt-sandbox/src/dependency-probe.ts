@@ -35,8 +35,8 @@ import {
 
 /**
  * Platforms the SRT backend enforces today: macOS Seatbelt (S1), Linux
- * bwrap + seccomp + netns (S5), and Windows low-privilege account + NTFS ACL +
- * WFP + worker-RPC per-scope (S6).
+ * bwrap + seccomp + netns. Windows dependency discovery remains read-only;
+ * native execution is gated separately because shared ownership is unproven.
  */
 const SUPPORTED_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux", "win32"]);
 
@@ -62,7 +62,8 @@ function windowsGuidance(problems: readonly string[]): string {
     `${problems.join("; ")}. Ensure the vendored srt-win.exe is present (reinstall ` +
     `@anthropic-ai/sandbox-runtime), the Microsoft Visual C++ 2015-2022 Redistributable is ` +
     `installed, and the Secondary Logon (seclogon) service is enabled. The SRT sandbox refuses ` +
-    `to run commands unsandboxed (fail-closed).`
+    `to run commands unsandboxed (fail-closed). Windows execution remains disabled until ` +
+    `the runtime supports exclusive account, credential, WFP, and ACL ownership.`
   );
 }
 

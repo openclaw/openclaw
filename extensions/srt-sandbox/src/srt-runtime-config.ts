@@ -1,8 +1,8 @@
+import fs from "node:fs";
 import path from "node:path";
 // Translate an OpenClaw sandbox scope into an SRT runtime config.
 //
-// Encodes the file-system model verified during research (XIN-1912, macOS
-// Seatbelt 8/8): SRT reads are deny-then-allow (open by default, narrowed via
+// Encodes the file-system model verified on macOS Seatbelt: SRT reads are deny-then-allow (open by default, narrowed via
 // denyRead) and writes are allow-only (denied by default, widened via the
 // allowWrite allowlist, denyWrite takes precedence). "Specified directory
 // writable, everything else read-only" therefore reduces to a single
@@ -15,6 +15,7 @@ import path from "node:path";
 // SandboxRuntimeConfig). Consumed by SandboxManager.initialize() /
 // wrapWithSandboxArgv() (src/sandbox/sandbox-manager.ts:630, :1800).
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
+import { resolveReadOnlyWorkspaceSkillMounts } from "openclaw/plugin-sdk/sandbox";
 import type { ResolvedSrtPluginConfig, SrtNetworkMode } from "./config.js";
 
 /** The OpenClaw scope inputs that determine the SRT file/network policy. */
@@ -27,6 +28,7 @@ export type SrtScopePolicyInput = {
   skillsWorkspaceDir?: string;
   /** Whether the workspace is writable ("rw"), read-only ("ro"), or hidden. */
   workspaceAccess: "none" | "ro" | "rw";
+  readOnlyResourceMounts?: readonly { hostPath: string; containerPath: string }[];
 };
 
 function isAbsolutePath(value: string): boolean {
@@ -50,25 +52,90 @@ function dedupeAbsolute(paths: Array<string | undefined>): string[] {
   return out;
 }
 
-/**
- * Compute the writable allowlist for a scope.
- *
- * The workspace directory is only writable when the scope grants "rw"; a "ro"
- * or "none" scope keeps the workspace read-only (writes fail closed at the
- * kernel layer). The agent workspace and skills mirror plus any configured
- * extra paths are always added so the backend can stage its own scratch state.
- */
+/** Workspace permissions never promote the hidden host or managed skills. */
 export function resolveWritableRoots(
   scope: SrtScopePolicyInput,
   extraWritablePaths: readonly string[],
 ): string[] {
-  const roots: Array<string | undefined> = [
-    scope.workspaceAccess === "rw" ? scope.workspaceDir : undefined,
-    scope.agentWorkspaceDir,
-    scope.skillsWorkspaceDir,
+  return dedupeAbsolute([
+    scope.workspaceAccess !== "ro" ? scope.workspaceDir : undefined,
+    scope.workspaceAccess === "rw" ? scope.agentWorkspaceDir : undefined,
     ...extraWritablePaths,
-  ];
-  return dedupeAbsolute(roots);
+  ]);
+}
+
+function withCanonicalAliases(paths: Array<string | undefined>): string[] {
+  return dedupeAbsolute(
+    paths.flatMap((entry) => {
+      if (!entry) {
+        return [];
+      }
+      try {
+        return [entry, fs.realpathSync(entry)];
+      } catch {
+        // Writable descendants may not exist yet. Resolve their admitted
+        // ancestor so a symlink cannot hide a protected root from filtering.
+        const api = entry.startsWith("/") ? path.posix : path.win32;
+        let parent = api.dirname(entry);
+        const suffix = [api.basename(entry)];
+        while (parent !== api.dirname(parent)) {
+          try {
+            return [entry, api.join(fs.realpathSync(parent), ...suffix)];
+          } catch {
+            suffix.unshift(api.basename(parent));
+            parent = api.dirname(parent);
+          }
+        }
+        return [entry];
+      }
+    }),
+  );
+}
+
+/** A single policy snapshot owns command, broker and file-tool permissions. */
+export function buildSrtFilesystemPolicy(
+  scope: SrtScopePolicyInput,
+  extraWritablePaths: readonly string[],
+): SandboxRuntimeConfig["filesystem"] {
+  const skills = resolveReadOnlyWorkspaceSkillMounts({ ...scope, workdir: scope.workspaceDir });
+  const denyRead = withCanonicalAliases(
+    scope.workspaceAccess === "none" ? [scope.agentWorkspaceDir] : [],
+  );
+  const denyWrite = withCanonicalAliases([
+    ...(scope.workspaceAccess === "ro" ? [scope.workspaceDir, scope.agentWorkspaceDir] : []),
+    ...(scope.workspaceAccess === "none" ? [scope.agentWorkspaceDir] : []),
+    ...skills.map((mount) => mount.hostPath),
+    ...(scope.readOnlyResourceMounts ?? []).map((mount) => mount.hostPath),
+  ]);
+  const within = (candidate: string, root: string) => {
+    const api = candidate.startsWith("/") ? path.posix : path.win32;
+    const relative = api.relative(root, candidate);
+    return (
+      relative === "" ||
+      (!relative.startsWith(`..${api.sep}`) && relative !== ".." && !api.isAbsolute(relative))
+    );
+  };
+  const allowWrite = resolveWritableRoots(scope, extraWritablePaths).flatMap((candidate) => {
+    const aliases = withCanonicalAliases([candidate]);
+    // Linux binds writable roots after hiding reads. An ancestor writable
+    // mount would restore a hidden host workspace, so reject both overlaps.
+    if (
+      aliases.some(
+        (alias) =>
+          denyWrite.some((root) => within(alias, root)) ||
+          denyRead.some((root) => within(root, alias)),
+      )
+    ) {
+      return [];
+    }
+    return aliases;
+  });
+  return {
+    allowRead: [],
+    denyRead,
+    allowWrite: dedupeAbsolute(allowWrite),
+    denyWrite,
+  };
 }
 
 function resolveNetwork(
@@ -99,22 +166,15 @@ function resolveNetwork(
 /**
  * Build the SRT runtime config for one scope.
  *
- * Reads are left unrestricted (allowRead/denyRead empty) so non-writable paths
- * remain readable — the "rest read-only" half of the guarantee. Writes are
- * confined to {@link resolveWritableRoots}.
+ * Hidden host workspaces are denied reads; other non-writable paths remain
+ * readable. Explicit readonly boundaries override every writable root.
  */
 export function buildSrtRuntimeConfig(
   scope: SrtScopePolicyInput,
   pluginConfig: ResolvedSrtPluginConfig,
 ): SandboxRuntimeConfig {
-  const allowWrite = resolveWritableRoots(scope, pluginConfig.writablePaths);
   return {
     network: resolveNetwork(pluginConfig.network, pluginConfig.allowedDomains),
-    filesystem: {
-      allowRead: [],
-      denyRead: [],
-      allowWrite,
-      denyWrite: [],
-    },
+    filesystem: buildSrtFilesystemPolicy(scope, pluginConfig.writablePaths),
   };
 }

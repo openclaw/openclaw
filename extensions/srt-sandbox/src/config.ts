@@ -39,7 +39,7 @@ export type ResolvedSrtPluginConfig = {
   /** Buffered-command timeout in milliseconds (runShellCommand / probes). */
   commandTimeoutMs: number;
   /**
-   * S4-P1 (XIN-1936): when true, each session is routed through its OWN
+   * S4-P1: when true, each session is routed through its OWN
    * `srt --control-fd` broker process (Candidate 2), giving real per-session
    * network isolation — a private proxy + token + allowlist + (Linux) netns per
    * session. When false (default) the P0 global-allowlist in-process path is
@@ -54,10 +54,9 @@ export type ResolvedSrtPluginConfig = {
    */
   parentProxy?: { http?: string; https?: string; noProxy?: string };
   /**
-   * S6 Windows options. Each scope maps to a low-privilege account + WFP
-   * sublayer + loopback port range (per-scope isolation). `srtWinPath` overrides
-   * the vendored per-arch `srt-win.exe`; `proxyPortBase` is the base
-   * loopback PERMIT port. Only consulted on win32.
+   * Reserved Windows discovery settings. Native execution is disabled with
+   * SRT 0.0.76 until account, credential, WFP and ACL provisioning have exclusive
+   * ownership and retirement-safe rollback. proxyPortBase has no runtime effect.
    */
   windows?: {
     srtWinPath?: string;

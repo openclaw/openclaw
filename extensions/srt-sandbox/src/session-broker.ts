@@ -1,36 +1,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-// Per-session network broker (Stage S4-P1, XIN-1936 — Candidate 2).
-//
-// Implements the S4 spike verdict (XIN-1932): one `srt --control-fd` broker
-// process per session. Each broker is an independent `srt` CLI process, so it
-// runs its own SandboxManager.initialize() and therefore owns a PRIVATE proxy
-// + auth token + allowlist + (Linux) network namespace. That per-process
-// separation is the only real fix for R3 — inside a single manager process the
-// network layer is module-level singletons bound once at initialize()
-// (sandbox-manager.ts:126,129,147,908-911), so two scopes sharing one manager
-// share one network policy.
-//
-// This class owns a broker's whole lifecycle:
-//   - spawn: write a per-broker settings file, launch `srt --settings <f>
-//     --control-fd 4 -c <executor>` through the S2 reaper (detached group +
-//     liveness launcher), and health-check the `ready` handshake. A spawn that
-//     never reaches the sandboxed executor fails CLOSED — exec rejects, and the
-//     session never runs unsandboxed or through another session's broker.
-//   - exec: newline-delimited JSON RPC over the broker's stdin/stdout. The
-//     executor runs each command INSIDE the broker's sandbox, so the command's
-//     traffic inherits the broker's proxy env + netns — the session's own
-//     network scope, not a shared one.
-//   - re-scope: write a full config JSON-line to the control fd; SRT's
-//     updateConfig() swaps the singleton config live (sandbox-manager.ts:
-//     1956-1986), so allowlist changes take effect for subsequent requests with
-//     no broker restart. parentProxy is captured by value at proxy creation and
-//     is NOT hot-swappable (:1979-1982), so a parentProxy change fails closed
-//     with a clear error demanding a re-init rather than silently no-op'ing.
-//   - death: every in-flight call fails closed; a later exec lazily respawns a
-//     fresh (still sandboxed, same-policy) broker — a crash never wedges the
-//     session and never drops it out of the sandbox.
+// Session network policy control and health channel. Buffered and streaming
+// commands each receive a fresh same-policy SRT sandbox under a host guardian.
+// Cleanup authority must remain outside the guest's signaling permissions.
 import { createRequire } from "node:module";
 import path from "node:path";
+import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import { resolvePreferredOpenClawTmpDir, shellEscape } from "openclaw/plugin-sdk/sandbox";
 import {
   buildBrokerRuntimeConfig,
@@ -40,6 +14,7 @@ import {
   type BrokerParentProxy,
 } from "./broker-config.js";
 import { buildBrokerExecutorCommand } from "./broker-executor.js";
+import { ExecCustody } from "./exec-custody.js";
 import { CONTROL_FD, type BrokerChildHandle, type ScopeChildReaper } from "./scope-reaper.js";
 
 /** Spawn / health-check failed; the session has no network and no unsandboxed fallback. */
@@ -87,6 +62,7 @@ export type SessionBrokerDeps = {
   reaper: ScopeChildReaper;
   /** Writable roots for the broker's filesystem allowlist. */
   writableRoots: string[];
+  filesystem?: SandboxRuntimeConfig["filesystem"];
   /** Initial per-session network policy. */
   policy: BrokerNetworkPolicy;
   /** Working directory for the broker process. */
@@ -131,6 +107,7 @@ function resolveSrtCliPath(): string {
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
 
 export class SessionBroker {
+  private readonly custody = new ExecCustody();
   private proc: BrokerChildHandle | undefined;
   private spawning: Promise<BrokerChildHandle> | undefined;
   private nextRequestId = 1;
@@ -175,6 +152,7 @@ export class SessionBroker {
     return serializeBrokerConfig(
       buildBrokerRuntimeConfig({
         writableRoots: this.deps.writableRoots,
+        filesystem: this.deps.filesystem,
         policy: { allowedDomains: this.allowedDomains, parentProxy: this.parentProxy },
       }),
     );
@@ -481,30 +459,34 @@ export class SessionBroker {
   /** Run one command inside the broker's sandbox and network scope. */
   async exec(params: BrokerExecParams): Promise<BrokerExecResult> {
     params.signal?.throwIfAborted();
-    const proc = await this.ensureBroker();
+    await this.ensureBroker();
     const timeoutMs = params.timeoutMs ?? this.deps.rpcTimeoutMs;
-    const payload: Record<string, unknown> = { op: "exec", script: params.script };
-    if (params.timeoutMs !== undefined) {
-      payload.timeoutMs = params.timeoutMs;
+    // Each command gets the current session policy in a fresh sandbox. Its
+    // guardian stays outside that sandbox, so guest signals cannot revoke the
+    // timeout or parent-death authority. Concurrent commands retain isolation.
+    const script = params.shell
+      ? `${shellEscape(params.shell)} -c ${shellEscape(params.script)}`
+      : params.script;
+    const command = this.prepareCommand(script, {});
+    const env = Object.fromEntries(
+      Object.entries(command.env).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+    try {
+      return await this.custody.run(
+        { argv: command.argv, env, cwd: command.cwd, stdinMode: "pipe-open" },
+        {
+          stdin: params.stdin,
+          timeoutMs,
+          signal: params.signal,
+          cleanup: command.cleanup,
+        },
+      );
+    } catch (error) {
+      command.cleanup();
+      throw error;
     }
-    if (params.shell !== undefined) {
-      payload.shell = params.shell;
-    }
-    if (params.stdin !== undefined) {
-      const buf = typeof params.stdin === "string" ? Buffer.from(params.stdin) : params.stdin;
-      payload.stdin = buf.toString("base64");
-    }
-    // Give the RPC deadline headroom over the command's own timeout so a
-    // command that runs to its limit reports a real result instead of an
-    // RPC timeout racing it.
-    const rpcTimeout = params.timeoutMs !== undefined ? timeoutMs + 5_000 : this.deps.rpcTimeoutMs;
-    const response = await this.request(proc, payload, rpcTimeout, "exec", params.signal);
-    return {
-      code: typeof response.code === "number" ? response.code : 1,
-      stdout: Buffer.from(typeof response.stdout === "string" ? response.stdout : "", "base64"),
-      stderr: Buffer.from(typeof response.stderr === "string" ? response.stderr : "", "base64"),
-      timedOut: response.timedOut === true,
-    };
   }
 
   /** Health probe over the RPC channel. Returns the broker pid + exec count. */
@@ -552,6 +534,7 @@ export class SessionBroker {
       return;
     }
     this.disposed = true;
+    this.custody.dispose();
     const proc = this.proc;
     if (proc) {
       try {

@@ -222,7 +222,7 @@ describe.skipIf(!isLinux)("srt sandbox Linux buildExecSpec (bwrap wrapper in arg
 // when the helper is absent; this proves the positive case on a host where the
 // helper IS present — SRT actually threads the vendored apply-seccomp binary
 // into the bwrap invocation it hands back for a real Linux wrap. Without this,
-// "seccomp is applied" rested on hand-run evidence only (XIN-1926 finding B2).
+// "seccomp is applied" rested on hand-run evidence only.
 describe.skipIf(!isLinux)("srt sandbox Linux seccomp engaged (AC-R3)", () => {
   it("threads the vendored apply-seccomp binary into the bwrap argv for a Linux wrap", async () => {
     const ws = mkdtempSync(path.join(tmpdir(), "srt-lx-seccomp-"));

@@ -39,6 +39,7 @@ export type BrokerNetworkPolicy = {
 export type BuildBrokerRuntimeConfigInput = {
   /** Writable roots for the broker's filesystem allowlist (scope dirs + extras). */
   writableRoots: string[];
+  filesystem?: SandboxRuntimeConfig["filesystem"];
   /** The session's network policy. */
   policy: BrokerNetworkPolicy;
 };
@@ -95,7 +96,7 @@ export function buildBrokerRuntimeConfig(
   }
   return {
     network,
-    filesystem: {
+    filesystem: input.filesystem ?? {
       allowRead: [],
       denyRead: [],
       allowWrite: [...input.writableRoots],

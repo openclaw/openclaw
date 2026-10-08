@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { resolveSrtPluginConfig } from "./config.js";
 import { buildSrtRuntimeConfig, resolveWritableRoots } from "./srt-runtime-config.js";
-import { buildWindowsExecSpec } from "./windows-sandbox-config.js";
 
 const scope = {
   workspaceDir: "/workspace",
@@ -61,26 +60,5 @@ describe("SRT configuration contract", () => {
         windows: { srtWinPath: "C:\\tools\\srt-win.exe" },
       }),
     ).not.toThrow();
-  });
-
-  it("preserves requested Windows environment and rejects unsupported account switching", () => {
-    const spec = buildWindowsExecSpec({
-      command: "echo %TOKEN%",
-      cwd: "C:\\workspace",
-      allowWrite: ["C:\\workspace"],
-      sandboxUser: "srt-sandbox",
-      setEnvVars: { TOKEN: "scope-value" },
-      srtWin: { exe: "C:\\tools\\srt-win.exe", prependArgs: [] },
-    });
-    expect(spec.argv).toContain("TOKEN=scope-value");
-    expect(() =>
-      buildWindowsExecSpec({
-        command: "whoami",
-        cwd: "C:\\workspace",
-        allowWrite: [],
-        sandboxUser: "srt-other",
-        srtWin: { exe: "C:\\tools\\srt-win.exe", prependArgs: [] },
-      }),
-    ).toThrow(/account pools are unsupported/);
   });
 });

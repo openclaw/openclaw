@@ -32,7 +32,8 @@ vi.mock("@anthropic-ai/sandbox-runtime", async (importActual) => {
   };
 });
 
-vi.mock("./dependency-probe.js", () => ({
+vi.mock("./dependency-probe.js", async (importActual) => ({
+  ...(await importActual<typeof import("./dependency-probe.js")>()),
   assertSrtSandboxAvailable: vi.fn().mockResolvedValue(undefined),
 }));
 
