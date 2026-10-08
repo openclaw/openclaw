@@ -124,6 +124,7 @@ export const SOURCE_ADMISSION_PATHS = [
   "src/infra/retry-after.ts",
   "src/infra/retry-attempt-errors.ts",
   "src/infra/retry.ts",
+  "src/infra/retryable-network-errors.ts",
   "src/infra/secure-random.ts",
   "src/logging/secret-redaction-registry.ts",
   "src/shared/global-singleton.ts",

@@ -1,6 +1,7 @@
 // Defines the bounded retry contract shared by ClawHub runtime and release reads.
 import { parseRetryAfterHeaderSeconds } from "./retry-after.js";
 import { retryAsync } from "./retry.js";
+import { isTransientNetworkError } from "./retryable-network-errors.js";
 
 const CLAWHUB_RETRY_DELAYS_MS = [1_000, 3_000, 10_000] as const;
 const CLAWHUB_MAX_RETRY_AFTER_MS = 60_000;
@@ -31,7 +32,7 @@ function parseRetryAfterMs(headers: Headers): number | undefined {
     return undefined;
   }
   const delayMs = retryAfterSeconds * 1_000;
-  return delayMs <= CLAWHUB_MAX_RETRY_AFTER_MS ? delayMs : undefined;
+  return delayMs;
 }
 
 /**
@@ -60,6 +61,14 @@ export async function retryClawHubRead<T extends ClawHubResponseHandle>(
           error instanceof RetryableClawHubResponse
             ? parseRetryAfterMs(error.result.response.headers)
             : undefined,
+        shouldRetry: (error) =>
+          error instanceof RetryableClawHubResponse
+            ? // A server delay outside our budget stops recovery; never send an
+              // earlier request merely to fit the bounded retry schedule.
+              (parseRetryAfterMs(error.result.response.headers) ?? 0) <= CLAWHUB_MAX_RETRY_AFTER_MS
+            : // Undici wraps permanent TLS and transient socket failures alike;
+              // classify the cause, not the generic outer "fetch failed" message.
+              isTransientNetworkError(error instanceof Error && error.cause ? error.cause : error),
         onRetry: async ({ err }) => {
           if (err instanceof RetryableClawHubResponse) {
             await options.disposeRetry(err.result);
