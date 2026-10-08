@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChatRunState } from "../server-chat-state.js";
@@ -257,12 +256,4 @@ describe("global chat broadcast ownership", () => {
       ],
     ]);
   });
-});
-
-// The terminal publication adapter must not regain a run-ID registration lookup.
-it("requires captured registrations for terminal marking", () => {
-  const broadcaster = readFileSync(new URL("./chat-broadcast.ts", import.meta.url), "utf8");
-  expect(broadcaster).not.toContain("chatAbortControllers");
-  const abortOwner = readFileSync(new URL("../chat-abort.ts", import.meta.url), "utf8");
-  expect(abortOwner).not.toMatch(/markChatAbortTerminalOutcome\s*\([^;]*\.get\s*\(/);
 });

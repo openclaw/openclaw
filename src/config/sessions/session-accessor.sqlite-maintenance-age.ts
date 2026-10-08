@@ -315,7 +315,7 @@ export function recordSessionEntryMaintenanceAgeFact(
 
 /** The kick uses the same periodic deadline as inline maintenance callers. */
 export function readSessionEntryMaintenanceNextAgeAt(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   maintenance: ResolvedSessionMaintenanceConfig,
 ): number | undefined {
   if (maintenance.mode !== "enforce") {

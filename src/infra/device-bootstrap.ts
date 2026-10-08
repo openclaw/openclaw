@@ -17,7 +17,7 @@ import {
   DevicePairingAuthorityRefusedError,
   executeDevicePairingMutation,
 } from "./device-pairing-worker.js";
-import type { PairedDevice } from "./device-pairing.types.js";
+import type { DeviceBootstrapTokenRecord, PairedDevice } from "./device-pairing.types.js";
 import { createAsyncLock } from "./pairing-files.js";
 
 const withLock = createAsyncLock();
@@ -186,8 +186,8 @@ export async function readDevicePairSetupCompletion(
 }
 
 export async function clearDeviceBootstrapTokens(
-  params: BootstrapParams<"bootstrap.clear"> & { assertCurrent?: () => void } = {},
-): Promise<DeviceBootstrapOperations["bootstrap.clear"]["output"]> {
+  params: { baseDir?: string; assertCurrent?: () => void } = {},
+): Promise<{ removed: number }> {
   const { baseDir, assertCurrent, ...input } = params;
   return await withLock(() =>
     executeDevicePairingMutation(
@@ -198,9 +198,10 @@ export async function clearDeviceBootstrapTokens(
 }
 
 /** Revoke a bootstrap token unless its cloud-worker environment is already bound to the token's device. */
-export async function revokeDeviceBootstrapToken(
-  params: BootstrapParams<"bootstrap.revoke">,
-): Promise<DeviceBootstrapOperations["bootstrap.revoke"]["output"]> {
+export async function revokeDeviceBootstrapToken(params: {
+  token: string;
+  baseDir?: string;
+}): Promise<{ removed: boolean; record?: DeviceBootstrapTokenRecord }> {
   const { baseDir, ...input } = params;
   return await withLock(() =>
     executeDevicePairingMutation(

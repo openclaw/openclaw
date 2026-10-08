@@ -334,32 +334,20 @@ function readCurrentConversationBindingRows(
   return rows;
 }
 
-function readCurrentConversationBinding(db: DatabaseSync, conversation: ConversationRef) {
-  const bindingKey = buildConversationKey(conversation);
-  const row = readCurrentConversationBindingRows(db, [conversation])[0];
-  return { bindingKey, row, record: row ? bindingRowToRecord(row) : null };
-}
-
-function deleteCurrentConversationBindingRow(db: DatabaseSync, bindingKey: string): void {
-  getCurrentConversationBindingQueries(db).remove(bindingKey);
-}
-
 export function updateCurrentConversationBindingRecordInDatabase(
   db: DatabaseSync,
   ref: ConversationRef,
   update: (current: SessionBindingRecord | null) => SessionBindingRecord | null,
 ): { previous: SessionBindingRecord | null; current: SessionBindingRecord | null } {
   const conversation = normalizeConversationRef(ref);
-  const {
-    bindingKey,
-    row: existingRow,
-    record: existing,
-  } = readCurrentConversationBinding(db, conversation);
+  const bindingKey = buildConversationKey(conversation);
+  const existingRow = readCurrentConversationBindingRows(db, [conversation])[0];
+  const existing = existingRow ? bindingRowToRecord(existingRow) : null;
   const previous = existing && !isBindingExpired(existing) ? existing : null;
   const current = update(previous);
   if (!current) {
     if (existingRow) {
-      deleteCurrentConversationBindingRow(db, existingRow.binding_key);
+      getCurrentConversationBindingQueries(db).remove(existingRow.binding_key);
     }
     return { previous, current: null };
   }
@@ -368,7 +356,7 @@ export function updateCurrentConversationBindingRecordInDatabase(
     throw new Error("Current conversation binding update changed its conversation owner");
   }
   if (existingRow && existingRow.binding_key !== bindingKey) {
-    deleteCurrentConversationBindingRow(db, existingRow.binding_key);
+    getCurrentConversationBindingQueries(db).remove(existingRow.binding_key);
   }
   const row = currentConversationBindingRow(current, conversation, bindingKey);
   getCurrentConversationBindingQueries(db).upsert(row);
@@ -391,8 +379,7 @@ export function inspectCurrentConversationBindingRecordInDatabase(
   conversation: ConversationRef,
   now = Date.now(),
 ): SessionBindingRecord | null {
-  const { record } = readCurrentConversationBinding(db, conversation);
-  return record && !isBindingExpired(record, now) ? record : null;
+  return inspectCurrentConversationBindingRecordsInDatabase(db, [conversation], now)[0] ?? null;
 }
 
 /** Higher-priority absences and later fallback rows must come from the same snapshot. */
@@ -400,16 +387,17 @@ export function readCurrentConversationBindingSelectionInDatabase(
   db: DatabaseSync,
   conversations: readonly ConversationRef[],
 ): Array<SessionBindingRecord | null> {
-  return runSqliteDeferredTransactionSync(db, () => {
-    return inspectCurrentConversationBindingRecordsInDatabase(db, conversations);
-  });
+  return runSqliteDeferredTransactionSync(db, () =>
+    inspectCurrentConversationBindingRecordsInDatabase(db, conversations),
+  );
 }
 
 export function readCurrentConversationBindingResolutionInDatabase(
   db: DatabaseSync,
   conversation: ConversationRef,
 ): { record: SessionBindingRecord | null; repair: boolean } {
-  const { row, record } = readCurrentConversationBinding(db, conversation);
+  const row = readCurrentConversationBindingRows(db, [conversation])[0];
+  const record = row ? bindingRowToRecord(row) : null;
   return {
     record: record ?? null,
     repair: Boolean(
@@ -464,7 +452,7 @@ export function pruneCurrentConversationBindingListInTransaction(
   for (const row of rows) {
     const record = bindingRowToRecord(row);
     if (!record || isBindingExpired(record)) {
-      deleteCurrentConversationBindingRow(db, row.binding_key);
+      getCurrentConversationBindingQueries(db).remove(row.binding_key);
     } else {
       active.push(record);
     }
@@ -553,7 +541,7 @@ export function removeCurrentConversationBindingsInDatabase(
     if (input.genericOnly && !record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
       continue;
     }
-    deleteCurrentConversationBindingRow(db, row.binding_key);
+    getCurrentConversationBindingQueries(db).remove(row.binding_key);
     if (record && !isBindingExpired(record)) {
       removed.push(record);
     }

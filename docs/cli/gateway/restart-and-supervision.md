@@ -65,6 +65,12 @@ retains exit status `78` and parks a managed LaunchAgent when possible. A refuse
 shared-state database cannot record a new lifecycle row; the error log explains
 the refusal, and deep status reports it instead of an unavailable shutdown record.
 
+When the shared-state database cannot be read at all (for example, the file is
+damaged), `openclaw gateway status --deep` fails with exit status `1` and names
+the database path and read error instead of reporting a config read failure.
+Stop OpenClaw processes, then restore that file from a verified backup, as
+`openclaw doctor` also advises.
+
 Foreground/manual Gateways, in-process restarts selected by `OPENCLAW_NO_RESPAWN=1`, and other supervisors retain exit status `1` when
 cleanup cannot finish before the shutdown deadline.
 

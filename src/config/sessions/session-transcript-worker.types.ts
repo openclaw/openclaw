@@ -20,9 +20,17 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { VoiceSessionMatch } from "../../talk/client-voice-session-store.js";
 import type {
+  TrajectoryRetentionWorkerInput,
+  TrajectoryRuntimeRetentionPlan,
+} from "../../trajectory/runtime-retention.contract.js";
+import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
 } from "./activity-summary-source.types.js";
+import type {
+  SessionCleanupReadInput,
+  SessionCleanupReadResult,
+} from "./cleanup-service-read.types.js";
 import type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
 import type {
   ConversationRowsWorkerInput,
@@ -53,6 +61,8 @@ import type {
 import type {
   LifecycleArtifactCleanupRequest,
   LifecycleArtifactCleanupWorkerResult,
+  SessionMaintenanceReadCommand,
+  SessionMaintenanceReadResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
@@ -292,6 +302,13 @@ export type SessionRowFactsWorkerResult = {
   rows: SessionRowDatabaseFacts[];
 };
 
+type SessionMaintenanceReadWorkerInput = {
+  kind: "session-maintenance-read";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  plan: SessionMaintenanceReadCommand;
+};
+
 type SessionStoreTargetWorkerInput = {
   kind: "session-store-target";
   request: SessionStoreTargetReadRequest;
@@ -342,6 +359,8 @@ type BoardWidgetDocumentWorkerInput = BoardReadWorkerInput<
 >;
 
 export type SessionHistoryWorkerInput =
+  | TrajectoryRetentionWorkerInput
+  | SessionCleanupReadInput
   | BoardSnapshotWorkerInput
   | BoardWidgetDocumentWorkerInput
   | SessionStoreProjectionWorkerInput
@@ -392,6 +411,7 @@ export type SessionHistoryWorkerInput =
   | SessionStoreSummaryWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
+  | SessionMaintenanceReadWorkerInput
   | SessionStoreTargetWorkerInput
   | SessionTargetInventoryWorkerInput
   | SessionIdentityEvidenceWorkerInput
@@ -415,6 +435,11 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
+  "trajectory-retention": {
+    kind: "trajectory-retention";
+    plan: TrajectoryRuntimeRetentionPlan;
+  };
+  "session-cleanup": SessionCleanupReadResult;
   "transcript-raw-delta": { kind: "transcript-raw-delta"; result: SessionTranscriptRawDeltaResult };
   "transcript-visible-delta": {
     kind: "transcript-visible-delta";
@@ -428,6 +453,11 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
   "board-widget-document": {
     kind: "board-widget-document";
     value: BoardReadOperations["boards.readWidgetDocument"]["output"];
+  };
+  "session-maintenance-read": {
+    kind: "session-maintenance-read";
+    result: SessionMaintenanceReadResult;
+    workerThreadId: number;
   };
   "cli-process-history": ChatHistoryDisplayResult;
   "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
@@ -563,6 +593,11 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
+  readTrajectoryRetention: (
+    input: Omit<TrajectoryRetentionWorkerInput, "kind" | "database">,
+    options: { signal?: AbortSignal; timeoutMs: number },
+  ) => Promise<TrajectoryRuntimeRetentionPlan>;
+  readCleanup: SessionHistoryReader<SessionCleanupReadInput>;
   readRawDelta: CancellableSessionHistoryReader<
     Extract<SessionTranscriptDeltaWorkerInput, { kind: "transcript-raw-delta" }>,
     SessionTranscriptRawDeltaResult
@@ -668,6 +703,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
     signal?: AbortSignal,
   ) => Promise<SessionExactEntriesWorkerResult>;
   readRowFacts: SessionHistoryReader<SessionRowFactsWorkerInput>;
+  readSessionMaintenance: CancellableSessionHistoryReader<SessionMaintenanceReadWorkerInput>;
   readStoreProjection: SessionHistoryReader<SessionStoreProjectionWorkerInput>;
   readEntries: (
     scope: SessionEntryListWorkerInput["scope"],

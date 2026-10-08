@@ -103,7 +103,10 @@ function assertRequestAuthorityCurrent(options: RequestMutationOptions): void {
   options.sessionMutationCommitGuard?.();
 }
 
-function captureRequestAuthorityAssertion(options: RequestMutationOptions) {
+function captureRequestAuthorityAssertion(
+  options: RequestMutationOptions,
+  nativeTransport: boolean,
+) {
   const source = captureExternalSessionCommitGuard(options.sessionMutationCommitGuard);
   return composeSessionSourceAssertion(
     [source],
@@ -112,6 +115,7 @@ function captureRequestAuthorityAssertion(options: RequestMutationOptions) {
       assertSource();
     },
     {
+      hasOpaqueCheck: nativeTransport,
       preparedCheck: (assertSource) => {
         options.signal?.throwIfAborted();
         if (!hasPreparedGatewayDeviceAuthority(options.client, options.hasCurrentClientAuthority)) {
@@ -156,7 +160,7 @@ export function readGatewayRequestMutationAuthority(
   }
   const { req, client, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } = options;
   const captured = { req, client, signal, hasCurrentClientAuthority, sessionMutationCommitGuard };
-  const assertLifetimeCurrent = captureRequestAuthorityAssertion(captured);
+  const assertLifetimeCurrent = captureRequestAuthorityAssertion(captured, true);
   const compatibility: GatewayRequestMutationAuthority = {
     family: "native-compatibility",
     assertPreparationCurrent: () => assertRequestTransportCurrent(captured),
@@ -299,7 +303,7 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
     assertHandlerCurrent,
     source.assertOperatorCurrent,
     source.family === "worker" ? source.assertWorkerCurrent : undefined,
-    captureRequestAuthorityAssertion(handler),
+    captureRequestAuthorityAssertion(handler, source.family === "native-compatibility"),
   ]);
   const assertLifetimeCurrent = composeSessionSourceAssertion(
     [source.assertLifetimeCurrent],

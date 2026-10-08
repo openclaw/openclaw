@@ -36,6 +36,7 @@ import {
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
 import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
+import { readHarnessCompletionSourceInDatabase } from "./session-harness-completion-source.kernel.js";
 import {
   prepareSessionHistoryReadOperation,
   type SessionHistoryReadOperationRequest,
@@ -53,6 +54,7 @@ import { readSessionTranscriptMaintenance } from "./session-transcript-maintenan
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
   runWithSessionTranscriptReadFence,
+  resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
 
@@ -82,6 +84,10 @@ export function createIncognitoHistoryWorker(
   database: OpenClawAgentDatabase,
   env: NodeJS.ProcessEnv,
 ) {
+  const completionSources = new Map<
+    string,
+    IncognitoHistoryOperations["session.history.completion-source.open"]["input"]
+  >();
   let prepared: PreparedHistoryRead<Command["type"]> | undefined;
   const prepare = async (command: Command) => {
     if (command.type === "session.history.memory-targets") {
@@ -222,6 +228,41 @@ export function createIncognitoHistoryWorker(
     }
     let request: SessionHistoryReadOperationRequest;
     switch (command.type) {
+      case "session.history.completion-source.open":
+        prepared = prepareHistoryRead(command.type, () => {
+          if (
+            command.input.claim.requesterAgentId !== database.agentId ||
+            command.input.claim.requesterSessionKey !== sessionKey ||
+            command.input.claim.sessionId !== sessionId ||
+            command.input.claim.lifecycleRevision !== command.input.lifecycleRevision
+          ) {
+            throw new Error("Incognito completion source belongs to another session");
+          }
+          if (completionSources.has(command.input.sourceId)) {
+            throw new Error("Incognito completion source is already registered");
+          }
+          completionSources.set(command.input.sourceId, command.input);
+        });
+        return;
+      case "session.history.completion-source.release":
+        prepared = prepareHistoryRead(command.type, () => {
+          completionSources.delete(command.input.sourceId);
+        });
+        return;
+      case "session.history.harness-completion-source":
+        if (
+          command.input.claim.requesterAgentId !== database.agentId ||
+          command.input.claim.requesterSessionKey !== sessionKey ||
+          command.input.claim.sessionId !== sessionId
+        ) {
+          throw new Error("Harness completion source belongs to another incognito session");
+        }
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () =>
+            readHarnessCompletionSourceInDatabase(database, command.input.claim, "committed"),
+          ),
+        );
+        return;
       case "session.history.raw-delta":
         prepared = prepareHistoryRead(command.type, () =>
           runWithSessionTranscriptReadFence(admission, () =>
@@ -569,6 +610,37 @@ export function createIncognitoHistoryWorker(
   };
   return {
     prepare,
+    completionFacts(sessionKey: string): IncognitoSessionFacts["completionSources"] {
+      return [...completionSources.values()]
+        .filter((source) => source.sessionKey === sessionKey)
+        .map((source) => {
+          let valid = false;
+          try {
+            valid = runWithSessionTranscriptReadFence(source.admission, () => {
+              // Even an original admitted delivery must retain its exact branch/reset fence.
+              if (source.admission) {
+                resolveSqliteSessionTranscriptReadFence({
+                  database,
+                  agentId: database.agentId,
+                  sessionKey,
+                  sessionId: source.sessionId,
+                });
+              }
+              const snapshot = readHarnessCompletionSourceInDatabase(database, source.claim);
+              return (
+                snapshot.entry?.sessionId === source.sessionId &&
+                snapshot.entry?.lifecycleRevision === source.lifecycleRevision &&
+                snapshot.validInput
+              );
+            });
+          } catch (error) {
+            if (!(error instanceof SessionTranscriptReadFenceError)) {
+              throw error;
+            }
+          }
+          return { sourceId: source.sourceId, valid };
+        });
+    },
     execute(command: Command, facts: IncognitoSessionFacts[]) {
       const targets =
         command.type === "session.history.search" ||
@@ -576,6 +648,9 @@ export function createIncognitoHistoryWorker(
           ? command.input.sessions
           : [command.input];
       for (const target of targets) {
+        if (command.type === "session.history.completion-source.release") {
+          continue;
+        }
         const entry = readExactSessionEntryRow(database, target.sessionKey)?.entry;
         if (target.allowMissing) {
           if (
@@ -608,6 +683,10 @@ export function createIncognitoHistoryWorker(
     },
     assertSettled() {
       prepared = undefined;
+    },
+    close() {
+      prepared = undefined;
+      completionSources.clear();
     },
   };
 }
