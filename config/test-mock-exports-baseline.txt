@@ -2274,7 +2274,6 @@
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../stream-message-shared.js","46df41cf5ab086a0cb044ebe9ef4d6d377e6c3fcb99122cc5b9938d8d49b4d8b",1]
 ["src/agents/cli-runner/execute-events.tool-result-args.test.ts","../cli-runner.js","d49cf3459d32e0ed9cfb2500ea5a7a1d94fc58772eddfb044b46f79d62e84920",1]
 ["src/agents/cli-runner/execute-plugin-native-bash.test.ts","../tools/gateway.js","422938fe8e7822cbd0ffe23388aa0f608f06cc23f1d19e068d4976a3fec18d6d",1]
-["src/agents/cli-runner/execute-plugin.mcp-capture.test.ts","../tools/gateway.js","422938fe8e7822cbd0ffe23388aa0f608f06cc23f1d19e068d4976a3fec18d6d",1]
 ["src/agents/cli-runner/execute-plugin.policy.test.ts","../tools/gateway.js","88f5c83ec236b816d42dcc9f38161e4f25a10f9a557acb8c851434c71f0ef6e0",1]
 ["src/agents/cli-runner/execute-plugin.test.ts","../tools/gateway.js","88f5c83ec236b816d42dcc9f38161e4f25a10f9a557acb8c851434c71f0ef6e0",1]
 ["src/agents/cli-runner/execute.pending-cancellation.test.ts","../../process/supervisor/adapters/child.js","f0ed6ae9a6d7db71356d4d7657aa3c1643d6950af219f2edabc068df91728a37",1]
