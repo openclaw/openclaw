@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { registerSandboxBackend } from "../agents/sandbox/backend.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -35,6 +36,33 @@ async function explain(opts: Parameters<typeof sandboxExplainCommand>[0]) {
 }
 
 describe("sandbox explain command", () => {
+  it("passes resolved agent context to plugin workspace resolvers", async () => {
+    mockCfg = {
+      agents: {
+        defaults: { sandbox: { mode: "all", backend: "explain-agent-context" } },
+        entries: { research: {} },
+      },
+      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+    };
+    const restore = registerSandboxBackend("explain-agent-context", {
+      factory: async () => {
+        throw new Error("explain must not provision a sandbox");
+      },
+      resolveWorkdir: ({ agentId }) => {
+        if (agentId !== "research") {
+          throw new Error("missing resolved agent context");
+        }
+        return "/runtime/research";
+      },
+    });
+    try {
+      const parsed = await explain({ json: true, agent: "research" });
+      expect(parsed.sandbox.runtimeWorkdir).toBe("/runtime/research");
+    } finally {
+      restore();
+    }
+  });
+
   it.each([
     [
       "unknown",

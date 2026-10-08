@@ -23,6 +23,8 @@ export type SandboxBackendManager = {
 };
 
 export type CreateSandboxBackendParams = {
+  /** Resolved canonical agent ID. Optional for older SDK callers; never infer from scopeKey. */
+  agentId?: string;
   sessionKey: string;
   scopeKey: string;
   /** Runtime IDs already registered for this backend and scope, newest first. */

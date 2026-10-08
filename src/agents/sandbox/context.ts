@@ -405,6 +405,7 @@ async function resolveProvisionedSandboxContext(
     params.assertCurrent?.();
     return createSandboxBackend(
       {
+        agentId: runtime.agentId,
         sessionKey: rawSessionKey,
         scopeKey,
         ...(registeredRuntimeIds.length > 0 ? { registeredRuntimeIds } : {}),
@@ -579,12 +580,13 @@ export async function ensureSandboxWorkspaceForSession(
       assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
       const selected = await prepareSandboxWorkspaceSelection(ownedParams, resolved);
       assertCurrent();
-      const { rawSessionKey, cfg } = selected;
+      const { rawSessionKey, cfg, runtime } = selected;
 
       const { agentWorkspaceDir, scopeKey, workspaceDir, ...workspace } =
         await ensureSandboxWorkspaceLayout(ownedParams, selected);
       assertCurrent();
       const containerWorkdir = getSandboxBackendWorkdirResolver(cfg.backend)?.({
+        agentId: runtime.agentId,
         cfg,
         sessionKey: rawSessionKey,
         scopeKey,

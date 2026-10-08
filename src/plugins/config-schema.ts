@@ -67,7 +67,8 @@ function normalizeJsonSchema(schema: unknown): unknown {
     propertyNames &&
     typeof propertyNames === "object" &&
     !Array.isArray(propertyNames) &&
-    (propertyNames as Record<string, unknown>).type === "string"
+    (propertyNames as Record<string, unknown>).type === "string" &&
+    Object.keys(propertyNames).length === 1
   ) {
     delete record.propertyNames;
   }
