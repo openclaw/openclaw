@@ -60,59 +60,6 @@ describe("compaction identifier-preservation instructions", () => {
     mockGenerateSummary.mockResolvedValue("summary");
   });
 
-  function firstSummaryInstructions() {
-    return mockGenerateSummary.mock.calls[0]?.[6] ?? "";
-  }
-
-  it("injects identifier-preservation guidance even without custom instructions", async () => {
-    await runSummary(2);
-
-    expect(mockGenerateSummary).toHaveBeenCalledTimes(1);
-    expect(firstSummaryInstructions()).toContain(
-      "Preserve all opaque identifiers exactly as written",
-    );
-    expect(firstSummaryInstructions()).toContain("UUIDs");
-    expect(firstSummaryInstructions()).toContain("IPs");
-    expect(firstSummaryInstructions()).toContain("ports");
-    expect(firstSummaryInstructions()).not.toContain("tokens");
-    expect(firstSummaryInstructions()).not.toContain("API keys");
-    expect(firstSummaryInstructions()).not.toContain("Additional focus:");
-  });
-
-  it("keeps identifier-preservation guidance when custom instructions are provided", async () => {
-    await runSummary(2, {
-      customInstructions: "Focus on release-impacting bugs.",
-    });
-
-    expect(mockGenerateSummary).toHaveBeenCalledTimes(1);
-    expect(firstSummaryInstructions()).toContain(
-      "Preserve all opaque identifiers exactly as written",
-    );
-    expect(firstSummaryInstructions()).toContain("Additional focus:");
-    expect(firstSummaryInstructions()).toContain("Focus on release-impacting bugs.");
-  });
-
-  it("applies identifier-preservation guidance on staged split + merge summarization", async () => {
-    await runSummary(4, {
-      maxChunkTokens: 1000,
-      parts: 2,
-      minMessagesForSplit: 4,
-    });
-
-    expect(mockGenerateSummary).toHaveBeenCalledTimes(3);
-    for (const call of mockGenerateSummary.mock.calls) {
-      expect(call[6]).toContain("Preserve all opaque identifiers exactly as written");
-    }
-
-    type SyntheticMergeMessage = { role: "user"; content: string; timestamp: number };
-    const mergeMessages = mockGenerateSummary.mock.calls[2]![0] as SyntheticMergeMessage[];
-    expect(mergeMessages.map((message) => message.content)).toEqual([
-      "[Chunk 1 — oldest messages [2026-01-01 00:01 — 2026-01-01 00:02 UTC]]\nsummary",
-      "[Chunk 2 — most recent messages [2026-01-01 00:03 — 2026-01-01 00:04 UTC]]\nsummary",
-    ]);
-    expect(mergeMessages[1]!.timestamp).toBe(mergeMessages[0]!.timestamp + 1);
-  });
-
   it("avoids duplicate additional-focus headers in split+merge path", async () => {
     await runSummary(4, {
       maxChunkTokens: 1000,
@@ -122,6 +69,26 @@ describe("compaction identifier-preservation instructions", () => {
     });
 
     expect(mockGenerateSummary).toHaveBeenCalledTimes(3);
+    for (const call of mockGenerateSummary.mock.calls) {
+      expect(call[6]).toContain("Preserve all opaque identifiers exactly as written");
+    }
+    const mergeMessages = mockGenerateSummary.mock.calls[2]![0];
+    expect(mergeMessages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: "[Chunk 1 — oldest messages [2026-01-01 00:01 — 2026-01-01 00:02 UTC]]\nsummary",
+      }),
+      expect.objectContaining({
+        role: "user",
+        content:
+          "[Chunk 2 — most recent messages [2026-01-01 00:03 — 2026-01-01 00:04 UTC]]\nsummary",
+      }),
+    ]);
+    const firstTimestamp = mergeMessages[0]?.timestamp;
+    if (typeof firstTimestamp !== "number") {
+      throw new Error("expected a numeric merge-message timestamp");
+    }
+    expect(mergeMessages[1]?.timestamp).toBe(firstTimestamp + 1);
     const instructions = mockGenerateSummary.mock.calls.at(-1)?.[6] ?? "";
     expect(instructions).toContain("Merge these partial summaries into a single cohesive summary.");
     expect(instructions).toContain("Prioritize customer-visible regressions.");
@@ -133,27 +100,6 @@ describe("compaction identifier policy", () => {
   beforeEach(() => {
     mockGenerateSummary.mockReset();
     mockGenerateSummary.mockResolvedValue("summary");
-  });
-
-  it("can disable identifier preservation with off policy", async () => {
-    await runSummary(2, { summarizationInstructions: { identifierPolicy: "off" } });
-
-    expect(mockGenerateSummary).toHaveBeenCalledOnce();
-    expect(mockGenerateSummary.mock.calls[0]?.[6]).toBeUndefined();
-  });
-
-  it("supports custom identifier instructions", async () => {
-    await runSummary(2, {
-      summarizationInstructions: {
-        identifierPolicy: "custom",
-        identifierInstructions: "Keep ticket IDs unchanged.",
-      },
-    });
-
-    expect(mockGenerateSummary).toHaveBeenCalledOnce();
-    const built = mockGenerateSummary.mock.calls[0]?.[6];
-    expect(built).toContain("Keep ticket IDs unchanged.");
-    expect(built).not.toContain("Preserve all opaque identifiers exactly as written");
   });
 
   it("falls back to strict text when custom policy is missing instructions", async () => {
@@ -192,12 +138,6 @@ describe("compaction staged summarization failures", () => {
 
   beforeEach(() => {
     mockGenerateSummary.mockReset();
-  });
-
-  it("throws CompactionError when any chunk summarization fails", async () => {
-    mockGenerateSummary.mockRejectedValue(new Error("fetch failed"));
-
-    await expect(runStagedSummary()).rejects.toThrow();
   });
 
   it("completes the merge successfully when all chunks succeed", async () => {

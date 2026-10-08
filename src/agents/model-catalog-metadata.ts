@@ -5,6 +5,7 @@ import {
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import {
   modelTransportRoutesMatch,
+  normalizeCatalogRouteBaseUrl,
   resolveCatalogOwnedModelCompat,
 } from "./model-compat-catalog.js";
 
@@ -13,19 +14,6 @@ function mergeCatalogFields<T extends object>(
   override: T | undefined,
 ): T | undefined {
   return base && override ? { ...base, ...override } : (override ?? base);
-}
-
-export function normalizeCatalogRouteBaseUrl(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const url = new URL(value);
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString();
-  } catch {
-    return value.replace(/\/+$/u, "");
-  }
 }
 
 function catalogRouteChanges(base: ModelCatalogEntry, overlay: ModelCatalogEntry): boolean {

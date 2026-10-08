@@ -7,9 +7,15 @@ import {
   GatewayAgentRuntimeSchema,
   GatewayThinkingLevelOptionSchema,
 } from "./model-runtime-options.js";
-import { NonEmptyString } from "./primitives.js";
+import { NonEmptyString, Sha256String } from "./primitives.js";
 import { GitHubSetupHandleSchema } from "./secrets.js";
 import { SessionPermissionModeSchema } from "./sessions-row.js";
+import { SkillsDetailResultSchema } from "./skill-detail.js";
+
+export { SkillsDetailResultSchema } from "./skill-detail.js";
+
+export { SkillsSearchParamsSchema, SkillsSearchResultSchema } from "./skills-search.js";
+export type { SkillsSearchParams, SkillsSearchResult } from "./skills-search.js";
 
 export {
   ModelChoiceSchema,
@@ -165,68 +171,6 @@ export const AgentsDeleteResultSchema = closedObject({
   purgeFailed: Type.Optional(Type.Literal(true)),
 });
 
-const Sha256String = Type.String({
-  minLength: 64,
-  maxLength: 64,
-  pattern: "^[a-fA-F0-9]{64}$",
-});
-
-/** File metadata and optional content for agent-local editable files. */
-export const AgentsFileEntrySchema = closedObject({
-  name: NonEmptyString,
-  path: NonEmptyString,
-  missing: Type.Boolean(),
-  // True when absence is a normal workspace state (optional profile files, and
-  // MEMORY.md before anything is written). Editors should offer these for
-  // creation rather than flagging them as faults.
-  expectedAbsent: Type.Optional(Type.Boolean()),
-  size: Type.Optional(Type.Integer({ minimum: 0 })),
-  updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  hash: Type.Optional(Sha256String),
-  content: Type.Optional(Type.String()),
-});
-
-/** Lists editable files for one agent. */
-export const AgentsFilesListParamsSchema = closedObject({
-  agentId: NonEmptyString,
-});
-
-/** Editable file list for an agent workspace. */
-export const AgentsFilesListResultSchema = closedObject({
-  agentId: NonEmptyString,
-  workspace: NonEmptyString,
-  files: Type.Array(AgentsFileEntrySchema),
-});
-
-/** Reads one editable agent file by name. */
-export const AgentsFilesGetParamsSchema = closedObject({
-  agentId: NonEmptyString,
-  name: NonEmptyString,
-});
-
-/** Result for reading one editable agent file. */
-export const AgentsFilesGetResultSchema = closedObject({
-  agentId: NonEmptyString,
-  workspace: NonEmptyString,
-  file: AgentsFileEntrySchema,
-});
-
-/** Writes one editable agent file. */
-export const AgentsFilesSetParamsSchema = closedObject({
-  agentId: NonEmptyString,
-  name: NonEmptyString,
-  content: Type.String(),
-  expectedHash: Type.Optional(Sha256String),
-});
-
-/** Result returned after writing an editable agent file. */
-export const AgentsFilesSetResultSchema = closedObject({
-  ok: Type.Literal(true),
-  agentId: NonEmptyString,
-  workspace: NonEmptyString,
-  file: AgentsFileEntrySchema,
-});
-
 /** Reads model-provider credential health for one configured agent. */
 export const ModelsAuthStatusParamsSchema = closedObject({
   refresh: Type.Optional(Type.Boolean()),
@@ -362,9 +306,6 @@ export const SkillsUploadCommitParamsSchema = closedObject({
 const CLAWHUB_SKILL_REF_DESCRIPTION =
   "ClawHub skill reference: `@owner/slug`, `skills-sh:owner/repo/slug`, or a bare `slug` when no publisher is known.";
 
-/** Wire copy of the core trust state; this package intentionally depends on typebox only. */
-const CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE = "not-scanned-by-clawhub";
-
 /** Installs a skill from legacy install id, ClawHub, or uploaded archive. */
 export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
@@ -416,104 +357,15 @@ export const SkillsUpdateParamsSchema = Type.Union([
   }),
 ]);
 
-/** Searches the skill registry. */
-export const SkillsSearchParamsSchema = closedObject({
-  query: Type.Optional(NonEmptyString),
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
-});
-
-/** Ranked skill registry search results. */
-export const SkillsSearchResultSchema = closedObject({
-  results: Type.Array(
-    closedObject({
-      score: Type.Number(),
-      slug: NonEmptyString,
-      registry: NonEmptyString,
-      ownerHandle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-      installRef: Type.String({
-        minLength: 1,
-        description:
-          "Source-qualified reference for this result. Send it as `slug` to skills.install; several publishers can share one slug.",
-      }),
-      installOnly: Type.Optional(
-        Type.Literal(true, {
-          description:
-            "Present when ClawHub serves this result install-only: offer install directly with `installRef`, because skills.detail cannot answer for it. Absence means the ordinary review-then-install flow, so results from servers that predate this field keep their existing behavior.",
-        }),
-      ),
-      trustState: Type.Optional(
-        Type.Literal(CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE, {
-          description:
-            "Present when ClawHub resolves this result from a source it has not scanned.",
-        }),
-      ),
-      displayName: NonEmptyString,
-      summary: Type.Optional(Type.String()),
-      icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-      version: Type.Optional(NonEmptyString),
-      updatedAt: Type.Optional(Type.Integer()),
-    }),
-  ),
-});
-
 /** Reads registry detail for one skill. */
 export const SkillsDetailParamsSchema = closedObject({
   slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
+  version: Type.Optional(NonEmptyString),
 });
 
 /** Reads current security verdicts for configured skills. */
 export const SkillsSecurityVerdictsParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
-});
-
-/** Skill registry detail, latest version, metadata, and owner info. */
-export const SkillsDetailResultSchema = closedObject({
-  skill: Type.Union([
-    closedObject({
-      slug: NonEmptyString,
-      displayName: NonEmptyString,
-      summary: Type.Optional(Type.String()),
-      icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-      tags: Type.Optional(Type.Record(NonEmptyString, Type.String())),
-      channel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-      isOfficial: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
-      createdAt: Type.Integer(),
-      updatedAt: Type.Integer(),
-    }),
-    Type.Null(),
-  ]),
-  latestVersion: Type.Optional(
-    Type.Union([
-      closedObject({
-        version: NonEmptyString,
-        createdAt: Type.Integer(),
-        changelog: Type.Optional(Type.String()),
-      }),
-      Type.Null(),
-    ]),
-  ),
-  metadata: Type.Optional(
-    Type.Union([
-      closedObject({
-        os: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-        systems: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-      }),
-      Type.Null(),
-    ]),
-  ),
-  owner: Type.Optional(
-    Type.Union([
-      closedObject({
-        handle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-        displayName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-        image: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-        official: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
-        channel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-        isOfficial: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
-      }),
-      Type.Null(),
-    ]),
-  ),
 });
 
 /** Security verdict report for installed/requested skills. */
@@ -1136,12 +988,6 @@ export const ToolsGitHubAuthorizeCancelResultSchema = closedObject({
   cancelled: Type.Boolean(),
 });
 
-/** Reads the effective tool set for one session. */
-export const ToolsEffectiveParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  sessionKey: NonEmptyString,
-});
-
 /** Invokes one tool through the gateway tool dispatcher. */
 export const ToolsInvokeParamsSchema = closedObject({
   name: NonEmptyString,
@@ -1155,63 +1001,6 @@ export const ToolsInvokeParamsSchema = closedObject({
    * Missing values remain delegated, and agent runtime identity wins server-side.
    */
   conversationReadOrigin: Type.Optional(Type.Literal("direct-operator")),
-});
-
-/** Effective tool entry after session/profile/channel/plugin filtering. */
-export const ToolsEffectiveEntrySchema = closedObject({
-  id: NonEmptyString,
-  label: NonEmptyString,
-  description: Type.String(),
-  rawDescription: Type.String(),
-  source: Type.Union([
-    Type.Literal("core"),
-    Type.Literal("plugin"),
-    Type.Literal("channel"),
-    Type.Literal("mcp"),
-  ]),
-  pluginId: Type.Optional(NonEmptyString),
-  channelId: Type.Optional(NonEmptyString),
-  mcpServer: Type.Optional(NonEmptyString),
-  mcpToolName: Type.Optional(NonEmptyString),
-  deniedBySession: Type.Optional(Type.Literal(true)),
-  risk: Type.Optional(
-    Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
-  ),
-  tags: Type.Optional(Type.Array(NonEmptyString)),
-});
-
-/** Effective tool group shown to runtime/session callers. */
-export const ToolsEffectiveGroupSchema = closedObject({
-  id: Type.Union([
-    Type.Literal("core"),
-    Type.Literal("plugin"),
-    Type.Literal("channel"),
-    Type.Literal("mcp"),
-  ]),
-  label: NonEmptyString,
-  source: Type.Union([
-    Type.Literal("core"),
-    Type.Literal("plugin"),
-    Type.Literal("channel"),
-    Type.Literal("mcp"),
-  ]),
-  tools: Type.Array(ToolsEffectiveEntrySchema),
-});
-
-/** Notice explaining runtime filtering such as quarantined tool schemas. */
-export const ToolsEffectiveNoticeSchema = closedObject({
-  id: NonEmptyString,
-  severity: Type.Union([Type.Literal("info"), Type.Literal("warning")]),
-  message: Type.String(),
-  servers: Type.Optional(Type.Array(NonEmptyString)),
-});
-
-/** Effective tool set for a session, including profile and filtering notices. */
-export const ToolsEffectiveResultSchema = closedObject({
-  agentId: NonEmptyString,
-  profile: NonEmptyString,
-  groups: Type.Array(ToolsEffectiveGroupSchema),
-  notices: Type.Optional(Type.Array(ToolsEffectiveNoticeSchema)),
 });
 
 /** Normalized error shape for tool invocation failures. */
@@ -1245,19 +1034,12 @@ export const ToolsInvokeResultSchema = closedObject({
 export type AgentKind = Static<typeof AgentKindSchema>;
 export type AgentSummary = Static<typeof AgentSummarySchema>;
 export type GatewayAgentRuntime = Static<typeof GatewayAgentRuntimeSchema>;
-export type AgentsFileEntry = Static<typeof AgentsFileEntrySchema>;
 export type AgentsCreateParams = Static<typeof AgentsCreateParamsSchema>;
 export type AgentsCreateResult = Static<typeof AgentsCreateResultSchema>;
 export type AgentsUpdateParams = Static<typeof AgentsUpdateParamsSchema>;
 export type AgentsUpdateResult = Static<typeof AgentsUpdateResultSchema>;
 export type AgentsDeleteParams = Static<typeof AgentsDeleteParamsSchema>;
 export type AgentsDeleteResult = Static<typeof AgentsDeleteResultSchema>;
-export type AgentsFilesListParams = Static<typeof AgentsFilesListParamsSchema>;
-export type AgentsFilesListResult = Static<typeof AgentsFilesListResultSchema>;
-export type AgentsFilesGetParams = Static<typeof AgentsFilesGetParamsSchema>;
-export type AgentsFilesGetResult = Static<typeof AgentsFilesGetResultSchema>;
-export type AgentsFilesSetParams = Static<typeof AgentsFilesSetParamsSchema>;
-export type AgentsFilesSetResult = Static<typeof AgentsFilesSetResultSchema>;
 export type AgentsListParams = Static<typeof AgentsListParamsSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelsAuthSetApiKeyParams = Static<typeof ModelsAuthSetApiKeyParamsSchema>;
@@ -1292,17 +1074,10 @@ export type ToolsGitHubAuthorizeCancelParams = Static<
 export type ToolsGitHubAuthorizeCancelResult = Static<
   typeof ToolsGitHubAuthorizeCancelResultSchema
 >;
-export type ToolsEffectiveParams = Static<typeof ToolsEffectiveParamsSchema>;
-export type ToolsEffectiveEntry = Static<typeof ToolsEffectiveEntrySchema>;
-export type ToolsEffectiveGroup = Static<typeof ToolsEffectiveGroupSchema>;
-export type ToolsEffectiveNotice = Static<typeof ToolsEffectiveNoticeSchema>;
-export type ToolsEffectiveResult = Static<typeof ToolsEffectiveResultSchema>;
 export type ToolsInvokeParams = Static<typeof ToolsInvokeParamsSchema>;
 export type ToolsInvokeResult = Static<typeof ToolsInvokeResultSchema>;
 export type SkillsBinsParams = Static<typeof SkillsBinsParamsSchema>;
 export type SkillsBinsResult = Static<typeof SkillsBinsResultSchema>;
-export type SkillsSearchParams = Static<typeof SkillsSearchParamsSchema>;
-export type SkillsSearchResult = Static<typeof SkillsSearchResultSchema>;
 export type SkillsDetailParams = Static<typeof SkillsDetailParamsSchema>;
 export type SkillsDetailResult = Static<typeof SkillsDetailResultSchema>;
 export type SkillsProposalsListParams = Static<typeof SkillsProposalsListParamsSchema>;

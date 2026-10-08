@@ -1,4 +1,4 @@
-import type { DurableDeliveryCompletion } from "../../infra/outbound/delivery-completion.js";
+import type { DurableDeliveryCompletion } from "../../infra/outbound/delivery-queue-types.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -53,18 +53,13 @@ export function buildRecoverablePendingFinalDeliveryText(
     return undefined;
   }
 
-  const recoveryText: string[] = [];
-  for (const payload of sendablePayloads) {
-    const textAndMedia = [
-      payload.text,
-      ...(payload.mediaUrls ?? []).map((mediaUrl) => `MEDIA:${mediaUrl}`),
-    ]
-      .filter((value): value is string => Boolean(value?.trim()))
-      .join("\n");
-    if (textAndMedia) {
-      recoveryText.push(textAndMedia);
-    }
-  }
+  const recoveryText = sendablePayloads
+    .map((payload) =>
+      [payload.text, ...(payload.mediaUrls ?? []).map((mediaUrl) => `MEDIA:${mediaUrl}`)]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .join("\n"),
+    )
+    .filter(Boolean);
   return sanitizePendingFinalDeliveryText(recoveryText.join("\n\n")) || undefined;
 }
 
@@ -97,11 +92,7 @@ function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
     payload.delivery !== undefined ||
     payload.channelData !== undefined ||
     payload.location !== undefined ||
-    payload.replyToId !== undefined ||
-    payload.replyToTag === true ||
-    payload.replyToCurrent === true ||
-    payload.audioAsVoice === true ||
-    payload.videoAsNote === true ||
+    hasUnrecoverableNormalizedDeliveryShape(payload) ||
     payload.spokenText !== undefined ||
     payload.ttsSupplement !== undefined ||
     (hasMedia && (payload.isCommentary === true || payload.isStatusNotice === true))

@@ -1,14 +1,4 @@
-// Telegram helper module supports body helpers behavior.
-import type {
-  Chat,
-  Message,
-  MessageOrigin,
-  RichBlock,
-  RichBlockCaption,
-  RichMessageButton,
-  RichText,
-  User,
-} from "grammy/types";
+import type { Chat, Message, RichBlock, RichBlockCaption, RichText } from "grammy/types";
 import type {
   ChannelInboundMediaInput,
   NormalizedLocation,
@@ -53,27 +43,17 @@ export function resolveTelegramPrimaryMedia(
   if (!msg) {
     return undefined;
   }
-  const photo = msg.photo?.[msg.photo.length - 1];
-  if (photo) {
-    return { kind: "image", fileRef: photo };
-  }
-  if (msg.video) {
-    return { kind: "video", fileRef: msg.video };
-  }
-  if (msg.video_note) {
-    return { kind: "video", fileRef: msg.video_note };
-  }
-  if (msg.audio) {
-    return { kind: "audio", fileRef: msg.audio };
-  }
-  if (msg.voice) {
-    return { kind: "audio", fileRef: msg.voice };
-  }
-  if (msg.document) {
-    return { kind: "document", fileRef: msg.document };
-  }
-  if (msg.sticker) {
-    return { kind: "sticker", fileRef: msg.sticker };
+  const candidates: Array<[TelegramMediaKind, TelegramMediaFileRef | undefined]> = [
+    ["image", msg.photo?.[msg.photo.length - 1]],
+    ["video", msg.video ?? msg.video_note],
+    ["audio", msg.audio ?? msg.voice],
+    ["document", msg.document],
+    ["sticker", msg.sticker],
+  ];
+  for (const [kind, fileRef] of candidates) {
+    if (fileRef) {
+      return { kind, fileRef };
+    }
   }
   return undefined;
 }
@@ -91,13 +71,7 @@ export function buildSenderLabel(msg: Message, senderId?: number | string) {
     senderId != null ? normalizeOptionalString(String(senderId)) : undefined;
   const fallbackId = normalizedSenderId ?? (msg.from?.id != null ? String(msg.from.id) : undefined);
   const idPart = fallbackId ? `id:${fallbackId}` : undefined;
-  if (label && idPart) {
-    return `${label} ${idPart}`;
-  }
-  if (label) {
-    return label;
-  }
-  return idPart ?? "id:unknown";
+  return [label, idPart].filter(Boolean).join(" ") || "id:unknown";
 }
 
 export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
@@ -117,12 +91,8 @@ function compactRichText(value: string): string {
     .join("\n");
 }
 
-function joinRichText(parts: string[], separator: string): string {
-  return parts.map(compactRichText).filter(Boolean).join(separator);
-}
-
-function renderRichMessageButton(button: RichMessageButton): string {
-  return renderRichInlineText(button.text);
+function joinRichText(parts: string[]): string {
+  return parts.map(compactRichText).filter(Boolean).join("\n");
 }
 
 function renderRichInlineText(value: RichText | undefined): string {
@@ -139,7 +109,7 @@ function renderRichInlineText(value: RichText | undefined): string {
     case "anchor":
       return "";
     case "button":
-      return renderRichMessageButton(value.button);
+      return renderRichInlineText(value.button.text);
     case "custom_emoji":
       return value.alternative_text;
     case "mathematical_expression":
@@ -151,10 +121,7 @@ function renderRichInlineText(value: RichText | undefined): string {
 
 function renderRichCaption(caption: RichBlockCaption | undefined): string {
   return caption
-    ? joinRichText(
-        [renderRichInlineText(caption.text), renderRichInlineText(caption.credit ?? "")],
-        "\n",
-      )
+    ? joinRichText([renderRichInlineText(caption.text), renderRichInlineText(caption.credit)])
     : "";
 }
 
@@ -168,38 +135,25 @@ function renderRichBlock(block: RichBlock): string {
       return renderRichInlineText(block.text);
     case "expandable_blockquote":
     case "pullquote":
-      return joinRichText(
-        [renderRichInlineText(block.text), renderRichInlineText(block.credit ?? "")],
-        "\n",
-      );
+      return renderRichCaption(block);
     case "mathematical_expression":
       return block.expression;
     case "blockquote":
-      return joinRichText(
-        [renderRichInlineText(block.credit ?? ""), renderRichBlocks(block.blocks)],
-        "\n",
-      );
+      return joinRichText([renderRichInlineText(block.credit), renderRichBlocks(block.blocks)]);
     case "collage":
     case "slideshow":
-      return joinRichText([renderRichCaption(block.caption), renderRichBlocks(block.blocks)], "\n");
+      return joinRichText([renderRichCaption(block.caption), renderRichBlocks(block.blocks)]);
     case "details":
-      return joinRichText(
-        [renderRichInlineText(block.summary), renderRichBlocks(block.blocks)],
-        "\n",
-      );
+      return joinRichText([renderRichInlineText(block.summary), renderRichBlocks(block.blocks)]);
     case "list":
       return joinRichText(
-        block.items.map((item) => joinRichText([item.label, renderRichBlocks(item.blocks)], "\n")),
-        "\n",
+        block.items.map((item) => joinRichText([item.label, renderRichBlocks(item.blocks)])),
       );
     case "table":
-      return joinRichText(
-        [
-          renderRichInlineText(block.caption ?? ""),
-          ...block.cells.flatMap((row) => row.map((cell) => renderRichInlineText(cell.text ?? ""))),
-        ],
-        "\n",
-      );
+      return joinRichText([
+        renderRichInlineText(block.caption),
+        ...block.cells.flatMap((row) => row.map((cell) => renderRichInlineText(cell.text))),
+      ]);
     case "animation":
     case "audio":
     case "document":
@@ -209,7 +163,7 @@ function renderRichBlock(block: RichBlock): string {
     case "voice_note":
       return renderRichCaption(block.caption);
     case "buttons":
-      return joinRichText(block.buttons.map(renderRichMessageButton), "\n");
+      return joinRichText(block.buttons.map((button) => renderRichInlineText(button.text)));
     case "anchor":
     case "divider":
       return "";
@@ -219,7 +173,7 @@ function renderRichBlock(block: RichBlock): string {
 }
 
 function renderRichBlocks(blocks: readonly RichBlock[]): string {
-  return joinRichText(blocks.map(renderRichBlock), "\n");
+  return joinRichText(blocks.map(renderRichBlock));
 }
 
 export function resolveTelegramRichMessagePlaceholder(
@@ -232,7 +186,7 @@ export function resolveTelegramRichMessageText(msg: TelegramTextMessage): string
   if (!msg.rich_message) {
     return undefined;
   }
-  return compactRichText(renderRichBlocks(msg.rich_message.blocks)) || undefined;
+  return renderRichBlocks(msg.rich_message.blocks) || undefined;
 }
 
 export function resolveTelegramRichMessageBody(msg: TelegramTextMessage): string | undefined {
@@ -365,9 +319,7 @@ export function hasBotMention(msg: Message, botUsername: string, botId?: number)
     if (ent.type === "bot_command" && isBotCommandAddressedToMention(slice, mention)) {
       return true;
     }
-    // A `text_mention` entity tags a user by id (the entity text is the display
-    // name, not `@username`), so the `mention` branch above never matches it.
-    // When it resolves to this bot, it is still an explicit mention of us.
+    // Text mentions identify the bot by ID rather than username.
     if (ent.type === "text_mention" && botId !== undefined && ent.user?.id === botId) {
       return true;
     }
@@ -414,156 +366,72 @@ export type TelegramForwardedContext = {
   fromMessageId?: number;
 };
 
-function normalizeForwardedUserLabel(user: User) {
-  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
-  const username = normalizeOptionalString(user.username);
-  const id = String(user.id);
-  const display =
-    (name && username
-      ? `${name} (@${username})`
-      : name || (username ? `@${username}` : undefined)) || `user:${id}`;
-  return { display, name: name || undefined, username, id };
-}
-
-function normalizeForwardedChatLabel(chat: Chat, fallbackKind: "chat" | "channel") {
-  const title = normalizeOptionalString(chat.title);
-  const username = normalizeOptionalString(chat.username);
-  const id = String(chat.id);
-  const display = title || (username ? `@${username}` : undefined) || `${fallbackKind}:${id}`;
-  return { display, title, username, id };
-}
-
-function buildForwardedContextFromUser(params: {
-  user: User;
-  date?: number;
-  type: string;
-}): TelegramForwardedContext | null {
-  const { display, name, username, id } = normalizeForwardedUserLabel(params.user);
-  if (!display) {
+export function normalizeForwardedContext(msg: Message): TelegramForwardedContext | null {
+  const origin = msg.forward_origin;
+  if (!origin) {
     return null;
   }
-  return {
-    from: display,
-    date: params.date,
-    fromType: params.type,
-    fromId: id,
-    fromUsername: username,
-    fromTitle: name,
-  };
-}
-
-function buildForwardedContextFromHiddenName(params: {
-  name?: string;
-  date?: number;
-  type: string;
-}): TelegramForwardedContext | null {
-  const trimmed = params.name?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return {
-    from: trimmed,
-    date: params.date,
-    fromType: params.type,
-    fromTitle: trimmed,
-  };
-}
-
-function buildForwardedContextFromChat(params: {
-  chat: Chat;
-  date?: number;
-  type: string;
-  signature?: string;
-  messageId?: number;
-}): TelegramForwardedContext | null {
-  const fallbackKind = params.type === "channel" ? "channel" : "chat";
-  const { display, title, username, id } = normalizeForwardedChatLabel(params.chat, fallbackKind);
-  if (!display) {
-    return null;
-  }
-  const signature = normalizeOptionalString(params.signature);
-  const from = signature ? `${display} (${signature})` : display;
-  const chatType = normalizeOptionalString(params.chat.type) as Chat["type"] | undefined;
-  return {
-    from,
-    date: params.date,
-    fromType: params.type,
-    fromId: id,
-    fromUsername: username,
-    fromTitle: title,
-    fromSignature: signature,
-    fromChatType: chatType,
-    fromMessageId: params.messageId,
-  };
-}
-
-function resolveForwardOrigin(origin: MessageOrigin): TelegramForwardedContext | null {
+  const context = { date: origin.date, fromType: origin.type };
   switch (origin.type) {
-    case "user":
-      return buildForwardedContextFromUser({
-        user: origin.sender_user,
-        date: origin.date,
-        type: "user",
-      });
-    case "hidden_user":
-      return buildForwardedContextFromHiddenName({
-        name: origin.sender_user_name,
-        date: origin.date,
-        type: "hidden_user",
-      });
+    case "user": {
+      const user = origin.sender_user;
+      const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+      const username = normalizeOptionalString(user.username);
+      const id = String(user.id);
+      const from =
+        (name && username
+          ? `${name} (@${username})`
+          : name || (username ? `@${username}` : undefined)) || `user:${id}`;
+      return {
+        ...context,
+        from,
+        fromId: id,
+        fromUsername: username,
+        fromTitle: name || undefined,
+      };
+    }
+    case "hidden_user": {
+      const name = origin.sender_user_name?.trim();
+      return name ? { ...context, from: name, fromTitle: name } : null;
+    }
     case "chat":
-      return buildForwardedContextFromChat({
-        chat: origin.sender_chat,
-        date: origin.date,
-        type: "chat",
-        signature: origin.author_signature,
-      });
-    case "channel":
-      return buildForwardedContextFromChat({
-        chat: origin.chat,
-        date: origin.date,
-        type: "channel",
-        signature: origin.author_signature,
-        messageId: origin.message_id,
-      });
+    case "channel": {
+      const chat = origin.type === "channel" ? origin.chat : origin.sender_chat;
+      const title = normalizeOptionalString(chat.title);
+      const username = normalizeOptionalString(chat.username);
+      const id = String(chat.id);
+      const display = title || (username ? `@${username}` : undefined) || `${origin.type}:${id}`;
+      const signature = normalizeOptionalString(origin.author_signature);
+      return {
+        ...context,
+        from: signature ? `${display} (${signature})` : display,
+        fromId: id,
+        fromUsername: username,
+        fromTitle: title,
+        fromSignature: signature,
+        fromChatType: normalizeOptionalString(chat.type) as Chat["type"] | undefined,
+        fromMessageId: origin.type === "channel" ? origin.message_id : undefined,
+      };
+    }
     default:
       origin satisfies never;
       return null;
   }
 }
 
-export function normalizeForwardedContext(msg: Message): TelegramForwardedContext | null {
-  if (!msg.forward_origin) {
+export function extractTelegramLocation(msg: Message): NormalizedLocation | null {
+  const { venue } = msg;
+  const location = venue?.location ?? msg.location;
+  if (!location) {
     return null;
   }
-  return resolveForwardOrigin(msg.forward_origin);
-}
-
-export function extractTelegramLocation(msg: Message): NormalizedLocation | null {
-  const { venue, location } = msg;
-
-  if (venue) {
-    return {
-      latitude: venue.location.latitude,
-      longitude: venue.location.longitude,
-      accuracy: venue.location.horizontal_accuracy,
-      name: venue.title,
-      address: venue.address,
-      source: "place",
-      isLive: false,
-    };
-  }
-
-  if (location) {
-    const isLive = typeof location.live_period === "number" && location.live_period > 0;
-    return {
-      latitude: location.latitude,
-      longitude: location.longitude,
-      accuracy: location.horizontal_accuracy,
-      source: isLive ? "live" : "pin",
-      isLive,
-    };
-  }
-
-  return null;
+  const isLive = !venue && typeof location.live_period === "number" && location.live_period > 0;
+  return {
+    latitude: location.latitude,
+    longitude: location.longitude,
+    accuracy: location.horizontal_accuracy,
+    ...(venue ? { name: venue.title, address: venue.address } : {}),
+    source: venue ? "place" : isLive ? "live" : "pin",
+    isLive,
+  };
 }

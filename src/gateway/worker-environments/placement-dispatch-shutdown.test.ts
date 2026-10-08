@@ -155,7 +155,11 @@ describe("worker placement shutdown replay", () => {
         profileId: "development",
         profileSnapshot: { settings: { region: "test" } },
       });
-      const owner = seedProvisioningPlacement(placements, intent.environmentId, "remote-exec");
+      const owner = await seedProvisioningPlacement(
+        placements,
+        intent.environmentId,
+        "remote-exec",
+      );
       if (owner.state !== "provisioning") {
         throw new Error("recovery fixture requires provisioning");
       }
@@ -200,7 +204,7 @@ describe("worker placement shutdown replay", () => {
       isShuttingDown: () => true,
       recoveryBarrierError: error,
     });
-    const owner = harness.placements.seedProvisioning();
+    const owner = await harness.placements.seedProvisioning();
     if (owner.state !== "provisioning") {
       throw new Error("recovery fixture requires provisioning");
     }

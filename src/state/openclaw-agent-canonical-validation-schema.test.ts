@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { constants, DatabaseSync } from "node:sqlite";
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { RuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import type { RetainedNativeWorker } from "../infra/worker-native-lifecycle.types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   assertCanonicalSessionValidationSchema,
@@ -8,6 +15,7 @@ import {
 } from "./openclaw-agent-canonical-validation-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
+import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_V21_SQL } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -43,10 +51,13 @@ function clearPending(database: DatabaseSync) {
   database.exec("DELETE FROM session_canonical_validation_pending");
 }
 
-function withDatabase(run: (database: DatabaseSync) => void) {
-  const database = new DatabaseSync(":memory:");
+function withDatabase(run: (database: DatabaseSync) => void, admitted = false) {
+  const database = admitted ? openNodeSqliteDatabase(":memory:") : new DatabaseSync(":memory:");
   try {
     database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+    if (admitted) {
+      admitSqliteSchema(database);
+    }
     run(database);
   } finally {
     if (database.isOpen) {
@@ -205,24 +216,210 @@ describe("canonical validation schema admission", () => {
     missingTables: ["session_canonical_validation_pending"],
     cause: expect.objectContaining({ message: expect.stringMatching(/missing or drifted/u) }),
   });
-  it.each([
-    "DROP TABLE session_canonical_validation_pending",
-    "DROP TRIGGER session_nodes_canonical_pending_after_update",
-    "DROP TRIGGER session_windows_canonical_pending_after_delete",
-    "DROP TRIGGER session_key_contract_canonical_pending_after_update",
-    `CREATE TRIGGER clear_canonical_pending AFTER INSERT ON session_canonical_validation_pending
-      BEGIN DELETE FROM session_canonical_validation_pending; END`,
-  ])("rejects changed required schema after a cached admission (%#)", (change) => {
-    withDatabase((database) => {
-      assertCanonicalSessionValidationSchema(database);
-      database.exec(change);
-      expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
-        change.startsWith("DROP TABLE")
-          ? missingTable
-          : /canonical validation schema is missing or drifted/u,
-      );
+  it("reuses admitted comparison and runtime facts through an older worker carrier without hiding schema drift", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const factKeys = [
+        "openclaw.sqliteNativeRuntimeAdmission",
+        "openclaw.agentCanonicalValidationSchemaDefinitions",
+      ] as const;
+      const originalFacts = factKeys.map((name) => getEnvironmentData(name));
+      const installFacts = (values: Parameters<typeof setEnvironmentData>[1][]) =>
+        factKeys.forEach((name, index) => setEnvironmentData(name, values[index]));
+      let closeSource: Parameters<RuntimeWorkerGeneration["retain"]>[1] | undefined;
+      const source = captureRetainedNativeWorkerSource({
+        runtimeGeneration: {
+          resolve: (url) => url,
+          retain: (_owner, close) => {
+            closeSource = close;
+          },
+        },
+      });
+      const children: RetainedNativeWorker[] = [];
+      source.retain({}, async () => {
+        await Promise.all(children.map((child) => child.terminate()));
+      });
+      const pathname = state.path("worker-admission.sqlite");
+      const spawn = () => {
+        const worker = source.create(
+          `
+          const { parentPort, workerData } = require("node:worker_threads");
+          const { DatabaseSync, StatementSync } = require("node:sqlite");
+          const reads = [], executions = [];
+          for (const method of ["get", "all", "run", "iterate"]) {
+            const original = StatementSync.prototype[method];
+            StatementSync.prototype[method] = function(...args) {
+              reads.push(this.sourceSQL);
+              return Reflect.apply(original, this, args);
+            };
+          }
+          const originalExec = DatabaseSync.prototype.exec;
+          DatabaseSync.prototype.exec = function(sql) {
+            executions.push(sql);
+            return Reflect.apply(originalExec, this, [sql]);
+          };
+          let database, canonical;
+          parentPort.on("message", async (command) => {
+            if (command === "ping") {
+              parentPort.postMessage({ ready: true });
+              return;
+            }
+            reads.length = executions.length = 0;
+            let error;
+            try {
+              if (!database) {
+                const { register } = await import(workerData.loader);
+                register();
+                const native = await import(workerData.native);
+                canonical = await import(workerData.canonical);
+                database = native.openNodeSqliteDatabase(workerData.pathname, { readOnly: true });
+              }
+              canonical.assertCanonicalSessionValidationSchema(database);
+            } catch (caught) {
+              error = caught.message;
+            }
+            parentPort.postMessage({
+              error,
+              nativeProbes: reads.filter((sql) => /sqlite_(?:version|compileoption_used)\\(/u.test(sql)).length,
+              comparisonBootstraps: executions.filter((sql) => sql !== workerData.schemaSql && sql.includes("CREATE TABLE IF NOT EXISTS session_canonical_validation_pending")).length,
+              diagnosticBootstraps: executions.filter((sql) => sql === workerData.schemaSql).length,
+              catalogReads: reads.filter((sql) => sql.includes("FROM main.sqlite_schema")).length,
+            });
+          });
+        `,
+          {
+            eval: true,
+            execArgv: [],
+            workerData: {
+              pathname,
+              schemaSql: OPENCLAW_AGENT_SCHEMA_SQL,
+              loader: import.meta.resolve("tsx/esm/api"),
+              native: new URL("../infra/node-sqlite.ts", import.meta.url).href,
+              canonical: new URL("./openclaw-agent-canonical-validation-schema.ts", import.meta.url)
+                .href,
+            },
+          },
+        );
+        children.push(worker);
+        let pending: ReturnType<typeof createDeferredCore<unknown>>;
+        worker.on("message", (value) => pending.resolve(value));
+        worker.on("error", (error) => pending.reject(error));
+        return (command = "read") => {
+          pending = createDeferredCore<unknown>();
+          worker.postMessage(command, []);
+          return pending.promise;
+        };
+      };
+      let database: DatabaseSync | undefined;
+      try {
+        installFacts([]);
+        await spawn()("ping");
+        installFacts(originalFacts);
+        database = openNodeSqliteDatabase(pathname);
+        database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        assertCanonicalSessionValidationSchema(database);
+        const admittedFacts = factKeys.map((name) => getEnvironmentData(name));
+        const read = spawn();
+        const admitted = await read();
+        database.exec("DROP TRIGGER session_nodes_canonical_pending_after_update");
+        const drifted = await read();
+        database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        installFacts([]);
+        const absent = await spawn()();
+        const canonicalFact = admittedFacts[1];
+        installFacts([
+          admittedFacts[0],
+          {
+            ...(canonicalFact && typeof canonicalFact === "object" ? canonicalFact : {}),
+            sourceHash: "another schema",
+          },
+        ]);
+        const differentSource = await spawn()();
+        expect(admitted).toMatchObject({
+          error: undefined,
+          nativeProbes: 0,
+          comparisonBootstraps: 0,
+          diagnosticBootstraps: 0,
+        });
+        assert(admitted && typeof admitted === "object" && "catalogReads" in admitted);
+        expect(admitted.catalogReads).toBeLessThanOrEqual(1);
+        expect(drifted).toMatchObject({
+          error: expect.stringMatching(/canonical validation schema is missing or drifted/u),
+          nativeProbes: 0,
+          comparisonBootstraps: 0,
+        });
+        assert(drifted && typeof drifted === "object" && "catalogReads" in drifted);
+        expect(drifted.catalogReads).toBeGreaterThan(0);
+        expect(absent).toMatchObject({
+          error: undefined,
+          comparisonBootstraps: 1,
+        });
+        assert(absent && typeof absent === "object" && "nativeProbes" in absent);
+        expect(absent.nativeProbes).toBeGreaterThan(0);
+        expect(differentSource).toMatchObject({
+          error: undefined,
+          nativeProbes: 0,
+          comparisonBootstraps: 1,
+        });
+      } finally {
+        database?.close();
+        installFacts(originalFacts);
+        const retire = await closeSource?.();
+        if (retire) {
+          await retire();
+        }
+      }
     });
   });
+  it("refuses a drifted canonical trigger at read-only open", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const pathname = state.path("drifted.sqlite");
+      const seed = new DatabaseSync(pathname);
+      try {
+        seed.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        seed.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+          VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', 1, 1);
+          DROP TRIGGER session_nodes_canonical_pending_after_update;`);
+      } finally {
+        seed.close();
+      }
+      expect(() => {
+        const opened = openOpenClawAgentDatabaseReadOnly({
+          agentId: "main",
+          path: pathname,
+          env: state.env,
+        });
+        if (opened.found) {
+          opened.database.close();
+        }
+      }).toThrow(/canonical validation schema is missing or drifted.*openclaw doctor --fix/u);
+    });
+  });
+  it.each(
+    [
+      "DROP TABLE session_canonical_validation_pending",
+      "DROP TRIGGER session_nodes_canonical_pending_after_update",
+      "DROP TRIGGER session_windows_canonical_pending_after_delete",
+      "DROP TRIGGER session_key_contract_canonical_pending_after_update",
+      `CREATE TRIGGER clear_canonical_pending AFTER INSERT ON session_canonical_validation_pending
+      BEGIN DELETE FROM session_canonical_validation_pending; END`,
+      `CREATE TRIGGER session_canonical_validation_pending AFTER INSERT ON conversations
+      BEGIN DELETE FROM session_canonical_validation_pending; END`,
+    ].flatMap((change) => [false, true].map((admitted) => ({ change, admitted }))),
+  )(
+    "rejects changed required schema after cached admission, admitted=$admitted (%#)",
+    ({ change, admitted }) => {
+      withDatabase((database) => {
+        assertCanonicalSessionValidationSchema(database);
+        database.exec(change);
+        expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
+          change.startsWith("DROP TABLE")
+            ? missingTable
+            : /canonical validation schema is missing or drifted/u,
+        );
+      }, admitted);
+    },
+  );
 
   it("does not reuse validation performed inside a rolled-back schema transaction", () => {
     withDatabase((database) => {
@@ -290,7 +487,9 @@ describe("agent schema 21 migration", () => {
         database
           .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
           .run(sibling);
-        const before = database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all();
+        const before = database
+          .prepare("SELECT *, 0 AS snapshot_revision FROM session_nodes ORDER BY session_key")
+          .all();
         oldWriter = new DatabaseSync(pathname);
         const oldWrite = oldWriter.prepare(
           "UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?",

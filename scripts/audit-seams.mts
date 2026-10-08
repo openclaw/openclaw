@@ -1,19 +1,22 @@
 #!/usr/bin/env node
-// Audits repo ownership seams, optional plugin leaks, and nearby test coverage signals.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import type * as ts from "typescript/unstable/ast";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
-import { visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
+import { groupBy } from "./lib/group-by.mts";
+import {
+  createNativeTypeScriptParser,
+  type NativeTypeScriptParser,
+} from "./lib/native-typescript.mts";
 import { optionalBundledClusterSet } from "./lib/optional-bundled-clusters.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { toLine } from "./lib/ts-guard-utils.mts";
+import { toLine, visitModuleSpecifiers } from "./lib/ts-guard-utils.mts";
 
 type ImportEntry = {
   family: string;
@@ -24,11 +27,6 @@ type ImportEntry = {
   specifier: string;
 };
 type OptionalClusterImportEntry = Omit<ImportEntry, "family"> & { cluster: string };
-type ModuleSpecifierVisit = {
-  kind: string;
-  specifierNode: ts.Node;
-  specifier: string;
-};
 const MATCH_QUALITY_RANK = {
   "exact-stem": 0,
   "path-nearby": 1,
@@ -125,47 +123,20 @@ function isTestLikePath(relativePath: string) {
   );
 }
 
-function isProductionLikeFile(relativePath: string) {
-  return !isTestLikePath(relativePath);
-}
-
-async function walkCodeFiles(rootDir: string) {
+async function walkCodeFiles(
+  rootDir: string,
+  options: { includeTests?: boolean; ignoreUnreadable?: boolean } = {},
+) {
   const out: string[] = [];
-  async function walk(dir: string): Promise<void> {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name === "dist" || entry.name === "node_modules") {
-        continue;
-      }
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await walk(fullPath);
-        continue;
-      }
-      if (!entry.isFile() || !isCodeFile(entry.name)) {
-        continue;
-      }
-      const relativePath = normalizePath(fullPath);
-      if (!isProductionLikeFile(relativePath)) {
-        continue;
-      }
-      out.push(fullPath);
-    }
-  }
-  await walk(rootDir);
-  return out.toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
-}
-
-async function walkAllCodeFiles(rootDir: string, options: { includeTests?: boolean } = {}) {
-  const out: string[] = [];
-  const includeTests = options.includeTests === true;
-
   async function walk(dir: string): Promise<void> {
     let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
+    } catch (error) {
+      if (options.ignoreUnreadable) {
+        return;
+      }
+      throw error;
     }
     for (const entry of entries) {
       if (entry.name === "dist" || entry.name === "node_modules") {
@@ -174,19 +145,15 @@ async function walkAllCodeFiles(rootDir: string, options: { includeTests?: boole
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         await walk(fullPath);
-        continue;
+      } else if (
+        entry.isFile() &&
+        isCodeFile(entry.name) &&
+        (options.includeTests || !isTestLikePath(normalizePath(fullPath)))
+      ) {
+        out.push(fullPath);
       }
-      if (!entry.isFile() || !isCodeFile(entry.name)) {
-        continue;
-      }
-      const relativePath = normalizePath(fullPath);
-      if (!includeTests && !isProductionLikeFile(relativePath)) {
-        continue;
-      }
-      out.push(fullPath);
     }
   }
-
   await walk(rootDir);
   return out.toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
 }
@@ -225,113 +192,61 @@ function compareImports(left: ImportEntry, right: ImportEntry) {
   );
 }
 
-function collectPluginSdkImports(filePath: string, sourceFile: ts.SourceFile): ImportEntry[] {
-  const entries: ImportEntry[] = [];
-
-  function push(kind: string, specifierNode: ts.Node, specifier: string) {
-    const resolvedPath = resolveRelativeSpecifier(specifier, filePath);
-    if (!resolvedPath?.startsWith("src/plugin-sdk/")) {
-      return;
-    }
-    entries.push({
-      family: normalizePluginSdkFamily(resolvedPath),
-      file: normalizePath(filePath),
-      kind,
-      line: toLine(sourceFile, specifierNode),
-      resolvedPath,
-      specifier,
-    });
-  }
-
-  const visit = ({ kind, specifierNode, specifier }: ModuleSpecifierVisit) =>
-    push(kind, specifierNode, specifier);
-  visitModuleSpecifiers(ts, sourceFile, visit);
-  return entries;
-}
-
-async function collectCorePluginSdkImports() {
-  const files = await walkCodeFiles(srcRoot);
+function collectFileImports(filePath: string, sourceFile: ts.SourceFile) {
   const inventory: ImportEntry[] = [];
-  for (const filePath of files) {
-    if (normalizePath(filePath).startsWith("src/plugin-sdk/")) {
-      continue;
-    }
-    const source = await fs.readFile(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
-    inventory.push(...collectPluginSdkImports(filePath, sourceFile));
-  }
-  return inventory.toSorted(compareImports);
-}
-
-function collectOptionalClusterStaticImports(
-  filePath: string,
-  sourceFile: ts.SourceFile,
-): OptionalClusterImportEntry[] {
-  const entries: OptionalClusterImportEntry[] = [];
-
-  function push(kind: string, specifierNode: ts.Node, specifier: string) {
-    if (!specifier.startsWith(".")) {
-      return;
-    }
+  const optionalClusterStaticLeaks: OptionalClusterImportEntry[] = [];
+  visitModuleSpecifiers(sourceFile, ({ kind, specifierNode, specifier }) => {
     const resolvedPath = resolveRelativeSpecifier(specifier, filePath);
     if (!resolvedPath) {
       return;
     }
-    const cluster = resolveOptionalClusterFromPath(resolvedPath);
-    if (!cluster) {
-      return;
-    }
-    entries.push({
-      cluster,
+    const entry = {
       file: normalizePath(filePath),
       kind,
       line: toLine(sourceFile, specifierNode),
       resolvedPath,
       specifier,
-    });
-  }
-
-  const visit = ({ kind, specifierNode, specifier }: ModuleSpecifierVisit) => {
-    if (kind !== "dynamic-import") {
-      push(kind, specifierNode, specifier);
+    };
+    if (resolvedPath.startsWith("src/plugin-sdk/")) {
+      inventory.push({ family: normalizePluginSdkFamily(resolvedPath), ...entry });
     }
-  };
-  visitModuleSpecifiers(ts, sourceFile, visit);
-  return entries;
+    const cluster = resolveOptionalClusterFromPath(resolvedPath);
+    if (kind !== "dynamic-import" && cluster) {
+      optionalClusterStaticLeaks.push({ cluster, ...entry });
+    }
+  });
+  return { inventory, optionalClusterStaticLeaks };
 }
 
-async function collectOptionalClusterStaticLeaks() {
-  const files = await walkCodeFiles(srcRoot);
-  const inventory: OptionalClusterImportEntry[] = [];
-  for (const filePath of files) {
-    const relativePath = normalizePath(filePath);
-    if (relativePath.startsWith("src/plugin-sdk/")) {
+async function collectCoreImports(parser: NativeTypeScriptParser) {
+  const inventory: ImportEntry[] = [];
+  const optionalClusterStaticLeaks: OptionalClusterImportEntry[] = [];
+  for (const filePath of await walkCodeFiles(srcRoot)) {
+    if (normalizePath(filePath).startsWith("src/plugin-sdk/")) {
       continue;
     }
     const source = await fs.readFile(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
-    inventory.push(...collectOptionalClusterStaticImports(filePath, sourceFile));
+    const sourceFile = parser.parseSourceFile(filePath, source);
+    const imports = collectFileImports(filePath, sourceFile);
+    inventory.push(...imports.inventory);
+    optionalClusterStaticLeaks.push(...imports.optionalClusterStaticLeaks);
   }
-  return inventory.toSorted((left, right) => {
-    return (
-      left.cluster.localeCompare(right.cluster) ||
-      left.file.localeCompare(right.file) ||
-      left.line - right.line ||
-      left.kind.localeCompare(right.kind) ||
-      left.specifier.localeCompare(right.specifier)
-    );
-  });
+  return {
+    inventory: inventory.toSorted(compareImports),
+    optionalClusterStaticLeaks: optionalClusterStaticLeaks.toSorted(
+      (left, right) =>
+        left.cluster.localeCompare(right.cluster) ||
+        left.file.localeCompare(right.file) ||
+        left.line - right.line ||
+        left.kind.localeCompare(right.kind) ||
+        left.specifier.localeCompare(right.specifier),
+    ),
+  };
 }
 
 function buildDuplicatedSeamFamilies(inventory: ImportEntry[]) {
-  const grouped = new Map<string, ImportEntry[]>();
-  for (const entry of inventory) {
-    const bucket = grouped.get(entry.family) ?? [];
-    bucket.push(entry);
-    grouped.set(entry.family, bucket);
-  }
-
-  const duplicated = Object.fromEntries(
+  const grouped = groupBy(inventory, (entry) => entry.family);
+  return Object.fromEntries(
     [...grouped.entries()]
       .map(([family, entries]) => {
         const files = [...new Set(entries.map((entry) => entry.file))].toSorted(compareStrings);
@@ -354,17 +269,10 @@ function buildDuplicatedSeamFamilies(inventory: ImportEntry[]) {
         );
       }),
   );
-
-  return duplicated;
 }
 
 function buildOverlapFiles(inventory: ImportEntry[]) {
-  const byFile = new Map<string, ImportEntry[]>();
-  for (const entry of inventory) {
-    const bucket = byFile.get(entry.file) ?? [];
-    bucket.push(entry);
-    byFile.set(entry.file, bucket);
-  }
+  const byFile = groupBy(inventory, (entry) => entry.file);
 
   return [...byFile.entries()]
     .map(([file, entries]) => {
@@ -386,12 +294,7 @@ function buildOverlapFiles(inventory: ImportEntry[]) {
 }
 
 function buildOptionalClusterStaticLeaks(inventory: OptionalClusterImportEntry[]) {
-  const grouped = new Map<string, OptionalClusterImportEntry[]>();
-  for (const entry of inventory) {
-    const bucket = grouped.get(entry.cluster) ?? [];
-    bucket.push(entry);
-    grouped.set(entry.cluster, bucket);
-  }
+  const grouped = groupBy(inventory, (entry) => entry.cluster);
 
   return Object.fromEntries(
     [...grouped.entries()]
@@ -412,26 +315,6 @@ function buildOptionalClusterStaticLeaks(inventory: OptionalClusterImportEntry[]
   );
 }
 
-function packageClusterMeta(relativePackagePath: string) {
-  if (relativePackagePath === "ui/package.json") {
-    return {
-      cluster: "ui",
-      packageName: "openclaw-control-ui",
-      packagePath: relativePackagePath,
-      reachability: "workspace-ui",
-    };
-  }
-  const cluster = path.basename(path.dirname(relativePackagePath));
-  return {
-    cluster,
-    packageName: null,
-    packagePath: relativePackagePath,
-    reachability: relativePackagePath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)
-      ? "extension-workspace"
-      : "workspace",
-  };
-}
-
 function classifyMissingPackageCluster(params: {
   cluster: string;
   pluginSdkEntries: string[];
@@ -445,24 +328,14 @@ function classifyMissingPackageCluster(params: {
     };
   }
   if (optionalBundledClusterSet.has(params.cluster)) {
-    if (params.cluster === "ui") {
-      return {
-        decision: "optional",
-        reason:
-          "Private UI workspace. Repo-wide CLI/plugin CI should not require UI-only packages.",
-      };
-    }
-    if (params.pluginSdkEntries.length > 0) {
-      return {
-        decision: "optional",
-        reason:
-          "Public plugin-sdk entry exists, but repo-wide default check/build should isolate this optional cluster from the static graph.",
-      };
-    }
     return {
       decision: "optional",
       reason:
-        "Workspace package is intentionally not mirrored into the root dependency set by default CI policy.",
+        params.cluster === "ui"
+          ? "Private UI workspace. Repo-wide CLI/plugin CI should not require UI-only packages."
+          : params.pluginSdkEntries.length > 0
+            ? "Public plugin-sdk entry exists, but repo-wide default check/build should isolate this optional cluster from the static graph."
+            : "Workspace package is intentionally not mirrored into the root dependency set by default CI policy.",
     };
   }
   return {
@@ -472,7 +345,7 @@ function classifyMissingPackageCluster(params: {
   };
 }
 
-async function buildMissingPackages(params: { staticLeakClusters?: Set<string> } = {}) {
+async function buildMissingPackages(staticLeakClusters: ReadonlySet<string>) {
   const rootPackage: PackageJson = JSON.parse(
     await fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
   );
@@ -513,20 +386,21 @@ async function buildMissingPackages(params: { staticLeakClusters?: Set<string> }
     if (missing.length === 0) {
       continue;
     }
-    const meta = packageClusterMeta(relativePackagePath);
-    const pluginSdkEntries = [...(pluginSdkReachability.get(meta.cluster) ?? new Set())].toSorted(
+    const cluster = path.basename(path.dirname(relativePackagePath));
+    const pluginSdkEntries = [...(pluginSdkReachability.get(cluster) ?? [])].toSorted(
       compareStrings,
     );
     const classification = classifyMissingPackageCluster({
-      cluster: meta.cluster,
+      cluster,
       pluginSdkEntries,
-      hasStaticLeak: params.staticLeakClusters?.has(meta.cluster) === true,
+      hasStaticLeak: staticLeakClusters.has(cluster),
     });
     output.push({
-      cluster: meta.cluster,
+      cluster,
       decision: classification.decision,
       decisionReason: classification.reason,
-      packageName: pkg.name ?? meta.packageName,
+      packageName:
+        pkg.name ?? (relativePackagePath === "ui/package.json" ? "openclaw-control-ui" : null),
       packagePath: relativePackagePath,
       npmSpec: redactNpmSpec(pkg.openclaw?.install?.npmSpec),
       private: pkg.private === true,
@@ -548,7 +422,7 @@ function stemFromRelativePath(relativePath: string) {
 function splitNameTokens(name: string) {
   return name
     .split(/[^a-zA-Z0-9]+/)
-    .map((token) => token.trim().toLowerCase())
+    .map((token) => token.toLowerCase())
     .filter(Boolean);
 }
 
@@ -564,26 +438,17 @@ function hasAnyImportSource(source: string, specifiers: string[]) {
   return specifiers.some((specifier) => hasImportSource(source, specifier));
 }
 
-function isCronProductionPath(relativePath: string) {
-  return relativePath.startsWith("src/cron/") && isProductionLikeFile(relativePath);
-}
-
-function isSubagentProductionPath(relativePath: string) {
-  return (
-    (relativePath.startsWith("src/agents/") || relativePath.startsWith("src/cron/")) &&
-    isProductionLikeFile(relativePath) &&
-    (/subagent|sessions-spawn|acp-spawn/.test(relativePath) ||
-      relativePath === "src/agents/tools/sessions-spawn-tool.ts" ||
-      relativePath === "src/agents/tools/subagents-tool.ts")
-  );
+function matchingSeamKinds(source: string, rules: Array<[string, boolean, RegExp]>) {
+  return rules
+    .filter(([, enabled, pattern]) => enabled && pattern.test(source))
+    .map(([kind]) => kind);
 }
 
 function describeCronSeamKinds(relativePath: string, source: string) {
-  if (!isCronProductionPath(relativePath)) {
+  if (!relativePath.startsWith("src/cron/") || isTestLikePath(relativePath)) {
     return [];
   }
 
-  const seamKinds = [];
   const importsAgentRunner = hasAnyImportSource(source, [
     "../../agents/cli-runner.js",
     "../../agents/embedded-agent.js",
@@ -624,67 +489,49 @@ function describeCronSeamKinds(relativePath: string, source: string) {
       "../store.js",
     ]);
 
-  if (
-    importsAgentRunner &&
-    /\brunCliAgent\b|\brunEmbeddedAgent\b|\brunWithModelFallback\b|\bregisterAgentRunContext\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("cron-agent-handoff");
-  }
-
-  if (
-    importsOutboundDelivery &&
-    /\bdeliverOutboundPayloads\b|\bbuildOutboundSessionContext\b|\bresolveAgentOutboundIdentity\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("cron-outbound-delivery");
-  }
-
-  if (
-    importsHeartbeat &&
-    /\bstripHeartbeatToken\b|\bHeartbeat\b|\bheartbeat\b|\bnext-heartbeat\b/.test(source)
-  ) {
-    seamKinds.push("cron-heartbeat-handoff");
-  }
-
-  if (
-    importsSchedulerModules &&
-    /\bensureLoaded\b|\bpersist\b|\barmTimer\b|\brunMissedJobs\b|\bcomputeJobNextRunAtMs\b|\brecomputeNextRunsForMaintenance\b|\bnextWakeAtMs\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("cron-scheduler-state");
-  }
-
-  if (
-    importsOutboundDelivery &&
-    /\bmediaUrl\b|\bmediaUrls\b|\bfilename\b|\baudioAsVoice\b|\bdeliveryPayloads\b|\bdeliveryPayloadHasStructuredContent\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("cron-media-delivery");
-  }
-
-  if (
-    importsFollowup &&
-    /\bwaitForDescendantSubagentSummary\b|\breadDescendantSubagentFallbackReply\b|\bexpectsSubagentFollowup\b|\bcallGateway\b|\blistDescendantRunsForRequester\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("cron-followup-handoff");
-  }
-
-  return seamKinds;
+  return matchingSeamKinds(source, [
+    [
+      "cron-agent-handoff",
+      importsAgentRunner,
+      /\brunCliAgent\b|\brunEmbeddedAgent\b|\brunWithModelFallback\b|\bregisterAgentRunContext\b/,
+    ],
+    [
+      "cron-outbound-delivery",
+      importsOutboundDelivery,
+      /\bdeliverOutboundPayloads\b|\bbuildOutboundSessionContext\b|\bresolveAgentOutboundIdentity\b/,
+    ],
+    [
+      "cron-heartbeat-handoff",
+      importsHeartbeat,
+      /\bstripHeartbeatToken\b|\bHeartbeat\b|\bheartbeat\b|\bnext-heartbeat\b/,
+    ],
+    [
+      "cron-scheduler-state",
+      importsSchedulerModules,
+      /\bensureLoaded\b|\bpersist\b|\barmTimer\b|\brunMissedJobs\b|\bcomputeJobNextRunAtMs\b|\brecomputeNextRunsForMaintenance\b|\bnextWakeAtMs\b/,
+    ],
+    [
+      "cron-media-delivery",
+      importsOutboundDelivery,
+      /\bmediaUrl\b|\bmediaUrls\b|\bfilename\b|\baudioAsVoice\b|\bdeliveryPayloads\b|\bdeliveryPayloadHasStructuredContent\b/,
+    ],
+    [
+      "cron-followup-handoff",
+      importsFollowup,
+      /\bwaitForDescendantSubagentSummary\b|\breadDescendantSubagentFallbackReply\b|\bexpectsSubagentFollowup\b|\bcallGateway\b|\blistDescendantRunsForRequester\b/,
+    ],
+  ]);
 }
 
 function describeSubagentSeamKinds(relativePath: string, source: string) {
-  if (!isSubagentProductionPath(relativePath)) {
+  if (
+    (!relativePath.startsWith("src/agents/") && !relativePath.startsWith("src/cron/")) ||
+    isTestLikePath(relativePath) ||
+    !/subagent|sessions-spawn|acp-spawn/.test(relativePath)
+  ) {
     return [];
   }
 
-  const seamKinds = [];
   const isAnnounceDispatchPath =
     relativePath === "src/agents/subagents/announce/subagent-announce.ts" ||
     relativePath === "src/agents/subagents/announce/subagent-announce-dispatch.ts";
@@ -745,52 +592,33 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
     "../../../infra/agent-events.js",
   ]);
 
-  if (
-    importsSpawnRuntime &&
-    /\bspawnSubagentDirect\b|\bspawnAcpDirect\b|\bregisterSubagentRun\b|\bgetAcpSessionManager\b|\bspawnSubagent\b|\bspawnAcp\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("subagent-session-spawn");
-  }
-
-  if (
-    importsLifecycleRegistry &&
-    /\bemitSubagentEndedHookOnce\b|\bresolveDeferredCleanupDecision\b|\bpersistSubagentRunsToDisk\b|\brestoreSubagentRunsFromDisk\b|\bresolveContextEngine\b|\bemitSessionLifecycleEvent\b|\bcaptureSubagentCompletionReply\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("subagent-lifecycle-registry");
-  }
-
-  if (
-    (importsAnnounceDelivery || isAnnounceDispatchPath) &&
-    /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("subagent-announce-delivery");
-  }
-
-  if (
-    importsCleanup &&
-    /\bsessions\.delete\b|\bdeleteTranscript\b|\bcleanupFailedAcpSpawn\b|\bcleanupProvisionalSession\b|\bcleanupFailedSpawnBeforeAgentStart\b|\bresolveDeferredCleanupDecision\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("subagent-session-cleanup");
-  }
-
-  if (
-    importsParentStream &&
-    /\bstartAcpSpawnParentStreamRelay\b|\brequestHeartbeatNow\b|\benqueueSystemEvent\b|\bonAgentEvent\b|\bstreamTo\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("subagent-parent-stream");
-  }
-
-  return seamKinds;
+  return matchingSeamKinds(source, [
+    [
+      "subagent-session-spawn",
+      importsSpawnRuntime,
+      /\bspawnSubagentDirect\b|\bspawnAcpDirect\b|\bregisterSubagentRun\b|\bgetAcpSessionManager\b|\bspawnSubagent\b|\bspawnAcp\b/,
+    ],
+    [
+      "subagent-lifecycle-registry",
+      importsLifecycleRegistry,
+      /\bemitSubagentEndedHookOnce\b|\bresolveDeferredCleanupDecision\b|\bpersistSubagentRunsToDisk\b|\brestoreSubagentRunsFromDisk\b|\bresolveContextEngine\b|\bemitSessionLifecycleEvent\b|\bcaptureSubagentCompletionReply\b/,
+    ],
+    [
+      "subagent-announce-delivery",
+      importsAnnounceDelivery || isAnnounceDispatchPath,
+      /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bresolveBoundDeliveryDestination\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/,
+    ],
+    [
+      "subagent-session-cleanup",
+      importsCleanup,
+      /\bsessions\.delete\b|\bdeleteTranscript\b|\bcleanupFailedAcpSpawn\b|\bcleanupProvisionalSession\b|\bcleanupFailedSpawnBeforeAgentStart\b|\bresolveDeferredCleanupDecision\b/,
+    ],
+    [
+      "subagent-parent-stream",
+      importsParentStream,
+      /\bstartAcpSpawnParentStreamRelay\b|\brequestHeartbeatNow\b|\benqueueSystemEvent\b|\bonAgentEvent\b|\bstreamTo\b/,
+    ],
+  ]);
 }
 
 export function describeSeamKinds(relativePath: string, source: string) {
@@ -847,7 +675,6 @@ async function buildTestIndex(testFiles: string[]) {
       const baseName = path.basename(stem);
       const source = await readScannableText(filePath);
       return {
-        filePath,
         relativePath,
         stem,
         baseName,
@@ -881,8 +708,6 @@ function hasModuleMockReference(source: string, importPath: string) {
   return patterns.some((pattern) => pattern.test(source));
 }
 
-const matchQualityRank = (quality: MatchQuality) => MATCH_QUALITY_RANK[quality] ?? 4;
-
 function findRelatedTests(relativePath: string, testIndex: TestIndexEntry[]): RelatedTestMatch[] {
   const stem = stemFromRelativePath(relativePath);
   const baseName = path.basename(stem);
@@ -898,12 +723,11 @@ function findRelatedTests(relativePath: string, testIndex: TestIndexEntry[]): Re
       return [{ file: entry.relativePath, matchQuality: "path-nearby" }];
     }
     const entryDir = path.dirname(entry.relativePath).split(path.sep).join("/");
+    const relativeImportPath = path.posix.relative(entryDir, stem);
     const importPath =
-      path.posix.relative(entryDir, stem) === path.basename(stem)
-        ? `./${path.basename(stem)}`
-        : path.posix.relative(entryDir, stem).startsWith(".")
-          ? path.posix.relative(entryDir, stem)
-          : `./${path.posix.relative(entryDir, stem)}`;
+      relativeImportPath === baseName || !relativeImportPath.startsWith(".")
+        ? `./${relativeImportPath}`
+        : relativeImportPath;
     if (
       hasExecutableImportReference(entry.source, importPath) &&
       !hasModuleMockReference(entry.source, importPath)
@@ -920,20 +744,9 @@ function findRelatedTests(relativePath: string, testIndex: TestIndexEntry[]): Re
     return [];
   });
 
-  const byFile = new Map<string, RelatedTestMatch>();
-  for (const match of matches) {
-    const existing = byFile.get(match.file);
-    if (
-      !existing ||
-      matchQualityRank(match.matchQuality) < matchQualityRank(existing.matchQuality)
-    ) {
-      byFile.set(match.file, match);
-    }
-  }
-
-  return [...byFile.values()].toSorted((left, right) => {
+  return matches.toSorted((left, right) => {
     return (
-      matchQualityRank(left.matchQuality) - matchQualityRank(right.matchQuality) ||
+      MATCH_QUALITY_RANK[left.matchQuality] - MATCH_QUALITY_RANK[right.matchQuality] ||
       left.file.localeCompare(right.file)
     );
   });
@@ -984,9 +797,9 @@ async function buildSeamTestInventory() {
     ...(await walkCodeFiles(extensionsRoot)),
   ].toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
   const testFiles = [
-    ...(await walkAllCodeFiles(srcRoot, { includeTests: true })),
-    ...(await walkAllCodeFiles(extensionsRoot, { includeTests: true })),
-    ...(await walkAllCodeFiles(testRoot, { includeTests: true })),
+    ...(await walkCodeFiles(srcRoot, { includeTests: true, ignoreUnreadable: true })),
+    ...(await walkCodeFiles(extensionsRoot, { includeTests: true, ignoreUnreadable: true })),
+    ...(await walkCodeFiles(testRoot, { includeTests: true, ignoreUnreadable: true })),
   ]
     .filter((filePath) => /\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(filePath))
     .toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
@@ -1029,14 +842,14 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   }
 
   await collectWorkspacePackagePaths();
-  const inventory = await collectCorePluginSdkImports();
-  const optionalClusterStaticLeaks = await collectOptionalClusterStaticLeaks();
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  const { inventory, optionalClusterStaticLeaks } = await collectCoreImports(parser);
   const staticLeakClusters = new Set(optionalClusterStaticLeaks.map((entry) => entry.cluster));
   const result = {
     duplicatedSeamFamilies: buildDuplicatedSeamFamilies(inventory),
     overlapFiles: buildOverlapFiles(inventory),
     optionalClusterStaticLeaks: buildOptionalClusterStaticLeaks(optionalClusterStaticLeaks),
-    missingPackages: await buildMissingPackages({ staticLeakClusters }),
+    missingPackages: await buildMissingPackages(staticLeakClusters),
     seamTestInventory: await buildSeamTestInventory(),
   };
 

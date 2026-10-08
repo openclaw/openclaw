@@ -4,7 +4,7 @@ import { ref } from "lit/directives/ref.js";
 import type { CronJobsScheduleKindFilter } from "../../api/types.ts";
 import { icon } from "../../components/icons.ts";
 import type { PickerOption } from "../../components/select-picker.ts";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
+import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import type { CronProps } from "./view-types.ts";
@@ -73,16 +73,8 @@ export function renderJobsFilterPopover(props: CronProps, active: boolean) {
       aria-label=${t("cron.list.filters")}
       placement="bottom-end"
       without-arrow
-      @wa-show=${(event: Event) => {
-        if (event.currentTarget instanceof Element) {
-          event.currentTarget.previousElementSibling?.setAttribute("aria-expanded", "true");
-        }
-      }}
-      @wa-hide=${(event: Event) => {
-        if (event.currentTarget instanceof Element) {
-          event.currentTarget.previousElementSibling?.setAttribute("aria-expanded", "false");
-        }
-      }}
+      @wa-show=${syncPopoverExpanded}
+      @wa-hide=${syncPopoverExpanded}
     >
       <div class="cron-filter-popover__panel">
         ${renderJobsFilter(props, "cronJobsScheduleKindFilter", {

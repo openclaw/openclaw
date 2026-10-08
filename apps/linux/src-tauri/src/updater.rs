@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tauri_plugin_opener::OpenerExt;
@@ -124,6 +124,14 @@ pub struct UpdaterState {
     manual_pending: Arc<AtomicBool>,
 }
 
+impl UpdaterState {
+    fn lifecycle(&self) -> MutexGuard<'_, UpdateLifecycle> {
+        self.lifecycle
+            .lock()
+            .expect("updater lifecycle lock poisoned")
+    }
+}
+
 #[derive(Debug)]
 struct DeferredUpdate<T = Update> {
     update: T,
@@ -197,16 +205,17 @@ impl<T> UpdateLifecycle<T> {
         if self.operation_in_progress {
             return ClaimedAction::None;
         }
-        if relaunch || self.action() == UpdateAction::RestartToUpdate {
+        if relaunch || self.ready.is_some() {
             self.operation_in_progress = true;
             return match self.ready.take() {
                 Some(ReadyUpdate::Deferred(deferred)) => ClaimedAction::Install(deferred),
                 Some(ReadyUpdate::Installed) | None => ClaimedAction::Restart,
             };
         }
-        match self.action() {
-            UpdateAction::OpenDownloadPage => ClaimedAction::OpenDownloadPage,
-            _ => ClaimedAction::None,
+        if self.download_available {
+            ClaimedAction::OpenDownloadPage
+        } else {
+            ClaimedAction::None
         }
     }
 
@@ -256,8 +265,8 @@ struct UpdateInfo {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ManualUpdateInfo {
-    version: String,
-    notes: Option<String>,
+    #[serde(flatten)]
+    update: UpdateInfo,
     release_url: &'static str,
 }
 
@@ -320,9 +329,7 @@ pub(crate) fn perform_action(app: &AppHandle) {
 fn activate(app: &AppHandle, relaunch: bool) {
     let action = app
         .state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
+        .lifecycle()
         .claim_action(relaunch);
     refresh_action(app);
     match action {
@@ -340,9 +347,7 @@ fn activate(app: &AppHandle, relaunch: bool) {
                 Ok(()) => app.restart(),
                 Err(error) => {
                     app.state::<UpdaterState>()
-                        .lifecycle
-                        .lock()
-                        .expect("updater lifecycle lock poisoned")
+                        .lifecycle()
                         .restore_failed_install(deferred);
                     deliver_error(&app, true, TerminalResultKind::RelaunchFailed, error);
                 }
@@ -379,19 +384,7 @@ async fn run_check(app: AppHandle, manual: bool) {
             .parse()
             .expect("desktop test updater endpoint is valid")])
         .and_then(|builder| builder.build());
-    let updater = match updater {
-        Ok(updater) => updater,
-        Err(error) => {
-            deliver_error(
-                &app,
-                manual_requested(),
-                TerminalResultKind::CheckFailed,
-                error,
-            );
-            return;
-        }
-    };
-    let update = match updater.check().await {
+    let update = match async { updater?.check().await }.await {
         Ok(Some(update)) => update,
         Ok(None) => {
             deliver_result(
@@ -419,11 +412,7 @@ async fn run_check(app: AppHandle, manual: bool) {
         notes: update.body.clone(),
     };
 
-    app.state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
-        .download_started();
+    app.state::<UpdaterState>().lifecycle().download_started();
     refresh_action(&app);
     let install_kind = install_kind();
     if install_kind == InstallKind::NotifyOnly {
@@ -435,8 +424,7 @@ async fn run_check(app: AppHandle, manual: bool) {
             TerminalResultKind::PackageUpdateAvailable,
             AVAILABLE_MANUAL_EVENT,
             ManualUpdateInfo {
-                version: info.version,
-                notes: info.notes,
+                update: info,
                 release_url: RELEASE_URL,
             },
             &notification_body,
@@ -448,12 +436,7 @@ async fn run_check(app: AppHandle, manual: bool) {
     let result = update.download(progress_callback(app.clone()), || {}).await;
     let result = match result {
         Ok(bytes) if install_kind == InstallKind::SelfInstall => {
-            let admitted = app
-                .state::<UpdaterState>()
-                .lifecycle
-                .lock()
-                .expect("updater lifecycle lock poisoned")
-                .begin_self_install();
+            let admitted = app.state::<UpdaterState>().lifecycle().begin_self_install();
             if !admitted {
                 // A relaunch already owns the process; do not replace files beneath it.
                 return;
@@ -461,17 +444,13 @@ async fn run_check(app: AppHandle, manual: bool) {
             refresh_action(&app);
             let result = update.install(&bytes);
             app.state::<UpdaterState>()
-                .lifecycle
-                .lock()
-                .expect("updater lifecycle lock poisoned")
+                .lifecycle()
                 .finish_self_install(result.is_ok());
             result
         }
         Ok(bytes) => {
             app.state::<UpdaterState>()
-                .lifecycle
-                .lock()
-                .expect("updater lifecycle lock poisoned")
+                .lifecycle()
                 .replace_ready(ReadyUpdate::Deferred(DeferredUpdate { update, bytes }));
             Ok(())
         }
@@ -528,11 +507,7 @@ fn result_delivery(
 }
 
 pub(crate) fn current_action(app: &AppHandle) -> UpdateAction {
-    app.state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
-        .action()
+    app.state::<UpdaterState>().lifecycle().action()
 }
 
 fn refresh_action(app: &AppHandle) {
@@ -582,10 +557,6 @@ fn install_kind_from_appimage_env(appimage: Option<OsString>, platform: Platform
     }
 }
 
-fn main_window(app: &AppHandle) -> Option<Webview> {
-    app.get_webview("main")
-}
-
 fn main_content_is_remote(app: &AppHandle, window: Option<&Webview>) -> bool {
     !window.is_some_and(|window| {
         app.state::<crate::DesktopState>()
@@ -602,7 +573,7 @@ fn progress_callback(app: AppHandle) -> impl FnMut(usize, Option<u64>) {
 }
 
 fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
-    if let Some(window) = main_window(app) {
+    if let Some(window) = app.get_webview("main") {
         if !main_content_is_remote(app, Some(&window)) {
             let _ = window.emit(event, payload);
         }
@@ -618,12 +589,10 @@ fn deliver_result<S: Serialize + Clone>(
     notification_body: &str,
 ) {
     app.state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
+        .lifecycle()
         .record_result(result);
     refresh_action(app);
-    let window = main_window(app);
+    let window = app.get_webview("main");
     let destination = result_delivery(manual, main_content_is_remote(app, window.as_ref()), result);
     if matches!(
         destination,

@@ -172,22 +172,19 @@ describe("scoped session access providers", () => {
     });
   });
 
-  it.each(["history", "send", "list", "status"] as const)(
-    "gives the canonical main session agent-wide %s access under tree visibility",
-    (action) => {
-      const checker = createSessionVisibilityRowChecker({
-        action,
-        requesterSessionKey: "agent:main:work",
-        mainSessionKey: "agent:main:work",
-        visibility: "tree",
-        a2aPolicy: createAgentToAgentPolicy({}),
-      });
+  it("gives the canonical main session agent-wide access under tree visibility", () => {
+    const checker = createSessionVisibilityRowChecker({
+      action: "history",
+      requesterSessionKey: "agent:main:work",
+      mainSessionKey: "agent:main:work",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({}),
+    });
 
-      expect(checker.check({ key: "agent:main:telegram:group:unspawned" })).toEqual({
-        allowed: true,
-      });
-    },
-  );
+    expect(checker.check({ key: "agent:main:telegram:group:unspawned" })).toEqual({
+      allowed: true,
+    });
+  });
 
   it("keeps the main exception inside tree same-agent scope", () => {
     const makeChecker = (visibility: "self" | "tree") =>
@@ -268,7 +265,7 @@ describe("scoped session access providers", () => {
       allowed: false,
       status: "forbidden",
       error:
-        "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.",
+        "Session send visibility is restricted. Configure agents.entries.<id>.tools.agentToAgent.send for explicit send-only destinations, or tools.sessions.visibility=all for shared access. Global agent-to-agent and sandbox limits still apply.",
     });
   });
 
@@ -406,6 +403,33 @@ describe("createAgentToAgentPolicy allow list", () => {
     expect(policy.isAllowed("main", "ops")).toBe(false);
     expect(policy.isAllowed("ops", "main")).toBe(false);
     expect(policy.isAllowed("main", "main")).toBe(true);
+  });
+});
+
+describe("directed send matcher", () => {
+  it.each([
+    { send: undefined, narrow: false, broad: true },
+    { send: [], narrow: false, broad: false },
+    { send: [" "], narrow: false, broad: false },
+    { send: ["ops-*"], narrow: true, broad: true },
+    { send: ["*"], narrow: true, broad: true },
+  ])("matches only explicit send destinations: $send", ({ send, narrow, broad }) => {
+    const a2aPolicy = createAgentToAgentPolicy({
+      agents: { entries: { ReSeArCh: { tools: { agentToAgent: { send } } } } },
+    });
+    expect(a2aPolicy.isAllowed("research", "ops-west")).toBe(true);
+    for (const [visibility, allowed] of [
+      ["agent", narrow],
+      ["all", broad],
+    ] as const) {
+      const checker = createSessionVisibilityRowChecker({
+        action: "send",
+        requesterSessionKey: "agent:research:main",
+        visibility,
+        a2aPolicy,
+      });
+      expect(checker.check({ key: "agent:ops-west:main" }).allowed).toBe(allowed);
+    }
   });
 });
 

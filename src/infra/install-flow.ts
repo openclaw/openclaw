@@ -1,4 +1,3 @@
-// Coordinates plugin install flow decisions from source detection through target preparation.
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +5,7 @@ import { resolveUserPath } from "../utils.js";
 import {
   type ArchiveExtractLimits,
   type ArchiveLogger,
+  type ExtractArchiveOptions,
   extractArchive,
   resolvePackedRootDir,
 } from "./archive.js";
@@ -14,8 +14,6 @@ import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { withInstallActivity, type InstallActivityObserver } from "./install-progress.js";
 import { withInstallWorkspace } from "./install-source-utils.js";
 
-// Install-flow helpers validate local install paths and unpack archives inside
-// temporary workspaces before handing the resolved package root to callers.
 type ExistingInstallPathResult =
   | {
       ok: true;
@@ -27,7 +25,6 @@ type ExistingInstallPathResult =
       error: string;
     };
 
-/** Resolve and stat a user-provided install path. */
 export async function resolveExistingInstallPath(
   inputPath: string,
 ): Promise<ExistingInstallPathResult> {
@@ -41,11 +38,11 @@ export async function resolveExistingInstallPath(
 
 export type ExtractedArchiveVerification<TFailure extends { ok: false; error: string }> = {
   limits: ArchiveExtractLimits;
+  entryFilter?: ExtractArchiveOptions["entryFilter"];
   verify: (extractDir: string) => Promise<TFailure | null>;
   onExtractionError: (error: unknown) => TFailure;
 };
 
-/** Extract an archive to a temp dir and run work against the detected package root. */
 export async function withExtractedArchiveRoot<
   TResult extends { ok: boolean },
   TFailure extends { ok: false; error: string } = never,
@@ -70,10 +67,12 @@ export async function withExtractedArchiveRoot<
         extractArchive({
           archivePath: params.archivePath,
           destDir: extractDir,
+          stripComponents: 0,
           // fs-safe uses zero for an extraction without an elapsed deadline.
           timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs) ?? 0,
           logger: params.logger,
           limits: params.verification?.limits ?? params.limits,
+          entryFilter: params.verification?.entryFilter,
           durable: false,
         }),
       );

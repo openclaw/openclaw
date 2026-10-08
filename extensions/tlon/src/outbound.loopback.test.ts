@@ -95,107 +95,57 @@ describe("tlon outbound loopback", () => {
     }
   });
 
-  it.each(targets)(
-    "stops a $name send revoked while authentication is pending",
-    async ({ to, threadId }) => {
-      const login = createDeferred<http.ServerResponse>();
-      const pokes: string[] = [];
+  it.each(["login", "redirect", "dispatch refresh"] as const)(
+    "stops requests when authority closes during %s",
+    async (phase) => {
+      const paused = createDeferred<http.ServerResponse | undefined>();
+      const resume = createDeferred<void>();
+      const laterRequests: string[] = [];
       const port = await listenLoopback((req, res) => {
         if (req.url === "/~/login") {
-          login.resolve(res);
-          return;
+          if (phase !== "dispatch refresh") {
+            paused.resolve(res);
+          } else {
+            finishLogin(res);
+          }
+        } else {
+          laterRequests.push(req.url ?? "");
+          res.writeHead(204);
+          res.end();
         }
-        pokes.push(req.url ?? "");
-        res.writeHead(204);
-        res.end();
       });
       const controller = new AbortController();
-      const revoked = new Error("Tlon delivery authority revoked");
-      const onPlatformSendDispatch = vi.fn(async () => {});
+      const revoked = new Error(`authority closed during ${phase}`);
+      const onPlatformSendDispatch = vi.fn(async () => {
+        if (phase === "dispatch refresh") {
+          paused.resolve(undefined);
+          await resume.promise;
+        }
+      });
       const result = textSender({
         cfg: loopbackConfig(port),
-        to,
-        threadId,
+        to: "~nec",
         text: "cancelled message",
         assertDirectAdapterHandoff: () => controller.signal.throwIfAborted(),
         onPlatformSendDispatch,
-      }).then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      const response = await login.promise;
+      }).catch((error: unknown) => error);
+      const response = await paused.promise;
       controller.abort(revoked);
-      finishLogin(response);
+      if (response) {
+        if (phase === "redirect") {
+          response.writeHead(302, { location: "/~/redirected-login" });
+          response.end();
+        } else {
+          finishLogin(response);
+        }
+      }
+      resume.resolve();
 
-      expect(await result).toEqual({ error: revoked });
-      expect(pokes).toEqual([]);
-      expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+      expect(await result).toBe(revoked);
+      expect(laterRequests).toEqual([]);
+      expect(onPlatformSendDispatch).toHaveBeenCalledTimes(phase === "dispatch refresh" ? 1 : 0);
     },
   );
-
-  it("checks authority again before following an authentication redirect", async () => {
-    const login = createDeferred<http.ServerResponse>();
-    const laterRequests: string[] = [];
-    const port = await listenLoopback((req, res) => {
-      if (req.url === "/~/login") {
-        login.resolve(res);
-      } else {
-        laterRequests.push(req.url ?? "");
-        finishLogin(res);
-      }
-    });
-    const controller = new AbortController();
-    const revoked = new Error("authority closed during login");
-    const onPlatformSendDispatch = vi.fn(async () => {});
-    const result = textSender({
-      cfg: loopbackConfig(port),
-      to: "~nec",
-      text: "cancelled message",
-      assertDirectAdapterHandoff: () => controller.signal.throwIfAborted(),
-      onPlatformSendDispatch,
-    }).catch((error: unknown) => error);
-    const response = await login.promise;
-    controller.abort(revoked);
-    response.writeHead(302, { location: "/~/redirected-login" });
-    response.end();
-
-    expect(await result).toBe(revoked);
-    expect(laterRequests).toEqual([]);
-    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
-  });
-
-  it("checks authority after awaiting the recipient-visible dispatch refresh", async () => {
-    const dispatch = createDeferred<void>();
-    const resume = createDeferred<void>();
-    const pokes: string[] = [];
-    const port = await listenLoopback((req, res) => {
-      if (req.url === "/~/login") {
-        finishLogin(res);
-      } else {
-        pokes.push(req.url ?? "");
-        res.writeHead(204);
-        res.end();
-      }
-    });
-    const controller = new AbortController();
-    const revoked = new Error("authority closed during dispatch refresh");
-    const result = textSender({
-      cfg: loopbackConfig(port),
-      to: "~nec",
-      text: "cancelled message",
-      assertDirectAdapterHandoff: () => controller.signal.throwIfAborted(),
-      onPlatformSendDispatch: async () => {
-        dispatch.resolve();
-        await resume.promise;
-      },
-    }).catch((error: unknown) => error);
-    await dispatch.promise;
-    controller.abort(revoked);
-    resume.resolve();
-
-    expect(await result).toBe(revoked);
-    expect(pokes).toEqual([]);
-  });
 
   it.each(targets)(
     "retains an accepted $name result after authority closes",
@@ -302,17 +252,7 @@ describe("tlon outbound loopback", () => {
       res.end("not found");
     });
 
-    const cfg = {
-      channels: {
-        tlon: {
-          enabled: true,
-          ship: "~zod",
-          url: `http://127.0.0.1:${port}`,
-          code: "mock-code",
-          network: { dangerouslyAllowPrivateNetwork: true },
-        },
-      },
-    };
+    const cfg = loopbackConfig(port);
 
     const outbound = tlonPlugin.outbound;
     if (!outbound) {
@@ -329,7 +269,8 @@ describe("tlon outbound loopback", () => {
       await outbound.sendText?.({ cfg, to: "~nec", text: chunk });
     }
 
-    expect(chunks.length).toBeGreaterThan(1);
+    expect(outbound.chunkerMode).toBe("markdown");
+    expect(chunks).toEqual(["x".repeat(TEXT_LIMIT), "x"]);
     expect(pokes).toHaveLength(chunks.length);
     expect(loginCount).toBeGreaterThan(0);
     // Every unit fits the transport limit, so the urbit transport accepts each poke.

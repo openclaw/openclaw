@@ -9,8 +9,14 @@ type PlaybackRestore = {
   paused: boolean;
 };
 
+const MEDIA_SOURCE_PROPERTIES = ["src", "sourceIdentity", "playback", "authToken"];
+
 function finiteMediaTime(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+export function chatMediaSourceChanged(changed: ReadonlyMap<PropertyKey, unknown>): boolean {
+  return MEDIA_SOURCE_PROPERTIES.some((key) => changed.has(key));
 }
 
 /** Keeps a refreshed ticket ready without interrupting active media playback. */
@@ -118,7 +124,7 @@ export class ChatMediaSourceController {
     this.playbackReadiness = "idle";
   }
 
-  updateSource(media: HTMLMediaElement, source: string, sourceIdentity = source): void {
+  updateSource(media: HTMLMediaElement, source: string, sourceIdentity: string): void {
     const nextSource = source.trim();
     const nextIdentity = sourceIdentity.trim();
     if (!nextSource || !nextIdentity) {

@@ -5,9 +5,9 @@ import { expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import {
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "../../../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -65,10 +65,14 @@ const suite = createControlUiE2eSuite({
         },
         "alpha",
       );
-      const port = await getGatewayE2ePortBlock();
-      signal.throwIfAborted();
+      const portClaim = await acquireGatewayE2ePortBlock();
+      if (signal.aborted) {
+        // Gateway startup has not taken ownership of the claim yet.
+        await portClaim.release();
+        signal.throwIfAborted();
+      }
       gatewayStartup = startGatewayWithClient({
-        port,
+        portClaim,
         configPath: state.configPath,
         token,
         scopes: ["operator.admin"],
@@ -268,7 +272,7 @@ suite.define(() => {
         expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
         expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
       } finally {
-        await context.close();
+        await suite.closeBrowserContext(context);
       }
     },
   );

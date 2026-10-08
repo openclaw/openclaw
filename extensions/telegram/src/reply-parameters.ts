@@ -1,15 +1,15 @@
 import { GrammyError } from "grammy";
 import type { MessageEntity } from "grammy/types";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
+import { TELEGRAM_INVALID_TOPIC_ID_MESSAGE } from "./targets.js";
 
 const sendLogger = createSubsystemLogger("telegram/send");
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
-const GrammyErrorCtor: typeof GrammyError | undefined =
-  typeof GrammyError === "function" ? GrammyError : undefined;
 
 type TelegramReplyParameters = {
   message_id: number;
@@ -36,16 +36,19 @@ export function resolveTelegramSendThreadSpec(params: {
   if (params.targetDirectMessagesTopicId != null) {
     return { id: params.targetDirectMessagesTopicId, scope: "direct-messages" };
   }
-  const messageThreadId =
-    params.messageThreadId != null ? params.messageThreadId : params.targetMessageThreadId;
+  const messageThreadId = params.messageThreadId ?? params.targetMessageThreadId;
   if (messageThreadId == null) {
     return undefined;
+  }
+  const topicId = parseStrictPositiveInteger(messageThreadId);
+  if (topicId === undefined) {
+    throw new Error(TELEGRAM_INVALID_TOPIC_ID_MESSAGE);
   }
   // Bot-private topics retain the historical dm scope. A :topic: marker on a
   // group remains forum semantics; channel Direct Messages require their
   // distinct :direct-topic: marker and never infer from a negative chat id.
   return {
-    id: messageThreadId,
+    id: topicId,
     scope: params.chatType === "direct" ? "dm" : "forum",
   };
 }
@@ -95,16 +98,9 @@ export function buildTelegramThreadReplyParams(opts?: {
   return params;
 }
 
-export function buildTelegramSendParams(opts?: {
-  replyToMessageId?: number;
-  replyQuoteMessageId?: number;
-  replyQuoteText?: string;
-  replyQuotePosition?: number;
-  replyQuoteEntities?: unknown[];
-  thread?: TelegramThreadSpec | null;
-  silent?: boolean;
-  useReplyIdAsQuoteSource?: boolean;
-}): Record<string, unknown> {
+export function buildTelegramSendParams(
+  opts?: NonNullable<Parameters<typeof buildTelegramThreadReplyParams>[0]> & { silent?: boolean },
+): Record<string, unknown> {
   const params: Record<string, unknown> = { ...buildTelegramThreadReplyParams(opts) };
   if (opts?.silent === true) {
     params.disable_notification = true;
@@ -124,18 +120,13 @@ export function getTelegramNativeQuoteReplyMessageId(
 }
 
 export function isTelegramQuoteParamError(err: unknown): boolean {
-  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
+  if (err instanceof GrammyError) {
     return QUOTE_PARAM_RE.test(err.description);
   }
   return QUOTE_PARAM_RE.test(formatErrorMessage(err));
 }
 
-function removeTelegramNativeQuoteParam(
-  params: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-  if (!params) {
-    return {};
-  }
+function removeTelegramNativeQuoteParam(params: Record<string, unknown>): Record<string, unknown> {
   const replyMessageId = getTelegramNativeQuoteReplyMessageId(params);
   const { reply_parameters: _ignored, ...rest } = params;
   if (replyMessageId != null) {

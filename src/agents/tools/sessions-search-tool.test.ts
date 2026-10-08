@@ -3,13 +3,11 @@ import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  applySessionStoreProjection,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
+import { normalizeToolParameters } from "../agent-tools.schema.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
@@ -48,7 +46,7 @@ function createTool(params: {
     config: {
       ...config,
       agents: {
-        entries: { main: { default: true } },
+        entries: { main: {} },
         ...(config.agents as Record<string, unknown> | undefined),
       },
     },
@@ -191,6 +189,9 @@ describe("sessions_search tool", () => {
 
   it("rejects empty queries and invalid limits", async () => {
     const tool = createTool({});
+    expect(tool.parameters).toMatchObject({
+      properties: { limit: { description: expect.stringContaining("Maximum search results: 25") } },
+    });
     await expect(tool.execute("call-1", { query: "   " })).rejects.toThrow(
       "query must not be empty",
     );
@@ -201,6 +202,25 @@ describe("sessions_search tool", () => {
       "query must not exceed 4096 characters",
     );
   });
+
+  it("rejects an empty query in the schema while accepting keywords", () => {
+    const tool = createTool({});
+    expect(Value.Check(tool.parameters, { query: "" })).toBe(false);
+    expect(Value.Check(tool.parameters, { query: "loan" })).toBe(true);
+    expect(Value.Check(tool.parameters, { query: "  loan  " })).toBe(true);
+  });
+
+  it.each(["openai", "google"])(
+    "rejects blank execution with retry guidance after %s schema normalization",
+    async (modelProvider) => {
+      const tool = normalizeToolParameters(createTool({}), { modelProvider });
+      for (const query of ["", "   "]) {
+        await expect(tool.execute!("blank-query", { query })).rejects.toThrow(
+          /query must not be empty; retry with non-empty keywords/,
+        );
+      }
+    },
+  );
 
   it("filters invisible hits before applying the limit", async () => {
     const requests: CallGatewayRequest[] = [];
@@ -280,9 +300,10 @@ describe("sessions_search tool", () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({
       requests,
+      agentId: "main",
       config: {
         tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [hit({ sessionKey: "global", agentId: "work", messageId: "work-global" })],
     });
@@ -303,7 +324,7 @@ describe("sessions_search tool", () => {
       agentSessionKey: "global",
       config: {
         tools: { sessions: { visibility: "agent" } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [
         hit({ sessionKey: "global", agentId: "work" }),
@@ -338,7 +359,7 @@ describe("sessions_search tool", () => {
       agentSessionKey: "agent:main:main",
       config: {
         tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [hit({ sessionKey: "agent:work:other", agentId: "work" })],
     });
@@ -359,7 +380,7 @@ describe("sessions_search tool", () => {
   it("accepts the gateway's canonical key for the current-session alias", async () => {
     const tool = createSessionsSearchTool({
       config: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         tools: { sessions: { visibility: "self" } },
       },
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
@@ -484,14 +505,10 @@ describe("sessions_search tool", () => {
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "old-incarnation";
     const storePath = path.join(tempDirs.make("openclaw-sessions-search-"), "sessions.sqlite");
-    await applySessionStoreProjection({
-      storePath,
-      skipMaintenance: true,
-      update: (store) => {
-        store[targetSessionKey] = { sessionId: expectedSessionId, updatedAt: 1 };
-        return { persist: true, result: undefined };
-      },
-    });
+    replaceSessionEntrySync(
+      { storePath, sessionKey: targetSessionKey },
+      { sessionId: expectedSessionId, updatedAt: 1 },
+    );
     const requests: CallGatewayRequest[] = [];
     const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) => {
       if (

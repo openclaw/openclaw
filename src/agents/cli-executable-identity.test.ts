@@ -6,10 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
+import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
 
 const tempDirs: string[] = [];
+const scriptExecPath = process.platform === "win32" ? resolveTestNodeExecPath() : process.execPath;
 
 function makePackage(): { root: string; entrypoint: string; implementation: string } {
   const root = fs.realpathSync.native(
@@ -24,7 +27,7 @@ function makePackage(): { root: string; entrypoint: string; implementation: stri
     path.join(root, "package.json"),
     `${JSON.stringify({ name: "@fixture/verified-cli", version: "1.0.0" })}\n`,
   );
-  fs.writeFileSync(entrypoint, `#!${process.execPath}\nimport "../dist/main.js";\n`, {
+  fs.writeFileSync(entrypoint, `#!${scriptExecPath}\nimport "../dist/main.js";\n`, {
     mode: 0o755,
   });
   fs.chmodSync(entrypoint, 0o755);
@@ -39,7 +42,7 @@ const commandPackagePolicy: CliBackendRuntimeArtifactPolicy = {
 };
 
 const packageCommandEnv = {
-  PATH: path.dirname(process.execPath),
+  PATH: path.dirname(scriptExecPath),
   PATHEXT: ".EXE;.CMD",
 };
 
@@ -77,7 +80,7 @@ describe("CLI executable implementation identity", () => {
       expect(first.runtimeArtifact).toMatchObject({ packageVersion: "1.0.0" });
       expect(second.runtimeArtifact.treeSha256).not.toBe(first.runtimeArtifact.treeSha256);
       expect(first.resolvedPath).toBe(fixture.entrypoint);
-      const nodePath = fs.realpathSync.native(process.execPath);
+      const nodePath = fs.realpathSync.native(scriptExecPath);
       expect(first.invocation).toEqual({
         command: nodePath,
         leadingArgv: [fixture.entrypoint],
@@ -96,7 +99,7 @@ describe("CLI executable implementation identity", () => {
       const params = {
         command: "cli.js",
         env: {
-          PATH: `${path.dirname(fixture.entrypoint)};${path.dirname(process.execPath)}`,
+          PATH: `${path.dirname(fixture.entrypoint)};${path.dirname(scriptExecPath)}`,
           PATHEXT: ".EXE;.CMD",
         },
         runtimeArtifact: commandPackagePolicy,
@@ -108,7 +111,7 @@ describe("CLI executable implementation identity", () => {
       });
       expect(identity?.runtimeArtifact.kind).toBe("package-tree");
       expect(identity?.invocation).toEqual({
-        command: fs.realpathSync.native(process.execPath),
+        command: fs.realpathSync.native(scriptExecPath),
         leadingArgv: [fixture.entrypoint],
         resolution: "node-entrypoint",
       });
@@ -206,10 +209,15 @@ describe("CLI executable implementation identity", () => {
       fs.mkdirSync(wrapperDir);
       const entrypoint =
         scenario.artifact === "native"
-          ? path.join(fixture.root, "bin", "verified-cli.exe")
+          ? fs.realpathSync.native(getWindowsCmdExePath())
           : fixture.entrypoint;
+      const shimEntrypoint =
+        scenario.artifact === "native"
+          ? path.join(fixture.root, "native", path.basename(entrypoint))
+          : entrypoint;
       if (scenario.artifact === "native") {
-        fs.copyFileSync(process.execPath, entrypoint);
+        // Borrow the installed image; cleanup must not delete a just-executed Windows binary.
+        fs.symlinkSync(path.dirname(entrypoint), path.dirname(shimEntrypoint), "junction");
       } else {
         const hookRoot = fs.realpathSync.native(
           fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-unbound-hook-")),
@@ -220,20 +228,20 @@ describe("CLI executable implementation identity", () => {
         // Windows invokes Node with the script path, so shebang flags must remain inert.
         fs.writeFileSync(
           entrypoint,
-          `#!${process.execPath} --require=${hook}\nimport "../dist/main.js";\n`,
+          `#!${scriptExecPath} --require=${hook}\nimport "../dist/main.js";\n`,
         );
         fs.writeFileSync(fixture.implementation, 'process.stdout.write("identity-ok");\n');
       }
       const posixShim = path.join(wrapperDir, "verified-cli");
       const cmdShim = `${posixShim}.cmd`;
-      const relativeEntrypoint = path.relative(wrapperDir, entrypoint);
+      const relativeEntrypoint = path.relative(wrapperDir, shimEntrypoint);
       fs.writeFileSync(
         posixShim,
         `#!/bin/sh\nexec "$basedir/${relativeEntrypoint.replaceAll("\\", "/")}" "$@"\n`,
       );
       fs.writeFileSync(cmdShim, `@ECHO off\r\n"%~dp0\\${relativeEntrypoint}" %*\r\n`);
       const env = {
-        pAtH: `${wrapperDir};${path.dirname(process.execPath)}`,
+        pAtH: `${wrapperDir};${path.dirname(scriptExecPath)}`,
         pAtHeXt: ".CMD;.EXE",
       };
       const identity = await resolveCliExecutableIdentity({
@@ -241,7 +249,7 @@ describe("CLI executable implementation identity", () => {
         env,
         runtimeArtifact: {
           ...commandPackagePolicy,
-          nativeExecutableNames: ["verified-cli.exe"],
+          nativeExecutableNames: ["cmd.exe"],
         },
       });
 
@@ -249,7 +257,7 @@ describe("CLI executable implementation identity", () => {
       expect(identity.resolvedPath).toBe(cmdShim);
       expect(identity.invocation).toEqual({
         command:
-          scenario.artifact === "native" ? entrypoint : fs.realpathSync.native(process.execPath),
+          scenario.artifact === "native" ? entrypoint : fs.realpathSync.native(scriptExecPath),
         leadingArgv: scenario.artifact === "native" ? [] : [entrypoint],
         resolution: scenario.artifact === "native" ? "exe-entrypoint" : "node-entrypoint",
       });
@@ -261,7 +269,9 @@ describe("CLI executable implementation identity", () => {
       );
       expect(identity.files.some((file) => file.path === posixShim)).toBe(false);
       const args =
-        scenario.artifact === "native" ? ["-e", 'process.stdout.write("identity-ok")'] : [];
+        scenario.artifact === "native"
+          ? ["/d", "/s", "/c", "<nul set /p =identity-ok&exit /b 0"]
+          : [];
       const child = spawnSync(
         identity.invocation.command,
         [...identity.invocation.leadingArgv, ...args],
@@ -445,7 +455,7 @@ describe("CLI executable implementation identity", () => {
       const fixture = makePackage();
       fs.writeFileSync(
         fixture.entrypoint,
-        `#!${process.execPath} --require=/tmp/unbound-hook.cjs\nimport "../dist/main.js";\n`,
+        `#!${scriptExecPath} --require=/tmp/unbound-hook.cjs\nimport "../dist/main.js";\n`,
         { mode: 0o755 },
       );
 

@@ -306,18 +306,15 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             browserSessionExpiresAt: profile?.browserSessionExpiresAt,
             lastSeen: facts?.lastSeen,
             isProbing: self.store.isProbing(gateway.target))
+        let activate = { [weak self, weak item] in
+            guard let self, let item else { return }
+            item.menu?.cancelTracking()
+            self.openGateway(item)
+        }
         let card = GatewayMenuCard(model: model, now: now)
             .contentShape(Rectangle())
-            .onTapGesture { [weak self, weak item] in
-                guard let self, let item else { return }
-                item.menu?.cancelTracking()
-                self.openGateway(item)
-            }
-            .accessibilityAction { [weak self, weak item] in
-                guard let self, let item else { return }
-                item.menu?.cancelTracking()
-                self.openGateway(item)
-            }
+            .onTapGesture(perform: activate)
+            .accessibilityAction(.default, activate)
         StatusMenuRenderer.configureHostedView(item, rootView: card, highlights: true)
     }
 

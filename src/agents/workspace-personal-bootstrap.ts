@@ -1,6 +1,9 @@
 import path from "node:path";
 import { isRootFileMissingFailure } from "../infra/boundary-file-read.js";
-import { readUserProfileIdentity } from "../state/user-profile-list.js";
+import {
+  hasMultipleSessionSharingIdentities,
+  readUserProfileIdentity,
+} from "../state/user-profile-list.js";
 import { resolveUserPath } from "../utils.js";
 import {
   readWorkspaceFileWithGuards,
@@ -14,7 +17,7 @@ export async function loadPersonalUserBootstrapFile(
   profileId?: string,
   warn?: (message: string) => void,
 ): Promise<WorkspaceBootstrapFile | undefined> {
-  if (!profileId) {
+  if (!profileId || !hasMultipleSessionSharingIdentities()) {
     return undefined;
   }
   const canonicalId = readUserProfileIdentity(profileId)?.profileId;
@@ -32,7 +35,10 @@ export async function loadPersonalUserBootstrapFile(
     return undefined;
   }
   // A merge while the file was being read must not inject a retired profile's overlay.
-  if (readUserProfileIdentity(profileId)?.profileId !== canonicalId) {
+  if (
+    !hasMultipleSessionSharingIdentities() ||
+    readUserProfileIdentity(profileId)?.profileId !== canonicalId
+  ) {
     return undefined;
   }
   const file: WorkspaceBootstrapFile = {

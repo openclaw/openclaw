@@ -1,5 +1,4 @@
 /** Resolves provider environment variable candidates and auth evidence from core/plugin metadata. */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -120,13 +119,6 @@ function appendUniqueAuthEvidence(
   }
 }
 
-function appendUniqueProviderRef(target: Set<string>, providerId: string): void {
-  const normalized = normalizeProviderId(providerId);
-  if (normalized) {
-    target.add(normalized);
-  }
-}
-
 function findProviderMetadataSnapshot(
   params?: ProviderEnvVarLookupParams,
   options: { allowSynchronousPolicyRead?: boolean } = {},
@@ -136,24 +128,13 @@ function findProviderMetadataSnapshot(
   }
   const config = params?.config;
   const env = params?.env ?? process.env;
-  let current: PluginMetadataSnapshot | undefined;
-  if (config) {
-    current = getCurrentPluginMetadataSnapshot({
-      ...options,
-      config,
-      env,
-      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-      allowWorkspaceScopedSnapshot: true,
-    });
-  } else {
-    current = getCurrentPluginMetadataSnapshot({
-      ...options,
-      env,
-      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-      allowWorkspaceScopedSnapshot: true,
-      requireDefaultDiscoveryContext: true,
-    });
-  }
+  const current = getCurrentPluginMetadataSnapshot({
+    ...options,
+    env,
+    ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    allowWorkspaceScopedSnapshot: true,
+    ...(config ? { config } : { requireDefaultDiscoveryContext: true }),
+  });
   if (current) {
     return current;
   }
@@ -266,7 +247,7 @@ function resolveManifestRuntimeAuthFacts(
   // Fallback refs keep insertion order; sorting would change one-pass alias-chain expansion.
   for (const [alias, target] of aliasEntries) {
     if (refs.has(target)) {
-      appendUniqueProviderRef(refs, alias);
+      refs.add(alias);
     }
   }
   return {
@@ -322,46 +303,6 @@ function withSetupEnvOverrides(
   };
 }
 
-function createLazyReadonlyRecord(
-  resolve: () => Record<string, readonly string[]>,
-): Record<string, readonly string[]> {
-  let cached: Record<string, readonly string[]> | undefined;
-  const getResolved = (): Record<string, readonly string[]> => {
-    cached ??= resolve();
-    return cached;
-  };
-
-  return new Proxy({} as Record<string, readonly string[]>, {
-    get(_target, prop) {
-      if (typeof prop !== "string") {
-        return undefined;
-      }
-      return getResolved()[prop];
-    },
-    has(_target, prop) {
-      return typeof prop === "string" && Object.hasOwn(getResolved(), prop);
-    },
-    ownKeys() {
-      return Reflect.ownKeys(getResolved());
-    },
-    getOwnPropertyDescriptor(_target, prop) {
-      if (typeof prop !== "string") {
-        return undefined;
-      }
-      const value = getResolved()[prop];
-      if (value === undefined) {
-        return undefined;
-      }
-      return {
-        configurable: true,
-        enumerable: true,
-        value,
-        writable: false,
-      };
-    },
-  });
-}
-
 /**
  * Provider env vars used for setup/default secret refs and broad secret
  * scrubbing. This can include non-model providers and may intentionally choose
@@ -371,9 +312,7 @@ function createLazyReadonlyRecord(
  * is only for true core/non-plugin providers and a few setup-specific ordering
  * overrides where generic onboarding wants a different preferred env var.
  */
-const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() =>
-  withSetupEnvOverrides(resolveProviderAuthEnvVarCandidatesCore()),
-);
+let providerEnvVarsCache: Record<string, readonly string[]> | undefined;
 
 /** Returns known env var candidates for a provider id or alias. */
 export function getProviderEnvVarsCore(
@@ -382,11 +321,11 @@ export function getProviderEnvVarsCore(
 ): string[] {
   const providerEnvVars = params
     ? withSetupEnvOverrides(resolveProviderAuthEnvVarCandidatesCore(params))
-    : PROVIDER_ENV_VARS;
+    : (providerEnvVarsCache ??= withSetupEnvOverrides(resolveProviderAuthEnvVarCandidatesCore()));
   const envVars = Object.hasOwn(providerEnvVars, providerId)
     ? providerEnvVars[providerId]
     : undefined;
-  return Array.isArray(envVars) ? [...envVars] : [];
+  return envVars ? [...envVars] : [];
 }
 
 // OPENCLAW_API_KEY authenticates the local OpenClaw bridge itself and must

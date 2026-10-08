@@ -12,9 +12,8 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const TELEGRAM_POLLING_CONNECT_GRACE_MS = 120_000;
+const TELEGRAM_CONNECT_GRACE_MS = 120_000;
 const TELEGRAM_POLLING_STALE_TRANSPORT_MS = 30 * 60_000;
-const TELEGRAM_WEBHOOK_CONNECT_GRACE_MS = 120_000;
 
 const TELEGRAM_ACCOUNT_STATUS_FIELDS = [
   "mode",
@@ -26,19 +25,11 @@ const TELEGRAM_ACCOUNT_STATUS_FIELDS = [
 ] as const;
 
 type TelegramAccountStatus = AccountStatusSnapshot<(typeof TELEGRAM_ACCOUNT_STATUS_FIELDS)[number]>;
-
-type TelegramGroupMembershipAuditSummary = {
-  unresolvedGroups?: number;
-  hasWildcardUnmentionedGroups?: boolean;
-  groups?: Array<{
-    chatId: string;
-    ok?: boolean;
-    status?: string | null;
-    error?: string | null;
-    matchKey?: string;
-    matchSource?: string;
-  }>;
-};
+type AddTelegramStatusIssue = (
+  kind: ChannelStatusIssue["kind"],
+  message: string,
+  fix: string,
+) => void;
 
 function appendTelegramRuntimeError(message: string, lastError: unknown): string {
   const error = normalizeOptionalString(lastError);
@@ -53,40 +44,39 @@ function isTelegramPollingBacklogStallError(lastError: unknown): boolean {
   );
 }
 
-function collectTelegramPollingRuntimeIssues(params: {
+function collectTelegramRuntimeIssues(params: {
   account: TelegramAccountStatus;
-  accountId: string;
-  issues: ChannelStatusIssue[];
+  addIssue: AddTelegramStatusIssue;
   now: number;
 }) {
-  const { account, accountId, issues, now } = params;
-  if (account.running !== true || normalizeOptionalString(account.mode) !== "polling") {
+  const { account, addIssue, now } = params;
+  const mode = normalizeOptionalString(account.mode);
+  if (account.running !== true || (mode !== "polling" && mode !== "webhook")) {
     return;
   }
 
   const lastStartAt = asFiniteNumber(account.lastStartAt) ?? null;
-  const lastTransportActivityAt = asFiniteNumber(account.lastTransportActivityAt) ?? null;
-  const fix = `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the bot token, proxy/network settings, and logs if it persists.`;
+  const fix =
+    mode === "polling"
+      ? `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the bot token, proxy/network settings, and logs if it persists.`
+      : `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the webhook URL, secret, TLS/proxy reachability, and Telegram setWebhook logs if it persists.`;
 
   if (account.connected === false) {
-    const withinStartupGrace =
-      lastStartAt != null && now - lastStartAt < TELEGRAM_POLLING_CONNECT_GRACE_MS;
+    const withinStartupGrace = lastStartAt != null && now - lastStartAt < TELEGRAM_CONNECT_GRACE_MS;
     if (!withinStartupGrace) {
-      const message = isTelegramPollingBacklogStallError(account.lastError)
-        ? "Telegram isolated polling spool backlog is stalled while Bot API polling is still succeeding"
-        : "Telegram polling is running but has not completed a successful getUpdates call since startup";
-      issues.push({
-        channel: "telegram",
-        accountId,
-        kind: "runtime",
-        message: appendTelegramRuntimeError(message, account.lastError),
-        fix,
-      });
+      const message =
+        mode === "webhook"
+          ? "Telegram webhook listener is running but setWebhook has not completed since startup"
+          : isTelegramPollingBacklogStallError(account.lastError)
+            ? "Telegram isolated polling spool backlog is stalled while Bot API polling is still succeeding"
+            : "Telegram polling is running but has not completed a successful getUpdates call since startup";
+      addIssue("runtime", appendTelegramRuntimeError(message, account.lastError), fix);
     }
     return;
   }
 
-  if (account.connected === true && lastTransportActivityAt != null) {
+  const lastTransportActivityAt = asFiniteNumber(account.lastTransportActivityAt) ?? null;
+  if (mode === "polling" && account.connected === true && lastTransportActivityAt != null) {
     if (lastStartAt != null && lastTransportActivityAt < lastStartAt) {
       const lifecycleAgeMs = Math.max(0, now - lastStartAt);
       if (lifecycleAgeMs <= TELEGRAM_POLLING_STALE_TRANSPORT_MS) {
@@ -95,71 +85,30 @@ function collectTelegramPollingRuntimeIssues(params: {
     }
     const ageMs = now - lastTransportActivityAt;
     if (ageMs > TELEGRAM_POLLING_STALE_TRANSPORT_MS) {
-      issues.push({
-        channel: "telegram",
-        accountId,
-        kind: "runtime",
-        message: appendTelegramRuntimeError(
+      addIssue(
+        "runtime",
+        appendTelegramRuntimeError(
           `Telegram polling transport is stale (last successful getUpdates ${Math.max(0, Math.floor(ageMs / 60_000))}m ago)`,
           account.lastError,
         ),
         fix,
-      });
+      );
     }
   }
 }
 
-function collectTelegramWebhookRuntimeIssues(params: {
-  account: TelegramAccountStatus;
-  accountId: string;
-  issues: ChannelStatusIssue[];
-  now: number;
-}) {
-  const { account, accountId, issues, now } = params;
-  if (account.running !== true || normalizeOptionalString(account.mode) !== "webhook") {
-    return;
-  }
-
-  if (account.connected !== false) {
-    return;
-  }
-
-  const lastStartAt = asFiniteNumber(account.lastStartAt) ?? null;
-  const withinStartupGrace =
-    lastStartAt != null && now - lastStartAt < TELEGRAM_WEBHOOK_CONNECT_GRACE_MS;
-  if (withinStartupGrace) {
-    return;
-  }
-
-  issues.push({
-    channel: "telegram",
-    accountId,
-    kind: "runtime",
-    message: appendTelegramRuntimeError(
-      "Telegram webhook listener is running but setWebhook has not completed since startup",
-      account.lastError,
-    ),
-    fix: `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the webhook URL, secret, TLS/proxy reachability, and Telegram setWebhook logs if it persists.`,
-  });
-}
-
-function readTelegramGroupMembershipAuditSummary(
-  value: unknown,
-): TelegramGroupMembershipAuditSummary {
+function readTelegramGroupMembershipAuditSummary(value: unknown) {
   if (!isRecord(value)) {
     return {};
   }
-  const unresolvedGroups =
-    typeof value.unresolvedGroups === "number" && Number.isFinite(value.unresolvedGroups)
-      ? value.unresolvedGroups
-      : undefined;
+  const unresolvedGroups = asFiniteNumber(value.unresolvedGroups);
   const hasWildcardUnmentionedGroups =
     typeof value.hasWildcardUnmentionedGroups === "boolean"
       ? value.hasWildcardUnmentionedGroups
       : undefined;
   const groupsRaw = value.groups;
   const groups = Array.isArray(groupsRaw)
-    ? (groupsRaw
+    ? groupsRaw
         .map((entry) => {
           if (!isRecord(entry)) {
             return null;
@@ -175,7 +124,7 @@ function readTelegramGroupMembershipAuditSummary(
           const matchSource = normalizeOptionalString(entry.matchSource);
           return { chatId, ok, status, error, matchKey, matchSource };
         })
-        .filter(Boolean) as TelegramGroupMembershipAuditSummary["groups"])
+        .filter((entry) => entry !== null)
     : undefined;
   return { unresolvedGroups, hasWildcardUnmentionedGroups, groups };
 }
@@ -194,50 +143,38 @@ export function collectTelegramStatusIssues(
       continue;
     }
     const now = Date.now();
+    const addIssue: AddTelegramStatusIssue = (kind, message, fix) => {
+      issues.push({ channel: "telegram", accountId, kind, message, fix });
+    };
 
-    collectTelegramPollingRuntimeIssues({
+    collectTelegramRuntimeIssues({
       account,
-      accountId,
-      issues,
-      now,
-    });
-    collectTelegramWebhookRuntimeIssues({
-      account,
-      accountId,
-      issues,
+      addIssue,
       now,
     });
 
     if (account.allowUnmentionedGroups === true) {
-      issues.push({
-        channel: "telegram",
-        accountId,
-        kind: "config",
-        message:
-          "Config allows unmentioned group messages (requireMention=false). Telegram Bot API privacy mode will block most group messages unless disabled.",
-        fix: "In BotFather run /setprivacy → Disable for this bot (then restart the gateway).",
-      });
+      addIssue(
+        "config",
+        "Config allows unmentioned group messages (requireMention=false). Telegram Bot API privacy mode will block most group messages unless disabled.",
+        "In BotFather run /setprivacy → Disable for this bot (then restart the gateway).",
+      );
     }
 
     const audit = readTelegramGroupMembershipAuditSummary(account.audit);
     if (audit.hasWildcardUnmentionedGroups === true) {
-      issues.push({
-        channel: "telegram",
-        accountId,
-        kind: "config",
-        message:
-          'Telegram groups config uses "*" with requireMention=false; membership probing is not possible without explicit group IDs.',
-        fix: "Add explicit numeric group ids under channels.telegram.groups (or per-account groups) to enable probing.",
-      });
+      addIssue(
+        "config",
+        'Telegram groups config uses "*" with requireMention=false; membership checking is not possible without explicit group IDs.',
+        "Add explicit numeric group ids under channels.telegram.groups (or per-account groups) to enable checking.",
+      );
     }
     if (audit.unresolvedGroups && audit.unresolvedGroups > 0) {
-      issues.push({
-        channel: "telegram",
-        accountId,
-        kind: "config",
-        message: `Some configured Telegram groups are not numeric IDs (unresolvedGroups=${audit.unresolvedGroups}). Membership probe can only check numeric group IDs.`,
-        fix: "Use numeric chat IDs (e.g. -100...) as keys in channels.telegram.groups for requireMention=false groups.",
-      });
+      addIssue(
+        "config",
+        `Some configured Telegram groups are not numeric IDs (unresolvedGroups=${audit.unresolvedGroups}). Membership checks require numeric group IDs.`,
+        "Use numeric chat IDs (e.g. -100...) as keys in channels.telegram.groups for requireMention=false groups.",
+      );
     }
     for (const group of audit.groups ?? []) {
       if (group.ok === true) {
@@ -246,16 +183,14 @@ export function collectTelegramStatusIssues(
       const status = group.status ? ` status=${group.status}` : "";
       const err = group.error ? `: ${group.error}` : "";
       const baseMessage = `Group ${group.chatId} not reachable by bot.${status}${err}`;
-      issues.push({
-        channel: "telegram",
-        accountId,
-        kind: "runtime",
-        message: appendMatchMetadata(baseMessage, {
+      addIssue(
+        "runtime",
+        appendMatchMetadata(baseMessage, {
           matchKey: group.matchKey,
           matchSource: group.matchSource,
         }),
-        fix: "Invite the bot to the group, then DM the bot once (/start) and restart the gateway.",
-      });
+        "Invite the bot to the group, then DM the bot once (/start) and restart the gateway.",
+      );
     }
   }
   return issues;

@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
+import { SystemEventQueueFullError } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
-  createAuthRateLimiter,
+  createGatewayAuthRateLimiter,
   normalizeRateLimitClientIp,
 } from "../auth-rate-limit.js";
 import { applyHookMappings, HOOK_MAPPING_FAN_OUT_MAX_ITEMS } from "../hooks-mapping.js";
@@ -86,15 +88,9 @@ type HookReplayScope = {
   dispatchScope: Record<string, unknown>;
 };
 
-function resolveMappedHookExternalContentSource(params: { subPath: string; sessionKey: string }) {
-  if (params.subPath === "gmail") {
-    return "gmail" as const;
-  }
-  return resolveHookExternalContentSourceFromSession(params.sessionKey) ?? "webhook";
-}
-
 export function createHooksRequestHandler(
   opts: {
+    scheduler: GatewayScheduler;
     /** Returns the stable resolved object for the current hooks-config generation. */
     getHooksConfig: () => HooksConfigResolved | null;
     bindHost: string;
@@ -108,14 +104,17 @@ export function createHooksRequestHandler(
   const fanoutResponseDeadlineMs =
     opts.fanoutResponseDeadlineMs ?? HOOK_FAN_OUT_RESPONSE_DEADLINE_MS;
   const hookReplayCache = new Map<string, HookReplayEntry>();
-  const hookAuthLimiter = createAuthRateLimiter({
-    maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
-    windowMs: HOOK_AUTH_FAILURE_WINDOW_MS,
-    lockoutMs: HOOK_AUTH_FAILURE_WINDOW_MS,
-    exemptLoopback: false,
-    // Handler lifetimes are tied to gateway runtime/tests; skip background timer fanout.
-    pruneIntervalMs: 0,
-  });
+  const hookAuthLimiter = createGatewayAuthRateLimiter(
+    {
+      maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
+      windowMs: HOOK_AUTH_FAILURE_WINDOW_MS,
+      lockoutMs: HOOK_AUTH_FAILURE_WINDOW_MS,
+      exemptLoopback: false,
+      // Handler lifetimes are tied to gateway runtime/tests; skip background timer fanout.
+      pruneIntervalMs: 0,
+    },
+    { scheduler: opts.scheduler },
+  );
 
   const resolveHookClientKey = (req: IncomingMessage): string => {
     const attribution = readPreparedGatewayIngressAttribution(req);
@@ -383,7 +382,15 @@ export function createHooksRequestHandler(
       if (rejectChangedHooksConfig()) {
         return null;
       }
-      return dispatchWakeHook(dispatchValue, targetAgentId);
+      try {
+        return dispatchWakeHook(dispatchValue, targetAgentId);
+      } catch (error) {
+        if (!(error instanceof SystemEventQueueFullError)) {
+          throw error;
+        }
+        sendJson(res, 503, { ok: false, error: error.message, ...wakeResult });
+        return null;
+      }
     };
 
     if (subPath === "wake") {
@@ -491,6 +498,7 @@ export function createHooksRequestHandler(
           sourcePath: `${basePath}/agent`,
           agentId: target.selectedAgentId,
           externalContentSource: "webhook",
+          replayKey,
         });
       });
       await sendAgentResult(res, dispatched, undefined, waitForCompletion === true);
@@ -596,7 +604,7 @@ export function createHooksRequestHandler(
               dispatchScope.occurrence = occurrence;
             }
             const replayKey = buildHookReplayCacheKey({
-              pathKey: subPath || "mapping",
+              pathKey: subPath,
               token,
               // Fan-out producers (gog gmail) send no idempotency key, yet a
               // non-2xx batch response makes them redeliver the same batch.
@@ -632,10 +640,12 @@ export function createHooksRequestHandler(
                   mappingId: action.mappingId,
                   allowUnsafeExternalContent: action.allowUnsafeExternalContent,
                   ...(mapped.fanout ? { admissionMode: "background" as const } : {}),
-                  externalContentSource: resolveMappedHookExternalContentSource({
-                    subPath,
-                    sessionKey: sessionKey.value,
-                  }),
+                  replayKey,
+                  externalContentSource:
+                    subPath === "gmail"
+                      ? "gmail"
+                      : (resolveHookExternalContentSourceFromSession(sessionKey.value) ??
+                        "webhook"),
                 });
               });
           };

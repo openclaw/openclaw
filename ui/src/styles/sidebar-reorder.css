@@ -1,15 +1,49 @@
 .sidebar-zone-entry {
+  position: relative;
   display: flex;
   align-items: center;
 }
 
-.sidebar-zone-entry > :first-child {
+.sidebar-zone-entry > :first-child,
+.sidebar-zone-entry .nav-item {
   flex: 1 1 auto;
   min-width: 0;
 }
 
 .sidebar-reorder-menu {
   flex: 0 0 auto;
+}
+
+/* Use the existing leading gutter without moving the row's icon or label. */
+.sidebar-zone-entry > .sidebar-reorder-menu .sidebar-reorder-trigger {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 4px;
+  width: 8px;
+  padding: 0;
+}
+
+/* Touch drawers keep reordering beside the other actions, not over the leading
+   glyph or session color stripe. Reserve a real flex slot without widening rows. */
+.shell--mobile-nav .sidebar-zone-entry > .sidebar-reorder-menu {
+  align-self: flex-start;
+
+  .sidebar-reorder-trigger {
+    position: static;
+    width: 24px;
+    height: var(--sidebar-nav-row-height);
+  }
+}
+
+.sidebar-zone-entry .sidebar-reorder-trigger svg {
+  flex: none;
+}
+
+/* A nested plugin section stacks its parent link and children inside the flex row. */
+.nav-item-group {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .sidebar-reorder-trigger {
@@ -40,7 +74,7 @@
     opacity: 0;
   }
 
-  .sidebar-zone-entry:where(:hover, :focus-within) .sidebar-reorder-trigger,
+  .sidebar-zone-entry:where(:hover, :has(:focus-visible)) .sidebar-reorder-trigger,
   .sidebar-recent-sessions__head:where(:hover, :focus-within) .sidebar-reorder-trigger,
   .sidebar-reorder-menu[open] .sidebar-reorder-trigger {
     opacity: 1;

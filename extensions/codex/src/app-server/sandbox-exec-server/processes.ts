@@ -1,7 +1,3 @@
-/**
- * Manages subprocess lifecycle, streaming output buffers, stdin writes, and
- * termination for Codex sandbox exec-server process RPCs.
- */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -9,6 +5,7 @@ import {
   prepareSandboxProcessCleanup,
   sanitizeEnvVars,
 } from "openclaw/plugin-sdk/sandbox";
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexNativeProcessClient } from "../native-process-authority.js";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { resolveFsSandboxPolicy } from "./fs-policy.js";
@@ -21,7 +18,6 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const RETAINED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 const CLOSED_PROCESS_EVICTION_MS = 60_000;
 
-/** Starts a sandbox-backed process and registers it in the connection-local process table. */
 export async function startProcess(
   execServer: OpenClawExecServer,
   processes: Map<string, ManagedProcess>,
@@ -36,7 +32,13 @@ export async function startProcess(
   }
   const argv = requireStringArray(record.argv, "argv");
   const cwd = resolveExecServerPath(requireString(record.cwd, "cwd"), "process cwd");
-  rejectUnsupportedArg0(record.arg0);
+  if (record.arg0 !== undefined && record.arg0 !== null) {
+    throw new Error(
+      typeof record.arg0 === "string"
+        ? "Codex sandbox exec-server does not support arg0 overrides."
+        : "arg0 must be a string or null.",
+    );
+  }
   assertSupportedProcessSandbox(execServer, record);
   const env = readProcessEnv(record);
   const tty = record.tty === true;
@@ -111,9 +113,7 @@ export async function startProcess(
     notifyProcessWaiters(managed);
     throw error;
   } finally {
-    if (managed.startPromise === startPromise) {
-      managed.startPromise = undefined;
-    }
+    managed.startPromise = undefined;
   }
   return { processId, sandboxType: "none" };
 }
@@ -220,16 +220,14 @@ async function runProcess(
   const child = owner.process;
   child.stdout.on("data", (chunk: Buffer) => appendProcessChunk(managed, "stdout", chunk));
   child.stderr.on("data", (chunk: Buffer) => appendProcessChunk(managed, "stderr", chunk));
-  child.once("error", (error) => {
-    // Node can report an abort or transport error before the child exits. The
-    // backend lease and Codex terminal notifications stay owned until close.
+  // Node can report an abort or transport error before the child exits. The
+  // backend lease and Codex terminal notifications stay owned until close.
+  const onError = (error: Error) => {
     managed.failure ??= error.message;
     notifyProcessWaiters(managed);
-  });
-  child.stdin.on("error", (error: Error) => {
-    managed.failure ??= error.message;
-    notifyProcessWaiters(managed);
-  });
+  };
+  child.once("error", onError);
+  child.stdin.on("error", onError);
   owner.assertCurrent();
   if (!managed.tty && !managed.pipeStdin) {
     child.stdin.end();
@@ -311,43 +309,39 @@ function emitProcessClosed(managed: ManagedProcess, exitCode: number | null): vo
   notifyProcessWaiters(managed);
 }
 
-function limitProcessChunks(chunks: ProcessChunk[], maxBytes: number | undefined): ProcessChunk[] {
-  if (!maxBytes) {
-    return chunks;
-  }
-  const retained: ProcessChunk[] = [];
-  let retainedBytes = 0;
-  for (const chunk of chunks) {
-    const byteLength = Buffer.from(chunk.chunk, "base64").byteLength;
-    if (retained.length > 0 && retainedBytes + byteLength > maxBytes) {
-      break;
-    }
-    retained.push(chunk);
-    retainedBytes += byteLength;
-    if (retainedBytes >= maxBytes) {
-      break;
-    }
-  }
-  return retained;
-}
-
-/** Reads buffered process output, optionally waiting for new output or process close. */
 export async function readProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
 ): Promise<JsonObject> {
   const record = requireObject(params, "process/read params");
   const processId = requireString(record.processId, "processId");
-  const managed = requireProcess(processes, processId);
+  const managed = processes.get(processId);
+  if (!managed) {
+    throw new Error(`unknown process: ${processId}`);
+  }
   const afterSeq = typeof record.afterSeq === "number" ? record.afterSeq : 0;
   const waitMs = typeof record.waitMs === "number" && record.waitMs > 0 ? record.waitMs : 0;
   if (!managed.closed && managed.nextSeq - 1 <= afterSeq && waitMs > 0) {
     await waitForProcessUpdate(managed, waitMs);
   }
-  const chunks = limitProcessChunks(
-    managed.chunks.filter((chunk) => chunk.seq > afterSeq),
-    typeof record.maxBytes === "number" && record.maxBytes > 0 ? record.maxBytes : undefined,
-  );
+  const maxBytes =
+    typeof record.maxBytes === "number" && record.maxBytes > 0 ? record.maxBytes : undefined;
+  const chunks: ProcessChunk[] = [];
+  let retainedBytes = 0;
+  for (const chunk of managed.chunks) {
+    if (!(chunk.seq > afterSeq)) {
+      continue;
+    }
+    const byteLength = maxBytes ? Buffer.from(chunk.chunk, "base64").byteLength : 0;
+    if (maxBytes && chunks.length > 0 && retainedBytes + byteLength > maxBytes) {
+      break;
+    }
+    chunks.push(chunk);
+    retainedBytes += byteLength;
+    if (maxBytes && retainedBytes >= maxBytes) {
+      break;
+    }
+  }
   const lastChunk = chunks.at(-1);
   return {
     chunks,
@@ -359,7 +353,6 @@ export async function readProcess(
   };
 }
 
-/** Writes base64 stdin data to a running process when stdin is still open. */
 export function writeProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
@@ -451,24 +444,6 @@ function notifyProcessWaiters(managed: ManagedProcess): void {
   }
 }
 
-function requireProcess(processes: Map<string, ManagedProcess>, processId: string): ManagedProcess {
-  const managed = processes.get(processId);
-  if (!managed) {
-    throw new Error(`unknown process: ${processId}`);
-  }
-  return managed;
-}
-
-function rejectUnsupportedArg0(value: unknown): void {
-  if (value === undefined || value === null) {
-    return;
-  }
-  if (typeof value === "string") {
-    throw new Error("Codex sandbox exec-server does not support arg0 overrides.");
-  }
-  throw new Error("arg0 must be a string or null.");
-}
-
 function readEnv(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -483,53 +458,24 @@ function readEnv(value: unknown): Record<string, string> {
 }
 
 function readProcessEnv(record: JsonObject): Record<string, string> {
-  const policyEnv = buildEnvFromPolicy(record.envPolicy);
-  const requestedEnv = {
-    ...policyEnv,
-    ...readEnv(record.env),
-  };
-  // Codex inherits its app-server's full environment by default. Scrub again at
-  // this last boundary so no credential can cross into any sandbox backend.
-  return sanitizeEnvVars(requestedEnv).allowed;
-}
-
-function buildEnvFromPolicy(value: unknown): Record<string, string> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  const policy = value as Record<string, unknown>;
-  const inheritedEnv = readEnv(policy.set);
-  const includeOnly = readStringList(policy.includeOnly);
+  const value = record.envPolicy;
+  const policy = value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+  const inheritedEnv = readEnv(policy?.set);
+  const includeOnly = filterStringEntries(policy?.includeOnly);
   if (includeOnly.length > 0) {
-    filterEnvKeys(inheritedEnv, includeOnly, true);
-  }
-  return inheritedEnv;
-}
-
-function filterEnvKeys(
-  env: Record<string, string>,
-  patterns: string[],
-  keepMatches: boolean,
-): void {
-  if (patterns.length === 0) {
-    return;
-  }
-  const regexes = patterns.map((pattern) => wildcardPatternToRegex(pattern));
-  for (const key of Object.keys(env)) {
-    const matches = regexes.some((regex) => regex.test(key));
-    if (matches !== keepMatches) {
-      delete env[key];
+    const regexes = includeOnly.map(wildcardPatternToRegex);
+    for (const key of Object.keys(inheritedEnv)) {
+      if (!regexes.some((regex) => regex.test(key))) {
+        delete inheritedEnv[key];
+      }
     }
   }
+  // Codex inherits its app-server's full environment by default. Scrub again at
+  // this last boundary so no credential can cross into any sandbox backend.
+  return sanitizeEnvVars({ ...inheritedEnv, ...readEnv(record.env) }).allowed;
 }
 
 function wildcardPatternToRegex(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/gu, "\\$&");
   return new RegExp(`^${escaped.replaceAll("*", ".*").replaceAll("?", ".")}$`, "iu");
-}
-
-function readStringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string")
-    : [];
 }

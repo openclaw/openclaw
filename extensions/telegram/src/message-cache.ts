@@ -1,4 +1,7 @@
 import type { Message } from "grammy/types";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -14,7 +17,6 @@ import {
   normalizeMessageNodes,
   parsePersistedCacheValue,
   parseRetainedCacheNode,
-  parseSafeMessageId,
   persistedCacheNode,
   resolveReplyMessage,
   retainedMessageId,
@@ -98,7 +100,6 @@ export type TelegramMessageCache = {
 
 type TelegramMessageCacheBucket = {
   messages: Map<string, TelegramCachedMessageNode>;
-  hydrated: boolean;
   hydratePromise?: Promise<void>;
   persistentStore?: TelegramMessageCachePersistentStore;
   promoted?: boolean;
@@ -109,19 +110,6 @@ type TelegramMessageCacheBucket = {
 const DEFAULT_MAX_MESSAGES = 5000;
 const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`;
 const TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY = Symbol.for("openclaw.telegram.messageCacheBuckets");
-
-function getPersistedMessageCacheBuckets(): Map<string, TelegramMessageCacheBucket> {
-  const globalRecord = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalRecord[TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY] as
-    | Map<string, TelegramMessageCacheBucket>
-    | undefined;
-  if (existing) {
-    return existing;
-  }
-  const created = new Map<string, TelegramMessageCacheBucket>();
-  globalRecord[TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY] = created;
-  return created;
-}
 
 type TelegramMessageCachePersistentStore = {
   register(key: string, value: PersistedTelegramMessageCacheValue): Promise<void>;
@@ -144,8 +132,7 @@ function telegramMessageCacheKey(params: {
   chatId: string | number;
   messageId: string;
 }) {
-  const key = `${params.accountId}:${params.chatId}:${params.messageId}`;
-  return params.scopeKey ? `${params.scopeKey}:${key}` : key;
+  return `${telegramMessageCacheKeyPrefix(params)}${params.messageId}`;
 }
 
 function telegramMessageCacheKeyPrefix(params: {
@@ -155,16 +142,6 @@ function telegramMessageCacheKeyPrefix(params: {
 }) {
   const prefix = `${params.accountId}:${params.chatId}:`;
   return params.scopeKey ? `${params.scopeKey}:${prefix}` : prefix;
-}
-
-function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessages: number): void {
-  while (messages.size > maxMessages) {
-    const oldest = messages.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    messages.delete(oldest);
-  }
 }
 
 function upsertCachedMessageNode(params: {
@@ -204,10 +181,12 @@ function resolveMessageCacheBucket(params: {
   if (!bucketKey) {
     return {
       messages: new Map<string, TelegramCachedMessageNode>(),
-      hydrated: true,
+      hydratePromise: Promise.resolve(),
     };
   }
-  const persistedMessageCacheBuckets = getPersistedMessageCacheBuckets();
+  const persistedMessageCacheBuckets = resolveGlobalMap<string, TelegramMessageCacheBucket>(
+    TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY,
+  );
   const existing = persistedMessageCacheBuckets.get(bucketKey);
   if (existing) {
     existing.persistentStore = params.persistentStore ?? existing.persistentStore;
@@ -215,27 +194,19 @@ function resolveMessageCacheBucket(params: {
   }
   const bucket = {
     messages: new Map<string, TelegramCachedMessageNode>(),
-    hydrated: false,
     ...(params.persistentStore ? { persistentStore: params.persistentStore } : {}),
   };
   persistedMessageCacheBuckets.set(bucketKey, bucket);
   return bucket;
 }
 
-async function hydrateMessageCacheBucket(
+function hydrateMessageCacheBucket(
   bucket: TelegramMessageCacheBucket,
   maxMessages: number,
   scopeKey?: string,
   excludeGroups = false,
 ): Promise<void> {
-  if (bucket.hydrated) {
-    return;
-  }
-  if (bucket.hydratePromise) {
-    await bucket.hydratePromise;
-    return;
-  }
-  bucket.hydratePromise = (async () => {
+  bucket.hydratePromise ??= (async () => {
     let storeEntries: Array<{ key: string; value: unknown }> = [];
     try {
       storeEntries = (await bucket.persistentStore?.entries()) ?? [];
@@ -264,35 +235,34 @@ async function hydrateMessageCacheBucket(
           node: entry.node,
           mode: entry.mode,
         });
-        trimMessages(bucket.messages, maxMessages);
+        pruneMapToMaxSize(bucket.messages, maxMessages);
       }
     }
-    bucket.hydrated = true;
-  })().finally(() => {
+  })().catch((error: unknown) => {
     bucket.hydratePromise = undefined;
+    throw error;
   });
-  await bucket.hydratePromise;
+  return bucket.hydratePromise;
 }
 
-async function mergeRetainedCacheNode(params: {
+async function updateRetainedCacheNode(params: {
   store: TelegramMessageCacheRetainedStore;
   key: string;
-  node: TelegramCachedMessageNode;
-  mode: TelegramMessageObservationMode;
   botUserId?: number;
+  update: (
+    existing: TelegramCachedMessageNode | null,
+    sawExisting: boolean,
+  ) => TelegramCachedMessageNode | null;
 }): Promise<TelegramCachedMessageNode | null> {
   let observation = await params.store.observe(params.key);
   let sawExisting = observation.value !== undefined;
   for (;;) {
     const existing = parseRetainedCacheNode(params.key, observation.value);
-    // An embedded snapshot is context, not a new observation of a deleted message.
-    if (params.mode === "partial" && sawExisting && !existing) {
+    const node = params.update(existing, sawExisting);
+    if (!node) {
       return null;
     }
     sawExisting ||= existing !== null;
-    const node = existing
-      ? mergeCachedMessageNode(existing, params.node, params.mode)
-      : params.node;
     const result = await params.store.compareAndApply(params.key, observation.comparison, {
       operation: "update",
       action: "set",
@@ -532,7 +502,7 @@ export function createTelegramMessageCache(params?: {
     }
     const selected = Array.from(messages)
       .filter(([key, node]) => {
-        const id = parseSafeMessageId(node.messageId);
+        const id = parseStrictPositiveInteger(node.messageId);
         return key.startsWith(prefix) && id !== undefined && id >= minId && id <= maxId;
       })
       .map(([, node]) => node)
@@ -578,7 +548,18 @@ export function createTelegramMessageCache(params?: {
             throw new Error("Telegram history requires a native message ID in the owning chat");
           }
           const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId: id });
-          const cachedNode = await mergeRetainedCacheNode({ store, key, node, mode, botUserId });
+          const cachedNode = await updateRetainedCacheNode({
+            store,
+            key,
+            botUserId,
+            update: (existing, sawExisting) => {
+              // Embedded snapshots must not resurrect a deleted message.
+              if (mode === "partial" && sawExisting && !existing) {
+                return null;
+              }
+              return existing ? mergeCachedMessageNode(existing, node, mode) : node;
+            },
+          });
           if (cachedNode && messageId === currentObservation.node.messageId) {
             recordedEntry = cachedNode;
           }
@@ -596,7 +577,7 @@ export function createTelegramMessageCache(params?: {
           if (messageId === currentObservation.node.messageId) {
             recordedEntry = cachedNode;
           }
-          trimMessages(messages, maxMessages);
+          pruneMapToMaxSize(messages, maxMessages);
           await persistCachedNode({
             bucket,
             key,
@@ -633,19 +614,8 @@ export function createTelegramMessageCache(params?: {
         }
         const store = await openRetainedStore();
         const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId: id });
-        let observation = await store.observe(key);
-        for (;;) {
-          const node = withMedia(parseRetainedCacheNode(key, observation.value));
-          const result = await store.compareAndApply(key, observation.comparison, {
-            operation: "update",
-            action: "set",
-            value: persistedCacheNode(node, botUserId ?? observation.value?.botUserId),
-          });
-          if (result.status !== "conflict") {
-            return;
-          }
-          observation = result.current;
-        }
+        await updateRetainedCacheNode({ store, key, botUserId, update: withMedia });
+        return;
       }
       const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId });
       const node = withMedia(messages.get(key));
@@ -661,7 +631,7 @@ export function createTelegramMessageCache(params?: {
     },
     get,
     recentBefore: async ({ accountId, chatId, messageId, threadId, limit }) => {
-      const targetId = parseSafeMessageId(messageId);
+      const targetId = parseStrictPositiveInteger(messageId);
       return targetId === undefined
         ? []
         : (
@@ -676,7 +646,7 @@ export function createTelegramMessageCache(params?: {
           ).toReversed();
     },
     around: async ({ accountId, chatId, messageId, threadId, before, after }) => {
-      const targetId = parseSafeMessageId(messageId);
+      const targetId = parseStrictPositiveInteger(messageId);
       if (targetId === undefined) {
         return [];
       }
@@ -712,7 +682,7 @@ export function createTelegramMessageCache(params?: {
       if (!Number.isSafeInteger(limit) || limit <= 0) {
         return [];
       }
-      const beforeId = parseSafeMessageId(before);
+      const beforeId = parseStrictPositiveInteger(before);
       if (before !== undefined && (beforeId === undefined || !retainedMessageId(before))) {
         throw new Error("Telegram history cursors must be native message IDs");
       }
@@ -733,8 +703,8 @@ export function createTelegramMessageCache(params?: {
       if (!Number.isSafeInteger(limit) || limit <= 0 || limit === Number.MAX_SAFE_INTEGER) {
         return { messages: [], hasMore: false };
       }
-      const beforeId = parseSafeMessageId(before);
-      const afterId = parseSafeMessageId(after);
+      const beforeId = parseStrictPositiveInteger(before);
+      const afterId = parseStrictPositiveInteger(after);
       if (
         (before !== undefined && (beforeId === undefined || !retainedMessageId(before))) ||
         (after !== undefined && (afterId === undefined || !retainedMessageId(after)))

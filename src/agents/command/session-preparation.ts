@@ -1,10 +1,15 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import {
+  isMainRestartRecoveryCandidate,
+  normalizeMainSessionRecoveryRunFences,
+} from "../../config/sessions/restart-recovery-state.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { buildDeliveryFormatPrompt } from "../../infra/outbound/delivery-format-prompt.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
@@ -12,11 +17,14 @@ import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
+import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
   prepareCommandHarnessCompletionRecovery,
 } from "../agent-command-restart-recovery.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
+import { createRestartRecoveryOperatorSource } from "../operator-run-recovery-source.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
@@ -31,6 +39,7 @@ export function prepareCommandSessionRecoveryEntry(
   > & {
     deliveryContext?: DeliveryContext;
     now: number;
+    lifecycleGeneration: string;
     isSessionRollover: boolean;
   },
 ) {
@@ -40,6 +49,19 @@ export function prepareCommandSessionRecoveryEntry(
       ...params,
       hasDeliveryContext: Boolean(params.deliveryContext),
     });
+  const directOperatorSource =
+    !sourceOptions.sourceRunId &&
+    entry.restartRecoveryDeliveryRunId !== runId &&
+    (!opts.inputProvenance || opts.inputProvenance.kind === "external_user")
+      ? createRestartRecoveryOperatorSource({
+          authority: opts.operatorAuthority,
+          entry: { ...entry, sessionId },
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sourceRunId: runId,
+          inputProvenance: opts.inputProvenance,
+        })
+      : undefined;
   return {
     guardedHarnessCompletion,
     isCompletionCurrent,
@@ -47,6 +69,16 @@ export function prepareCommandSessionRecoveryEntry(
       ...entry,
       sessionId,
       updatedAt: now,
+      status: undefined,
+      abortedLastRun: false,
+      endedAt: undefined,
+      lastRunError: undefined,
+      restartRecoveryRuns: isMainRestartRecoveryCandidate(entry, params.sessionKey)
+        ? normalizeMainSessionRecoveryRunFences([
+            ...(entry.restartRecoveryRuns ?? []),
+            { runId, lifecycleGeneration: params.lifecycleGeneration },
+          ])
+        : entry.restartRecoveryRuns,
       sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
       lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
       ...buildCurrentRunRestartRecoveryClaim({
@@ -58,6 +90,13 @@ export function prepareCommandSessionRecoveryEntry(
         runId,
         harnessCompletion,
         ...sourceOptions,
+        ...(directOperatorSource
+          ? {
+              operatorSource: directOperatorSource,
+              sourceRunId: runId,
+              sourceIngress: directOperatorSource.snapshot.sourceIngress,
+            }
+          : {}),
         suppressTextDelivery: opts.internalDeliverySuppressText,
       }),
     },
@@ -97,7 +136,6 @@ export async function prepareEmbeddedSessionState(params: {
   sessionAgentId: string;
   lifecycleGeneration: string;
   runId: string;
-  workspaceDir: string;
   executionWorkspaceDir: string;
   watchSkills: boolean;
   isNewSession: boolean;
@@ -145,8 +183,11 @@ export async function prepareEmbeddedSessionState(params: {
     agentId: params.sessionAgentId,
   });
   const skillSnapshotState = await resolveReusableWorkspaceSkillSnapshot({
-    workspaceDir: params.workspaceDir,
-    executionWorkspaceDir: params.executionWorkspaceDir,
+    workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId),
+    ...resolveSessionSkillExecutionWorkspace(
+      sessionEntry?.worktree?.canonicalWorkspaceDir,
+      params.executionWorkspaceDir,
+    ),
     config: params.cfg,
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,
@@ -170,66 +211,48 @@ export async function prepareEmbeddedSessionState(params: {
     params.isNewSession || !currentSkillsSnapshot || skillSnapshotState.shouldRefresh;
   const skillsSnapshot = skillSnapshotState.snapshot;
 
-  if (
-    skillsSnapshot &&
-    params.sessionStore &&
-    params.sessionKey &&
-    needsSkillsSnapshot &&
-    !params.suppressVisibleSessionEffects
-  ) {
-    const now = Date.now();
-    const current = sessionEntry ?? {
-      sessionId: params.sessionId,
-      updatedAt: now,
-      sessionStartedAt: now,
+  const { sessionStore, sessionKey } = params;
+  if (sessionStore && sessionKey && !params.suppressVisibleSessionEffects) {
+    const persistUpdate = (
+      initialEntry: SessionEntry | undefined,
+      update: (entry: SessionEntry, now: number) => void,
+    ) => {
+      const now = Date.now();
+      const entry = initialEntry ?? {
+        sessionId: params.sessionId,
+        updatedAt: now,
+        sessionStartedAt: now,
+      };
+      const next: SessionEntry = {
+        ...entry,
+        sessionId: params.sessionId,
+        updatedAt: now,
+        sessionStartedAt: entry.sessionStartedAt ?? now,
+      };
+      update(next, now);
+      return persistAgentSession({
+        agentId: params.sessionAgentId,
+        sessionStore,
+        sessionKey,
+        storePath: params.storePath,
+        initialEntry: entry,
+        entry: next,
+      });
     };
-    const next: SessionEntry = {
-      ...current,
-      sessionId: params.sessionId,
-      updatedAt: now,
-      sessionStartedAt: current.sessionStartedAt ?? now,
-      skillsSnapshot,
-    };
-    sessionEntry = await persistAgentSession({
-      agentId: params.sessionAgentId,
-      sessionStore: params.sessionStore,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      initialEntry: current,
-      entry: next,
-    });
-  }
+    if (skillsSnapshot && needsSkillsSnapshot) {
+      sessionEntry = await persistUpdate(sessionEntry, (next) => {
+        next.skillsSnapshot = skillsSnapshot;
+      });
+    }
 
-  // Persist non-model-dependent command state before provider/model resolution.
-  // Thinking is written only after the selected runtime validates it.
-  const shouldPersistInitialSessionTouch =
-    params.opts.skipInitialSessionTouch !== true || Boolean(params.verboseOverride);
-  if (
-    params.sessionStore &&
-    params.sessionKey &&
-    !params.suppressVisibleSessionEffects &&
-    shouldPersistInitialSessionTouch
-  ) {
-    const now = Date.now();
-    const entry = params.sessionStore[params.sessionKey] ??
-      sessionEntry ?? { sessionId: params.sessionId, updatedAt: now, sessionStartedAt: now };
-    const next: SessionEntry = {
-      ...entry,
-      sessionId: params.sessionId,
-      updatedAt: now,
-      sessionStartedAt: entry.sessionStartedAt ?? now,
-      lastInteractionAt: now,
-      agentStatus: undefined,
-    };
-    applyVerboseOverride(next, params.verboseOverride);
-    sessionEntry = await persistAgentSession({
-      agentId: params.sessionAgentId,
-      sessionStore: params.sessionStore,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      initialEntry: entry,
-      entry: next,
-    });
+    // Persist non-model-dependent state first; thinking waits for runtime validation.
+    if (params.opts.skipInitialSessionTouch !== true || Boolean(params.verboseOverride)) {
+      sessionEntry = await persistUpdate(sessionStore[sessionKey] ?? sessionEntry, (next, now) => {
+        next.lastInteractionAt = now;
+        next.agentStatus = undefined;
+        applyVerboseOverride(next, params.verboseOverride);
+      });
+    }
   }
   if (params.sessionKey && !params.isSubagentLaneTurn) {
     const assertSignalCurrent = () => {
@@ -254,13 +277,32 @@ export async function prepareEmbeddedSessionState(params: {
     assertSignalCurrent();
   }
 
+  const runContext = resolveAgentRunContext(params.opts);
+  // Announce and inter-session turns get the delivering channel's contract, like replies.
+  const deliveryFormat =
+    (params.opts.deliver === true || params.opts.sourceReplyDeliveryMode === "message_tool_only") &&
+    buildDeliveryFormatPrompt({
+      cfg: params.cfg,
+      // Delivery preflight records the actual outbound target as reply* options.
+      channel: params.opts.replyChannel ?? runContext.messageChannel,
+      accountId: params.opts.replyAccountId ?? runContext.accountId,
+      agentId: params.sessionAgentId,
+      allowBootstrap: true,
+    });
+  const extraSystemPrompt = [params.opts.extraSystemPrompt, deliveryFormat].filter(Boolean);
   return {
     sessionEntry,
     requestedThinkLevel,
     resolvedVerboseLevel,
     skillsSnapshot,
-    runContext: resolveAgentRunContext(params.opts),
+    runContext,
+    opts: deliveryFormat
+      ? { ...params.opts, extraSystemPrompt: extraSystemPrompt.join("\n\n") }
+      : params.opts,
   };
 }
 
-export type EmbeddedSessionState = Awaited<ReturnType<typeof prepareEmbeddedSessionState>>;
+export type EmbeddedSessionState = Omit<
+  Awaited<ReturnType<typeof prepareEmbeddedSessionState>>,
+  "opts"
+>;

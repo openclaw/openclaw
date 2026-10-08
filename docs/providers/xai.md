@@ -187,6 +187,14 @@ metadata without joining the published inventory. Their pricing remains unknown,
 recorded as zero until the manifest includes them. Zero is an unavailable estimate, not a claim that
 the provider charges nothing.
 
+Thinking levels follow xAI's
+[documented release rule](https://docs.x.ai/developers/model-capabilities/text/reasoning)
+rather than a fixed model list. Grok 4.5 and later accept `low`, `medium`, and
+`high`; Grok 4.6 and later add `xhigh`. The default is `high`, and reasoning cannot
+be turned off. A newer release id such as `grok-4.8`, its `-latest` alias, or a
+dated snapshot gets these levels and image input before the manifest lists it.
+Variant ids such as `-fast` keep reasoning effort off.
+
 ## Feature coverage
 
 The bundled plugin maps supported xAI APIs onto OpenClaw's shared provider and
@@ -737,6 +745,8 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
       configurable effort control, but still request
       `include: ["reasoning.encrypted_content"]` so prior encrypted reasoning
       can be replayed on follow-up turns.
+      For those models, OpenClaw's `off` setting omits the effort override;
+      it does not turn off the model's native reasoning.
     - `web_search`, `x_search`, and `code_execution` are exposed as OpenClaw
       tools. OpenClaw attaches only the specific xAI built-in each tool needs
       to that tool's request instead of attaching every native tool to every
@@ -754,7 +764,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
 ## Live testing
 
 The xAI media paths are covered by unit tests and opt-in live suites. Export
-`XAI_API_KEY` in the process environment before running live probes.
+`XAI_API_KEY` in the process environment before running live checks.
 
 ```bash
 pnpm test extensions/xai

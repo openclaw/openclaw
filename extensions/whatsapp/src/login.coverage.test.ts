@@ -121,26 +121,6 @@ describe("loginWeb coverage", () => {
     rmSync(testState.authDir, { recursive: true, force: true });
   });
 
-  it("restarts once when WhatsApp requests code 515", async () => {
-    waitForWaConnectionMock
-      .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
-      .mockResolvedValueOnce(undefined);
-
-    const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const pendingLogin = loginWeb(false, waitForWaConnectionMock as never, runtime);
-    await pendingLogin;
-
-    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    const firstSock = await createWaSocketMock.mock.results[0]?.value;
-    expect(firstSock.ws.close).toHaveBeenCalled();
-    expect(runtimeMessageCalls(runtime.log)).toContain(
-      "✅ Linked after restart; web session ready.",
-    );
-    vi.runAllTimers();
-    const secondSock = await createWaSocketMock.mock.results[1]?.value;
-    expect(secondSock.ws.close).toHaveBeenCalled();
-  });
-
   it("routes QR output through runtime for initial and restart sockets", async () => {
     waitForWaConnectionMock
       .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
@@ -178,6 +158,11 @@ describe("loginWeb coverage", () => {
     );
     expect(renderQrTerminalMock).toHaveBeenCalledWith("initial-qr", { small: true });
     expect(renderQrTerminalMock).toHaveBeenCalledWith("restart-qr", { small: true });
+    const firstSock = await createWaSocketMock.mock.results[0]?.value;
+    expect(firstSock.ws.close).toHaveBeenCalled();
+    vi.runAllTimers();
+    const secondSock = await createWaSocketMock.mock.results[1]?.value;
+    expect(secondSock.ws.close).toHaveBeenCalled();
   });
 
   it("clears stale creds and continues login when logged out", async () => {

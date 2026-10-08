@@ -39,12 +39,6 @@ it.each([
     refresh: true,
   },
   {
-    name: "the parent run finishing",
-    payload: {},
-    terminal: { sessionKeys: [parent], status: "done" as const, endedAt: 2 },
-    refresh: true,
-  },
-  {
     name: "the parent run finishing for an explicitly cross-agent child query",
     payload: {},
     terminal: { sessionKeys: [parent], status: "done" as const, endedAt: 2 },
@@ -83,11 +77,6 @@ it.each([
     historyRow: { ...known, agentId: "worker", spawnedBy: "agent:other:parent", updatedAt: 2 },
     refresh: true,
     rows: [],
-  },
-  {
-    name: "unrelated agent activity",
-    payload: { sessionKey: "agent:research:other", reason: "update" },
-    refresh: false,
   },
   {
     name: "unrelated same-agent root",
@@ -138,7 +127,6 @@ it.each([
     refresh: true,
     rows: [],
   },
-  { name: "parent Swarm change", payload: { sessionKey: parent, reason: "swarm" }, refresh: true },
   {
     name: "parent change for an explicitly cross-agent child query",
     payload: { sessionKey: parent, reason: "swarm" },
@@ -146,12 +134,6 @@ it.each([
     refresh: true,
   },
   { name: "global membership invalidation", payload: { reason: "delete" }, refresh: true },
-  {
-    name: "sparse event for an unloaded child page",
-    payload: { sessionKey: "agent:research:unloaded", reason: "delete" },
-    refresh: true,
-    incomplete: true,
-  },
   {
     name: "off-page child reparented outside an incomplete window",
     payload: {

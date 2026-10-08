@@ -80,21 +80,11 @@ describe("Crabbox protected model command", () => {
       model: process.env.OPENAI_MODEL, proxy: process.env.HTTPS_PROXY,
       ca: fs.readFileSync(process.env.SSL_CERT_FILE, 'utf8'), path: process.env.SSL_CERT_FILE
     }));`;
-    const child = execFile("bash", ["-s", "--", process.execPath, "-e", fixture], {
+    const child = execFileAsync("bash", ["-s", "--", process.execPath, "-e", fixture], {
       env: { ...process.env, NODE_OPTIONS: undefined },
     });
-    const completion = new Promise<string>((resolve, reject) => {
-      let output = "";
-      child.stdout?.on("data", (chunk) => {
-        output += String(chunk);
-      });
-      child.once("error", reject);
-      child.once("exit", (code) =>
-        code === 0 ? resolve(output) : reject(new Error(`fixture exited ${code}`)),
-      );
-    });
-    child.stdin!.end(remoteInput);
-    const observed = JSON.parse(await completion);
+    child.child.stdin!.end(remoteInput);
+    const observed = JSON.parse((await child).stdout);
     expect(observed).toMatchObject({
       key: egress.sentinel,
       baseUrl: egress.baseUrl,
@@ -105,14 +95,13 @@ describe("Crabbox protected model command", () => {
     await expect(execFileAsync("test", ["-e", observed.path])).rejects.toThrow();
   });
 
-  it.each(["", "  --upstream-proxy-env-name string\n per-upstream-proxy-env help"])(
-    "refuses incompatible native commands before credential access",
-    async (help) => {
-      mocks.run.mockResolvedValue(result(help));
-      await expect(runCrabboxModelCommand(options)).rejects.toThrow("lacks native egress run");
-      expect(mocks.withEgress).not.toHaveBeenCalled();
-    },
-  );
+  it("refuses lookalike native flags before credential access", async () => {
+    mocks.run.mockResolvedValue(
+      result("  --upstream-proxy-env-name string\n per-upstream-proxy-env help"),
+    );
+    await expect(runCrabboxModelCommand(options)).rejects.toThrow("lacks native egress run");
+    expect(mocks.withEgress).not.toHaveBeenCalled();
+  });
 
   it("reports unconfirmed native process cleanup as failure", async () => {
     mocks.run.mockResolvedValueOnce(result(capabilityHelp));

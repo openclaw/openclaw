@@ -15,6 +15,10 @@ import {
   type HeartbeatConfig,
 } from "./heartbeat-config.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
+import {
+  isConversationExecCompletion,
+  isHeartbeatDeliveryAwarenessEvent,
+} from "./heartbeat-events-filter.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
 import type { runHeartbeatOnce } from "./heartbeat-runner-run.js";
 import { isConfiguredHeartbeatAgent, isTargetedUnscheduledWake } from "./heartbeat-wake-policy.js";
@@ -29,6 +33,8 @@ import {
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 import { isSessionEventWakePollDeferred } from "./session-event-wake.js";
+import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
+import { peekSystemEventEntries } from "./system-events.js";
 
 const loadHeartbeatExecution = createLazyRuntimeModule(() => import("./heartbeat-runner-run.js"));
 
@@ -90,25 +96,25 @@ export function startHeartbeatRunner(opts: {
     return agent;
   };
 
-  // Centralized cooldown gate. Both targeted and broadcast dispatch branches
-  // call this before invoking `runOnce`. Manual wakes are never deferred.
-  // Everything else respects the event cooldown, minimum spacing, and flood
-  // guard owned by heartbeat-cooldown.ts.
   const evaluateWakeDeferral = (
     agent: HeartbeatAgentState,
     now: number,
     reason?: string,
     intent: HeartbeatWakeIntent = "event",
-    options: { authoritativeScheduledTick?: boolean; retainedWork?: boolean } = {},
+    options: {
+      authoritativeScheduledTick?: boolean;
+      retainedWork?: boolean;
+      conversationTurn?: boolean;
+    } = {},
   ): DeferDecision => {
     const decision = shouldDeferWake({
       intent,
-      reason,
       now,
       nextDueMs: options.authoritativeScheduledTick ? now : agent.cooldownUntilMs,
       lastRunStartedAtMs: agent.lastRunStartedAtMs,
       recentRunStarts: agent.recentRunStarts,
       retainedWork: options.retainedWork,
+      conversationTurn: options.conversationTurn,
     });
     if (decision.defer && decision.reason === "flood") {
       if (!agent.floodLoggedSinceLastRun) {
@@ -123,8 +129,6 @@ export function startHeartbeatRunner(opts: {
     return decision;
   };
 
-  // Called immediately before `runOnce` actually executes. Updates the
-  // bookkeeping that the cooldown gate consults on the next wake.
   const recordRunBookkeeping = (agent: HeartbeatAgentState, now: number) => {
     agent.lastRunStartedAtMs = now;
     agent.cooldownUntilMs = now + (agent.intervalMs ?? 0);
@@ -208,9 +212,8 @@ export function startHeartbeatRunner(opts: {
     const now = startedAt;
 
     type AgentWakeOutcome = {
-      ran: boolean;
-      retryableSkip?: HeartbeatRunResult;
-      result?: HeartbeatRunResult;
+      result: HeartbeatRunResult;
+      retryable?: true;
     };
     const runOneAgent = async (
       agent: HeartbeatAgentState,
@@ -221,9 +224,16 @@ export function startHeartbeatRunner(opts: {
         agent.intervalMs = scheduledEveryMs;
         agent.heartbeat = { ...agent.heartbeat, every: `${scheduledEveryMs}ms` };
       }
+      const pendingEvents = execEventWake
+        ? peekSystemEventEntries(
+            resolveSystemEventQueueKey(requestedSessionKey ?? "global", agentId),
+          ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event))
+        : [];
       const deferral = evaluateWakeDeferral(agent, now, reason, intent, {
         authoritativeScheduledTick,
         retainedWork,
+        conversationTurn:
+          pendingEvents.length > 0 && pendingEvents.every(isConversationExecCompletion),
       });
       if (deferral.defer) {
         // Retained exec work never owns cadence unless a scheduled tick joined it.
@@ -235,7 +245,6 @@ export function startHeartbeatRunner(opts: {
           agent.cooldownUntilMs = now + (agent.intervalMs ?? 0);
         }
         return {
-          ran: false,
           result: {
             status: "skipped",
             reason: deferral.reason,
@@ -280,7 +289,7 @@ export function startHeartbeatRunner(opts: {
           wakeSignal?.aborted ||
           !areHeartbeatsEnabled()
         ) {
-          return { ran: false, result: { status: "skipped", reason: "disabled" } };
+          return { result: { status: "skipped", reason: "disabled" } };
         }
         res = await execute(runOptions);
       } catch (err) {
@@ -290,16 +299,16 @@ export function startHeartbeatRunner(opts: {
           agentId,
         });
         recordRunBookkeeping(agent, now);
-        return { ran: false, result: { status: "failed", reason: errMsg } };
+        return { result: { status: "failed", reason: errMsg } };
       }
       if (res.status === "skipped" && isSessionEventWakePollDeferred()) {
         // This occurrence ended before admission; the next persisted poll owns the next turn.
         recordRunBookkeeping(agent, now);
-        return { ran: false, result: res };
+        return { result: res };
       }
       if (res.status === "skipped" && isRetryableHeartbeatSkipReason(res.reason)) {
         // Retryable busy attempts own no cooldown; the wake layer retains them.
-        return { ran: false, retryableSkip: res };
+        return { result: res, retryable: true };
       }
       if (
         params.source === "exec-event" &&
@@ -307,10 +316,10 @@ export function startHeartbeatRunner(opts: {
         res.reason === HEARTBEAT_SKIP_NO_PENDING_EVENT
       ) {
         // An acknowledged exec completion owns neither cooldown nor retry.
-        return { ran: false, result: res };
+        return { result: res };
       }
       recordRunBookkeeping(agent, now);
-      return { ran: res.status === "ran", result: res };
+      return { result: res };
     };
 
     if (requestedSessionKey || requestedAgentId) {
@@ -340,13 +349,10 @@ export function startHeartbeatRunner(opts: {
         targetAgent = createAgentState(targetAgentId, now);
         state.agents.set(targetAgentId, targetAgent);
       }
-      const outcome = await runOneAgent(targetAgent, true);
-      if (outcome.retryableSkip) {
-        return outcome.retryableSkip;
-      }
-      return outcome.ran
+      const { result } = await runOneAgent(targetAgent, true);
+      return result.status === "ran"
         ? { status: "ran", durationMs: Date.now() - startedAt }
-        : (outcome.result ?? { status: "skipped", reason: "not-due" });
+        : result;
     }
 
     const enrolledAgents = Array.from(state.agents.values()).filter(
@@ -366,21 +372,20 @@ export function startHeartbeatRunner(opts: {
     let firstResult: HeartbeatRunResult | undefined;
     let firstFailure: Extract<HeartbeatRunResult, { status: "failed" }> | undefined;
     let firstGuardSkip: Extract<HeartbeatRunResult, { status: "skipped" }> | undefined;
-    for (const outcome of agentOutcomes) {
-      if (outcome.retryableSkip) {
+    for (const { result, retryable } of agentOutcomes) {
+      if (retryable) {
         // Busy agents own the retry. Successful siblings already advanced their
         // cooldown, so the retry does not replay their completed work.
-        return outcome.retryableSkip;
+        return result;
       }
-      ran ||= outcome.ran;
-      firstResult ??= outcome.result;
-      const result = outcome.result;
-      if (result?.status === "failed") {
+      ran ||= result.status === "ran";
+      firstResult ??= result;
+      if (result.status === "failed") {
         firstFailure ??= result;
       }
       if (
         !ran &&
-        result?.status === "skipped" &&
+        result.status === "skipped" &&
         result.retryAtMs !== undefined &&
         (!firstGuardSkip || result.retryAtMs < (firstGuardSkip.retryAtMs ?? Infinity))
       ) {

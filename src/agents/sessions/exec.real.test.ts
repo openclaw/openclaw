@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { execCommand } from "./exec.js";
@@ -44,7 +45,9 @@ describe("execCommand process-tree cleanup", () => {
     cleanupPids.clear();
   });
 
-  it("does not resolve a timeout while a SIGTERM-resistant descendant is alive", async () => {
+  it("does not resolve a timeout while a SIGTERM-resistant descendant is alive", async ({
+    signal,
+  }) => {
     const readyPath = join(tempDirs.make("openclaw-exec-tree-"), "ready.json");
     const descendantScript = [
       "process.on('SIGTERM', () => {});",
@@ -74,12 +77,14 @@ describe("execCommand process-tree cleanup", () => {
     cleanupPids.add(childPid);
 
     await expect(resultPromise).resolves.toMatchObject({ killed: true });
-    await vi.waitFor(
-      () => {
-        expect(isProcessAlive(parentPid)).toBe(false);
-        expect(isProcessAlive(childPid)).toBe(false);
-      },
-      { timeout: 500, interval: 25 },
-    );
+    // The product joins its termination controller, but foreign descendants expose no
+    // child handle here; observe final OS extinction without another wall-clock budget.
+    while (isProcessAlive(parentPid) || isProcessAlive(childPid)) {
+      await delay(10, undefined, { signal }).catch((error: unknown) => {
+        throw new Error("Timed out waiting for parent and descendant to exit", { cause: error });
+      });
+    }
+    expect(isProcessAlive(parentPid)).toBe(false);
+    expect(isProcessAlive(childPid)).toBe(false);
   }, 12_000);
 });

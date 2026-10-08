@@ -1,4 +1,3 @@
-// Control UI chat module implements user message content behavior.
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
@@ -14,6 +13,7 @@ type UserChatMessageContentBlock = {
   type: string;
   text?: string;
   url?: string;
+  fileName?: string;
   source?: unknown;
   attachment?: {
     url: string;
@@ -49,6 +49,7 @@ function buildUserChatMessageContentBlocks(
       blocks.push({
         type: "image",
         url: previewUrl,
+        ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
         source: { type: "url", url: previewUrl },
       });
       continue;
@@ -84,6 +85,7 @@ type LocalUserMessageInput = {
   };
   replyToId?: string;
   runId?: string;
+  steerTargetRunId?: string;
   sender?: SenderIdentity;
   text: string;
 };
@@ -132,6 +134,7 @@ export function buildLocalUserMessage(
         ? { workContext: { snapshot: input.workContext, text: input.text } }
         : {}),
       ...(input.runId ? { idempotencyKey: `${input.runId}:user` } : {}),
+      ...(input.steerTargetRunId ? { steerTargetRunId: input.steerTargetRunId } : {}),
       ...(input.pending
         ? {
             kind: "pending-send",

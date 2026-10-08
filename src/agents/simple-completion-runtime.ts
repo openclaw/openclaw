@@ -1,9 +1,5 @@
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
-/**
- * Simple completion runtime preparation.
- *
- * Resolves agent model selection, auth, runtime policy, and missing-auth errors before simple completions run.
- */
+import { requiredWorkerHelperError } from "../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
@@ -18,24 +14,17 @@ import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  resolveAgentDir,
-  resolveNativeModelPrimary,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "./agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
-import { DEFAULT_PROVIDER } from "./defaults.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "./execution-auth-binding.js";
-import {
-  createAgentRuntimeMetadataPluginIdScope,
-  type AgentHarnessPluginSelection,
-} from "./harness/runtime-plugin-load-plan.js";
+import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugin-load-plan.js";
+import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
+import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import {
   applySecretRefHeaderSentinels,
   applyLocalNoAuthHeaderOverride,
@@ -43,19 +32,13 @@ import {
   getApiKeyForModelCore,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
-import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveModelRouteIntent } from "./model-runtime-policy.js";
-import {
-  buildModelAliasIndex,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-} from "./model-selection.js";
+import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { resolveOpenAIModelRoutes } from "./openai-model-routes.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
-import { resolveProviderModelRouteAuthRequirement } from "./provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "./provider-runtime-auth-protection.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
@@ -71,99 +54,24 @@ import {
   type PreparedSimpleCompletionResolverContext,
   type SimpleCompletionModelResolver,
 } from "./simple-completion-scope.js";
+import { resolveSimpleCompletionSelectionRequest } from "./simple-completion-selection.js";
 import type {
   AgentSimpleCompletionSelection,
   PreparedSimpleCompletionModel,
   PreparedSimpleCompletionModelForAgent,
   PrepareSimpleCompletionModelForAgentParams,
 } from "./simple-completion.types.js";
-import { resolveUtilityModelRefForAgent } from "./utility-model.js";
+export { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-selection.js";
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 
-type SimpleCompletionSelectionParams = {
-  cfg: OpenClawConfig;
-  agentId: string;
-  agentDir?: string;
-  modelRef?: string;
-  useUtilityModel?: boolean;
-  manifestPlugins?:
-    | PluginMetadataSnapshot["plugins"]
-    | Pick<PluginMetadataSnapshot, "plugins" | "owners">;
-};
-
-type SimpleCompletionSelectionRequest = {
-  selection: AgentSimpleCompletionSelection;
-  shorthandModelId?: string;
-};
-
-function resolveSimpleCompletionSelectionRequest(
-  params: SimpleCompletionSelectionParams,
-): SimpleCompletionSelectionRequest | null {
-  const fallbackRef = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    manifestPlugins: params.manifestPlugins,
-  });
-  // Utility routing derives a provider-declared small model when unset and
-  // treats an explicit empty utilityModel as "use the primary" (disabled).
-  const modelRef =
-    params.modelRef?.trim() ||
-    (params.useUtilityModel
-      ? resolveUtilityModelRefForAgent({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          primaryProvider: fallbackRef.provider,
-          ...(params.manifestPlugins
-            ? {
-                metadataSnapshot:
-                  "plugins" in params.manifestPlugins
-                    ? params.manifestPlugins
-                    : { plugins: params.manifestPlugins },
-              }
-            : {}),
-        })
-      : undefined) ||
-    resolveNativeModelPrimary(params.cfg, params.agentId);
-  const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
-    manifestPlugins: params.manifestPlugins,
-  });
-  const resolved = split
-    ? resolveModelRefFromString({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        raw: split.model,
-        defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
-        aliasIndex,
-        manifestPlugins: params.manifestPlugins,
-      })
-    : null;
-  const provider = resolved?.ref.provider ?? fallbackRef.provider;
-  const modelId = resolved?.ref.model ?? fallbackRef.model;
-  if (!provider || !modelId) {
-    return null;
-  }
-  return {
-    selection: {
-      provider,
-      modelId,
-      profileId: split?.profile || undefined,
-      agentDir: params.agentDir?.trim() || resolveAgentDir(params.cfg, params.agentId),
-    },
-    ...(split && !split.model.includes("/") ? { shorthandModelId: split.model } : {}),
-  };
-}
-
-export function resolveSimpleCompletionSelectionForAgent(
-  params: SimpleCompletionSelectionParams,
-): AgentSimpleCompletionSelection | null {
-  return resolveSimpleCompletionSelectionRequest(params)?.selection ?? null;
-}
-
+type PreparedStreamCompletionModel =
+  | (Extract<PreparedSimpleCompletionModel, { model: Model }> & {
+      recordServiceTierObservation?: ReturnType<
+        NonNullable<PreparedModelRuntimeSnapshot["accountCatalog"]>["prepareServiceTierObserver"]
+      >;
+    })
+  | Extract<PreparedSimpleCompletionModel, { error: string }>;
 export type PrepareSimpleCompletionModelParams = {
   cfg: OpenClawConfig | undefined;
   agentId?: string;
@@ -183,6 +91,10 @@ export type PrepareSimpleCompletionModelParams = {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   workspaceDir?: string;
   agentRuntimeId?: string;
+  /** Internal stream callers own provider transport construction and embedded policy. */
+  transport?: "simple-completion" | "provider-stream";
+  /** Internal worker RPC owner; sessionless helper callers cannot supply this authority. */
+  workerInferenceAuthority?: { assertCurrent: () => void };
 };
 
 /** Prepares a model within the exact generation already held by its caller. */
@@ -191,9 +103,18 @@ export async function prepareSimpleCompletionModel(
     preparedModelRuntime: PreparedModelRuntimeSnapshot;
   },
   assertCurrent?: () => void,
-): Promise<PreparedSimpleCompletionModel> {
+): Promise<PreparedStreamCompletionModel> {
   params.signal?.throwIfAborted();
   const config = params.cfg ?? {};
+  const blocked =
+    requiredWorkerHelperError(
+      params.preparedModelRuntime.config,
+      Boolean(params.workerInferenceAuthority),
+    ) ?? requiredWorkerHelperError(config, Boolean(params.workerInferenceAuthority));
+  if (blocked) {
+    return blocked;
+  }
+  params.workerInferenceAuthority?.assertCurrent();
   const preparedModelRuntime = params.preparedModelRuntime;
   const context = createPreparedSimpleCompletionResolverContext({
     preparedModelRuntime,
@@ -208,9 +129,13 @@ export async function prepareSimpleCompletionModel(
     prepareSimpleCompletionModelCore(
       { ...params, agentDir: preparedModelRuntime.agentDir },
       context,
-      assertCurrent,
+      () => {
+        assertCurrent?.();
+        params.workerInferenceAuthority?.assertCurrent();
+      },
     ),
   );
+  params.workerInferenceAuthority?.assertCurrent();
   params.signal?.throwIfAborted();
   return prepared;
 }
@@ -219,7 +144,16 @@ async function prepareSimpleCompletionModelCore(
   params: PrepareSimpleCompletionModelParams,
   context: PreparedSimpleCompletionResolverContext,
   assertCurrent?: () => void,
-): Promise<PreparedSimpleCompletionModel> {
+): Promise<PreparedStreamCompletionModel> {
+  const blocked =
+    requiredWorkerHelperError(
+      context.preparedModelRuntime.config,
+      Boolean(params.workerInferenceAuthority),
+    ) ?? requiredWorkerHelperError(params.cfg ?? {}, Boolean(params.workerInferenceAuthority));
+  if (blocked) {
+    return blocked;
+  }
+  params.workerInferenceAuthority?.assertCurrent();
   const { modelResolver, workspaceDir } = context;
   const resolved = await modelResolver(
     params.provider,
@@ -289,6 +223,10 @@ async function prepareSimpleCompletionModelCore(
         })
       : undefined;
     const resolveProfileAuthMode = (profileId: string) => authStore?.profiles[profileId]?.type;
+    const resolveProfileAuthFlow = (profileId: string) => {
+      const credential = authStore?.profiles[profileId];
+      return credential?.type === "oauth" ? credential.authFlow : undefined;
+    };
     const routeIntent = params.agentRuntimeId
       ? { runtimeId: params.agentRuntimeId, source: "explicit" as const }
       : resolveModelRouteIntent({
@@ -298,6 +236,7 @@ async function prepareSimpleCompletionModelCore(
           agentId: params.agentId,
           primaryModel,
           resolveProfileAuthMode,
+          resolveProfileAuthFlow,
         });
     const routeResolution = resolveOpenAIModelRoutes({
       provider: initialModel.provider,
@@ -308,9 +247,14 @@ async function prepareSimpleCompletionModelCore(
       agentId: params.agentId,
       routeIntent,
       resolveProfileAuthMode,
-      pinnedAuthRequirement: resolveProviderModelRouteAuthRequirement(
-        params.profileId ? authStore?.profiles[params.profileId]?.type : undefined,
-      ),
+      resolveProfileAuthFlow,
+      pinnedAuthRequirement: params.profileId
+        ? (resolveProviderModelAuthPolicy({
+            provider: initialModel.provider,
+            mode: resolveProfileAuthMode(params.profileId),
+            authFlow: resolveProfileAuthFlow(params.profileId),
+          }).authRequirement ?? undefined)
+        : undefined,
       env: process.env,
     });
     const preparedAuth =
@@ -387,6 +331,8 @@ async function prepareSimpleCompletionModelCore(
       error: `Auth lookup failed for provider "${initialModel.provider}": ${formatErrorMessage(err)}`,
     };
   }
+  assertCurrent?.();
+  params.signal?.throwIfAborted();
   const rawApiKey = auth.apiKey?.trim();
   if (!rawApiKey && !params.allowMissingApiKeyModes?.includes(auth.mode)) {
     return {
@@ -397,25 +343,29 @@ async function prepareSimpleCompletionModelCore(
 
   let authValue = rawApiKey;
   if (rawApiKey) {
-    const preparedAuth = protectPreparedProviderRuntimeAuth({
+    const runtimeAuth = await prepareProviderRuntimeAuth({
       provider: resolvedModel.provider,
-      preparedAuth: await prepareProviderRuntimeAuth({
-        provider: resolvedModel.provider,
+      config: params.cfg,
+      workspaceDir,
+      env: process.env,
+      assertCurrent,
+      context: {
         config: params.cfg,
         workspaceDir,
         env: process.env,
-        context: {
-          config: params.cfg,
-          workspaceDir,
-          env: process.env,
-          provider: resolvedModel.provider,
-          modelId: resolvedModel.id,
-          model: resolvedModel,
-          apiKey: rawApiKey,
-          authMode: auth.mode,
-          profileId: auth.profileId,
-        },
-      }),
+        provider: resolvedModel.provider,
+        modelId: resolvedModel.id,
+        model: resolvedModel,
+        apiKey: rawApiKey,
+        authMode: auth.mode,
+        profileId: auth.profileId,
+      },
+    });
+    assertCurrent?.();
+    params.signal?.throwIfAborted();
+    const preparedAuth = protectPreparedProviderRuntimeAuth({
+      provider: resolvedModel.provider,
+      preparedAuth: runtimeAuth,
     });
     authValue = preparedAuth?.apiKey?.trim() || rawApiKey;
     resolved.authStorage.setRuntimeApiKey(resolvedModel.provider, authValue);
@@ -452,74 +402,46 @@ async function prepareSimpleCompletionModelCore(
     pluginMetadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
   });
   const preparedModel = attachModelProviderRuntimePluginHandle(model, providerRuntimeHandle);
-  // Capture this generation's transport hooks while keeping the logical model API
-  // visible to callers that build prompts before dispatch.
-  const completionTransport = attachModelProviderRuntimePluginHandle(
-    prepareModelForSimpleCompletion({
-      apiRegistry: modelRuntime.apiRegistry,
-      model: preparedModel,
-      cfg: params.cfg,
-    }),
-    providerRuntimeHandle,
-  );
+  // Direct completions retain this generation's transport. Embedded stream callers
+  // construct their own transport and must not run direct-completion factories.
+  const completionTransport =
+    params.transport === "provider-stream"
+      ? undefined
+      : attachModelProviderRuntimePluginHandle(
+          prepareModelForSimpleCompletion({
+            apiRegistry: modelRuntime.apiRegistry,
+            model: preparedModel,
+            cfg: params.cfg,
+            auth: { mode: resolvedAuth.mode, authFlow: resolvedAuth.authFlow },
+            agentId: params.agentId,
+          }),
+          providerRuntimeHandle,
+        );
+  const selectedCredential = resolveSelectedModelCredential({
+    provider: model.provider,
+    profileId: auth.profileId,
+    mode: auth.mode,
+  });
+  const recordServiceTierObservation =
+    params.transport === "provider-stream" &&
+    selectedCredential &&
+    selectedCredential.source !== "harness" &&
+    selectedCredential.requirement === "api-key" &&
+    model.provider === "openai" &&
+    model.api === "openai-responses"
+      ? context.preparedModelRuntime.accountCatalog?.prepareServiceTierObserver({
+          selectedCredential,
+          credential: auth.profileId ? authStore?.profiles[auth.profileId] : undefined,
+        })
+      : undefined;
 
   return {
     model: bindModelLlmRuntime(preparedModel, modelRuntime.llmRuntime, completionTransport),
     auth: resolvedAuth,
     ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
+    ...(recordServiceTierObservation ? { recordServiceTierObservation } : {}),
   };
 }
-
-async function acquirePreparedSimpleCompletionRuntime(
-  params: {
-    cfg: OpenClawConfig | undefined;
-    agentId?: string;
-    agentDir?: string;
-    modelResolver?: SimpleCompletionModelResolver;
-    signal?: AbortSignal;
-    workspaceDir?: string;
-    agentRuntimeId?: string;
-    pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  },
-  runtimePluginSelections: readonly AgentHarnessPluginSelection[],
-  onAcquired: (release: () => Promise<void>) => void,
-): Promise<PreparedSimpleCompletionResolverContext> {
-  const config = params.cfg ?? {};
-  const agentId = params.agentId ?? resolveDefaultAgentId(config);
-  const agentDir = params.agentDir?.trim() || resolveAgentDir(config, agentId);
-  const requestedWorkspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
-  const lease = await acquireAgentRunPreparedModelRuntime(
-    {
-      config,
-      agentId,
-      agentDir,
-      workspaceDir: requestedWorkspaceDir,
-      loadRuntimePlugins: true,
-      runtimePluginSelections: runtimePluginSelections.map((selection) => ({
-        ...selection,
-        agentId,
-      })),
-    },
-    {
-      catalogMode: "static",
-      abortSignal: params.signal,
-      ...(params.pluginMetadataSnapshot
-        ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-        : {}),
-    },
-  );
-  onAcquired(() => lease[Symbol.asyncDispose]());
-  return createPreparedSimpleCompletionResolverContext({
-    preparedModelRuntime: lease.snapshot,
-    workspaceDir: params.workspaceDir ?? lease.snapshot.workspaceDir ?? requestedWorkspaceDir,
-    modelResolver: params.modelResolver,
-    agentRuntimeId: params.agentRuntimeId,
-  });
-}
-
-type AcquiredSimpleCompletionModel =
-  | (Extract<PreparedSimpleCompletionModel, { model: Model }> & AsyncDisposable)
-  | Extract<PreparedSimpleCompletionModel, { error: string }>;
 
 type AcquiredSimpleCompletionModelForAgent =
   | (Extract<PreparedSimpleCompletionModelForAgent, { model: Model }> & AsyncDisposable)
@@ -529,15 +451,8 @@ type AcquiredSimpleCompletionModelForAgent =
 export async function acquireSimpleCompletionModelForAgent(
   params: PrepareSimpleCompletionModelForAgentParams,
 ): Promise<AcquiredSimpleCompletionModelForAgent> {
-  const selectionParams = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    modelRef: params.modelRef,
-    useUtilityModel: params.useUtilityModel,
-  };
   return await acquireSimpleCompletionModelWithSelection(params, (manifestPlugins) =>
-    resolveSimpleCompletionSelectionRequest({ ...selectionParams, manifestPlugins }),
+    resolveSimpleCompletionSelectionRequest({ ...params, manifestPlugins }),
   );
 }
 
@@ -552,6 +467,10 @@ export async function acquireSimpleCompletionModelWithSelection(
     shorthandModelId?: string;
   } | null,
 ): Promise<AcquiredSimpleCompletionModelForAgent> {
+  const blocked = requiredWorkerHelperError(params.cfg);
+  if (blocked) {
+    return blocked;
+  }
   const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
   const agentDir = params.agentDir?.trim() || resolveAgentDir(params.cfg, agentId);
   const tentativeRequest = resolveRequest();
@@ -618,41 +537,8 @@ export async function acquireSimpleCompletionModelWithSelection(
       return { error: `No model configured for agent ${agentId}.` };
     }
   }
-  const acquired = await acquirePreparedSimpleCompletionModel(
-    { ...params, agentId, agentDir, pluginMetadataSnapshot: metadataSnapshot },
-    [{ provider: selection.provider, modelId: selection.modelId }],
-    (context) =>
-      prepareSimpleCompletionModelCore(
-        {
-          cfg: params.cfg,
-          agentId: params.agentId,
-          provider: selection.provider,
-          modelId: selection.modelId,
-          modelIdSource: "selected",
-          agentDir: selection.agentDir,
-          profileId: selection.profileId,
-          preferredProfile: params.preferredProfile,
-          allowMissingApiKeyModes: params.allowMissingApiKeyModes,
-          ...(params.allowBundledStaticCatalogFallback !== undefined
-            ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
-            : {}),
-          skipAgentDiscovery: params.skipAgentDiscovery,
-          bindAuthOwner: params.bindAuthOwner,
-          signal: params.signal,
-        },
-        context,
-      ),
-  );
-  return { ...acquired, selection };
-}
-
-async function acquirePreparedSimpleCompletionModel(
-  params: Parameters<typeof acquirePreparedSimpleCompletionRuntime>[0],
-  runtimePluginSelections: readonly AgentHarnessPluginSelection[],
-  prepareModel: (
-    context: PreparedSimpleCompletionResolverContext,
-  ) => Promise<PreparedSimpleCompletionModel>,
-): Promise<AcquiredSimpleCompletionModel> {
+  const { cfg: config, signal, modelResolver } = params;
+  const requestedWorkspaceDir = resolveAgentWorkspaceDir(config, agentId);
   let releaseRuntime: (() => Promise<void>) | undefined;
   let setupSettled = false;
   let callerReleased = true;
@@ -664,7 +550,7 @@ async function acquirePreparedSimpleCompletionModel(
     }
     return releaseCompletion;
   };
-  return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
+  const acquired = await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
     // Host work includes setup only; host close releases adopted model claims after drainage.
     onAcquired({
       release: () => {
@@ -673,18 +559,45 @@ async function acquirePreparedSimpleCompletionModel(
         return releaseWhenUnused();
       },
     });
-    const context = await acquirePreparedSimpleCompletionRuntime(
-      params,
-      runtimePluginSelections,
-      (release) => {
-        releaseRuntime = release;
+    const lease = await acquireAgentRunPreparedModelRuntime(
+      {
+        config,
+        agentId,
+        agentDir,
+        workspaceDir: requestedWorkspaceDir,
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [
+          { provider: selection.provider, modelId: selection.modelId, agentId },
+        ],
+      },
+      {
+        catalogMode: "static",
+        abortSignal: signal,
+        pluginMetadataSnapshot: metadataSnapshot,
       },
     );
+    releaseRuntime = () => lease[Symbol.asyncDispose]();
+    const context = createPreparedSimpleCompletionResolverContext({
+      preparedModelRuntime: lease.snapshot,
+      workspaceDir: lease.snapshot.workspaceDir ?? requestedWorkspaceDir,
+      modelResolver,
+    });
     const prepared = await withPluginRuntimeGenerationScope(context.preparedModelRuntime, () => {
       captureWorkContext();
-      return prepareModel(context);
+      return prepareSimpleCompletionModelCore(
+        {
+          ...params,
+          transport: "simple-completion",
+          provider: selection.provider,
+          modelId: selection.modelId,
+          modelIdSource: "selected",
+          agentDir: selection.agentDir,
+          profileId: selection.profileId,
+        },
+        context,
+      );
     });
-    params.signal?.throwIfAborted();
+    signal?.throwIfAborted();
     if ("error" in prepared) {
       return prepared;
     }
@@ -699,6 +612,7 @@ async function acquirePreparedSimpleCompletionModel(
       },
     };
   });
+  return { ...acquired, selection };
 }
 
 export { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";

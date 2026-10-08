@@ -1,9 +1,9 @@
 // Owns durable outbound admission, immutable payload custody, and media staging.
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
+import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
-import { throwSqliteLifecycleErrors } from "../sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../sqlite-lifecycle-errors.js";
 import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import {
   collectPayloadMediaSources,
@@ -13,7 +13,6 @@ import {
 import { resolveConversationDeliveryScope } from "./delivery-completion.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
-import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
 import {
   loadPendingDelivery,
   type QueuedDelivery,
@@ -21,9 +20,11 @@ import {
   enqueueDeliveryOnce,
   enqueuePreparedDeliveryOnce,
 } from "./delivery-queue-storage.js";
+import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
 import {
   acceptedPreparedOutboundEntries,
   mapPreparedOutboundAcceptedPayloads,
+  preparedOutboundPayloads,
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
 import { normalizeOutboundReplyFacts } from "./reply-policy.js";
@@ -66,10 +67,8 @@ export function restoreQueuedDeliveryCustody(
       target,
     );
   }
-  const payloads = acceptedPreparedOutboundEntries(custody.preparedBatch).map(
-    (prepared) => prepared.payload,
-  );
-  return { ...params, ...custody, payloads };
+  const payloads = preparedOutboundPayloads(custody.preparedBatch);
+  return { ...params, ...custody, payloads, sessionGeneration: entry.sessionGeneration };
 }
 
 /** Stages producer-owned media and atomically admits one durable outbound intent. */
@@ -110,12 +109,17 @@ export async function stageAndEnqueueOutboundDelivery(
     {
       stateDir,
       payloads: acceptedPayloads,
+      ...(params.deliveryCompletion?.kind === "pending-final" &&
+      params.deliveryCompletion.commandOwnerReference !== undefined
+        ? { artifactFormat: "command-owner-v1" as const }
+        : params.sessionGeneration
+          ? { artifactFormat: "session-generation-v1" as const }
+          : {}),
       // Resolved exactly as the live send resolves it: staging must neither
       // reject media the send would deliver (agent workspace sources are only
       // reachable through the agent-scoped roots) nor read more than the send may.
       mediaAccess: resolveOutboundMediaAccessForSend(
         params,
-        channel,
         collectPayloadMediaSources(acceptedPayloads),
       ),
       maxBytes: resolveOutboundMediaMaxBytes({
@@ -137,6 +141,8 @@ export async function stageAndEnqueueOutboundDelivery(
     }
     return null;
   }
+  // Take custody before checking generation: temporary lifecycle mutations must
+  // leave a completed result available for recovery.
   try {
     const initialProducerClaim = options?.claimForLiveDelivery
       ? createInitialDeliveryProducerClaim()
@@ -162,6 +168,7 @@ export async function stageAndEnqueueOutboundDelivery(
       silent: params.silent,
       mirror: params.mirror,
       session: params.session,
+      sessionGeneration: params.sessionGeneration,
       gatewayClientScopes: params.gatewayClientScopes,
       preparedMessageId: params.preparedMessageId,
       completionRetention: params.completionRetention,
@@ -169,11 +176,12 @@ export async function stageAndEnqueueOutboundDelivery(
       deliveryCompletion: params.deliveryCompletion,
     };
     if (params.deliveryIntentId) {
-      const queued = options?.getStablePreparation
+      const preparation = await options?.getStablePreparation?.();
+      const queued = preparation
         ? await enqueuePreparedDeliveryOnce(
             delivery,
             params.deliveryIntentId,
-            await options.getStablePreparation(),
+            preparation,
             stateDir,
             staged.mediaStageId,
             params.deliveryQueueStateContext,
@@ -186,7 +194,7 @@ export async function stageAndEnqueueOutboundDelivery(
             params.deliveryQueueStateContext,
           );
       if (!queued.created) {
-        cancelDeliveryQueueMediaRetention(
+        await cancelDeliveryQueueMediaRetention(
           staged.mediaStageId,
           stateDir,
           params.deliveryQueueStateContext,
@@ -217,7 +225,7 @@ export async function stageAndEnqueueOutboundDelivery(
     }
     const errors: unknown[] = [err];
     try {
-      cancelDeliveryQueueMediaRetention(
+      await cancelDeliveryQueueMediaRetention(
         staged.mediaStageId,
         stateDir,
         params.deliveryQueueStateContext,

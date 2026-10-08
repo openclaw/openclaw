@@ -5,7 +5,6 @@ import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import {
   activeRuns,
-  createCodeModeBridgeDispatchState,
   createCodeModeRunOwner,
   disposeAllCodeModeRuns,
   reserveActiveRunSlot,
@@ -30,7 +29,6 @@ async function parkExpiringRun(method: "callValue" | "agentWait") {
     id: `bridge:${method}:1`,
     method,
     args: method === "agentWait" ? ["collector-1"] : ["openclaw:core:slow", {}],
-    promise: new Promise(() => {}),
     reply: owner.inbox.createReply(`bridge:${method}:1`),
     cancel,
   };
@@ -59,7 +57,7 @@ async function parkExpiringRun(method: "callValue" | "agentWait") {
     catalogProjection: createCodeModeCatalogProjection([]),
     namespaceRuntime: createCodeModeNamespaceRuntime(),
     output: new CodeModeOutputState(config.maxOutputBytes),
-    bridgeDispatch: createCodeModeBridgeDispatchState(),
+    bridgeDispatch: { started: false },
   });
   return { cancel, runId: owner.runId };
 }

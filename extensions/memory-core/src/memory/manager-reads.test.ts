@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import {
   listSessionTranscriptCorpusEntriesForAgent,
   sessionPathForFile,
@@ -49,6 +49,23 @@ describe("memory manager reads", () => {
     closeAllMemorySearchManagers,
   });
 
+  it("reports source eligibility before the index exists", async () => {
+    const diagnostic = await fixture.getFreshManager(
+      fixture.createConfig({ provider: "none", sources: ["memory"] }),
+      "status",
+      true,
+    );
+    expect(diagnostic.status().sourceCounts).toMatchObject([
+      {
+        source: "memory",
+        files: 0,
+        chunks: 0,
+        eligible: 1,
+        issues: [],
+      },
+    ]);
+  });
+
   it("limits targeted archive cleanup to indexed live paths without pruning unrelated sources", async () => {
     const activeId = "active-read-target";
     const archivedId = "archived-read-target";
@@ -76,16 +93,24 @@ describe("memory manager reads", () => {
     );
     expect(archive?.artifactKind).toBe("archive-artifact");
     const database = Reflect.get(manager, "db") as DatabaseSync;
-    const insert = database.prepare(
-      "INSERT INTO memory_index_sources(path, source, hash, mtime, size) VALUES(?, ?, 'retained', 1, 2)",
-    );
-    for (let index = 0; index < 2_000; index += 1) {
-      insert.run(`sessions/main/unrelated-${index}.jsonl`, "sessions");
+    const databasePath = database.location();
+    if (!databasePath) {
+      throw new Error("Expected the fixture's file-backed memory index");
     }
-    for (const sessionId of [activeId, archivedId]) {
-      insert.run(`sessions/main/${sessionId}`, "sessions");
+    {
+      // Observe the worker-published schema before seeding through a fixture writer.
+      using writer = new DatabaseSync(databasePath);
+      const insert = writer.prepare(
+        "INSERT INTO memory_index_sources(path, source, hash, mtime, size) VALUES(?, ?, 'retained', 1, 2)",
+      );
+      for (let index = 0; index < 2_000; index += 1) {
+        insert.run(`sessions/main/unrelated-${index}.jsonl`, "sessions");
+      }
+      for (const sessionId of [activeId, archivedId]) {
+        insert.run(`sessions/main/${sessionId}`, "sessions");
+      }
+      insert.run(`sessions/main/${archivedId}`, "memory");
     }
-    insert.run(`sessions/main/${archivedId}`, "memory");
     const readSources = database.prepare(
       "SELECT * FROM memory_index_sources ORDER BY path, source",
     );
@@ -118,6 +143,68 @@ describe("memory manager reads", () => {
       /\bmemory_index_sources\b/i.test(sql),
     );
     expect(sourceReads.reduce((total, read) => total + read.rows, 0)).toBeLessThanOrEqual(7);
+  });
+
+  it("inspects readonly session corpus diagnostics without changing the published index", async () => {
+    const sessionId = "diagnostic-corpus";
+    await fixture.seedSessionTranscript({
+      sessionId,
+      messages: [
+        {
+          role: "user",
+          timestamp: Date.now(),
+          content: "Violet diagnostic preference remains indexed.",
+          senderIsOwner: true,
+        },
+      ],
+    });
+    const cfg = fixture.createConfig({
+      provider: "none",
+      sources: ["sessions"],
+      sessionMemory: true,
+    });
+    const writer = await fixture.getFreshManager(cfg, "cli");
+    await writer.sync({ reason: "diagnostic-baseline", force: true });
+    const database: unknown = Reflect.get(writer, "db");
+    if (!(database instanceof DatabaseSync)) {
+      throw new Error("Expected the fixture's actual published database");
+    }
+    const snapshot = () => ({
+      sources: database.prepare("SELECT * FROM memory_index_sources ORDER BY id").all(),
+      chunks: database.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all(),
+      provenance: database
+        .prepare("SELECT * FROM memory_index_chunk_provenance ORDER BY chunk_id")
+        .all(),
+      metadata: database.prepare("SELECT * FROM memory_index_meta ORDER BY key").all(),
+      revision: database.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get(),
+      nodes: database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
+      windows: database.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
+    });
+    const before = snapshot();
+    expect(before.sources).toHaveLength(1);
+    expect(before.sources[0]).toMatchObject({
+      path: sessionPathForSessionIdentity("main", sessionId),
+      source: "sessions",
+    });
+    expect(before.chunks).toHaveLength(1);
+    expect(before.chunks[0]).toMatchObject({
+      source: "sessions",
+      text: expect.stringContaining("Violet diagnostic preference remains indexed."),
+    });
+
+    const diagnostic = await fixture.getFreshManager(cfg, "status", true);
+    try {
+      expect(diagnostic.status()).toMatchObject({
+        files: 1,
+        chunks: 1,
+        sourceCounts: [{ source: "sessions", files: 1, chunks: 1, eligible: 1, issues: [] }],
+      });
+      expect(snapshot()).toEqual(before);
+    } finally {
+      await diagnostic.close();
+    }
+    expect(database.isOpen).toBe(true);
+    expect(snapshot()).toEqual(before);
   });
 
   it("reuses diagnostic cache totals and the synchronous sync existence check", async () => {

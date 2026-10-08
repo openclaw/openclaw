@@ -22,7 +22,10 @@ const deliveryMocks = vi.hoisted(() => ({
   routeReply: vi.fn<typeof import("./route-reply.js").routeReply>(),
 }));
 
-vi.mock("./route-reply.runtime.js", () => deliveryMocks);
+vi.mock("./route-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./route-reply.js")>()),
+  ...deliveryMocks,
+}));
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: async ({ payload }: { payload: ReplyPayload }) => payload,
 }));
@@ -44,6 +47,7 @@ function createVisibleChatAcpCoordinator(
   abortSignal?: AbortSignal,
 ) {
   return createAcpDispatchDeliveryCoordinator({
+    preparedTtsPreferences: {},
     cfg,
     ctx: buildTestCtx({
       Provider: "visiblechat",
@@ -482,6 +486,7 @@ describe.each([undefined, "released"] as const)(
           },
         });
         const coordinator = createAcpDispatchDeliveryCoordinator({
+          preparedTtsPreferences: {},
           cfg: createAcpTestConfig(),
           ctx: buildTestCtx({ Provider: "visiblechat", Surface: "visiblechat" }),
           dispatcher,

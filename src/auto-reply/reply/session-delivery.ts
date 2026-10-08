@@ -1,4 +1,3 @@
-// Resolves persisted delivery route fields for session-bound replies.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -38,10 +37,7 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
 
 function isMainSessionKey(sessionKey?: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return normalizeLowercaseStringOrEmpty(sessionKey) === "main";
-  }
-  return normalizeLowercaseStringOrEmpty(parsed.rest) === "main";
+  return normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey) === "main";
 }
 
 const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);

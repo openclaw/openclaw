@@ -5,13 +5,14 @@ enum GatewaySetupRouteProbeBudget {
     static let tcpConnectTimeoutSeconds = 2.0
 }
 
-func defaultGatewayTCPReachabilityProbe(
-    host: String,
-    port: Int,
-    timeoutSeconds: Double,
-    queueLabel: String) async -> Bool
-{
-    await TCPProbe.probe(host: host, port: port, timeoutSeconds: timeoutSeconds, queueLabel: queueLabel)
+struct GatewaySetupAttempt: Equatable {
+    private let id = UUID()
+    let admissionCheckpoint: UInt64
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        // The UUID identifies the attempt; its admission checkpoint is immutable payload.
+        lhs.id == rhs.id
+    }
 }
 
 struct GatewayPendingTrustConnect {
@@ -22,9 +23,71 @@ struct GatewayPendingTrustConnect {
     let allowStoredDeviceAuth: Bool
     let suppressionLease: GatewayConnectionController.AutoConnectSuppressionLease
     let gatewayGeneration: UInt64?
+    let admissionCheckpoint: UInt64
+    var userInitiated = true
 }
 
 extension GatewayConnectionController {
+    struct TrustPrompt: Identifiable, Equatable {
+        let stableID: String
+        let gatewayName: String
+        let host: String
+        let port: Int
+        let fingerprintSha256: String
+        let isManual: Bool
+        let attemptGeneration: UInt64
+
+        var id: String {
+            self.stableID
+        }
+    }
+
+    func admitSetupLifetime(_ auth: ManualAuthOverride?, stableID: String, generation: UInt64?) -> Bool {
+        guard let auth, let expiry = auth.expiresAtMs,
+              expiry <= Int64(now().timeIntervalSince1970 * 1000)
+        else { return true }
+        let instanceID = GatewaySettingsStore.currentInstanceID()
+        let stored = GatewaySettingsStore.loadGatewayCredentials(instanceId: instanceID, gatewayStableID: stableID)
+        // The form persists setup credentials before admission. Remove only this
+        // expired bootstrap; a newer scan or Gateway device credentials must survive.
+        let saved = stored.bootstrapToken != auth.bootstrapToken || GatewaySettingsStore.saveGatewayCredentials(
+            token: stored.token,
+            bootstrapToken: nil,
+            password: stored.password,
+            gatewayStableID: stableID,
+            suppressStoredDeviceAuth: stored.suppressStoredDeviceAuth,
+            instanceId: instanceID)
+        let problem = GatewayConnectionProblem(
+            kind: .bootstrapTokenInvalid,
+            owner: .iphone,
+            title: "Setup code expired",
+            message: saved ? "Scan a new setup code. Cloudflare Access sign-in is still available." :
+                "Could not clear the expired setup code. Scan a new code to replace it.",
+            actionLabel: "Scan new code",
+            retryable: false,
+            pauseReconnect: true)
+        self.appModel?.failGatewayPreconnectVerification(
+            problem, stableID: stableID, host: nil, expectedGeneration: generation)
+        return false
+    }
+
+    func clearLegacyManualGatewayDefaults(matching stableID: String) {
+        let defaults = UserDefaults.standard
+        let host = defaults.string(forKey: "gateway.manual.host")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let port = Self.resolvedManualPort(
+            host: host,
+            port: defaults.integer(forKey: "gateway.manual.port"))
+        guard !host.isEmpty,
+              let port,
+              GatewayStableIdentifier.matches(self.manualStableID(host: host, port: port), stableID)
+        else { return }
+        defaults.set(false, forKey: "gateway.manual.enabled")
+        defaults.removeObject(forKey: "gateway.manual.host")
+        defaults.removeObject(forKey: "gateway.manual.port")
+        defaults.removeObject(forKey: "gateway.manual.tls")
+    }
+
     enum ConnectionAttemptResult: Equatable {
         case accepted
         case failed(String)
@@ -100,32 +163,6 @@ extension GatewayConnectionController {
 
         defaults.set(first.stableID, forKey: "gateway.lastDiscoveredStableID")
         GatewaySettingsStore.saveLastDiscoveredGatewayStableID(first.stableID)
-    }
-
-    func resolveDiscoveredTLSParams(
-        gateway: GatewayDiscoveryModel.DiscoveredGateway) -> GatewayTLSParams?
-    {
-        let stableID = gateway.stableID
-        let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-
-        // Never let unauthenticated discovery (TXT) override a stored pin.
-        if let stored {
-            return GatewayTLSParams(
-                required: true,
-                expectedFingerprint: stored,
-                allowTOFU: false,
-                storeKey: stableID)
-        }
-
-        if gateway.tlsEnabled || gateway.tlsFingerprintSha256 != nil {
-            return GatewayTLSParams(
-                required: true,
-                expectedFingerprint: nil,
-                allowTOFU: false,
-                storeKey: stableID)
-        }
-
-        return nil
     }
 
     func tlsProbeFailureProblem(

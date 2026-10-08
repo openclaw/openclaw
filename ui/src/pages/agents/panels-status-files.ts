@@ -27,49 +27,20 @@ import {
 } from "../../lib/presenter.ts";
 import { renderAgentContextSection } from "./panels-overview.ts";
 
-type ChannelSummaryEntry = {
-  id: string;
-  label: string;
-  accounts: ChannelAccountSnapshot[];
-};
-
-function resolveChannelLabel(snapshot: ChannelsStatusSnapshot, id: string) {
-  const meta = snapshot.channelMeta?.find((entry) => entry.id === id);
-  if (meta?.label) {
-    return meta.label;
-  }
-  return snapshot.channelLabels?.[id] ?? id;
-}
-
-function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null): ChannelSummaryEntry[] {
+function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null) {
   if (!snapshot) {
     return [];
   }
-  const ids = new Set<string>();
-  for (const id of snapshot.channelOrder ?? []) {
-    ids.add(id);
-  }
-  for (const entry of snapshot.channelMeta ?? []) {
-    ids.add(entry.id);
-  }
-  for (const id of Object.keys(snapshot.channelAccounts ?? {})) {
-    ids.add(id);
-  }
-  const ordered: string[] = [];
-  const seed = snapshot.channelOrder?.length ? snapshot.channelOrder : Array.from(ids);
-  for (const id of seed) {
-    if (!ids.has(id)) {
-      continue;
-    }
-    ordered.push(id);
-    ids.delete(id);
-  }
-  for (const id of ids) {
-    ordered.push(id);
-  }
-  return ordered.map((id) => ({
+  const ids = new Set([
+    ...(snapshot.channelOrder ?? []),
+    ...(snapshot.channelMeta ?? []).map((entry) => entry.id),
+    ...Object.keys(snapshot.channelAccounts ?? {}),
+  ]);
+  return Array.from(ids, (id) => ({
     id,
-    label: resolveChannelLabel(snapshot, id),
+    label:
+      snapshot.channelMeta?.find((entry) => entry.id === id)?.label ||
+      (snapshot.channelLabels?.[id] ?? id),
     accounts: snapshot.channelAccounts?.[id] ?? [],
   }));
 }
@@ -204,7 +175,6 @@ export function renderAgentChannels(params: {
 export function renderAgentCron(params: {
   basePath: string;
   context: AgentContext;
-  agentId: string;
   jobs: CronJob[];
   jobsTotal: number;
   jobsHasMore: boolean;

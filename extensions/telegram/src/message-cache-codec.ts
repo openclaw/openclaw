@@ -2,7 +2,7 @@ import type { Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessageBody,
@@ -54,7 +54,7 @@ type TelegramCachedMessageObservation = {
 };
 
 export function retainedMessageId(messageId: string): string | undefined {
-  const id = parseSafeMessageId(messageId);
+  const id = parseStrictPositiveInteger(messageId);
   return id !== undefined && id <= 9_999_999_999 ? String(id).padStart(10, "0") : undefined;
 }
 
@@ -91,12 +91,10 @@ function resolveMessageBody(msg: Message, preserveWhitespace: boolean): string |
 }
 
 function resolveMessageTimestamp(msg: MessageWithPromptContextTimestamp): number | undefined {
-  const promptContextTimestamp = msg.openclaw_prompt_context_timestamp_ms;
-  return typeof promptContextTimestamp === "number" && Number.isFinite(promptContextTimestamp)
-    ? promptContextTimestamp
-    : msg.date
-      ? msg.date * 1000
-      : undefined;
+  return (
+    asFiniteNumber(msg.openclaw_prompt_context_timestamp_ms) ??
+    (msg.date ? msg.date * 1000 : undefined)
+  );
 }
 
 export function normalizeMessageNode(
@@ -243,15 +241,8 @@ export function normalizeMessageNodes(
   return observations;
 }
 
-export function parseSafeMessageId(value: string | undefined): number | undefined {
-  return value === undefined ? undefined : parseStrictPositiveInteger(value);
-}
-
 export function parsePersistedCacheValue(key: string, value: unknown) {
-  if (
-    !isRecord(value) ||
-    (value.version !== undefined && value.version !== TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION)
-  ) {
+  if (!isRecord(value) || value.version !== TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION) {
     return [];
   }
   const separatorIndex = key.lastIndexOf(":");
@@ -260,24 +251,20 @@ export function parsePersistedCacheValue(key: string, value: unknown) {
   }
   const threadId = parseTelegramMessageThreadId(value.threadId);
   const botUserId = parseStrictPositiveInteger(value.botUserId);
-  const promptContextProjectionMarker =
-    value.version === TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION &&
-    isTelegramMessageFromCurrentBot(value.sourceMessage, botUserId)
-      ? parseTelegramPromptContextProjection(value.promptContextProjection)
-      : undefined;
-  const threadBinding =
-    value.version === TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION
-      ? normalizeTelegramMessageThreadBinding(value.threadBinding)
-      : undefined;
+  const promptContextProjectionMarker = isTelegramMessageFromCurrentBot(
+    value.sourceMessage,
+    botUserId,
+  )
+    ? parseTelegramPromptContextProjection(value.promptContextProjection)
+    : undefined;
+  const threadBinding = normalizeTelegramMessageThreadBinding(value.threadBinding);
   const resolvedMedia = parseTelegramResolvedMedia(value.resolvedMedia);
   return normalizeMessageNodes(value.sourceMessage, {
-    ...(threadId !== undefined ? { threadId } : {}),
-    ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
-    ...(threadBinding ? { threadBinding } : {}),
-    ...(resolvedMedia ? { resolvedMedia } : {}),
-    ...(value.version === TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION && value.historyEligible === true
-      ? { historyEligible: true }
-      : {}),
+    threadId,
+    promptContextProjectionMarker,
+    threadBinding,
+    resolvedMedia,
+    historyEligible: value.historyEligible === true,
   }).map(({ node, mode }) => ({
     key: `${key.slice(0, separatorIndex + 1)}${node.messageId}`,
     node,
@@ -339,11 +326,11 @@ export function mergeCachedMessageNode(
         ? other.resolvedMedia
         : undefined;
   return normalizeMessageNode(sourceMessage, {
-    ...(threadId !== undefined ? { threadId } : {}),
-    ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
-    ...(threadBinding ? { threadBinding } : {}),
-    ...(resolvedMedia ? { resolvedMedia } : {}),
-    ...(existing.historyEligible || incoming.historyEligible ? { historyEligible: true } : {}),
+    threadId,
+    promptContextProjectionMarker,
+    threadBinding,
+    resolvedMedia,
+    historyEligible: existing.historyEligible || incoming.historyEligible,
   });
 }
 
@@ -386,8 +373,8 @@ export function compareCachedMessageNodes(
   left: TelegramCachedMessageNode,
   right: TelegramCachedMessageNode,
 ) {
-  const leftId = parseSafeMessageId(left.messageId);
-  const rightId = parseSafeMessageId(right.messageId);
+  const leftId = parseStrictPositiveInteger(left.messageId);
+  const rightId = parseStrictPositiveInteger(right.messageId);
   if (leftId !== undefined && rightId !== undefined) {
     return leftId - rightId;
   }

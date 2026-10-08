@@ -18,6 +18,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -31,12 +32,13 @@ import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-
 const auxiliaries: ReturnType<typeof createGatewayAuxHandlers>[] = [];
 let fixture: OpenClawTestState | undefined;
 const cfg: OpenClawConfig = {
-  agents: { list: [{ id: "main" }, { id: "other" }] },
+  agents: { entries: { main: {}, other: {} } },
   mcp: { servers: { "project.docs": { command: "docs-mcp" } } },
 };
 
 function gateway() {
   const aux = createGatewayAuxHandlers({
+    scheduler: createTestGatewayScheduler(),
     log: {},
     getNativeApprovalRouteCoordinator: () => undefined,
     activateRuntimeSecrets: createTestRuntimeSecretsActivator(),

@@ -1,6 +1,3 @@
-/**
- * Handles assistant message deltas, reasoning, directives, and block replies.
- */
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
@@ -96,15 +93,18 @@ export function handleMessageUpdate(
     ctx.flushAssistantStream();
     const commentaryText = extractAssistantCommentaryText(msg);
     if (commentaryText) {
-      appendRawStream(() => ({
-        ts: Date.now(),
-        event: "assistant_text_stream",
-        runId: ctx.params.runId,
-        sessionId: (ctx.params.session as { id?: string }).id,
-        evtType: "commentary_update",
-        delta: "",
-        content: commentaryText,
-      }));
+      appendRawStream(
+        () => ({
+          ts: Date.now(),
+          event: "assistant_text_stream",
+          runId: ctx.params.runId,
+          sessionId: (ctx.params.session as { id?: string }).id,
+          evtType: "commentary_update",
+          delta: "",
+          content: commentaryText,
+        }),
+        ctx.params.sessionKey,
+      );
       emitAssistantCommentaryStreamData(ctx, msg, false, commentaryText);
     }
     return undefined;
@@ -122,20 +122,22 @@ export function handleMessageUpdate(
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
       typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
-    appendRawStream(() => ({
-      ts: Date.now(),
-      event: "assistant_thinking_stream",
-      runId: ctx.params.runId,
-      sessionId: (ctx.params.session as { id?: string }).id,
-      evtType,
-      delta: thinkingDelta,
-      content: thinkingContent,
-    }));
+    appendRawStream(
+      () => ({
+        ts: Date.now(),
+        event: "assistant_thinking_stream",
+        runId: ctx.params.runId,
+        sessionId: (ctx.params.session as { id?: string }).id,
+        evtType,
+        delta: thinkingDelta,
+        content: thinkingContent,
+      }),
+      ctx.params.sessionKey,
+    );
     // Emit-always: emitReasoningStream always reaches the bus/archive; the
     // streamReasoning rendering hook and message_tool_only source suppression
     // are gated downstream (dispatch wrapProgressCallback, #92738), so emission
     // here stays unconditional.
-    // Prefer full partial-message thinking when available; fall back to event payloads.
     const block =
       Array.isArray(msg.content) && msg.content.length === 1 ? msg.content[0] : undefined;
     const nativeThinking = block?.type === "thinking" ? block : undefined;
@@ -163,15 +165,18 @@ export function handleMessageUpdate(
   const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
   const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
 
-  appendRawStream(() => ({
-    ts: Date.now(),
-    event: "assistant_text_stream",
-    runId: ctx.params.runId,
-    sessionId: (ctx.params.session as { id?: string }).id,
-    evtType,
-    delta,
-    content,
-  }));
+  appendRawStream(
+    () => ({
+      ts: Date.now(),
+      event: "assistant_text_stream",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      evtType,
+      delta,
+      content,
+    }),
+    ctx.params.sessionKey,
+  );
 
   const partialAssistant = eventAssistantMessage;
   const priorBlockText = ctx.state.streamBlockText;
@@ -483,7 +488,6 @@ export function handleMessageUpdate(
     ) {
       openReasoningStream(ctx);
     }
-    // Detect when thinking block ends (</think> tag processed)
     if (
       !suppressMessageToolOnlySourceReplyOutput &&
       wasThinking &&

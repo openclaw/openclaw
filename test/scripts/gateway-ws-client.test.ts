@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { createGatewayWsClient } from "../../scripts/dev/gateway-ws-client.js";
+import { createGatewayWsClient } from "../../scripts/lib/gateway-ws-client.js";
 
 let server: Server | undefined;
 let wss: WebSocketServer | undefined;

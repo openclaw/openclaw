@@ -59,10 +59,32 @@ Runtime selections resolve in the requesting agent's scope before becoming owner
 
 ## Compute workers
 
-Code-mode execution and compaction planning use the reusable `WorkerTaskPool`.
-Their pools share a CPU admission limit of `max(1, availableParallelism() - 1)`
+Code-mode execution, compaction planning, and file-tool planning use the reusable `WorkerTaskPool`.
+Its scheduler and task protocol live in the private `@openclaw/worker-runtime`
+package. The OpenClaw host adapter owns native worker creation, resource custody,
+and process accounting. Plugins use the public
+[worker SDK entrypoints](/plugins/sdk-overview/infrastructure#worker-task-admission).
+
+The package keeps task results, execution settlement, and resource release as
+separate facts. A retained task can return a result while its owner still holds
+the worker and input charge. Native operations, database resources, and cleanup
+receipts make that distinction necessary; a general-purpose task queue alone
+does not replace those owners. The
+[package contributor guide](https://github.com/openclaw/openclaw/blob/main/packages/worker-runtime/README.md)
+explains the host boundary, async context lifetime, and reproducible benchmarks.
+
+These compute pools share a CPU admission limit of `max(1, availableParallelism() - 1)`
 within the calling isolate, reserving a CPU where possible for the Gateway. Ordered
 database and model-generation workers keep their existing independent limits.
+
+File-tool workers perform pure edit matching, Unicode normalization, and diff
+computation. One prepared patch supplies both display and unified-patch receipts,
+including previews. The file-tool caller keeps the mutation queue, filesystem
+access, persisted-byte verification, and authority checks; it revalidates authority
+and cancellation after planning before changing files. Write receipts retain their
+existing size and edit-distance limits.
+The shared runtime-process registry resolves the planning worker in both the
+installed package and the sealed portable-worker bundle.
 
 Admission includes queued, preparing, and running tasks. Each pool defaults to
 128 pending tasks and 256 MiB of producer-reported retained input; compute pools

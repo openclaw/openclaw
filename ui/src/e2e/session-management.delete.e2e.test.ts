@@ -150,8 +150,10 @@ suite.define(() => {
           if (!client?.recoveryScope) {
             throw new Error("Gateway recovery scope unavailable");
           }
+          const recoveryScope = client.recoveryScope;
           const { gatewayOwner, key: storageKey } = outbox.storageTargetForGateway(
             client.gatewayUrl,
+            recoveryScope,
           );
           const sessions = Object.fromEntries(
             sessionKeys.map((key, index) => [
@@ -159,16 +161,22 @@ suite.define(() => {
               {
                 draft: `local ${key}`,
                 draftRevision: index + 1,
-                queue: [{ id: `queued-${index}`, text: "queued", createdAt: index }],
+                queue: [
+                  {
+                    id: `queued-${index}`,
+                    text: "queued",
+                    createdAt: index,
+                    storageScope: JSON.stringify([gatewayOwner, recoveryScope]),
+                  },
+                ],
                 updatedAt: index + 1,
               },
             ]),
           );
           sessionStorage.setItem(
-            `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}`,
+            storageKey,
             JSON.stringify({ version: 4, gatewayOwner, sessions, recovery: {} }),
           );
-          const recoveryScope = client.recoveryScope;
           await Promise.all(
             sessionKeys.map((key, index) =>
               store.writeDurableComposerDraft(
@@ -218,7 +226,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.delete", { after: requestsBeforeReplacement });
       const inFlightRevision = await page.evaluate(
         async ({ store, key, scopeOwner }) => {
-          const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const storageKey = scopeOwner.storageKey;
           const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
             sessions: Record<string, unknown>;
           };
@@ -248,7 +256,7 @@ suite.define(() => {
         .poll(() =>
           page.evaluate(
             async ({ store, key, scopeOwner }) => {
-              const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+              const storageKey = scopeOwner.storageKey;
               const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
                 sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
               };
@@ -270,7 +278,7 @@ suite.define(() => {
 
       await page.evaluate(
         async ({ store, key, scopeOwner }) => {
-          const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const storageKey = scopeOwner.storageKey;
           const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
             sessions: Record<string, { draft?: string; draftRevision?: number }>;
           };
@@ -309,11 +317,9 @@ suite.define(() => {
         .poll(() =>
           page.evaluate(
             async ({ store, sessionKeys, scopeOwner }) => {
-              const local = JSON.parse(
-                sessionStorage.getItem(
-                  `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`,
-                ) ?? "{}",
-              ) as { sessions?: Record<string, { draft?: string; queue?: unknown[] }> };
+              const local = JSON.parse(sessionStorage.getItem(scopeOwner.storageKey) ?? "{}") as {
+                sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
+              };
               return Object.fromEntries(
                 await Promise.all(
                   sessionKeys.map(async (key) => {
@@ -397,12 +403,6 @@ suite.define(() => {
       );
 
       await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...replacement,
-        reason: "update",
-        sessionKey: key,
-      });
-      await replacementLabel.waitFor();
       await gateway.deferNext("sessions.delete");
       await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
 
@@ -417,7 +417,16 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".sessions-error[role=alert]").textContent())
         .toContain("changed before deletion. Retry.");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...replacement,
+        reason: "update",
+        sessionKey: key,
+      });
       await replacementLabel.waitFor();
+      expect(await page.getByRole("checkbox", { name: `Select session: ${key}` }).isChecked()).toBe(
+        false,
+      );
+      expect(await gateway.getRequests("sessions.delete")).toHaveLength(1);
       await captureUiProof(suite, page, "sessions-bulk-delete-replacement-protected.png");
     } finally {
       await context.close();

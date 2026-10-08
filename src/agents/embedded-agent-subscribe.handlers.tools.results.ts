@@ -8,6 +8,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
+import type {
+  ExecApprovalPendingReplyParams,
+  ExecApprovalUnavailableReplyParams,
+} from "../infra/exec-approval-reply.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
   parseInteractiveParam,
@@ -330,22 +334,6 @@ export function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null
   };
 }
 
-function shouldSuppressStructuredMediaToolOutput(params: {
-  toolName: string;
-  rawToolName: string;
-  isToolError: boolean;
-  hasDeliverableStructuredMedia: boolean;
-  builtinToolNames?: ReadonlySet<string>;
-}): boolean {
-  return (
-    params.toolName === "tts" &&
-    params.rawToolName.trim() === "tts" &&
-    params.builtinToolNames?.has("tts") === true &&
-    !params.isToolError &&
-    params.hasDeliverableStructuredMedia
-  );
-}
-
 export function buildPatchSummaryText(summary: ApplyPatchSummary): string {
   const parts = (["added", "modified", "deleted"] as const).flatMap((kind) =>
     summary[kind].length > 0 ? [`${summary[kind].length} ${kind}`] : [],
@@ -426,17 +414,7 @@ function queuePendingToolMedia(
   }
 }
 
-function readExecApprovalPendingDetails(result: unknown): {
-  approvalId: string;
-  approvalSlug: string;
-  expiresAtMs?: number;
-  allowedDecisions?: readonly ExecApprovalDecision[];
-  host: "gateway" | "node";
-  command: string;
-  cwd?: string;
-  nodeId?: string;
-  warningText?: string;
-} | null {
+function readExecApprovalPendingDetails(result: unknown): ExecApprovalPendingReplyParams | null {
   const outer = asOptionalObjectRecord(result);
   const details = readRecordField(outer?.details) ?? outer;
   if (details?.status !== "approval-pending") {
@@ -467,16 +445,9 @@ function readExecApprovalPendingDetails(result: unknown): {
   };
 }
 
-function readExecApprovalUnavailableDetails(result: unknown): {
-  reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
-  warningText?: string;
-  channel?: string;
-  channelLabel?: string;
-  accountId?: string;
-  sentApproverDms?: boolean;
-  host?: "gateway" | "node";
-  nodeId?: string;
-} | null {
+function readExecApprovalUnavailableDetails(
+  result: unknown,
+): ExecApprovalUnavailableReplyParams | null {
   const outer = asOptionalObjectRecord(result);
   const details = readRecordField(outer?.details) ?? outer;
   if (details?.status !== "approval-unavailable") {
@@ -575,14 +546,14 @@ export async function emitToolResultOutput(params: {
         ctx.trustedLocalMediaToolNames,
       )
     : [];
-  const shouldEmitOutput =
-    !shouldSuppressStructuredMediaToolOutput({
-      toolName,
-      rawToolName,
-      isToolError,
-      hasDeliverableStructuredMedia: hasStructuredMedia && mediaUrls.length > 0,
-      builtinToolNames: ctx.builtinToolNames,
-    }) && ctx.shouldEmitToolOutput();
+  const suppressStructuredTtsOutput =
+    toolName === "tts" &&
+    rawToolName.trim() === "tts" &&
+    ctx.builtinToolNames?.has("tts") === true &&
+    !isToolError &&
+    hasStructuredMedia &&
+    mediaUrls.length > 0;
+  const shouldEmitOutput = !suppressStructuredTtsOutput && ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
@@ -593,14 +564,7 @@ export async function emitToolResultOutput(params: {
     }
   }
 
-  if (isToolError) {
-    return;
-  }
-
-  if (!mediaReply) {
-    return;
-  }
-  if (mediaUrls.length === 0) {
+  if (isToolError || !mediaReply || mediaUrls.length === 0) {
     return;
   }
   const autoDeliveryMediaUrls = new Set(

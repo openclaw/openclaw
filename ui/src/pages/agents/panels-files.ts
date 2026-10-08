@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { AgentFileEntry, AgentsFilesListResult } from "../../api/types.ts";
+import type { AgentFileEntry } from "../../api/types.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -11,15 +11,11 @@ import { renderSettingsEmpty, renderSettingsSection } from "../../components/set
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import {
-  countLines,
-  countWords,
-  estimateReadingTimeLabel,
-  resetAgentFilePreview,
-  setPreviewExpandButtonState,
-} from "./agent-file-preview-state.ts";
+import { pathDisplayName } from "../../lib/path-display.ts";
+import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
+import { agentFilePreview } from "./agent-file-preview.ts";
 import { renderAgentFileError } from "./file-conflict-callout.ts";
-import { hasAgentFileContent } from "./files.ts";
+import { hasAgentFileContent, type AgentFilesViewState } from "./files.ts";
 
 function getExtensionLabel(fileName: string) {
   const ext = fileName.split(".").pop()?.trim().toLowerCase();
@@ -43,14 +39,7 @@ function formatWorkspaceRelativePath(filePath: string, workspace: string | null 
   if (normalizedWorkspace && normalizedPath.startsWith(`${normalizedWorkspace}/`)) {
     return normalizedPath.slice(normalizedWorkspace.length + 1) || ".";
   }
-  const pathParts = normalizedPath.split(/[\\/]+/);
-  for (let index = pathParts.length - 1; index >= 0; index -= 1) {
-    const pathPart = pathParts[index];
-    if (pathPart) {
-      return pathPart;
-    }
-  }
-  return normalizedPath;
+  return pathDisplayName(normalizedPath);
 }
 
 function toDomId(value: string) {
@@ -58,25 +47,38 @@ function toDomId(value: string) {
   return normalized.replace(/^-+|-+$/g, "") || "preview";
 }
 
-export function renderAgentFiles(params: {
-  agentId: string;
-  agentFilesList: AgentsFilesListResult | null;
-  agentFilesLoading: boolean;
-  agentFilesError: string | null;
-  agentFileActive: string | null;
-  agentFileContents: Record<string, string>;
-  agentFileDrafts: Record<string, string>;
-  agentFileSaving: boolean;
-  agentFileConflict: string | null;
-  canWrite: boolean;
-  onLoadFiles: (agentId: string) => void;
-  onSelectFile: (name: string) => void;
-  onFileDraftChange: (name: string, content: string) => void;
-  onFileReset: (name: string) => void;
-  onFileSave: (name: string) => void;
-  onFileReload: (name: string) => void;
-  onFileOverwrite: (name: string) => void;
-}) {
+function closeAgentFilePreview(event: Event, focusEditor = false) {
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLElement)) {
+    return;
+  }
+  const modal = button.closest<OpenClawModalDialog>("openclaw-modal-dialog");
+  if (!modal) {
+    return;
+  }
+  if (focusEditor) {
+    const textarea = modal
+      .closest(".settings-group")
+      ?.querySelector<HTMLElement>(".agent-file-textarea");
+    modal.setReturnFocusTarget(textarea ?? null);
+  }
+  modal.hide();
+  resetAgentFilePreview(modal);
+}
+
+export function renderAgentFiles(
+  params: AgentFilesViewState & {
+    agentId: string;
+    canWrite: boolean;
+    onLoadFiles: (agentId: string) => void;
+    onSelectFile: (name: string) => void;
+    onFileDraftChange: (name: string, content: string) => void;
+    onFileReset: (name: string) => void;
+    onFileSave: (name: string) => void;
+    onFileReload: (name: string) => void;
+    onFileOverwrite: (name: string) => void;
+  },
+) {
   const list = params.agentFilesList?.agentId === params.agentId ? params.agentFilesList : null;
   const files = list?.files ?? [];
   const active = params.agentFileActive ?? null;
@@ -87,41 +89,18 @@ export function renderAgentFiles(params: {
   const tabFiles = files.filter((file) => !isCreatable(file));
   const creatableFiles = files.filter(isCreatable);
   const activeEntry = active ? (files.find((file) => file.name === active) ?? null) : null;
+  const conflictName = active && params.agentFileConflict === active ? active : null;
+  const showMissing = activeEntry?.missing && !conflictName;
   const hasContent = active ? hasAgentFileContent(params, active) : false;
   const hasBase = active ? Object.hasOwn(params.agentFileContents, active) : false;
   const baseContent = active ? (params.agentFileContents[active] ?? "") : "";
   const draft = active ? (params.agentFileDrafts[active] ?? baseContent) : "";
   const isDirty = hasContent && (!hasBase || draft !== baseContent);
-  const previewHtml = activeEntry
-    ? toSanitizedMarkdownHtml(draft, { codeBlockChrome: "none", mode: "document" })
-    : "";
-  const draftByteSize = formatBytes(new TextEncoder().encode(draft).length);
-  const draftWordCount = countWords(draft);
-  const draftLineCount = countLines(draft);
-  const activePathLabel = activeEntry
-    ? formatWorkspaceRelativePath(activeEntry.path, list?.workspace)
-    : "";
-  const previewTitleId = activeEntry ? `agent-file-preview-title-${toDomId(activeEntry.name)}` : "";
-  const previewStatusLabel = activeEntry?.missing
-    ? t("agents.files.willCreateOnSave")
-    : isDirty
-      ? t("agents.files.liveDraftPreview")
-      : t("agents.files.savedPreview");
-  const previewStatusClass = activeEntry?.missing
-    ? "is-missing"
-    : isDirty
-      ? "is-dirty"
-      : "is-synced";
-  const previewUpdatedLabel = activeEntry?.updatedAtMs
-    ? t("agents.files.updated", { time: formatRelativeTimestamp(activeEntry.updatedAtMs) })
-    : activeEntry?.missing
-      ? t("agents.files.notCreatedYet")
-      : t("agents.files.updatedUnknown");
 
   return html`
     ${renderAgentFileError({
       error: params.agentFilesError,
-      conflictName: active && params.agentFileConflict === active ? active : null,
+      conflictName,
       busy: params.agentFilesLoading || params.agentFileSaving,
       canWrite: params.canWrite,
       onReload: params.onFileReload,
@@ -158,7 +137,7 @@ export function renderAgentFiles(params: {
                       value: file.name,
                       label: file.name.replace(/\.md$/i, ""),
                       badge:
-                        file.missing && file.expectedAbsent !== true
+                        file.missing && file.expectedAbsent !== true && file.name !== conflictName
                           ? t("agents.files.missing")
                           : undefined,
                       // File reads are serialized; changing the active tab mid-read would
@@ -249,7 +228,7 @@ export function renderAgentFiles(params: {
                             </div>
                           </div>
                           ${
-                            activeEntry.missing
+                            showMissing
                               ? html`<div class="callout info">
                                   ${
                                     activeEntry.expectedAbsent === true
@@ -290,138 +269,156 @@ export function renderAgentFiles(params: {
                               }
                             }}
                           >
-                            <div class="md-preview-dialog__panel">
-                              <div class="md-preview-dialog__header">
-                                <div class="md-preview-dialog__header-main">
-                                  <div class="md-preview-dialog__eyebrow">
-                                    ${icons.scrollText}
-                                    <span>${getExtensionLabel(activeEntry.name)}</span>
+                            ${agentFilePreview(
+                              [params.agentId, activeEntry.name, hasContent],
+                              () => {
+                                const previewHtml = toSanitizedMarkdownHtml(draft, {
+                                  codeBlockChrome: "none",
+                                  mode: "document",
+                                });
+                                const draftByteSize = formatBytes(
+                                  new TextEncoder().encode(draft).length,
+                                );
+                                const trimmedDraft = draft.trim();
+                                const draftWordCount = trimmedDraft
+                                  ? trimmedDraft.split(/\s+/).length
+                                  : 0;
+                                const draftLineCount =
+                                  draft.length === 0 ? 0 : draft.split(/\r?\n/).length;
+                                const readingTimeLabel =
+                                  draftWordCount <= 0
+                                    ? t("agents.files.emptyDraft")
+                                    : t("agents.files.minRead", {
+                                        count: String(
+                                          Math.max(1, Math.round(draftWordCount / 220)),
+                                        ),
+                                      });
+                                const activePathLabel = formatWorkspaceRelativePath(
+                                  activeEntry.path,
+                                  list?.workspace,
+                                );
+                                const previewTitleId = `agent-file-preview-title-${toDomId(activeEntry.name)}`;
+                                const previewStatusLabel = showMissing
+                                  ? t("agents.files.willCreateOnSave")
+                                  : isDirty || conflictName
+                                    ? t("agents.files.liveDraftPreview")
+                                    : t("agents.files.savedPreview");
+                                const previewStatusClass = showMissing
+                                  ? "is-missing"
+                                  : isDirty || conflictName
+                                    ? "is-dirty"
+                                    : "is-synced";
+                                const previewUpdatedLabel = activeEntry?.updatedAtMs
+                                  ? t("agents.files.updated", {
+                                      time: formatRelativeTimestamp(activeEntry.updatedAtMs),
+                                    })
+                                  : showMissing
+                                    ? t("agents.files.notCreatedYet")
+                                    : t("agents.files.updatedUnknown");
+                                return html`<div class="md-preview-dialog__panel">
+                                  <div class="md-preview-dialog__header">
+                                    <div class="md-preview-dialog__header-main">
+                                      <div class="md-preview-dialog__eyebrow">
+                                        ${icons.scrollText}
+                                        <span>${getExtensionLabel(activeEntry.name)}</span>
+                                      </div>
+                                      <div class="md-preview-dialog__title-wrap">
+                                        <div
+                                          id=${previewTitleId}
+                                          class="md-preview-dialog__title"
+                                          translate="no"
+                                        >
+                                          ${activeEntry.name}
+                                        </div>
+                                        <div class="md-preview-dialog__path mono" translate="no">
+                                          ${activePathLabel}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div class="md-preview-dialog__actions">
+                                      <openclaw-tooltip .content=${t("agents.files.expandPreview")}>
+                                        <button
+                                          type="button"
+                                          class="btn btn--sm md-preview-icon-btn md-preview-expand-btn"
+                                          aria-label=${t("agents.files.expandPreview")}
+                                          aria-pressed="false"
+                                          @click=${(e: Event) => {
+                                            const btn = e.currentTarget;
+                                            if (!(btn instanceof HTMLElement)) {
+                                              return;
+                                            }
+                                            const panel = btn.closest(".md-preview-dialog__panel");
+                                            if (!panel) {
+                                              return;
+                                            }
+                                            const isFullscreen =
+                                              panel.classList.toggle("fullscreen");
+                                            btn
+                                              .closest("openclaw-modal-dialog")
+                                              ?.classList.toggle("fullscreen", isFullscreen);
+                                            setPreviewExpandButtonState(btn, isFullscreen);
+                                          }}
+                                        >
+                                          <span class="when-normal" aria-hidden="true"
+                                            >${icons.maximize}</span
+                                          ><span class="when-fullscreen" aria-hidden="true"
+                                            >${icons.minimize}</span
+                                          >
+                                        </button>
+                                      </openclaw-tooltip>
+                                      ${(
+                                        [
+                                          ["editFile", icons.edit, true],
+                                          ["closePreview", icons.x, false],
+                                        ] as const
+                                      ).map(
+                                        ([label, icon, focusEditor]) => html`
+                                          <openclaw-tooltip .content=${t(`agents.files.${label}`)}>
+                                            <button
+                                              type="button"
+                                              class="btn btn--sm md-preview-icon-btn"
+                                              aria-label=${t(`agents.files.${label}`)}
+                                              @click=${(event: Event) => closeAgentFilePreview(event, focusEditor)}
+                                            >
+                                              <span aria-hidden="true">${icon}</span>
+                                            </button>
+                                          </openclaw-tooltip>
+                                        `,
+                                      )}
+                                    </div>
                                   </div>
-                                  <div class="md-preview-dialog__title-wrap">
+                                  <div class="md-preview-dialog__meta">
                                     <div
-                                      id=${previewTitleId}
-                                      class="md-preview-dialog__title"
-                                      translate="no"
+                                      class="md-preview-dialog__chip ${previewStatusClass}"
+                                      data-priority="essential"
                                     >
-                                      ${activeEntry.name}
+                                      <strong>${previewStatusLabel}</strong>
                                     </div>
-                                    <div class="md-preview-dialog__path mono" translate="no">
-                                      ${activePathLabel}
+                                    <div class="md-preview-dialog__chip" data-priority="essential">
+                                      <strong>${readingTimeLabel}</strong>
+                                      <span
+                                        >${t("agents.files.words", {
+                                          count: String(draftWordCount),
+                                        })}</span
+                                      >
+                                    </div>
+                                    <div class="md-preview-dialog__chip" data-priority="secondary">
+                                      <strong>${draftLineCount}</strong>
+                                      <span>${t("agents.files.lines")}</span>
+                                    </div>
+                                    <div class="md-preview-dialog__chip" data-priority="essential">
+                                      <strong>${draftByteSize}</strong>
+                                      <span>${previewUpdatedLabel}</span>
                                     </div>
                                   </div>
-                                </div>
-                                <div class="md-preview-dialog__actions">
-                                  <openclaw-tooltip .content=${t("agents.files.expandPreview")}>
-                                    <button
-                                      type="button"
-                                      class="btn btn--sm md-preview-icon-btn md-preview-expand-btn"
-                                      aria-label=${t("agents.files.expandPreview")}
-                                      aria-pressed="false"
-                                      @click=${(e: Event) => {
-                                        const btn = e.currentTarget;
-                                        if (!(btn instanceof HTMLElement)) {
-                                          return;
-                                        }
-                                        const panel = btn.closest(".md-preview-dialog__panel");
-                                        if (!panel) {
-                                          return;
-                                        }
-                                        const isFullscreen = panel.classList.toggle("fullscreen");
-                                        btn
-                                          .closest("openclaw-modal-dialog")
-                                          ?.classList.toggle("fullscreen", isFullscreen);
-                                        setPreviewExpandButtonState(btn, isFullscreen);
-                                      }}
-                                    >
-                                      <span class="when-normal" aria-hidden="true"
-                                        >${icons.maximize}</span
-                                      ><span class="when-fullscreen" aria-hidden="true"
-                                        >${icons.minimize}</span
-                                      >
-                                    </button>
-                                  </openclaw-tooltip>
-                                  <openclaw-tooltip .content=${t("agents.files.editFile")}>
-                                    <button
-                                      type="button"
-                                      class="btn btn--sm md-preview-icon-btn"
-                                      aria-label=${t("agents.files.editFile")}
-                                      @click=${(e: Event) => {
-                                        const button = e.currentTarget;
-                                        if (!(button instanceof HTMLElement)) {
-                                          return;
-                                        }
-                                        const modal =
-                                          button.closest<OpenClawModalDialog>(
-                                            "openclaw-modal-dialog",
-                                          );
-                                        const textarea = modal
-                                          ?.closest(".settings-group")
-                                          ?.querySelector<HTMLElement>(".agent-file-textarea");
-                                        modal?.setReturnFocusTarget(textarea ?? null);
-                                        modal?.hide();
-                                        if (modal) {
-                                          resetAgentFilePreview(modal);
-                                        }
-                                      }}
-                                    >
-                                      <span aria-hidden="true">${icons.edit}</span>
-                                    </button>
-                                  </openclaw-tooltip>
-                                  <openclaw-tooltip .content=${t("agents.files.closePreview")}>
-                                    <button
-                                      type="button"
-                                      class="btn btn--sm md-preview-icon-btn"
-                                      aria-label=${t("agents.files.closePreview")}
-                                      @click=${(e: Event) => {
-                                        const button = e.currentTarget;
-                                        if (!(button instanceof HTMLElement)) {
-                                          return;
-                                        }
-                                        const modal =
-                                          button.closest<OpenClawModalDialog>(
-                                            "openclaw-modal-dialog",
-                                          );
-                                        modal?.hide();
-                                        if (modal) {
-                                          resetAgentFilePreview(modal);
-                                        }
-                                      }}
-                                    >
-                                      <span aria-hidden="true">${icons.x}</span>
-                                    </button>
-                                  </openclaw-tooltip>
-                                </div>
-                              </div>
-                              <div class="md-preview-dialog__meta">
-                                <div
-                                  class="md-preview-dialog__chip ${previewStatusClass}"
-                                  data-priority="essential"
-                                >
-                                  <strong>${previewStatusLabel}</strong>
-                                </div>
-                                <div class="md-preview-dialog__chip" data-priority="essential">
-                                  <strong>${estimateReadingTimeLabel(draftWordCount)}</strong>
-                                  <span
-                                    >${t("agents.files.words", {
-                                      count: String(draftWordCount),
-                                    })}</span
-                                  >
-                                </div>
-                                <div class="md-preview-dialog__chip" data-priority="secondary">
-                                  <strong>${draftLineCount}</strong>
-                                  <span>${t("agents.files.lines")}</span>
-                                </div>
-                                <div class="md-preview-dialog__chip" data-priority="essential">
-                                  <strong>${draftByteSize}</strong>
-                                  <span>${previewUpdatedLabel}</span>
-                                </div>
-                              </div>
-                              <div class="md-preview-dialog__body">
-                                <article class="md-preview-dialog__reader sidebar-markdown">
-                                  ${unsafeHTML(previewHtml)}
-                                </article>
-                              </div>
-                            </div>
+                                  <div class="md-preview-dialog__body">
+                                    <article class="md-preview-dialog__reader sidebar-markdown">
+                                      ${unsafeHTML(previewHtml)}
+                                    </article>
+                                  </div>
+                                </div> `;
+                              },
+                            )}
                           </openclaw-modal-dialog>
                         `
                   }

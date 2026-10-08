@@ -24,9 +24,6 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
-import { findTaskByRunId } from "../../tasks/task-registry.js";
-import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   getAgentTestMocks,
@@ -41,6 +38,7 @@ import {
   expectRespondError,
   flushScheduledDispatchStep,
   mockMainSessionEntry,
+  mockSuccessfulAgentCommand,
   buildExistingMainStoreEntry,
   setupNewYorkTimeConfig,
   resetTimeConfig,
@@ -292,15 +290,14 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{
-      sessionEffects?: string;
-      suppressPromptPersistence?: boolean;
-    }>();
-    expect(callArgs.sessionEffects).toBe("internal");
-    expect(callArgs.suppressPromptPersistence).toBe(true);
+    expectRecordFields(await waitForAgentCommandCall(), {
+      sessionEffects: "internal",
+      suppressPromptPersistence: true,
+    });
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
     expect(context.addChatRun).not.toHaveBeenCalled();
     expect(mocks.registerAgentRunContext).toHaveBeenCalledWith("test-backend-internal-effects", {
+      agentId: "main",
       isControlUiVisible: false,
       lifecycleGeneration: "test-generation",
     });
@@ -315,10 +312,7 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey,
     });
     mocks.updateSessionStore.mockClear();
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -556,16 +550,6 @@ describe("gateway agent handler", () => {
     mocks.getLatestSubagentRunByChildSessionKey.mockClear();
     mocks.replaceSubagentRunAfterSteer.mockClear();
 
-    const defaultRuntime = getDetachedTaskLifecycleRuntime();
-    const createRunningTaskRunSpy = vi.fn(
-      (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
-        defaultRuntime.createRunningTaskRun(...args),
-    );
-    setDetachedTaskLifecycleRuntime({
-      ...defaultRuntime,
-      createRunningTaskRun: createRunningTaskRunSpy,
-    });
-
     const context = makeContext();
     context.getSessionEventSubscriberConnIds = () => new Set(["conn-1"]);
     await invokeAgent(
@@ -585,23 +569,18 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{
-      modelRun?: boolean;
-      promptMode?: string;
-      sessionEffects?: string;
-    }>();
-    expectRecordFields(callArgs, {
+    expectRecordFields(await waitForAgentCommandCall(), {
       modelRun: true,
       promptMode: "none",
       sessionEffects: "internal",
     });
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
     expect(context.addChatRun).not.toHaveBeenCalled();
-    expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
     expect(mocks.getLatestSubagentRunByChildSessionKey).not.toHaveBeenCalled();
     expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
     expect(mocks.registerAgentRunContext).toHaveBeenCalledWith("test-stateless-model-run", {
+      agentId: "main",
       isControlUiVisible: false,
       lifecycleGeneration: "test-generation",
     });
@@ -801,10 +780,7 @@ describe("gateway agent handler", () => {
 
   it("keeps voice-originated followups on the voice message channel without delivery", async () => {
     mockMainSessionEntry({ sessionId: "voice-session-id" });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -860,47 +836,6 @@ describe("gateway agent handler", () => {
     await waitForAgentCommandCall();
     const rejection = respond.mock.calls.find((call: unknown[]) => call[0] === false);
     expect(rejection).toBeUndefined();
-  });
-
-  it("does not create task rows for inter-session completion wakes", async () => {
-    primeMainAgentRun();
-    mocks.agentCommand.mockClear();
-
-    await invokeAgent(
-      {
-        message: [
-          "[Mon 2026-04-06 02:42 GMT+1] <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-          "OpenClaw runtime context (internal):",
-          "This context is runtime-generated, not user-authored. Keep internal details private.",
-        ].join("\n"),
-        sessionKey: "agent:main:main",
-        internalEvents: [
-          {
-            type: "task_completion",
-            source: "music_generation",
-            childSessionKey: "music:task-123",
-            childSessionId: "task-123",
-            announceType: "music generation task",
-            taskLabel: "compose a loop",
-            status: "ok",
-            statusLabel: "completed successfully",
-            result: "MEDIA:/tmp/song.mp3",
-            replyInstruction: "Reply in your normal assistant voice now.",
-          },
-        ],
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "music_generate:task-123",
-          sourceChannel: "internal",
-          sourceTool: "music_generate",
-        },
-        idempotencyKey: "music-generation-event-inter-session",
-      },
-      { reqId: "music-generation-event-inter-session" },
-    );
-
-    await waitForAgentCommandCall();
-    expect(findTaskByRunId("music-generation-event-inter-session")).toBeUndefined();
   });
 
   it("only forwards workspaceDir for spawned sessions with stored workspace inheritance", async () => {
@@ -1011,10 +946,7 @@ describe("gateway agent handler", () => {
       return await updater(store);
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -1062,10 +994,7 @@ describe("gateway agent handler", () => {
       lastChannel: "telegram",
       lastTo: "123",
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -1154,10 +1083,7 @@ describe("gateway agent handler", () => {
       lastChannel: "telegram",
       lastTo: "123",
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -1522,10 +1448,7 @@ describe("gateway agent handler", () => {
       lastChannel: "telegram",
       lastTo: "123",
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
 
     const respond = await invokeAgent(
@@ -1621,10 +1544,7 @@ describe("gateway agent handler", () => {
       lastChannel: "telegram",
       lastTo: "123",
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {

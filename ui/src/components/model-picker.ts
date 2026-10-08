@@ -17,7 +17,6 @@ type ModelPickerParams = {
   options: readonly ModelPickerOption[];
   disabled?: boolean;
   title?: string;
-  className?: string;
   placement?: "top" | "bottom";
   showSelectedDetail?: boolean;
   groupByProvider?: boolean;
@@ -45,6 +44,10 @@ export function renderModelPicker(params: ModelPickerParams) {
     ...params.options.map((option) => ({ ...option, description: option.detail })),
     ...(params.custom ? [{ value: customValue, label: params.custom.label }] : []),
   ];
+  const selectedIndex = options.findIndex((option) => option.value === params.value);
+  if (selectedIndex > 0) {
+    options.unshift(...options.splice(selectedIndex, 1));
+  }
   return html`
     <div class="model-picker">
       ${renderPicker({
@@ -71,7 +74,7 @@ export function renderModelPicker(params: ModelPickerParams) {
           : undefined,
         showOptionTooltips: false,
         showSelectedDescription: params.showSelectedDetail,
-        className: `model-picker__select ${params.className ?? ""}`,
+        className: "model-picker__select ",
         onOpen: params.onOpen,
         renderLeading: (option) =>
           option.provider

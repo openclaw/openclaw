@@ -1,14 +1,10 @@
-// Signal plugin module implements message actions behavior.
 import {
   createActionGate,
   jsonResult,
   readStringParam,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageActionName,
-} from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { removeReactionSignal, sendReactionSignal } from "../reaction-runtime-api.js";
@@ -34,32 +30,6 @@ function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId
   return { recipient: normalizeSignalReactionRecipient(withoutSignal) };
 }
 
-async function mutateSignalReaction(params: {
-  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
-  accountId?: string;
-  target: { recipient?: string; groupId?: string };
-  timestamp: number;
-  emoji: string;
-  remove?: boolean;
-  targetAuthor?: string;
-  targetAuthorUuid?: string;
-  assertDirectAdapterHandoff?: () => void;
-}) {
-  const options = {
-    cfg: params.cfg,
-    accountId: params.accountId,
-    groupId: params.target.groupId,
-    targetAuthor: params.targetAuthor,
-    targetAuthorUuid: params.targetAuthorUuid,
-    ...(params.assertDirectAdapterHandoff
-      ? { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff }
-      : {}),
-  };
-  const mutateReaction = params.remove ? removeReactionSignal : sendReactionSignal;
-  await mutateReaction(params.target.recipient ?? "", params.timestamp, params.emoji, options);
-  return jsonResult({ ok: true, [params.remove ? "removed" : "added"]: params.emoji });
-}
-
 export const signalMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg, accountId }) => {
     const configuredAccounts = accountId
@@ -71,15 +41,10 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       return null;
     }
 
-    const actions = new Set<ChannelMessageActionName>(["send"]);
     const reactionsEnabled = configuredAccounts.some((account) =>
       createActionGate(account.config.actions)("reactions"),
     );
-    if (reactionsEnabled) {
-      actions.add("react");
-    }
-
-    return { actions: Array.from(actions) };
+    return { actions: reactionsEnabled ? ["send", "react"] : ["send"] };
   },
   supportsAction: ({ action }) => action === "react",
   prepareSendPayload: ({ ctx, payload, replyToId, replyToIdSource }) => {
@@ -165,17 +130,16 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       if (!emoji) {
         throw new Error(`Emoji required to ${remove ? "remove" : "add"} reaction.`);
       }
-      return await mutateSignalReaction({
+      const mutateReaction = remove ? removeReactionSignal : sendReactionSignal;
+      await mutateReaction(target.recipient ?? "", timestamp, emoji, {
         cfg,
         accountId: account.accountId,
-        target,
-        timestamp,
-        emoji,
-        remove: Boolean(remove),
+        groupId: target.groupId,
         targetAuthor,
         targetAuthorUuid,
-        assertDirectAdapterHandoff,
+        ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
       });
+      return jsonResult({ ok: true, [remove ? "removed" : "added"]: emoji });
     }
 
     throw new Error(`Action ${action} not supported for ${providerId}.`);

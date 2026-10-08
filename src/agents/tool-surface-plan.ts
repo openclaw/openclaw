@@ -1,3 +1,4 @@
+import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import {
@@ -14,7 +15,7 @@ import {
   resolveToolSearchConfig,
 } from "./tool-search.js";
 
-type AgentToolSurfacePlanParams = {
+export type AgentToolSurfacePlanParams = {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
@@ -79,10 +80,23 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
   const toolSearchControlsEnabled =
     toolsAvailable && !codeModeControlsEnabled && toolSearchConfig.enabled;
   return {
+    codeModeConfig,
     codeModeControlsEnabled,
     toolSearchControlsEnabled,
     toolSearchConfig,
     toolSearchRuntimeConfig,
+  };
+}
+
+/** Only resolved presentation facts cross a placement boundary; runtime config stays on its owner. */
+export function prepareAgentToolSurfacePresentation(
+  params: AgentToolSurfacePlanParams,
+): AgentToolSurfacePresentation {
+  const plan = resolveAgentToolSurfacePlan(params);
+  return {
+    codeMode: { ...plan.codeModeConfig, enabled: plan.codeModeControlsEnabled },
+    toolSearch: { ...plan.toolSearchConfig, enabled: plan.toolSearchControlsEnabled },
+    forceDirectMessageTool: params.forceDirectMessageTool,
   };
 }
 

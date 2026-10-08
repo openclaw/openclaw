@@ -1,8 +1,6 @@
-/** Handles /whoami identity reporting for authorized command senders. */
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
-/** Command handler for the /whoami identity diagnostic. */
 export const handleWhoamiCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/whoami",

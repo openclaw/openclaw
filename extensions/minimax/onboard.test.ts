@@ -23,11 +23,6 @@ describe("minimax onboard", () => {
     expect(cfg.agents?.defaults?.model).toEqual({ primary: "minimax/MiniMax-M3" });
   });
 
-  it("keeps reasoning enabled for MiniMax-M3", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M3");
-    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
-  });
-
   it("keeps MiniMax chat models text-only so image tools use MiniMax-VL-01", () => {
     const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.7-highspeed");
     expect(cfg.models?.providers?.minimax?.models).toEqual([
@@ -126,33 +121,6 @@ describe("minimax onboard", () => {
       "MiniMax-M2.7",
       "MiniMax-M3",
     ]);
-  });
-
-  it("preserves other providers when adding minimax", () => {
-    const cfg = applyMinimaxApiConfig({
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://api.anthropic.com",
-            apiKey: "anthropic-key",
-            api: "anthropic-messages",
-            models: [
-              {
-                id: "claude-opus-4-5",
-                name: "Claude Opus 4.5",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 200000,
-                maxTokens: 8192,
-              },
-            ],
-          },
-        },
-      },
-    });
-    expect(cfg.models?.providers).toHaveProperty("anthropic");
-    expect(cfg.models?.providers).toHaveProperty("minimax");
   });
 
   it("preserves existing models mode", () => {

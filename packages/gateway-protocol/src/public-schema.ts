@@ -1,7 +1,9 @@
 // Explicit schema exports keep public protocol changes reviewable.
 export * from "./schema/sessions-goal.js";
+export * from "./schema/session-processes.js";
 export * from "./schema/sessions-provider-review.js";
 export * from "./schema/human-mentions.js";
+export * from "./schema/presence.js";
 export * from "./public-schema-push.js";
 export * from "./public-schema-users.js";
 export * from "./public-schema-plugins.js";
@@ -9,7 +11,6 @@ export * from "./public-schema-environments.js";
 export {
   isCloudWorkerPlacementState,
   ConnectParamsSchema,
-  GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareBusyResultSchema,
   GatewaySuspendPrepareDrainingResultSchema,
@@ -42,13 +43,19 @@ export {
   WorkerHeartbeatParamsSchema,
   WorkerHeartbeatRequestFrameSchema,
   WorkerHeartbeatResponseFrameSchema,
-  WorkerSessionsSpawnParamsSchema,
-  WorkerSessionsSpawnResponseFrameSchema,
-  WorkerSessionsSendParamsSchema,
-  WorkerSessionsSendResponseFrameSchema,
+  WORKER_PORTAL_PROTOCOL_FEATURE,
+  WORKER_PRESENCE_PROTOCOL_FEATURE,
+  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
+  WORKER_SESSION_TOOL_MAX_TEXT_LENGTH,
   WorkerPortalParamsSchema,
   WorkerPortalResponseFrameSchema,
+  WorkerPresenceParamsSchema,
+  WorkerPresenceResponseFrameSchema,
   WorkerSessionToolResultSchema,
+  WorkerSessionsSendParamsSchema,
+  WorkerSessionsSendResponseFrameSchema,
+  WorkerSessionsSpawnParamsSchema,
+  WorkerSessionsSpawnResponseFrameSchema,
   WorkerLiveEventSchema,
   WorkerLiveEventErrorDetailsSchema,
   WorkerLiveEventErrorShapeSchema,
@@ -68,9 +75,6 @@ export {
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
-  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
-  WORKER_PORTAL_PROTOCOL_FEATURE,
-  WORKER_SESSION_TOOL_MAX_TEXT_LENGTH,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
   WORKER_PROTOCOL_MAX_FEATURES,
@@ -128,6 +132,7 @@ export {
   NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeCancelEventSchema,
   NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeEventResultSchema,
@@ -155,6 +160,8 @@ export {
   SessionsCatalogReadResultSchema,
   SessionsCatalogContinueParamsSchema,
   SessionsCatalogContinueResultSchema,
+  SessionsCatalogImportParamsSchema,
+  SessionsCatalogImportResultSchema,
   SessionsCatalogArchiveParamsSchema,
   SessionsCatalogArchiveResultSchema,
   SessionsCatalogStartTerminalParamsSchema,
@@ -179,6 +186,8 @@ export {
   SessionFileRelevanceSchema,
   SessionsFilesGetParamsSchema,
   SessionsFilesGetResultSchema,
+  SessionsFilesAssetsParamsSchema,
+  SessionsFilesAssetsResultSchema,
   SessionsFilesSetParamsSchema,
   SessionsFilesSetResultSchema,
   SessionsFilesListParamsSchema,
@@ -192,6 +201,8 @@ export {
   SessionsDiffParamsSchema,
   SessionsDiffResultSchema,
   SessionBranchSchema,
+  SessionAncestorRefSchema,
+  SessionEventAncestorsSchema,
   SessionRowSchema,
   SessionsBranchesListParamsSchema,
   SessionsBranchesListResultSchema,
@@ -206,6 +217,7 @@ export {
   SESSION_OBSERVER_HEALTH_VALUES,
   SessionCompanionExchangeSchema,
   SessionObserverDigestSchema,
+  SessionNarrationEventSchema,
   SessionObserverHealthSchema,
   SessionObserverPlanProgressSchema,
   SessionMemberAddParamsSchema,
@@ -325,17 +337,6 @@ export {
   TaskSuggestionsDismissResultSchema,
   TaskSuggestionsListParamsSchema,
   TaskSuggestionsListResultSchema,
-  TaskSummarySchema,
-  TasksListParamsSchema,
-  TasksListResultSchema,
-  TasksGetParamsSchema,
-  TasksGetResultSchema,
-  TasksHistoryParamsSchema,
-  TasksHistoryResultSchema,
-  TasksCancelParamsSchema,
-  TasksCancelResultSchema,
-  TasksRecoveryParamsSchema,
-  TasksRecoveryResultSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -420,6 +421,8 @@ export {
   ChannelsStatusResultSchema,
   ChannelsPairingListParamsSchema,
   ChannelsPairingListResultSchema,
+  ChannelsPairingCliListResultSchema,
+  ChannelsPairingCodeApproveResultSchema,
   ChannelsPairingApproveParamsSchema,
   ChannelsPairingApproveResultSchema,
   ChannelsPairingDismissParamsSchema,
@@ -549,6 +552,8 @@ export {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  CronHistoryParamsSchema,
+  CronHistoryResultSchema,
   CronScratchGetParamsSchema,
   CronScratchGetResultSchema,
   CronScratchSetParamsSchema,
@@ -656,6 +661,10 @@ export {
   WorktreesRestoreParamsSchema,
   WorktreesGcParamsSchema,
   WorktreesGcResultSchema,
+  WorktreesRecoverRemovalParamsSchema,
+  WorktreesRecoverRemovalResultSchema,
+  WorktreesRetireSnapshotParamsSchema,
+  WorktreesRetireSnapshotResultSchema,
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
   WorktreeRepositoryStatusSchema,
@@ -672,3 +681,5 @@ export {
 } from "./schema/sessions-activity-summary.js";
 
 export * from "./schema/sessions-involvement.js";
+
+export * from "./schema/catalog.js";

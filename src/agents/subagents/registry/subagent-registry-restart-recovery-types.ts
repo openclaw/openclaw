@@ -1,14 +1,18 @@
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  SubagentRecoveryCurrent,
+  SubagentRunRecord,
+  SubagentSessionEffects,
+} from "./subagent-registry.types.js";
 
 export type RestartRecoveryResult =
   | { status: "ignored" }
-  | { status: "handled" }
+  | { status: "handled"; retained?: { isCurrent: () => boolean; released?: Promise<void> } }
   | { status: "deferred" }
   | {
       status: "terminal";
-      isRecoveryCurrent?: () => boolean;
-      isChildSessionEffectsCurrent?: () => boolean;
+      recoveryCurrent?: SubagentRecoveryCurrent;
+      sessionEffects?: SubagentSessionEffects;
       error: string;
       endedAt?: number;
       suppressSessionEffects?: boolean;

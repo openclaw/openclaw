@@ -2,54 +2,34 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isPathInside } from "./fs-safe.js";
+import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import {
   completePendingPackageLifecycle,
   discardPendingPackageLifecycle,
   PackageLifecycleOwnershipError,
 } from "./package-lifecycle.js";
 import { removePackageUpdatePath } from "./package-update-filesystem.js";
+import { classifyPackageUpdatePermissionFailure } from "./package-update-manager-preflight.js";
 import type { StagedPackageInstall } from "./package-update-swap-contract.js";
+import { mergePathPrepend } from "./path-prepend.js";
+import { resolveEnvironmentValue } from "./process-env.js";
+import { verifyPackageUpdateRecovery, type ResolvedGlobalInstallTarget } from "./update-global.js";
+import { prepareNativePackageStage } from "./update-native-package-stage.js";
 import {
-  resolveNpmLifecyclePolicyGate,
-  verifyPackageUpdateRecovery,
-  type ResolvedGlobalInstallTarget,
-} from "./update-global.js";
+  resolveNpmGlobalPrefixLayoutFromGlobalRoot,
+  resolveNpmGlobalPrefixLayoutFromPrefix,
+} from "./update-npm-prefix.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
-
-export async function resolveNpmUpdateLifecyclePolicy(params: {
-  installTarget: ResolvedGlobalInstallTarget;
-}): Promise<{
-  policy: ReturnType<typeof resolveNpmLifecyclePolicyGate>["policy"];
-  failedStep: UpdateStepResult | null;
-}> {
-  const gate = resolveNpmLifecyclePolicyGate(params.installTarget);
-  if (!gate.error) {
-    return { policy: gate.policy, failedStep: null };
-  }
-  const argv = [params.installTarget.command, "--version"];
-  const version = params.installTarget.npmOwner?.version ?? "";
-  return {
-    policy: null,
-    failedStep: {
-      name: "npm-lifecycle-policy-preflight",
-      command: argv.join(" "),
-      cwd: process.cwd(),
-      durationMs: 0,
-      exitCode: 1,
-      stdoutTail: version || null,
-      stderrTail: gate.error,
-    },
-  };
-}
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export type PackageUpdateStepRunner = (params: {
   name: string;
   argv: string[];
   cwd?: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  input?: string;
 }) => Promise<UpdateStepResult>;
 
 type PackageUpdateLifecycleResult =
@@ -59,13 +39,25 @@ type PackageUpdateLifecycleResult =
 /** Adapt lifecycle ownership refusal without flattening it into removable stage failure. */
 export async function runPackageUpdateLifecycle(params: {
   packageRoot: string;
+  nodeRunner?: string;
   manager: ResolvedGlobalInstallTarget["manager"];
   timeoutMs: number;
+  /** Null leaves script work unbounded; omission retains the caller's timeout. */
+  workTimeoutMs?: number | null;
   env?: NodeJS.ProcessEnv;
   runStep: PackageUpdateStepRunner;
   verifyCompleted: () => Promise<void>;
   steps: UpdateStepResult[];
 }): Promise<PackageUpdateLifecycleResult> {
+  const env =
+    params.nodeRunner && path.isAbsolute(params.nodeRunner)
+      ? {
+          ...params.env,
+          PATH: mergePathPrepend(resolveEnvironmentValue(params.env ?? process.env, "PATH"), [
+            path.dirname(params.nodeRunner),
+          ]),
+        }
+      : params.env;
   let failedScript: UpdateStepResult | null = null;
   try {
     await completePendingPackageLifecycle({
@@ -74,10 +66,13 @@ export async function runPackageUpdateLifecycle(params: {
       runScript: async (script) => {
         const step = await params.runStep({
           name: `${params.manager}-package-${script.name}`,
-          argv: [process.execPath, path.join(params.packageRoot, script.relativePath)],
+          argv: [
+            params.nodeRunner ?? process.execPath,
+            path.join(params.packageRoot, script.relativePath),
+          ],
           cwd: params.packageRoot,
-          env: params.env,
-          timeoutMs: params.timeoutMs,
+          env,
+          timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs),
         });
         params.steps.push(step);
         if (isFailedUpdateStep(step)) {
@@ -106,6 +101,96 @@ export async function runPackageUpdateLifecycle(params: {
     };
     params.steps.push(step);
     return { status: "failed", step, preserveStage };
+  }
+}
+
+export async function prepareStagedPackageInstall(
+  installTarget: ResolvedGlobalInstallTarget,
+  packageName: string,
+  nativeOptions?: { env: NodeJS.ProcessEnv; globalBinDir?: string; installSpec: string },
+): Promise<
+  | { stagedInstall: StagedPackageInstall; failedStep: null }
+  | { stagedInstall: null; failedStep: UpdateStepResult }
+> {
+  const startedAt = Date.now();
+  try {
+    if (nativeOptions) {
+      const native = await prepareNativePackageStage({
+        installTarget,
+        packageName,
+        ...nativeOptions,
+      });
+      if (!native) {
+        throw new Error("Cannot resolve the native package manager's staging owner.");
+      }
+      // Isolated pnpm resolves its newly created owner after installation.
+      const packageRoot = path.join(native.globalRoot, packageName);
+      return {
+        stagedInstall: {
+          prefix: native.projectRoot,
+          layout: {
+            prefix: native.projectRoot,
+            globalRoot: native.globalRoot,
+            binDir: native.binDir,
+          },
+          packageRoot,
+          installTarget: { ...installTarget, globalRoot: native.globalRoot, packageRoot },
+          native,
+        },
+        failedStep: null,
+      };
+    }
+    const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
+      allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
+    });
+    if (!targetLayout) {
+      throw new Error(
+        `The ${installTarget.manager} global install layout cannot prepare the update. Reinstall with ${installTarget.manager} into its default global layout, then retry the update.`,
+      );
+    }
+    await fs.mkdir(targetLayout.globalRoot, { recursive: true });
+    // Active stages must stay outside cleanupGlobalRenameDirs' disposable ".openclaw-" namespace.
+    const prefix = await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw.update-stage-"));
+    const layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
+    const packageRoot = path.join(layout.globalRoot, packageName);
+    return {
+      stagedInstall: {
+        prefix,
+        layout,
+        packageRoot,
+        installTarget: {
+          manager: "npm",
+          command: installTarget.command,
+          globalRoot: layout.globalRoot,
+          packageRoot,
+        },
+      },
+      failedStep: null,
+    };
+  } catch (err) {
+    const targetLayout =
+      installTarget.manager === "npm"
+        ? resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
+            allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
+          })
+        : null;
+    return {
+      stagedInstall: null,
+      failedStep: await classifyPackageUpdatePermissionFailure(
+        {
+          name: "package-stage",
+          command: `prepare staged ${installTarget.manager} install`,
+          cwd: targetLayout?.prefix ?? installTarget.globalRoot ?? process.cwd(),
+          durationMs: Date.now() - startedAt,
+          exitCode: 1,
+          stdoutTail: null,
+          stderrTail: formatErrorMessage(err),
+        },
+        installTarget,
+        nativeOptions?.env,
+        err,
+      ),
+    };
   }
 }
 
@@ -180,7 +265,6 @@ async function cleanupStagedPackageInstall(stage: StagedPackageInstall): Promise
 /** Dispose only after pending work is retired under its lifecycle generation. */
 export async function discardPackageUpdateStage(params: {
   stage: StagedPackageInstall;
-  manager: ResolvedGlobalInstallTarget["manager"];
   committed: boolean;
 }): Promise<PackageUpdateLifecycleResult | { status: "advisory"; step: UpdateStepResult }> {
   try {
@@ -208,7 +292,7 @@ export async function discardPackageUpdateStage(params: {
       status: "failed",
       preserveStage: true,
       step: {
-        name: `${params.manager}-package-lifecycle`,
+        name: `${params.stage.installTarget.manager}-package-lifecycle`,
         command: `discard ${params.stage.packageRoot}`,
         cwd: params.stage.packageRoot,
         durationMs: 0,

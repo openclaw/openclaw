@@ -6,9 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  cleanupCanaryArtifactsForExtensions,
   formatBoundaryCheckSuccessSummary,
   formatSlowCompileSummary,
   formatSkippedCompileProgress,
@@ -20,15 +19,49 @@ import {
   runNodeStepsWithConcurrency,
 } from "../../scripts/check-extension-package-tsc-boundary.mts";
 import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
+import { withinTest } from "../helpers/promise.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const tempRoots = new Set<string>();
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+async function fixturePidBeforeSettlement(pidPath: string, operation: PromiseLike<unknown>) {
+  const readPid = (error: unknown = new Error(`timeout waiting for pid in ${pidPath}`)) => {
+    const pid = fs.existsSync(pidPath) ? Number(fs.readFileSync(pidPath, "utf8")) : 0;
+    if (!Number.isInteger(pid) || pid <= 0) {
+      throw error;
+    }
+    return pid;
+  };
+  // The fixture writes the PID before its receipt; a separate output/exit can arrive first.
+  const settled = Promise.resolve(operation).then(
+    () => readPid(),
+    (error: unknown) => readPid(error),
+  );
+  return await Promise.race([receipts.waitFor(pidPath, "ready").then(() => readPid()), settled]);
+}
+
+async function waitForFixtureExit(pid: number, signal: AbortSignal) {
+  // Strict group cleanup can leave Darwin zombies awaiting the OS reaper. These foreign
+  // PIDs have no child handle; only the test lifetime bounds their final disappearance.
+  while (isProcessAlive(pid)) {
+    await delay(5, undefined, { signal }).catch((error: unknown) => {
+      throw new Error(`process still alive: ${pid}`, { cause: error });
+    });
+  }
+}
 
 function createTempExtensionRoot(extensionId = "demo") {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-canary-"));
@@ -45,11 +78,14 @@ function writeCanaryArtifacts(rootDir: string, extensionId = "demo") {
   return { canaryPath, tsconfigPath };
 }
 
-afterEach(() => {
-  for (const rootDir of tempRoots) {
-    fs.rmSync(rootDir, { force: true, recursive: true });
-  }
-  tempRoots.clear();
+beforeEach(({ onTestFinished }) => {
+  // Register first so process cleanup runs before removing files still owned by a child.
+  onTestFinished(() => {
+    for (const rootDir of tempRoots) {
+      fs.rmSync(rootDir, { force: true, recursive: true });
+    }
+    tempRoots.clear();
+  });
 });
 
 describe("check-extension-package-tsc-boundary", () => {
@@ -116,6 +152,7 @@ describe("check-extension-package-tsc-boundary", () => {
     write("scripts/prepare-extension-package-boundary-artifacts.mts", "export {};\n");
     for (const file of [
       "check-extension-package-tsc-boundary.mts",
+      "compile-extension-boundary.mts",
       "check-file-utils.ts",
       "tsx.mjs",
       "windows-cmd-helpers.mjs",
@@ -156,17 +193,20 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(cold.stdout.indexOf("] larger")).toBeLessThan(cold.stdout.indexOf("] demo"));
     const receipt = JSON.parse(
       fs.readFileSync(
-        path.join(root, ".artifacts/extension-package-boundary/compile/demo.tsbuildinfo"),
+        path.join(root, ".artifacts/extension-package-boundary/compile/demo.inputs.json"),
         "utf8",
       ),
     );
-    expect(receipt.fileNames.some((file: string) => file.endsWith("/demo/src/worker.ts"))).toBe(
-      true,
-    );
+    expect(receipt.inputs.some((file: string) => file.endsWith("/demo/src/worker.ts"))).toBe(true);
     const warm = run();
     expect(warm.status, warm.stdout + warm.stderr).toBe(0);
     expect(warm.stdout).toContain("compiled plugins: 0");
     expect(warm.stdout).toContain("skipped plugins: 2");
+    write("test/new-unrelated.test.ts", 'export const unrelated: number = "invalid";\n');
+    const unrelated = run();
+    expect(unrelated.status, unrelated.stdout + unrelated.stderr).toBe(0);
+    expect(unrelated.stdout).toContain("compiled plugins: 0");
+    expect(unrelated.stdout).toContain("skipped plugins: 2");
     write(
       "extensions/demo/package.json",
       JSON.stringify({
@@ -204,29 +244,6 @@ describe("check-extension-package-tsc-boundary", () => {
       ),
     ).rejects.toMatchObject({ kind: "timeout", fullOutput: expect.stringContaining(diagnostic) });
   });
-  it("removes stale canary artifacts across extensions", () => {
-    const { rootDir } = createTempExtensionRoot();
-    const { canaryPath, tsconfigPath } = writeCanaryArtifacts(rootDir);
-
-    cleanupCanaryArtifactsForExtensions(["demo"], rootDir);
-
-    expect(fs.existsSync(canaryPath)).toBe(false);
-    expect(fs.existsSync(tsconfigPath)).toBe(false);
-  });
-
-  it("cleans canary artifacts again on process exit", () => {
-    const { rootDir } = createTempExtensionRoot();
-    const { canaryPath, tsconfigPath } = writeCanaryArtifacts(rootDir);
-    const processObject = new EventEmitter();
-    const teardown = installCanaryArtifactCleanup(["demo"], { processObject, rootDir });
-
-    processObject.emit("exit");
-    teardown();
-
-    expect(fs.existsSync(canaryPath)).toBe(false);
-    expect(fs.existsSync(tsconfigPath)).toBe(false);
-  });
-
   it("cleans stale artifacts for every extension id passed to the cleanup hook", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-canary-"));
     tempRoots.add(rootDir);
@@ -465,36 +482,48 @@ describe("check-extension-package-tsc-boundary", () => {
 
   it.skipIf(process.platform === "win32")(
     "waits for timed-out async node step process groups",
-    async () => {
+    async ({ signal, onTestFinished }) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-tsc-timeout-"));
       tempRoots.add(root);
       const childPidPath = path.join(root, "child.pid");
       let childPid = 0;
-      const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
-        "",
-      );
+      const childScript = [
+        fixtureReceiptClientSource(receipts.endpoint),
+        "import fs from 'node:fs';",
+        "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
-        "const fs = require('node:fs');",
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+        `const child = spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
         "setInterval(() => {}, 1000);",
       ].join("");
 
-      const releaseAndWait = startProcessWatchdogFixture(() =>
-        runNodeStepAsync("hung-step-group", ["--eval", parentScript], 100),
+      let command!: ReturnType<typeof runNodeStepAsync>;
+      const releaseAndWait = startProcessWatchdogFixture(
+        () => (command = runNodeStepAsync("hung-step-group", ["--eval", parentScript], 100)),
       );
+      let cleanupPending: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPending ??= (async () => {
+          await releaseAndWait().catch(() => undefined);
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+          }
+        })());
+      onTestFinished(cleanup);
       try {
-        childPid = await waitForPidFile(childPidPath, 2_000);
+        childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, command), signal);
         expect(isProcessAlive(childPid)).toBe(true);
 
-        await expect(releaseAndWait()).rejects.toThrow("hung-step-group timed out after 100ms");
-        await waitForDead(childPid, 2_000);
+        await expect(withinTest(releaseAndWait(), signal)).rejects.toThrow(
+          "hung-step-group timed out after 100ms",
+        );
+        await waitForFixtureExit(childPid, signal);
       } finally {
-        await releaseAndWait().catch(() => undefined);
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        await cleanup();
       }
     },
   );
@@ -527,19 +556,22 @@ describe("check-extension-package-tsc-boundary", () => {
 
   it.skipIf(process.platform === "win32")(
     "force-kills aborted async node step process groups",
-    async () => {
+    async ({ signal, onTestFinished }) => {
       const { rootDir: root } = createTempExtensionRoot("abort-group");
       const childPidPath = path.join(root, "child.pid");
       const abortAckPath = path.join(root, "abort.ack");
       let childPid = 0;
-      const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
-        "",
-      );
+      const childScript = [
+        fixtureReceiptClientSource(receipts.endpoint),
+        "import fs from 'node:fs';",
+        "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
-        "const fs = require('node:fs');",
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+        `const child = spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
         "process.on('SIGTERM', () => process.exit(0));",
         "setInterval(() => {}, 1000);",
       ].join("");
@@ -560,40 +592,48 @@ describe("check-extension-package-tsc-boundary", () => {
         "wait();",
       ].join("");
 
-      try {
-        const command = runNodeStepsWithConcurrency(
-          [
-            {
-              label: "fail-fast",
-              args: ["--eval", failAfterTestAckScript],
-              timeoutMs: 5_000,
-            },
-            {
-              label: "aborted-step-group",
-              args: ["--eval", parentScript],
-              timeoutMs: 60_000,
-            },
-          ],
-          2,
-        );
+      const command = runNodeStepsWithConcurrency(
+        [
+          {
+            label: "fail-fast",
+            args: ["--eval", failAfterTestAckScript],
+            timeoutMs: 5_000,
+          },
+          {
+            label: "aborted-step-group",
+            args: ["--eval", parentScript],
+            timeoutMs: 60_000,
+          },
+        ],
+        2,
+      );
 
-        childPid = await waitForPidFile(childPidPath, 2_000);
+      let cleanupPending: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPending ??= (async () => {
+          fs.writeFileSync(abortAckPath, "go");
+          await command.catch(() => undefined);
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+          }
+        })());
+      onTestFinished(cleanup);
+      try {
+        childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, command), signal);
         expect(isProcessAlive(childPid)).toBe(true);
         fs.writeFileSync(abortAckPath, "go");
 
-        await expect(command).rejects.toThrow("fail-fast");
-        await waitForDead(childPid, 2_000);
+        await expect(withinTest(command, signal)).rejects.toThrow("fail-fast");
+        await waitForFixtureExit(childPid, signal);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        await cleanup();
       }
     },
   );
 
   it.skipIf(process.platform === "win32")(
     "cleans active async node step descendants before forwarding parent SIGTERM",
-    async ({ signal }) => {
+    async ({ signal, onTestFinished }) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-tsc-signal-"));
       tempRoots.add(root);
       const childPidPath = path.join(root, "child.pid");
@@ -601,9 +641,9 @@ describe("check-extension-package-tsc-boundary", () => {
         path.resolve("scripts/check-extension-package-tsc-boundary.mts"),
       ).href;
       let childPid = 0;
-      let runner: ReturnType<typeof spawn> | undefined;
       const childScript = [
-        "const fs = require('node:fs');",
+        fixtureReceiptClientSource(receipts.endpoint),
+        "import fs from 'node:fs';",
         "process.on('SIGTERM', () => {});",
         // Write the pid atomically: writeFileSync makes the file visible at open() (0 bytes)
         // before the content lands, so an existsSync-then-read poller can catch an empty file
@@ -611,12 +651,13 @@ describe("check-extension-package-tsc-boundary", () => {
         `const pidPath = ${JSON.stringify(childPidPath)};`,
         "fs.writeFileSync(pidPath + '.tmp', String(process.pid));",
         "fs.renameSync(pidPath + '.tmp', pidPath);",
+        "sendReceipt(pidPath, 'ready');",
         "setInterval(() => {}, 1000);",
       ].join("");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
         "process.on('SIGTERM', () => process.exit(0));",
-        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'inherit'] });`,
+        `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'inherit'] });`,
         "setInterval(() => {}, 1000);",
       ].join("");
       const runnerScript = [
@@ -628,38 +669,41 @@ describe("check-extension-package-tsc-boundary", () => {
         )}], 60_000); } catch (error) { if (process.exitCode !== 143) { console.error(error); process.exitCode = 1; } }`,
       ].join("\n");
 
-      const runnerEnded = new AbortController();
-      const readinessSignal = AbortSignal.any([signal, runnerEnded.signal]);
+      const runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
+        cwd: process.cwd(),
+        stdio: ["ignore", "ignore", "inherit"],
+      });
+      const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          runner.once("error", reject);
+          runner.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
+        },
+      );
+      let cleanupPending: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPending ??= (async () => {
+          if (runner.pid && isProcessAlive(runner.pid)) {
+            runner.kill("SIGTERM");
+          }
+          await closed;
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+          }
+        })());
+      onTestFinished(cleanup);
       try {
-        runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
-          cwd: process.cwd(),
-          stdio: ["ignore", "ignore", "inherit"],
-        });
-        runner.once("exit", () => runnerEnded.abort(new Error("Runner exited before readiness")));
-        runner.once("error", (error) => runnerEnded.abort(error));
-
-        // The child publishes readiness after both signal handlers are installed.
-        // Observe that state under the test/runner lifetime, not delayed FS notices.
-        childPid = await waitForPidFile(childPidPath, Number.POSITIVE_INFINITY, (ms) =>
-          delay(ms, undefined, { signal: readinessSignal }),
-        );
-        readinessSignal.throwIfAborted();
+        childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, closed), signal);
         expect(isProcessAlive(childPid)).toBe(true);
 
         runner.kill("SIGTERM");
 
-        await expect(waitForChildClose(runner)).resolves.toEqual({
+        await expect(withinTest(closed, signal)).resolves.toEqual({
           code: 143,
           signal: null,
         });
-        await waitForDead(childPid, 2_000);
+        await waitForFixtureExit(childPid, signal);
       } finally {
-        if (runner?.pid && isProcessAlive(runner.pid)) {
-          runner.kill("SIGKILL");
-        }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        await cleanup();
       }
     },
   );

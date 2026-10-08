@@ -51,10 +51,8 @@ export function resolveBedrockCachePoint(
   };
 }
 
-/** How Bedrock thinking output should be displayed to users. */
 type BedrockThinkingDisplay = "summarized" | "omitted";
 
-/** Extra Bedrock-specific stream options accepted by the provider runtime. */
 export interface BedrockOptions extends StreamOptions {
   region?: string;
   profile?: string;
@@ -75,7 +73,6 @@ function getModelMatchCandidates(modelId: string, modelName?: string): string[] 
   });
 }
 
-/** Return whether a Bedrock model is known to support Anthropic prompt caching. */
 export function supportsBedrockClaudePromptCaching(modelId: string, modelName?: string): boolean {
   const candidates = getModelMatchCandidates(modelId, modelName);
   const hasClaudeRef = candidates.some((s) => s.includes("claude"));
@@ -85,25 +82,9 @@ export function supportsBedrockClaudePromptCaching(modelId: string, modelName?: 
     }
     return false;
   }
-  if (candidates.some((s) => s.includes("-4-"))) {
-    return true;
-  }
-  if (
-    candidates.some(
-      (candidate) =>
-        candidate.includes("claude-fable-5") ||
-        candidate.includes("claude-mythos-5") ||
-        candidate.includes("claude-opus-5") ||
-        candidate.includes("claude-sonnet-5"),
-    )
-  ) {
-    return true;
-  }
-  if (candidates.some((s) => s.includes("claude-3-7-sonnet"))) {
-    return true;
-  }
-  if (candidates.some((s) => s.includes("claude-3-5-haiku"))) {
-    return true;
-  }
-  return false;
+  return candidates.some(
+    (candidate) =>
+      candidate.includes("-4-") ||
+      /claude-(?:fable-5|mythos-5|opus-5|sonnet-5|3-7-sonnet|3-5-haiku)/.test(candidate),
+  );
 }

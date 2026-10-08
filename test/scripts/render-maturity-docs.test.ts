@@ -4,18 +4,17 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Parser } from "htmlparser2";
+import { format } from "oxfmt";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   buildQaOccurrenceEvidenceSummary,
   createQaEvidenceInvocation,
-  validateQaEvidenceSummaryJson,
-  type QaEvidenceOccurrence,
-} from "../../extensions/qa-lab/api.js";
-import {
   qaMaturityTaxonomyIdentity,
   qaProfileEvidencePlan,
   readQaMaturityTaxonomySource,
+  validateQaEvidenceSummaryJson,
+  type QaEvidenceOccurrence,
 } from "../../extensions/qa-lab/test-api.js";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -726,7 +725,7 @@ describe("maturity docs renderer CLI", () => {
     },
   );
 
-  it("keeps historical outcomes but leaves current coverage unscored", () => {
+  it("keeps historical category counts but leaves current coverage unscored", async () => {
     const outputDir = tempDirs.make("openclaw-maturity-identity-output-");
     const evidenceDir = tempDirs.make("openclaw-maturity-identity-evidence-");
     writeQaEvidence({
@@ -764,6 +763,9 @@ describe("maturity docs renderer CLI", () => {
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
     expect(scorecard).toContain("Coverage Unscored");
     expect(scorecard).toContain("Historical evidence: taxonomy identity unknown");
+    const formatted = await format("scorecard.md", scorecard, { proseWrap: "preserve" });
+    expect(formatted.errors).toEqual([]);
+    expect(scorecard).toBe(formatted.code);
     expect(scorecard).toContain("1 passed");
     expect(scorecard).toContain(
       `<span className="maturity-summary-value">${expectedMaturityScorePercent()}%</span>`,
@@ -773,8 +775,8 @@ describe("maturity docs renderer CLI", () => {
     const historicalCategory = allProfileScorecardFixture().categoryReports[0]!;
     expect(scorecard).toContain(historicalCategory.name);
     expect(scorecard).toContain(historicalCategory.id);
-    expect(scorecard).toContain(
-      `| missing | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
+    expect(scorecard.replace(/ +\|/gu, " |")).toContain(
+      `| ${historicalCategory.name} | ${historicalCategory.id} | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
     );
   });
 
@@ -812,8 +814,8 @@ describe("maturity docs renderer CLI", () => {
     const historicalCategory = allProfileScorecardFixture().categoryReports[0]!;
     expect(scorecard).toContain(historicalCategory.name);
     expect(scorecard).toContain(historicalCategory.id);
-    expect(scorecard).toContain(
-      `| missing | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
+    expect(scorecard.replace(/ +\|/gu, " |")).toContain(
+      `| ${historicalCategory.name} | ${historicalCategory.id} | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
     );
   });
 

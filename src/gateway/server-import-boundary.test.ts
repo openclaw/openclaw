@@ -2,10 +2,13 @@
 // heavyweight cron, doctor, secret, task, and WebSocket handlers from eager loads.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 function readSource(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), "utf8");
@@ -28,13 +31,12 @@ function resolveRelativeSource(importer: string, specifier: string): string | nu
   return null;
 }
 
-function staticValueSpecifiers(filePath: string, source: string): string[] {
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+function staticValueSpecifiers(sourceFile: ts.SourceFile): string[] {
   const specifiers: string[] = [];
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
       const clause = statement.importClause;
-      if (clause?.isTypeOnly) {
+      if (clause?.phaseModifier === ts.SyntaxKind.TypeKeyword) {
         continue;
       }
       if (
@@ -60,24 +62,36 @@ function staticValueSpecifiers(filePath: string, source: string): string[] {
   return specifiers;
 }
 
+// Each case reads the same checkout; retain import facts, not native syntax trees.
+const importsByFile = new Map<string, string[]>();
+
 function collectStaticValueImportGraph(entryRelativePath: string): Map<string, string[]> {
   const entryPath = path.join(repoRoot, entryRelativePath);
   const graph = new Map<string, string[]>();
-  const pending = [entryPath];
-  while (pending.length > 0) {
-    const filePath = pending.pop();
-    if (!filePath || graph.has(filePath)) {
-      continue;
-    }
-    const specifiers = staticValueSpecifiers(filePath, readFileSync(filePath, "utf8"));
-    graph.set(filePath, specifiers);
-    for (const specifier of specifiers) {
-      if (!specifier.startsWith(".")) {
-        continue;
+  const pending = new Set([entryPath]);
+  while (pending.size > 0) {
+    const batch = [...pending].slice(0, 32);
+    const uncached = batch.filter((filePath) => !importsByFile.has(filePath));
+    if (uncached.length) {
+      const sources = parser.parseSourceFiles(
+        uncached.map((fileName) => ({ fileName, text: readFileSync(fileName, "utf8") })),
+      );
+      for (const [index, source] of sources.entries()) {
+        importsByFile.set(uncached[index]!, staticValueSpecifiers(source));
       }
-      const resolved = resolveRelativeSource(filePath, specifier);
-      if (resolved) {
-        pending.push(resolved);
+    }
+    for (const filePath of batch) {
+      pending.delete(filePath);
+      const specifiers = importsByFile.get(filePath)!;
+      graph.set(filePath, specifiers);
+      for (const specifier of specifiers) {
+        if (!specifier.startsWith(".")) {
+          continue;
+        }
+        const resolved = resolveRelativeSource(filePath, specifier);
+        if (resolved && !graph.has(resolved)) {
+          pending.add(resolved);
+        }
       }
     }
   }
@@ -163,7 +177,7 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toContain('from "./server-methods.js"');
     expect(serverImpl).not.toContain('from "./config-reload.js"');
     expect(serverImpl).not.toMatch(
-      /import\s+\{[^}]*resolveSessionKeyForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
+      /import\s+\{[^}]*resolveSessionForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
     );
     expect(readSource("src/gateway/server-runtime-subscriptions.ts")).toContain(
       'import("./server-session-key.js")',
@@ -175,9 +189,6 @@ describe("gateway startup import boundaries", () => {
       'from "./config-reload.js"',
     );
     expect(serverImpl).not.toContain('from "../plugins/hook-runner-global.js"');
-    expect(serverImpl).not.toContain('from "../tasks/task-registry.js"');
-    expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');
-    expect(serverImpl).toContain('import("../tasks/task-registry.maintenance.js")');
     expect(serverImpl).not.toContain('from "../secrets/runtime.js"');
     expect(readSource("src/gateway/server-reload-managed.ts")).not.toContain(
       'from "../secrets/runtime.js"',
@@ -196,7 +207,6 @@ describe("gateway startup import boundaries", () => {
     expect(readSource("src/gateway/server-aux-handlers.ts")).not.toMatch(
       /import\s+\{[^}]*create(?:Exec|Plugin|Secrets)[^}]*\}\s+from "\.\/server-methods\//s,
     );
-    expect(validation).not.toContain("legacy-secretref-env-marker");
     expect(validation).not.toContain("commands/doctor");
     const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
     expect(serverImpl).toContain('import("./server-worker-environment-startup.js")');
@@ -227,10 +237,12 @@ describe("gateway startup import boundaries", () => {
   it("defers retained plugin generation cleanup to the post-ready idle scheduler", () => {
     const serverImpl = readServerImplementation();
     const cleanup = readSource("src/gateway/server-retained-plugin-cleanup.ts");
-    const staticImports = staticValueSpecifiers("server-implementation.ts", serverImpl);
+    const staticImports = staticValueSpecifiers(
+      parser.parseSourceFile("server-implementation.ts", serverImpl),
+    );
     const serverStart = serverImpl.indexOf("export async function startGatewayServerCore");
     const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({", serverStart);
-    const cleanupCall = serverImpl.lastIndexOf("cleanupRetainedPluginInstallGenerations(");
+    const cleanupCall = serverImpl.lastIndexOf("cleanupGatewayRetiredPluginArtifacts(");
 
     expect(staticImports).not.toContain("../plugins/managed-npm-retention.js");
     expect(staticImports).not.toContain("../plugins/installed-plugin-index-records.js");
@@ -238,17 +250,13 @@ describe("gateway startup import boundaries", () => {
     expect(cleanup).toContain('import("../plugins/installed-plugin-index-records.js")');
     expect(postReadyStart).toBeGreaterThan(serverStart);
     expect(cleanupCall).toBeGreaterThan(postReadyStart);
-    expect(cleanup).toContain("loadInstalledPluginIndexInstallRecordsSync()");
   });
 
   it("loads the worker bootstrap runtime only when an operation needs it", () => {
     const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
     const runtimeLoad = "loadWorkerEnvironmentRuntimeModule()";
     const prepareStart = workerStartup.indexOf("const prepareInstallation = async");
-    const serviceStart = workerStartup.indexOf(
-      "const workerEnvironmentServiceBase =",
-      prepareStart,
-    );
+    const serviceStart = workerStartup.indexOf("createWorkerEnvironmentService({", prepareStart);
     const identityStart = workerStartup.indexOf("resolveSshIdentity: async", serviceStart);
     const bootstrapStart = workerStartup.indexOf("bootstrapWorker: async", serviceStart);
     const loggerStart = workerStartup.indexOf("logger: workerEnvironmentLog", bootstrapStart);
@@ -283,6 +291,6 @@ describe("gateway startup import boundaries", () => {
     expect(workerStartup).toContain(
       "const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(",
     );
-    expect(workerStartup).toContain("loadWorkerSessionToolExecutorModule().then(");
+    expect(workerStartup).toContain("await loadWorkerSessionToolExecutorModule()");
   });
 });

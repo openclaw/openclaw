@@ -1,6 +1,11 @@
-import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { baseEvent, createMetricsHarness, trusted, untrusted } from "./service.test-helpers.js";
+import {
+  baseEvent,
+  createMetricsHarness,
+  trusted,
+  untrusted,
+  withMetricsServer,
+} from "./service.test-helpers.js";
 
 // HTTP scrapes in this file exercise an authorized operator; the exporter's scope guard is
 // covered in service.http-scope.test.ts.
@@ -24,10 +29,24 @@ describe("diagnostics-prometheus runtime metrics", () => {
             heapUsedBytes: 300,
             externalBytes: 200,
             arrayBuffersBytes: 100,
+            heapSpaces: ["old_space", "future_v8_space"].map((space_name) => ({
+              space_name,
+              space_used_size: 101,
+              space_size: 202,
+              space_available_size: 0,
+              physical_space_size: 303,
+            })),
             workerHeapTotalBytes: 400,
             workerHeapUsedBytes: 250,
             workerCount: 3,
             workerHeapSampledCount: 2,
+            workerLifecycle: [
+              {
+                script: "sqlite-store.worker.js",
+                started: 5,
+                retired: [{ reason: "idle_timeout", count: 2 }],
+              },
+            ],
             workerHeaps: [
               { script: "sqlite-store.worker.js", heapUsed: 100, heapTotal: 200 },
               { script: "sqlite-store.worker.js", heapUsed: 150, heapTotal: 200 },
@@ -48,6 +67,22 @@ describe("diagnostics-prometheus runtime metrics", () => {
           trusted,
         );
       }
+      for (const [operation, count] of [
+        ["repository.identities", 4],
+        ["checkout.diff", 2],
+      ] as const) {
+        metrics.record(
+          {
+            ...baseEvent(),
+            type: "diagnostic.child_process.spawn",
+            family: "git",
+            operation,
+            count,
+            intervalMs: 60_000,
+          },
+          trusted,
+        );
+      }
       const rendered = metrics.render();
       for (const [kind, value] of Object.entries({
         rss: 1000,
@@ -60,12 +95,39 @@ describe("diagnostics-prometheus runtime metrics", () => {
       })) {
         expect(rendered).toContain(`openclaw_memory_bytes{kind="${kind}"} ${value}\n`);
       }
+      for (const space of ["old_space", "future_v8_space"]) {
+        for (const [stat, value] of Object.entries({
+          used: 101,
+          size: 202,
+          available: 0,
+          physical: 303,
+        })) {
+          expect(rendered).toContain(
+            `openclaw_heap_space_bytes{space="${space}",stat="${stat}"} ${value}\n`,
+          );
+        }
+      }
+      expect(metrics.render()).toBe(rendered);
       expect(rendered).toContain("openclaw_worker_count 3\n");
       expect(rendered).toContain("openclaw_worker_heap_sampled_count 2\n");
       expect(rendered).toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store.worker.js"} 250\n',
       );
-      expect(rendered).toContain('openclaw_child_process_spawn_total{family="node"} 5\n');
+      expect(rendered).toContain(
+        'openclaw_child_process_spawn_total{family="node",operation="none"} 5\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_child_process_spawn_total{family="git",operation="repository.identities"} 4\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_child_process_spawn_total{family="git",operation="checkout.diff"} 2\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_worker_retired_total{reason="idle_timeout",script="sqlite-store.worker.js"} 2\n',
+      );
       const retiredSample = {
         ...baseEvent(),
         type: "diagnostic.memory.sample" as const,
@@ -76,20 +138,37 @@ describe("diagnostics-prometheus runtime metrics", () => {
           externalBytes: 200,
           arrayBuffersBytes: 100,
           workerHeaps: [{ script: "other", heapUsed: 50, heapTotal: 100 }],
+          workerLifecycle: [
+            {
+              script: "sqlite-store.worker.js",
+              started: 5,
+              retired: [{ reason: "idle_timeout", count: 2 }],
+            },
+          ],
         },
       };
       metrics.record(retiredSample, untrusted);
       expect(metrics.render()).toBe(rendered);
       metrics.record(retiredSample, trusted);
+      expect(metrics.render()).not.toContain("openclaw_heap_space_bytes");
       expect(metrics.render()).not.toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store',
       );
       expect(metrics.render()).toContain('openclaw_worker_heap_used_bytes{script="other"} 50\n');
+      expect(metrics.render()).toContain(
+        'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
+      );
+      expect(metrics.render()).toContain(
+        'openclaw_worker_retired_total{reason="idle_timeout",script="sqlite-store.worker.js"} 2\n',
+      );
       metrics.record(
         { ...retiredSample, memory: { ...retiredSample.memory, workerHeaps: [] } },
         trusted,
       );
       expect(metrics.render()).not.toContain("openclaw_worker_heap_used_bytes");
+      expect(metrics.render()).toContain(
+        'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
+      );
     } finally {
       metrics.stop();
     }
@@ -100,29 +179,24 @@ describe("diagnostics-prometheus runtime metrics", () => {
     (preseed) => {
       const metrics = createMetricsHarness();
       const sample = {
-        ...baseEvent(),
         type: "gateway.event_loop.sample",
         intervalMs: 1_000,
         delayMaxMs: 20,
       } as const;
       try {
         if (preseed) {
-          metrics.record(sample, trusted);
-          metrics.record({ ...baseEvent(), type: "diagnostic.gc", durationMs: 20 }, trusted);
+          metrics.record(sample);
+          metrics.record({ type: "diagnostic.gc", durationMs: 20 });
         }
         for (let index = 0; index < 2100; index += 1) {
-          metrics.record(
-            {
-              ...baseEvent(),
-              type: "model.call.completed",
-              runId: `run-${index}`,
-              callId: `call-${index}`,
-              provider: "openai",
-              model: `model.${index}`,
-              durationMs: 10,
-            },
-            trusted,
-          );
+          metrics.record({
+            type: "model.call.completed",
+            runId: `run-${index}`,
+            callId: `call-${index}`,
+            provider: "openai",
+            model: `model.${index}`,
+            durationMs: 10,
+          });
         }
         const drops = () =>
           Number(
@@ -135,8 +209,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
           );
         const before = drops();
         expect(before).toBeGreaterThan(0);
-        metrics.record(sample, trusted);
-        metrics.record({ ...baseEvent(), type: "diagnostic.gc", durationMs: 20 }, trusted);
+        metrics.record(sample);
+        metrics.record({ type: "diagnostic.gc", durationMs: 20 });
         expect(drops()).toBe(before + (preseed ? 0 : 3));
         const rendered = metrics.render();
         if (preseed) {
@@ -155,45 +229,30 @@ describe("diagnostics-prometheus runtime metrics", () => {
 
   it("retains runtime durations across repeated HTTP scrapes without labels", async () => {
     const metrics = createMetricsHarness();
-    const server = createServer((req, res) => {
-      void metrics.handler(req, res);
-    });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected TCP server address");
-      }
+    await withMetricsServer(metrics, async (url) => {
       const scrape = async () => {
-        const response = await fetch(`http://127.0.0.1:${address.port}/api/diagnostics/prometheus`);
+        const response = await fetch(url);
         expect(response.status).toBe(200);
         return await response.text();
       };
-      metrics.record(
-        { ...baseEvent(), type: "gateway.event_loop.sample", intervalMs: 2_000, delayMaxMs: 1_250 },
-        trusted,
-      );
-      metrics.record({ ...baseEvent(), type: "diagnostic.gc", durationMs: 1_250 }, trusted);
+      metrics.record({ type: "gateway.event_loop.sample", intervalMs: 2_000, delayMaxMs: 1_250 });
+      metrics.record({ type: "diagnostic.gc", durationMs: 1_250 });
       const first = await scrape();
       expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 1");
       expect(first).toContain("openclaw_gateway_event_loop_observed_seconds_total 2");
       expect(first).toContain("openclaw_gc_duration_seconds_count 1");
       expect(await scrape()).toBe(first);
       metrics.record(
-        { ...baseEvent(), type: "gateway.event_loop.sample", intervalMs: 8_000, delayMaxMs: 20 },
+        { type: "gateway.event_loop.sample", intervalMs: 8_000, delayMaxMs: 20 },
         Object.freeze({ trusted: false, internal: true }),
       );
       metrics.record(
-        { ...baseEvent(), type: "diagnostic.gc", durationMs: 20 },
+        { type: "diagnostic.gc", durationMs: 20 },
         Object.freeze({ trusted: false, internal: true }),
       );
-      metrics.record({ ...baseEvent(), type: "diagnostic.gc", durationMs: 99_000 }, untrusted);
+      metrics.record({ type: "diagnostic.gc", durationMs: 99_000 }, untrusted);
       metrics.record(
         {
-          ...baseEvent(),
           type: "gateway.event_loop.sample",
           intervalMs: 99_000,
           delayMaxMs: 99_000,
@@ -216,17 +275,6 @@ describe("diagnostics-prometheus runtime metrics", () => {
       }
       expect(await scrape()).toBe(second);
       expect(second).not.toMatch(/\{(?!le=)/);
-    } finally {
-      try {
-        if (server.listening) {
-          await new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-            server.closeIdleConnections();
-          });
-        }
-      } finally {
-        metrics.stop();
-      }
-    }
+    });
   });
 });

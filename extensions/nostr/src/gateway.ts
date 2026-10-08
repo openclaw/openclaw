@@ -1,4 +1,8 @@
-// Nostr plugin module implements gateway behavior.
+import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
+import type {
+  ChannelGatewayContext,
+  ChannelOutboundAdapter,
+} from "openclaw/plugin-sdk/channel-contract";
 import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
@@ -8,43 +12,22 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
-import type { PluginRuntime } from "../runtime-api.js";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
 import type { MetricEvent } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import { getNostrRuntime } from "./runtime.js";
 import { resolveDefaultNostrAccountId, type ResolvedNostrAccount } from "./types.js";
 
-type NostrGatewayStart = NonNullable<
-  NonNullable<ChannelPlugin<ResolvedNostrAccount>["gateway"]>["startAccount"]
->;
-type NostrOutboundAdapter = Pick<
-  ChannelOutboundAdapter,
-  "chunker" | "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
-> & {
-  sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
-  sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
-};
 const activeBuses = new Map<string, NostrBusHandle>();
-const ACCESS_GROUP_PREFIX = "accessGroup:";
 
 function normalizeRelayLifecycleKey(relay: string): string {
   return new URL(relay).toString();
-}
-
-function parseNostrAccessGroupAllowFromEntry(entry: string): string | null {
-  const trimmed = entry.trim();
-  if (!trimmed.startsWith(ACCESS_GROUP_PREFIX)) {
-    return null;
-  }
-  const name = trimmed.slice(ACCESS_GROUP_PREFIX.length).trim();
-  return name || null;
 }
 
 function normalizeNostrAllowEntry(entry: string): string | null {
@@ -55,7 +38,7 @@ function normalizeNostrAllowEntry(entry: string): string | null {
   if (trimmed === "*") {
     return "*";
   }
-  const accessGroup = parseNostrAccessGroupAllowFromEntry(trimmed);
+  const accessGroup = parseAccessGroupAllowFromEntry(trimmed);
   if (accessGroup) {
     return `accessGroup:${accessGroup}`;
   }
@@ -82,11 +65,14 @@ const nostrIngressIdentity = {
   entryIdPrefix: "nostr-entry",
 } satisfies StableChannelIngressIdentityParams;
 
-export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
+export async function startNostrGatewayAccount(
+  ctx: ChannelGatewayContext<ResolvedNostrAccount>,
+): Promise<void> {
   const account = ctx.account;
   ctx.setStatus({
     accountId: account.accountId,
     publicKey: account.publicKey,
+    profile: account.profile,
     lifecycle: "starting",
   });
   ctx.log?.info?.(`[${account.accountId}] starting Nostr provider (pubkey: ${account.publicKey})`);
@@ -134,24 +120,26 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
   const connectedRelays = new Set<string>();
 
   const authorizeSender = async (input: {
-    senderId: string;
+    senderPubkey: string;
     reply: (text: string) => Promise<void>;
   }): Promise<"allow" | "block" | "pairing"> => {
-    const resolved = await resolveInboundAccess(input.senderId, "");
+    const resolved = await resolveInboundAccess(input.senderPubkey, "");
     if (resolved.senderAccess.decision === "allow") {
       return "allow";
     }
     if (resolved.senderAccess.decision === "pairing") {
       await pairing.issueChallenge({
-        senderId: input.senderId,
-        senderIdLine: `Your Nostr pubkey: ${input.senderId}`,
+        senderId: input.senderPubkey,
+        senderIdLine: `Your Nostr pubkey: ${input.senderPubkey}`,
         sendPairingReply: input.reply,
         onCreated: () => {
-          ctx.log?.debug?.(`[${account.accountId}] nostr pairing request sender=${input.senderId}`);
+          ctx.log?.debug?.(
+            `[${account.accountId}] nostr pairing request sender=${input.senderPubkey}`,
+          );
         },
         onReplyError: (err) => {
           ctx.log?.warn?.(
-            `[${account.accountId}] nostr pairing reply failed for ${input.senderId}: ${String(
+            `[${account.accountId}] nostr pairing reply failed for ${input.senderPubkey}: ${String(
               err,
             )}`,
           );
@@ -160,7 +148,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
       return "pairing";
     }
     ctx.log?.debug?.(
-      `[${account.accountId}] blocked Nostr sender ${input.senderId} (${resolved.senderAccess.reasonCode})`,
+      `[${account.accountId}] blocked Nostr sender ${input.senderPubkey} (${resolved.senderAccess.reasonCode})`,
     );
     return "block";
   };
@@ -172,8 +160,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         accountId: account.accountId,
         privateKey: account.privateKey,
         relays: account.relays,
-        authorizeSender: async ({ senderPubkey, reply }) =>
-          await authorizeSender({ senderId: senderPubkey, reply }),
+        authorizeSender,
         onMessage: async (senderPubkey, text, reply, meta, lifecycle) => {
           const resolvedAccess = await resolveInboundAccess(senderPubkey, text);
           if (resolvedAccess.senderAccess.decision !== "allow") {
@@ -183,7 +170,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
             return;
           }
 
-          const { dispatchInboundDirectDm } = await import("./inbound-direct-dm-runtime.js");
+          const { dispatchInboundDirectDm } = await import("openclaw/plugin-sdk/channel-inbound");
           await dispatchInboundDirectDm({
             channelRuntime,
             resolveChannelIngress: async (contextBinding) => {
@@ -216,13 +203,9 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
             turnAdoptionLifecycle:
               bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
             deliver: async (payload) => {
-              const outboundText =
-                payload && typeof payload === "object" && "text" in payload
-                  ? ((payload as { text?: string }).text ?? "")
-                  : "";
               // Inbound DM replies bypass the outbound adapter; sanitize before
               // Markdown conversion so private tool traces cannot reach a relay.
-              const sanitizedText = sanitizeAssistantVisibleText(outboundText);
+              const sanitizedText = sanitizeAssistantVisibleText(payload.text ?? "");
               if (!sanitizedText) {
                 return;
               }
@@ -313,7 +296,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
       await monitor.stop();
     },
   });
-};
+}
 
 export const nostrPairingTextAdapter = {
   idLabel: "nostrPubkey",
@@ -343,7 +326,7 @@ export const nostrPairingTextAdapter = {
   },
 };
 
-export const nostrOutboundAdapter: NostrOutboundAdapter = {
+export const nostrOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 4000,
   // The outbound planner ignores textChunkLimit unless the adapter also
@@ -389,7 +372,7 @@ export const nostrOutboundAdapter: NostrOutboundAdapter = {
       messageId: eventId,
     });
   },
-};
+} satisfies ChannelOutboundAdapter;
 
 export function getActiveNostrBuses(): Map<string, NostrBusHandle> {
   return new Map(activeBuses);

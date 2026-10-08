@@ -13,7 +13,6 @@ import {
 import { listManagedPluginNpmRootsSync } from "../plugins/npm-project-roots.js";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
-  type OpenClawPeerLinkAuditIssue,
   reconcileRegisteredOpenClawHostLinks,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "../plugins/plugin-peer-link.js";
@@ -29,13 +28,6 @@ type PluginPackageReadFailure = {
   reason: string;
 };
 
-type PluginHostLinkAudit = {
-  peerLinkIssues: OpenClawPeerLinkAuditIssue[];
-  packageReadFailures: PluginPackageReadFailure[];
-  registeredPeerLinkIssues: OpenClawPeerLinkAuditIssue[];
-  registeredPackageReadFailures: PluginPackageReadFailure[];
-};
-
 function resolveRegisteredPluginExtensionsRoot(
   params: InstalledPluginIndexRecordStoreOptions,
 ): string {
@@ -44,7 +36,6 @@ function resolveRegisteredPluginExtensionsRoot(
     : resolveDefaultPluginExtensionsDir(params.env);
 }
 
-/** Resolves all managed npm roots from the doctor state override or environment. */
 export function resolveDoctorPluginNpmRoots(
   params: InstalledPluginIndexRecordStoreOptions,
 ): string[] {
@@ -57,7 +48,7 @@ export function resolveDoctorPluginNpmRoots(
 /** Audits managed npm and registered plugin host links without mutating either root. */
 export async function listPluginOpenClawHostLinkIssues(
   params: InstalledPluginIndexRecordStoreOptions,
-): Promise<PluginHostLinkAudit> {
+) {
   const packageReadFailures: PluginPackageReadFailure[] = [];
   const registeredPackageReadFailures: PluginPackageReadFailure[] = [];
   const audits = await Promise.all(
@@ -93,7 +84,6 @@ export async function listPluginOpenClawHostLinkIssues(
   };
 }
 
-/** Relinks registry-owned plugin packages to the current OpenClaw host package. */
 export async function maybeRepairPluginOpenClawHostLinks(
   params: PluginHostLinkDoctorParams,
 ): Promise<boolean> {
@@ -110,27 +100,21 @@ export async function maybeRepairPluginOpenClawHostLinks(
         "Plugin registry",
       );
     }
-    if (audit.packageReadFailures.length > 0) {
-      note(
-        [
-          "Managed npm plugin packages could not be inspected:",
-          ...audit.packageReadFailures.map(
-            (failure) => `- ${shortenHomePath(failure.packageDir)}: ${failure.reason}`,
-          ),
-        ].join("\n"),
-        "Plugin registry",
-      );
-    }
-    if (audit.registeredPackageReadFailures.length > 0) {
-      note(
-        [
-          "Registered plugin packages could not be inspected:",
-          ...audit.registeredPackageReadFailures.map(
-            (failure) => `- ${shortenHomePath(failure.packageDir)}: ${failure.reason}`,
-          ),
-        ].join("\n"),
-        "Plugin registry",
-      );
+    for (const [label, failures] of [
+      ["Managed npm plugin", audit.packageReadFailures],
+      ["Registered plugin", audit.registeredPackageReadFailures],
+    ] as const) {
+      if (failures.length > 0) {
+        note(
+          [
+            `${label} packages could not be inspected:`,
+            ...failures.map(
+              (failure) => `- ${shortenHomePath(failure.packageDir)}: ${failure.reason}`,
+            ),
+          ].join("\n"),
+          "Plugin registry",
+        );
+      }
     }
     if (audit.registeredPeerLinkIssues.length > 0) {
       note(
@@ -147,10 +131,10 @@ export async function maybeRepairPluginOpenClawHostLinks(
     return false;
   }
 
-  const messages: { level: "info" | "warn"; message: string }[] = [];
+  const warnings: string[] = [];
   const logger = {
-    info: (message: string) => messages.push({ level: "info" as const, message }),
-    warn: (message: string) => messages.push({ level: "warn" as const, message }),
+    info() {},
+    warn: (message: string) => warnings.push(`- ${message}`),
   };
   const results = await Promise.all(
     npmRoots.map((npmRoot) =>
@@ -191,9 +175,6 @@ export async function maybeRepairPluginOpenClawHostLinks(
       "Plugin registry",
     );
   }
-  const warnings = messages
-    .filter((message) => message.level === "warn")
-    .map((message) => `- ${message.message}`);
   if (warnings.length > 0) {
     note(
       ["Could not repair all managed OpenClaw host peer links:", ...warnings].join("\n"),

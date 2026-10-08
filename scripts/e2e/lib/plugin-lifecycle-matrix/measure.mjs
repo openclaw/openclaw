@@ -1,7 +1,7 @@
-// Measures plugin lifecycle matrix E2E command timings.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { reportLimitViolations } from "../../../lib/check-limits.mts";
 
 const [summaryPath, phase, separator, command, ...args] = process.argv.slice(2);
 if (!summaryPath || !phase || separator !== "--" || !command) {
@@ -51,7 +51,7 @@ function readPositiveNumberEnv(name, fallback) {
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 function clampPluginLifecycleTimerMs(valueMs) {
-  return Math.min(Math.max(Math.floor(valueMs), 1), MAX_TIMER_TIMEOUT_MS);
+  return Math.min(valueMs, MAX_TIMER_TIMEOUT_MS);
 }
 
 const pollMs = clampPluginLifecycleTimerMs(
@@ -210,23 +210,20 @@ for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
 
 updateMetrics();
 const interval = setInterval(updateMetrics, pollMs);
-const timeoutTimer =
-  Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? setTimeout(() => {
-        if (childClosedResult && !childGroupExists()) {
-          finish(childClosedResult.code, childClosedResult.signal);
-          return;
-        }
-        timedOut = true;
-        terminateChildGroup("SIGTERM");
-        killTimer = setTimeout(() => {
-          terminateChildGroup("SIGKILL");
-          finish(124);
-        }, timeoutKillGraceMs);
-        killTimer.unref?.();
-      }, timeoutMs)
-    : null;
-timeoutTimer?.unref?.();
+const timeoutTimer = setTimeout(() => {
+  if (childClosedResult && !childGroupExists()) {
+    finish(childClosedResult.code, childClosedResult.signal);
+    return;
+  }
+  timedOut = true;
+  terminateChildGroup("SIGTERM");
+  killTimer = setTimeout(() => {
+    terminateChildGroup("SIGKILL");
+    finish(124);
+  }, timeoutKillGraceMs);
+  killTimer.unref?.();
+}, timeoutMs);
+timeoutTimer.unref?.();
 
 function terminateChildGroup(signal) {
   if (!child.pid) {
@@ -258,21 +255,11 @@ function childGroupExists() {
 
 function clearRuntimeTimers() {
   clearInterval(interval);
-  if (timeoutTimer) {
-    clearTimeout(timeoutTimer);
-  }
-  if (killTimer) {
-    clearTimeout(killTimer);
-  }
-  if (parentSignalTimer) {
-    clearTimeout(parentSignalTimer);
-  }
-  if (parentSignalPollTimer) {
-    clearInterval(parentSignalPollTimer);
-  }
-  if (childGroupDrainTimer) {
-    clearInterval(childGroupDrainTimer);
-  }
+  clearTimeout(timeoutTimer);
+  clearTimeout(killTimer);
+  clearTimeout(parentSignalTimer);
+  clearInterval(parentSignalPollTimer);
+  clearInterval(childGroupDrainTimer);
 }
 
 function rethrowParentSignal(signal, reason) {
@@ -357,7 +344,14 @@ function finish(code, signal) {
   if (cpuCoreRatio > maxCpuCoreRatio) {
     violations.push(`cpu_core_ratio=${cpuCoreRatio.toFixed(3)} > ${maxCpuCoreRatio}`);
   }
-  if (violations.length > 0) {
+  const limitsFailed = reportLimitViolations(
+    violations.map((message) => ({
+      file: "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs",
+      title: "Plugin lifecycle resource budget",
+      message: `phase=${phase} ${message}`,
+    })),
+  );
+  if (limitsFailed) {
     console.error(
       `plugin lifecycle resource ceiling exceeded: phase=${phase} ${violations.join("; ")}`,
     );

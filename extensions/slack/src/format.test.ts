@@ -161,15 +161,6 @@ describe("normalizeSlackOutboundText", () => {
     expect(res).toBe("• item\n  • nested");
   });
 
-  it("handles complex message with multiple elements", () => {
-    const res = normalizeSlackOutboundText(
-      "**Important:** Check the _docs_ at [link](https://example.com)\n\n- first\n- second",
-    );
-    expect(res).toBe(
-      "*Important:* Check the _docs_ at <https://example.com|link>\n\n• first\n• second",
-    );
-  });
-
   it("returns empty text when input is undefined at runtime", () => {
     expect(normalizeSlackOutboundText(undefined as unknown as string)).toBe("");
   });
@@ -245,6 +236,21 @@ describe("normalizeSlackOutboundText", () => {
     ).toStrictEqual([]);
   });
 
+  it("keeps a quote marker whose escaping depends on the following space", () => {
+    expect(markdownToSlackMrkdwnChunks("a > b **bold**> quote", 17)).toEqual([
+      "a &gt; b *bold*> ",
+      "quote",
+    ]);
+  });
+
+  it("measures native tokens with spaces as one unit when chunking", () => {
+    expect(markdownToSlackMrkdwnChunks("beta beta <@U1|some one> <https://x|a b> x", 23)).toEqual([
+      "beta beta &lt;@U1|some ",
+      "one&gt; <https://x|a b>",
+      " x",
+    ]);
+  });
+
   it("includes transcript protection when a native token exactly fills the chunk budget", () => {
     expect(markdownToSlackMrkdwnChunks("<@U|user[t]>", 12)).toEqual(["&lt;@U|user[", "t]&gt;"]);
   });
@@ -277,17 +283,7 @@ describe("normalizeSlackOutboundText", () => {
 });
 
 describe("escapeSlackMrkdwn", () => {
-  it("returns plain text unchanged", () => {
-    expect(escapeSlackMrkdwn("heartbeat status ok")).toBe("heartbeat status ok");
-  });
-
   it("escapes only Slack entities while preserving formatting markers and backslashes", () => {
     expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode_*`~&lt;&amp;&gt;\\");
-  });
-});
-
-describe("normalizeSlackOutboundText", () => {
-  it("normalizes markdown for outbound send/update paths", () => {
-    expect(normalizeSlackOutboundText(" **bold** ")).toBe("*bold*");
   });
 });

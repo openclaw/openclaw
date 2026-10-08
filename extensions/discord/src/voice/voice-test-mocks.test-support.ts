@@ -15,7 +15,7 @@ const {
   createAudioResourceMock,
   resolveAgentRouteMock,
   agentCommandMock,
-  resolveRealtimeBootstrapContextInstructionsMock,
+  resolveRealtimeVoiceAgentContextInstructionsMock,
   resolveVoiceIngressWithParticipantsMock,
   syntheticVoiceAdmissions,
   transcribeAudioFileMock,
@@ -211,9 +211,8 @@ const {
         _runtime?: unknown,
       ): Promise<{ payloads?: Array<{ text?: string }> }> => ({ payloads: [] }),
     ),
-    resolveRealtimeBootstrapContextInstructionsMock: vi.fn<
-      (...args: unknown[]) => Promise<string | undefined>
-    >(async () => undefined),
+    resolveRealtimeVoiceAgentContextInstructionsMock:
+      vi.fn<(...args: unknown[]) => Promise<string>>(),
     resolveVoiceIngressWithParticipantsMock: vi.fn() as Mock,
     transcribeAudioFileMock: vi.fn<PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"]>(
       async () => ({ text: "hello from voice" }),
@@ -297,7 +296,7 @@ export const voiceTestMocks = {
   createAudioResourceMock,
   resolveAgentRouteMock,
   agentCommandMock,
-  resolveRealtimeBootstrapContextInstructionsMock,
+  resolveRealtimeVoiceAgentContextInstructionsMock,
   resolveVoiceIngressWithParticipantsMock,
   transcribeAudioFileMock,
   resolveAudioInputBudgetMock,
@@ -387,7 +386,7 @@ vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", async () => {
   >("openclaw/plugin-sdk/realtime-bootstrap-context");
   return {
     ...actual,
-    resolveRealtimeBootstrapContextInstructions: resolveRealtimeBootstrapContextInstructionsMock,
+    resolveRealtimeVoiceAgentContextInstructions: resolveRealtimeVoiceAgentContextInstructionsMock,
   };
 });
 
@@ -501,13 +500,13 @@ vi.mock("./audio.js", async () => {
   const { PassThrough } = await import("node:stream");
   return {
     ...actual,
-    createDiscordOpusEncodeStream: vi.fn(() =>
-      Object.assign(new PassThrough(), {
+    DiscordOpusEncodeStream: vi.fn(function () {
+      return Object.assign(new PassThrough(), {
         flushPartialFrame: () => false,
         flushPartialFrameWhenReady: () => {},
         takePcmBytes: (packet: Buffer) => packet.length,
-      }),
-    ),
+      });
+    }),
     createDiscordOpusPlaybackStream: vi.fn(() => new PassThrough()),
     decodeOpusStreamChunks: decodeOpusStreamChunksMock,
   };

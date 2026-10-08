@@ -9,7 +9,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { MediaFact } from "../../media/media-facts.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
   discardPreparedInboundMedia,
@@ -20,29 +23,26 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
-import {
-  explicitOriginTargetsAcpSession,
-  explicitOriginTargetsPluginBinding,
-} from "./chat-origin-routing.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
+import { resolveExplicitOriginBindingTargets } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-function isPdfOffloadedRef(ref: OffloadedRef): boolean {
-  const mime = ref.mimeType.trim().toLowerCase();
-  if (mime === "application/pdf" || mime.endsWith("+pdf")) {
-    return true;
-  }
-  return path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() === ".pdf";
-}
-
 // Managed inbound PDFs can be read host-side from the media-store root, even
 // for locked-down agents, so sandbox staging may safely fall back to that path.
 function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  if (!isPdfOffloadedRef(ref)) {
+  const mime = ref.mimeType.trim().toLowerCase();
+  if (
+    mime !== "application/pdf" &&
+    !mime.endsWith("+pdf") &&
+    path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() !== ".pdf"
+  ) {
     return false;
   }
   try {
@@ -60,14 +60,16 @@ async function prestageMediaPathOffloads(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
+  skillLibrarySelections?: SkillSnapshot["librarySelections"];
+  existingSkillsSnapshot?: SkillSnapshot;
   abortSignal: AbortSignal;
   assertWorkAdmissionCurrent: () => void;
-}): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
+}): Promise<MediaFact[]> {
   const mediaPathRefs = params.offloadedRefs.filter(
     (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
   );
   if (mediaPathRefs.length === 0) {
-    return { paths: [], types: [] };
+    return [];
   }
   try {
     const [{ ensureSandboxWorkspaceForSession }, { SANDBOX_MEDIA_MAX_BYTES, stageSandboxMedia }] =
@@ -77,19 +79,17 @@ async function prestageMediaPathOffloads(params: {
       ]);
     params.abortSignal.throwIfAborted();
     params.assertWorkAdmissionCurrent();
-    const refsByManagedPath = (refs: OffloadedRef[]) => ({
-      paths: refs.map((ref) => ref.path),
-      types: refs.map((ref) => ref.mimeType),
-    });
-    const passThroughRefs: OffloadedRef[] = [];
-    const refsToStage: OffloadedRef[] = [];
-    for (const ref of mediaPathRefs) {
-      // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
-      (ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref)
-        ? passThroughRefs
-        : refsToStage
-      ).push(ref);
-    }
+    const refsByManagedPath = (refs: OffloadedRef[]): MediaFact[] =>
+      refs.map((ref) => ({
+        path: ref.path,
+        contentType: ref.mimeType,
+        fileName: ref.label,
+        workspaceDir: path.dirname(ref.path),
+      }));
+    // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
+    const refsToStage = mediaPathRefs.filter(
+      (ref) => !(ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref)),
+    );
     if (refsToStage.length === 0) {
       return refsByManagedPath(mediaPathRefs);
     }
@@ -98,12 +98,30 @@ async function prestageMediaPathOffloads(params: {
     if (getAgentWorkspaceAccess(workspaceDir, "prepareTurnAttachments")?.prepareTurnAttachments) {
       return refsByManagedPath(mediaPathRefs);
     }
+    const skillsSnapshot = params.skillLibrarySelections?.length
+      ? (
+          await (
+            await import("../../skills/runtime/session-snapshot.js")
+          ).resolveReusableWorkspaceSkillSnapshot({
+            workspaceDir,
+            config: params.cfg,
+            agentId: params.agentId,
+            existingSnapshot: params.existingSkillsSnapshot,
+            librarySelections: params.skillLibrarySelections,
+            assertCurrent: params.assertWorkAdmissionCurrent,
+          })
+        ).snapshot
+      : undefined;
+    params.abortSignal.throwIfAborted();
+    params.assertWorkAdmissionCurrent();
     const sandbox = await ensureSandboxWorkspaceForSession({
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       workspaceDir,
+      skillsSnapshot,
     });
+    params.assertWorkAdmissionCurrent();
     if (!sandbox) {
       return refsByManagedPath(mediaPathRefs);
     }
@@ -135,6 +153,7 @@ async function prestageMediaPathOffloads(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         workspaceDir,
+        skillsSnapshot,
         abortSignal: params.abortSignal,
       });
     } catch (stageErr) {
@@ -169,20 +188,20 @@ async function prestageMediaPathOffloads(params: {
         mimeType: stagedMedia[index]?.contentType ?? ref.mimeType,
       });
     });
-    for (const ref of passThroughRefs) {
-      resolvedByRef.set(ref, { path: ref.path, mimeType: ref.mimeType });
-    }
-    const ordered = mediaPathRefs.map(
-      (ref) => resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType },
-    );
-    return {
-      paths: ordered.map((entry) => entry.path),
-      types: ordered.map((entry) => entry.mimeType),
-      workspaceDir: sandbox.workspaceDir,
-    };
+    return mediaPathRefs.map((ref) => {
+      const resolved = resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType };
+      return {
+        path: resolved.path,
+        url: ref.mediaRef,
+        contentType: resolved.mimeType,
+        fileName: ref.label,
+        workspaceDir: sandbox.workspaceDir,
+      };
+    });
   } catch (err) {
     if (
       (params.abortSignal.aborted && Object.is(err, params.abortSignal.reason)) ||
+      err instanceof SessionMutationAuthorizationChangedError ||
       err instanceof MediaOffloadError ||
       err instanceof UnsupportedAttachmentError
     ) {
@@ -202,8 +221,9 @@ export async function prepareChatSendAttachments(params: {
   admission: AdmittedChatSend;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
+  client?: GatewayRequestHandlerOptions["client"];
 }) {
-  const { request, session, admission, respond, context } = params;
+  const { request, session, admission, respond, context, client } = params;
   const { inboundMessage, normalizedAttachments, explicitOrigin } = request;
   const { cfg, sessionKey, agentId, resolvedSessionModel, clientRunId } = session;
   const {
@@ -213,27 +233,31 @@ export async function prepareChatSendAttachments(params: {
     finishAbortedChatSend,
     lifecycleGeneration,
   } = admission;
+  const assertInputCurrent = () => {
+    activeRunAbort.controller.signal.throwIfAborted();
+    admission.assertWorkAdmissionCurrent();
+    admission.assertClientUploadAllowed?.();
+  };
   let parsedMessage = inboundMessage;
   let parsedImages: Awaited<ReturnType<typeof parseMessageWithAttachments>>["images"] = [];
   let imageOrder: Awaited<ReturnType<typeof parseMessageWithAttachments>>["imageOrder"] = [];
   let offloadedRefs: OffloadedRef[] = [];
-  let mediaPathOffloadPaths: string[] = [];
-  let mediaPathOffloadTypes: string[] = [];
-  let mediaPathOffloadWorkspaceDir: string | undefined;
-  const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(explicitOrigin);
+  let mediaPathOffloads: MediaFact[] = [];
+  let explicitOriginTargetsPlugin = false;
   let prepareAttachmentsMs: number | undefined;
 
-  if (normalizedAttachments.length > 0) {
-    const prepareAttachmentsStartedAtMs = performance.now();
-    try {
+  try {
+    const explicitOriginTargets = await resolveExplicitOriginBindingTargets(explicitOrigin);
+    assertInputCurrent();
+    explicitOriginTargetsPlugin = explicitOriginTargets.plugin;
+
+    if (normalizedAttachments.length > 0) {
+      const prepareAttachmentsStartedAtMs = performance.now();
       await measureDiagnosticsTimelineSpan(
         "gateway.chat_send.prepare_attachments",
         async () => {
           const imageSupport: { value: boolean | undefined } = {
-            value:
-              explicitOriginTargetsAcpSession(explicitOrigin) || explicitOriginTargetsPlugin
-                ? true
-                : undefined,
+            value: explicitOriginTargets.acp || explicitOriginTargetsPlugin ? true : undefined,
           };
           const resolveSupportsImages = async (): Promise<boolean> => {
             imageSupport.value ??= await resolveGatewayModelSupportsImages({
@@ -250,6 +274,8 @@ export async function prepareChatSendAttachments(params: {
             log: context.logGateway,
             supportsImages: imageSupport.value ?? resolveSupportsImages,
             acceptNonImage: true,
+            signal: activeRunAbort.controller.signal,
+            assertCurrent: assertInputCurrent,
           });
           // The parser owns MIME classification. An unresolved capability means no image was seen,
           // so post-processing must not trigger catalog discovery for a non-image attachment.
@@ -260,19 +286,31 @@ export async function prepareChatSendAttachments(params: {
           parsedImages = parsed.images;
           imageOrder = parsed.imageOrder;
           offloadedRefs = parsed.offloadedRefs;
-          ({
-            paths: mediaPathOffloadPaths,
-            types: mediaPathOffloadTypes,
-            workspaceDir: mediaPathOffloadWorkspaceDir,
-          } = await prestageMediaPathOffloads({
+          const stagingEntry =
+            admission.initialSessionEntry ?? admission.admittedSessionEntry ?? session.entry;
+          const selectedSkills = stagingEntry
+            ? (stagingEntry.skillLibrarySelections ??
+              stagingEntry.skillsSnapshot?.librarySelections)
+            : request.systemInputProvenance
+              ? undefined
+              : (
+                  await prepareSkillLibrarySessionCreation(
+                    client,
+                    context.getRuntimeConfig ?? cfg,
+                    resolveOperatorSessionCreation(client),
+                  )
+                ).skillLibrarySelections;
+          mediaPathOffloads = await prestageMediaPathOffloads({
             offloadedRefs,
             includeImageRefs: !parsedSupportsImages,
             cfg,
             sessionKey,
             agentId,
+            skillLibrarySelections: selectedSkills,
+            existingSkillsSnapshot: stagingEntry?.skillsSnapshot,
             abortSignal: activeRunAbort.controller.signal,
-            assertWorkAdmissionCurrent: admission.assertWorkAdmissionCurrent,
-          }));
+            assertWorkAdmissionCurrent: assertInputCurrent,
+          });
         },
         {
           phase: "agent-turn",
@@ -283,52 +321,75 @@ export async function prepareChatSendAttachments(params: {
           },
         },
       );
+      assertInputCurrent();
       // Pass-through media still needs awaited cleanup when preparation was cancelled.
       activeRunAbort.controller.signal.throwIfAborted();
       prepareAttachmentsMs = roundedChatSendTimingMs(
         performance.now() - prepareAttachmentsStartedAtMs,
       );
-    } catch (err) {
-      const aborted =
-        activeRunAbort.controller.signal.aborted &&
-        (context.chatRunState.hasAbortMarker(clientRunId) ||
-          Object.is(err, activeRunAbort.controller.signal.reason));
-      // Retire failed-run cancellation before cleanup yields, but retain work
-      // admission until deletion finishes so a late abort cannot replace the error.
-      if (!aborted) {
-        activeRunAbort.cleanup();
-      }
-      await discardPreparedInboundMedia(offloadedRefs);
-      if (aborted) {
-        finishAbortedChatSend();
-        return { ok: false as const };
-      }
-      cleanupAdmittedRun();
-      clearAgentRunContext(clientRunId, lifecycleGeneration);
-      logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
-      respond(
-        false,
-        undefined,
-        errorShape(
-          err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-          String(err),
-        ),
-      );
+    }
+  } catch (err) {
+    const aborted =
+      activeRunAbort.controller.signal.aborted &&
+      (context.chatRunState.hasAbortMarker(clientRunId) ||
+        Object.is(err, activeRunAbort.controller.signal.reason));
+    // Retire failed-run cancellation before cleanup yields, but retain work
+    // admission until deletion finishes so a late abort cannot replace the error.
+    if (!aborted) {
+      activeRunAbort.cleanup();
+    }
+    await discardPreparedInboundMedia(offloadedRefs);
+    if (aborted) {
+      finishAbortedChatSend();
       return { ok: false as const };
     }
+    cleanupAdmittedRun();
+    clearAgentRunContext(clientRunId, lifecycleGeneration);
+    logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
+    respond(
+      false,
+      undefined,
+      err instanceof SessionMutationAuthorizationChangedError
+        ? err.error
+        : errorShape(
+            err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+            String(err),
+          ),
+    );
+    return { ok: false as const };
   }
   return {
     ok: true as const,
     value: {
       explicitOriginTargetsPlugin,
       imageOrder,
-      mediaPathOffloadPaths,
-      mediaPathOffloadTypes,
-      mediaPathOffloadWorkspaceDir,
+      mediaPathOffloads,
       offloadedRefs,
       parsedImages,
       parsedMessage,
       prepareAttachmentsMs,
     },
+  };
+}
+
+export type PreparedChatSendAttachments = Extract<
+  Awaited<ReturnType<typeof prepareChatSendAttachments>>,
+  { ok: true }
+>["value"];
+
+/** Preparation owns cleanup until a transcript or pending input takes custody of its media. */
+export function bindChatSendPreparedMediaCustody(params: {
+  admission: Pick<AdmittedChatSend, "setDiscardAbandonedPreparedMedia">;
+  attachments: Pick<PreparedChatSendAttachments, "offloadedRefs">;
+}): (recorder: UserTurnTranscriptRecorder) => void {
+  let recorder: UserTurnTranscriptRecorder | undefined;
+  // Dispatch owns persistence after the ACK disarms this cleanup.
+  params.admission.setDiscardAbandonedPreparedMedia(() => {
+    if (!recorder?.hasPersisted() && !recorder?.getPendingInputMessage?.()) {
+      void discardPreparedInboundMedia(params.attachments.offloadedRefs);
+    }
+  });
+  return (inputRecorder) => {
+    recorder = inputRecorder;
   };
 }

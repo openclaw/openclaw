@@ -30,7 +30,9 @@ type AgentCommandResult = Awaited<
 type AgentCommandFn = (...args: unknown[]) => Promise<AgentCommandResult | void>;
 type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 export type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
-type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
+type DispatchInboundMessageFn = (
+  ...args: Parameters<typeof import("../auto-reply/dispatch.js").dispatchInboundMessage>
+) => Promise<unknown>;
 type CompactEmbeddedAgentSessionFn = (...args: unknown[]) => Promise<unknown>;
 
 const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.configRoot");

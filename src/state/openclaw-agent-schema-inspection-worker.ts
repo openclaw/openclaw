@@ -1,7 +1,7 @@
 import { fork } from "node:child_process";
+import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { z } from "zod";
-import type { FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
@@ -34,6 +34,7 @@ const inspectionResponse = z.discriminatedUnion("ok", [
       .object({
         version: z.number().int().safe(),
         integrityGateOutcome: z.enum(["cached", "healthy"]).optional(),
+        preparationPending: z.literal(true).optional(),
         writerAppVersion: z.string().optional(),
         reason: z.string().optional(),
         failure: agentSchemaInspectionErrorSchema.optional(),

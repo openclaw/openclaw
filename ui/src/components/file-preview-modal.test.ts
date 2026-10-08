@@ -60,6 +60,17 @@ function shadowText(modal: FilePreviewModalElement): string {
   return modal.shadowRoot?.textContent ?? "";
 }
 
+function pressArrowDown(target: EventTarget | null | undefined) {
+  const event = new KeyboardEvent("keydown", {
+    key: "ArrowDown",
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+  });
+  target?.dispatchEvent(event);
+  return event;
+}
+
 describe("openclaw-file-preview-modal", () => {
   beforeEach(() => {
     container = document.createElement("div");
@@ -150,13 +161,7 @@ describe("openclaw-file-preview-modal", () => {
     expect(input).toBeInstanceOf(HTMLInputElement);
     expect(modal.shadowRoot?.activeElement).toBe(input);
 
-    const arrowDown = new KeyboardEvent("keydown", {
-      key: "ArrowDown",
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-    });
-    input!.dispatchEvent(arrowDown);
+    const arrowDown = pressArrowDown(input);
 
     expect(arrowDown.defaultPrevented).toBe(true);
     expect(onDocumentKeydown).not.toHaveBeenCalled();
@@ -169,13 +174,7 @@ describe("openclaw-file-preview-modal", () => {
     modal.addEventListener("file-preview-select", onSelect);
 
     const dialog = modal.shadowRoot?.querySelector<HTMLElement>("openclaw-modal-dialog");
-    const arrowDown = new KeyboardEvent("keydown", {
-      key: "ArrowDown",
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-    });
-    dialog?.dispatchEvent(arrowDown);
+    const arrowDown = pressArrowDown(dialog);
 
     expect(arrowDown.defaultPrevented).toBe(true);
     expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
@@ -207,13 +206,7 @@ describe("openclaw-file-preview-modal", () => {
     document.addEventListener("keydown", onDocumentKeydown);
 
     const input = modal.shadowRoot?.querySelector<HTMLInputElement>(".search");
-    const arrowDown = new KeyboardEvent("keydown", {
-      key: "ArrowDown",
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-    });
-    input!.dispatchEvent(arrowDown);
+    const arrowDown = pressArrowDown(input);
 
     expect(arrowDown.defaultPrevented).toBe(true);
     expect(onDocumentKeydown).not.toHaveBeenCalled();
@@ -281,21 +274,8 @@ describe("openclaw-file-preview-modal", () => {
         common: { close: "Fechar", copied: "Copiado!", copyFailed: "Falha ao copiar" },
         filePreview: {
           label: "Arquivos de suporte",
-          listLabel: "Arquivos",
-          searchPlaceholder: "Buscar arquivos…",
-          readOnly: "somente leitura",
-          emptyTitle: "Nenhum arquivo corresponde",
-          emptySubtitle: "Tente outro nome ou conteúdo.",
           copyFile: "Copiar arquivo",
           fileCount: "{count} arquivos",
-          filteredFileCount: "{count}/{total} arquivos",
-          noMatches: "Nenhum arquivo corresponde.",
-          navigate: "navegar",
-          kind: {
-            text: "Texto",
-            shell: "Shell",
-            file: "Arquivo",
-          },
         },
       });
 
@@ -332,6 +312,18 @@ describe("openclaw-file-preview-modal", () => {
       expect(feedback.hidden).toBe(true);
     },
   );
+
+  it.each([
+    ["references/notes.constructor", "CONSTRUCTOR"],
+    ["references/notes.__proto__", "__PROTO__"],
+  ])("renders the fallback file-kind label for %s", async (path, label) => {
+    const modal = await renderPreview({
+      activePath: path,
+      previewFiles: [{ path, size: "12 B", contents: "Example file" }],
+    });
+
+    expect(modal.shadowRoot?.querySelector(".chip.accent")?.textContent).toBe(label);
+  });
 
   it("localizes generic file-kind chips", async () => {
     i18n.registerTranslation("pt-BR", {

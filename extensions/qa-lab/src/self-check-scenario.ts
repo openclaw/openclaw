@@ -1,6 +1,6 @@
-import { extractQaToolPayload } from "./extract-tool-payload.js";
+import type { QaBusMessage } from "openclaw/plugin-sdk/qa-channel-protocol";
+import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import type { QaTransportState } from "./qa-transport.js";
-import type { QaBusMessage } from "./runtime-api.js";
 import type { QaScenarioDefinition } from "./scenario.js";
 import { waitForOutboundMessage } from "./suite-runtime-transport.js";
 

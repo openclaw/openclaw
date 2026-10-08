@@ -3,11 +3,21 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { finished } from "node:stream/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import type { PluginGatewayAccessPolicy } from "../plugins/gateway-access-policy.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { mergeProfiles, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
@@ -73,7 +83,7 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await fs.rm(temp, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
@@ -393,13 +403,15 @@ describe("assistant image session policy", () => {
           },
         };
         const profile = ensureProfileForEmail("media-role-reader@example.test");
+        const catalog = await prepareUserProfileCatalog();
+        onTestFinished(catalog.release);
         const source = path.join(project, "image.png");
         await fs.writeFile(source, PNG);
         entry.visibility = visibility;
         state.auth.mockResolvedValue({
           authMethod: "trusted-proxy",
           operatorScopes: ["operator.read"],
-          ...resolveHttpProfile(profile.id, profile.updatedAt, cfg),
+          ...resolveHttpProfile(profile.id, cfg),
         });
         const result = await request(source);
         if (available) {
@@ -475,6 +487,58 @@ describe("assistant image session policy", () => {
       });
     },
   );
+  it("keeps merged-profile media tickets bound to the canonical person's current plugin access", async () => {
+    const pluginId = "media-reader-access";
+    const grant = new AbortController();
+    const authorize = vi.fn<PluginGatewayAccessPolicy["authorize"]>(() => ({
+      signal: grant.signal,
+      assertCurrent: () => grant.signal.throwIfAborted(),
+    }));
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(createPluginRecord({ id: pluginId }));
+    registry.gatewayAccessPolicies.push({ pluginId, source: "fixture", policy: { authorize } });
+    const previous = captureActivePluginRegistrySnapshot();
+    stageActivePluginRegistry(registry, null, "default");
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
+        cfg.gateway = {
+          roles: {
+            default: "viewer",
+            definitions: {
+              viewer: {
+                sessions: { others: "view" },
+                agents: "*",
+                scopes: ["operator.read"],
+                accessPolicyPlugin: pluginId,
+              },
+            },
+          },
+        };
+        const profile = ensureProfileForEmail("media-alias@example.test");
+        const canonical = ensureProfileForEmail("media-canonical@example.test");
+        const catalog = await prepareUserProfileCatalog();
+        onTestFinished(catalog.release);
+        state.auth.mockResolvedValue({
+          authMethod: "trusted-proxy",
+          operatorScopes: ["operator.read"],
+          ...resolveHttpProfile(profile.id, cfg),
+        });
+        const source = path.join(project, "shared.png");
+        await fs.writeFile(source, PNG);
+        const metadata = await request(source);
+        expect(metadata.payload).toMatchObject({ available: true });
+        const ticket = String(metadata.payload!.mediaTicket);
+        mergeProfiles(profile.id, canonical.id);
+        expect((await request(source, { ticket, bytes: true })).bytes).toEqual(PNG);
+        expect(authorize.mock.calls.at(-1)?.[0].profile.profileId).toBe(canonical.id);
+        grant.abort();
+        expect((await request(source, { ticket, bytes: true })).res.statusCode).toBe(404);
+      });
+    } finally {
+      rollbackStagedPluginRegistry(previous);
+    }
+  });
+
   it.each(["visibility", "role assignment", "role definition"] as const)(
     "revalidates a named reader's saved media ticket after %s withdrawal",
     async (change) => {
@@ -489,10 +553,12 @@ describe("assistant image session policy", () => {
           },
         };
         const profile = ensureProfileForEmail("media-reader@example.test");
+        const catalog = await prepareUserProfileCatalog();
+        onTestFinished(catalog.release);
         state.auth.mockResolvedValue({
           authMethod: "trusted-proxy",
           operatorScopes: ["operator.read"],
-          ...resolveHttpProfile(profile.id, profile.updatedAt, cfg),
+          ...resolveHttpProfile(profile.id, cfg),
         });
         const source = path.join(project, "shared.png");
         await fs.writeFile(source, PNG);
@@ -541,12 +607,14 @@ describe("assistant image session policy", () => {
           },
         };
         const profile = ensureProfileForEmail("yielding-media-reader@example.test");
+        const catalog = await prepareUserProfileCatalog();
+        onTestFinished(catalog.release);
         let current = true;
         state.auth.mockResolvedValue({
           authMethod: "trusted-proxy",
           operatorScopes: ["operator.read"],
           hasCurrentClientAuthority: () => current,
-          ...resolveHttpProfile(profile.id, profile.updatedAt, cfg),
+          ...resolveHttpProfile(profile.id, cfg),
         });
         const source = path.join(project, "shared.png");
         await fs.writeFile(source, PNG);
@@ -602,7 +670,7 @@ describe("assistant image session policy", () => {
             dispatched = true;
             // Dispatch admission already withdraws Gateway-local access; activation needs an
             // attached environment and must not turn this file-open hook into a false 404.
-            placements.startDispatch({
+            await placements.startDispatch({
               sessionId: entry.sessionId,
               sessionKey,
               agentId: "main",

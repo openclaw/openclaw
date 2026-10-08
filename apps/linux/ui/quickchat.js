@@ -15,30 +15,20 @@ function chatMessageText(message) {
   if (typeof content === "string") {
     return content;
   }
-  return typeof message?.text === "string" ? message.text : null;
+  return typeof message?.text === "string" ? message.text : Array.isArray(content) ? "" : null;
 }
 
 function assembleChatDelta(currentText, payload) {
   const snapshot = chatMessageText(payload?.message);
-  if (typeof payload?.deltaText === "string") {
-    if (payload.replace === true) {
-      return payload.deltaText;
-    }
-    if (currentText === null) {
-      return snapshot ?? payload.deltaText;
-    }
-    if (snapshot !== null) {
-      const prefixLength = snapshot.length - payload.deltaText.length;
-      if (
-        prefixLength !== currentText.length ||
-        snapshot.slice(0, prefixLength) !== currentText
-      ) {
-        return snapshot;
-      }
-    }
-    return `${currentText}${payload.deltaText}`;
+  if (snapshot !== null) {
+    return snapshot;
   }
-  return snapshot;
+  if (typeof payload?.deltaText !== "string") {
+    return currentText;
+  }
+  return payload.replace === true
+    ? payload.deltaText
+    : currentText === null ? null : `${currentText}${payload.deltaText}`;
 }
 
 const INLINE_WIDGET_DOCUMENTS_PATH = "/__openclaw__/canvas/documents";
@@ -65,6 +55,20 @@ function decodeRepeatedly(raw) {
   return null;
 }
 
+function decodePathSegments(path) {
+  const encoded = path.split("/");
+  if (encoded[0] !== "" || encoded.slice(1).some((segment) => !segment)) {
+    return null;
+  }
+  const segments = encoded.slice(1).map(decodeRepeatedly);
+  if (segments.some((segment) =>
+    segment === null || segment === "." || segment === ".." ||
+    segment.includes("/") || segment.includes("\\"))) {
+    return null;
+  }
+  return segments;
+}
+
 function canonicalInlineWidgetTarget(raw) {
   if (typeof raw !== "string") {
     return null;
@@ -80,23 +84,7 @@ function canonicalInlineWidgetTarget(raw) {
   if (!path.startsWith(`${INLINE_WIDGET_DOCUMENTS_PATH}/`)) {
     return null;
   }
-  const segments = path.split("/");
-  if (
-    segments[0] !== "" ||
-    segments.slice(1).some((segment) => {
-      if (!segment) {
-        return true;
-      }
-      const decoded = decodeRepeatedly(segment);
-      return (
-        decoded === null ||
-        decoded === "." ||
-        decoded === ".." ||
-        decoded.includes("/") ||
-        decoded.includes("\\")
-      );
-    })
-  ) {
+  if (!decodePathSegments(path)) {
     return null;
   }
   try {
@@ -209,25 +197,9 @@ function resolveInlineWidgetUrl(rawSurfaceUrl, rawTarget) {
   ) {
     return null;
   }
-  const encodedSegments = surface.pathname.split("/");
-  if (encodedSegments[0] !== "" || encodedSegments.slice(1).some((segment) => !segment)) {
-    return null;
-  }
-  const segments = [];
-  for (const encoded of encodedSegments.slice(1)) {
-    const decoded = decodeRepeatedly(encoded);
-    if (
-      decoded === null ||
-      decoded === "." ||
-      decoded === ".." ||
-      decoded.includes("/") ||
-      decoded.includes("\\")
-    ) {
-      return null;
-    }
-    segments.push(decoded);
-  }
+  const segments = decodePathSegments(surface.pathname);
   if (
+    !segments ||
     segments.length < 3 ||
     segments.at(-3) !== "__openclaw__" ||
     segments.at(-2) !== "cap" ||
@@ -289,12 +261,9 @@ let hiding = false;
 let hideTimer = null;
 let acceptedTimer = null;
 let visibilitySequence = 0;
+let rendererAdmission = null;
 let popoverSequence = 0;
 
-function nextVisibilityOperation() {
-  visibilitySequence += 1;
-  return visibilitySequence;
-}
 let sendError = "";
 let gatewayState = "down";
 let gatewayGeneration = null;
@@ -313,8 +282,16 @@ let activeReply = null;
 let replyExpanded = false;
 let disclosureRevision = 0;
 let pendingChatEvents = [];
+let pendingChatTarget = null;
+let pendingChatOverflow = false;
 
 const MAX_PENDING_CHAT_EVENTS = 64;
+
+function clearPendingChat() {
+  pendingChatEvents = [];
+  pendingChatTarget = null;
+  pendingChatOverflow = false;
+}
 
 function friendlyError(error, fallback = "Could not send the message.") {
   if (typeof error === "string") {
@@ -445,16 +422,20 @@ function resetAccepted() {
 function clearReply() {
   activeReply = null;
   replyExpanded = false;
+  resetReplyPresentation("");
+  elements.replyThinking.hidden = true;
+  scheduleWidgetSync();
+}
+
+function resetReplyPresentation(prompt) {
   renderReplyPresentation();
   elements.reply.classList.remove("has-error", "has-widgets", "is-terminal");
   elements.replyError.textContent = "";
   elements.replyState.textContent = "";
   elements.replyText.textContent = "";
-  elements.replyPrompt.textContent = "";
+  elements.replyPrompt.textContent = prompt;
   elements.replyWidgets.replaceChildren();
   elements.replyWidgets.hidden = true;
-  elements.replyThinking.hidden = true;
-  scheduleWidgetSync();
 }
 
 function renderReplyPresentation() {
@@ -790,36 +771,28 @@ function terminalizeDisconnectedReply() {
   scrollReplyToEnd();
 }
 
-function replyTargetMatches(target, payload) {
-  if (!target || payload?.sessionKey !== target.sessionKey) {
-    return false;
-  }
-  return target.agentId == null || payload?.agentId === target.agentId;
+function chatRunMatches(target, payload) {
+  return Boolean(target) &&
+    payload?.gatewayGeneration === target.gatewayGeneration &&
+    payload?.runId === target.runId && payload?.sessionKey === target.sessionKey &&
+    (target.agentId == null || payload?.agentId === target.agentId);
 }
 
 function startReply(target, identity, runId, prompt, expanded) {
   activeReply = {
     runId,
     gatewayGeneration: target.gatewayGeneration,
-    target: {
-      sessionKey: target.sessionKey,
-      agentId: typeof target.agentId === "string" ? target.agentId : null,
-    },
+    sessionKey: target.sessionKey,
+    agentId: typeof target.agentId === "string" ? target.agentId : null,
     terminal: false,
     text: null,
+    textIncomplete: false,
     widgets: [],
     activeWidgetKey: null,
     widgetRect: null,
   };
   replyExpanded = expanded;
-  renderReplyPresentation();
-  elements.reply.classList.remove("has-error", "has-widgets", "is-terminal");
-  elements.replyError.textContent = "";
-  elements.replyState.textContent = "";
-  elements.replyText.textContent = "";
-  elements.replyPrompt.textContent = prompt;
-  elements.replyWidgets.replaceChildren();
-  elements.replyWidgets.hidden = true;
+  resetReplyPresentation(prompt);
   elements.replyThinking.textContent = reducedMotion.matches ? "…" : "Thinking…";
   elements.replyThinking.hidden = false;
   elements.replyAgentName.textContent = identity?.name?.trim() || "Agent";
@@ -833,15 +806,14 @@ function applyChatEvent(payload) {
   }
   // The chat.send ACK owns this reply. Exact runId equality is primary; the routing target remains
   // a secondary guard so concurrent turns from other surfaces never enter this reply area.
-  if (payload?.gatewayGeneration !== activeReply.gatewayGeneration ||
-      activeReply.gatewayGeneration !== gatewayGeneration ||
-      payload?.runId !== activeReply.runId || !replyTargetMatches(activeReply.target, payload)) {
+  if (activeReply.gatewayGeneration !== gatewayGeneration || !chatRunMatches(activeReply, payload)) {
     return;
   }
   if (activeReply.terminal) {
     return;
   }
 
+  activeReply.textIncomplete ||= payload.missingTextBaseline === true;
   updateReplyWidgets(payload?.message);
   const hasTextUpdate =
     typeof payload?.deltaText === "string" || chatMessageText(payload?.message) !== null;
@@ -849,7 +821,10 @@ function applyChatEvent(payload) {
     const nextText = assembleChatDelta(activeReply.text, payload);
     if (nextText !== null) {
       activeReply.text = nextText;
+      activeReply.textIncomplete = false;
       renderReplyText();
+    } else if (payload.deltaText) {
+      activeReply.textIncomplete = true;
     }
   }
 
@@ -866,7 +841,13 @@ function applyChatEvent(payload) {
   stopReplyThinking();
   elements.reply.classList.add("is-terminal");
   if (payload.state === "final") {
-    elements.replyState.textContent = "";
+    if (activeReply.textIncomplete) {
+      elements.reply.classList.add("has-error");
+      elements.replyState.textContent = "Incomplete";
+      elements.replyError.textContent = "Reply text is incomplete. Open the dashboard to recover it.";
+    } else {
+      elements.replyState.textContent = "";
+    }
   } else if (payload.state === "aborted") {
     activeReply.text = `${activeReply.text || ""}${activeReply.text ? "\n\n" : ""}(stopped)`;
     elements.replyState.textContent = "Stopped";
@@ -884,7 +865,7 @@ function applyChatEvent(payload) {
 }
 
 function applyRecoveredReply(result) {
-  if (activeReply?.terminal || result.status !== "ok") return;
+  if ((activeReply?.terminal && !activeReply.textIncomplete) || result.status !== "ok") return;
   if (!Array.isArray(result.recoveredMessages) || result.recoveredMessages.length === 0) {
     throw new Error("The completed reply could not be recovered.");
   }
@@ -896,6 +877,11 @@ function applyRecoveredReply(result) {
       content.push(...message.content.filter((block) => block?.type === "canvas"));
     }
   }
+  if (activeReply?.textIncomplete) {
+    activeReply.terminal = false;
+    elements.reply.classList.remove("has-error");
+    elements.replyError.textContent = "";
+  }
   applyChatEvent({
     gatewayGeneration: result.gatewayGeneration,
     sessionKey: result.sessionKey,
@@ -906,14 +892,55 @@ function applyRecoveredReply(result) {
   });
 }
 
+function prepareChatSend(payload) {
+  if (!sending || payload?.gatewayGeneration !== gatewayGeneration ||
+      typeof payload.runId !== "string" || !payload.runId ||
+      typeof payload.sessionKey !== "string" || !payload.sessionKey) {
+    return;
+  }
+  pendingChatTarget = payload;
+  pendingChatEvents = pendingChatEvents.filter((event) => chatRunMatches(payload, event));
+}
+
 function handleChatEvent(payload) {
   if (sending) {
     // The Gateway may stream before the chat.send ack reaches invoke; replay only after the native
     // command returns the accepted routing target, then apply the same session/run filters.
+    if (pendingChatTarget && !chatRunMatches(pendingChatTarget, payload)) {
+      return;
+    }
+    const previousIndex = pendingChatEvents.findIndex((event) =>
+      event.gatewayGeneration === payload?.gatewayGeneration &&
+      event.runId === payload?.runId && event.sessionKey === payload?.sessionKey &&
+      event.agentId === payload?.agentId);
+    const previous = pendingChatEvents[previousIndex];
+    if (["final", "error", "aborted"].includes(previous?.state)) {
+      return;
+    }
+    const text = assembleChatDelta(chatMessageText(previous?.message), payload);
+    const message = payload?.message ?? previous?.message;
+    const buffered = {
+      ...payload,
+      missingTextBaseline: text === null &&
+        (previous?.missingTextBaseline === true || Boolean(payload?.deltaText)),
+      message: text === null ? message : {
+        ...message,
+        role: message?.role ?? "assistant",
+        content: [
+          { type: "text", text },
+          ...(Array.isArray(message?.content)
+            ? message.content.filter((block) => block?.type !== "text") : []),
+        ],
+      },
+    };
+    if (previousIndex !== -1) {
+      pendingChatEvents.splice(previousIndex, 1);
+    }
     if (pendingChatEvents.length === MAX_PENDING_CHAT_EVENTS) {
       pendingChatEvents.shift();
+      pendingChatOverflow = true;
     }
-    pendingChatEvents.push(payload);
+    pendingChatEvents.push(buffered);
     return;
   }
   if (activeReply) {
@@ -1114,36 +1141,19 @@ async function refreshShortcutStatus() {
 }
 
 function acceleratorFromEvent(event) {
-  let key = "";
-  if (/^Key[A-Z]$/.test(event.code)) {
-    key = event.code;
-  } else if (/^Digit[0-9]$/.test(event.code)) {
-    key = event.code;
-  } else if (event.code === "Space") {
-    key = "Space";
-  } else if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(event.code)) {
-    key = event.code;
-  }
-  if (!key) {
+  if (event.code !== "Space" && !/^(?:Key[A-Z]|Digit[0-9]|F(?:[1-9]|1[0-9]|2[0-4]))$/.test(event.code)) {
     return null;
   }
-  const parts = [];
-  if (event.ctrlKey) {
-    parts.push("Ctrl");
-  }
-  if (event.altKey) {
-    parts.push("Alt");
-  }
-  if (event.shiftKey) {
-    parts.push("Shift");
-  }
-  if (event.metaKey) {
-    parts.push("Super");
-  }
+  const parts = [
+    ["Ctrl", event.ctrlKey],
+    ["Alt", event.altKey],
+    ["Shift", event.shiftKey],
+    ["Super", event.metaKey],
+  ].filter(([, pressed]) => pressed).map(([modifier]) => modifier);
   if (parts.length === 0) {
     return null;
   }
-  parts.push(key);
+  parts.push(event.code);
   return parts.join("+");
 }
 
@@ -1163,13 +1173,23 @@ async function saveShortcut(accelerator) {
   }
 }
 
+async function invokeVisibility(method, generation) {
+  if (rendererAdmission) {
+    await rendererAdmission;
+    if (visibilitySequence !== generation) {
+      return false;
+    }
+  }
+  return invoke(method, { sessionId: rendererSessionId, rendererEpoch, generation });
+}
+
 async function requestHide() {
   if (hiding) {
     return;
   }
-  const operationGeneration = nextVisibilityOperation();
+  const operationGeneration = ++visibilitySequence;
   hiding = true;
-  pendingChatEvents = [];
+  clearPendingChat();
   closePopover(false, false);
   document.body.classList.remove("shown");
   window.clearTimeout(hideTimer);
@@ -1177,11 +1197,7 @@ async function requestHide() {
     () => {
       void (async () => {
         try {
-          const hidden = await invoke("quickchat_hide", {
-            sessionId: rendererSessionId,
-            rendererEpoch,
-            generation: operationGeneration,
-          });
+          const hidden = await invokeVisibility("quickchat_hide", operationGeneration);
           if (visibilitySequence !== operationGeneration) {
             return;
           }
@@ -1210,12 +1226,8 @@ async function requestHide() {
 }
 
 function reveal() {
-  const operationGeneration = nextVisibilityOperation();
-  void invoke("quickchat_activate", {
-    sessionId: rendererSessionId,
-    rendererEpoch,
-    generation: operationGeneration,
-  })
+  const operationGeneration = ++visibilitySequence;
+  void invokeVisibility("quickchat_activate", operationGeneration)
     .then((activated) => {
       if (activated !== true && visibilitySequence === operationGeneration) {
         document.body.classList.remove("shown");
@@ -1258,7 +1270,7 @@ async function send(openDashboard) {
   const sendVisibilitySequence = visibilitySequence;
   const sendGeneration = gatewayGeneration;
   const sendDisclosureRevision = disclosureRevision;
-  pendingChatEvents = [];
+  clearPendingChat();
   sendError = "";
   renderStatus();
   updateSendButton();
@@ -1274,19 +1286,23 @@ async function send(openDashboard) {
     if (result.gatewayGeneration !== sendGeneration || gatewayGeneration !== sendGeneration) {
       throw new Error("Gateway changed before the Quick Chat reply was accepted.");
     }
+    if (pendingChatTarget && !chatRunMatches(pendingChatTarget, result)) {
+      throw new Error("Gateway acknowledged a different Quick Chat reply.");
+    }
     sending = false;
     sendError = "";
     elements.input.value = "";
     if (visibilitySequence !== sendVisibilitySequence || hiding) {
-      pendingChatEvents = [];
+      clearPendingChat();
       updateSendButton();
       return;
     }
     accepted = true;
     startReply(result, sentIdentity, result.runId, message,
       sendDisclosureRevision === disclosureRevision ? true : replyExpanded);
+    activeReply.textIncomplete = pendingChatOverflow;
     const bufferedEvents = pendingChatEvents;
-    pendingChatEvents = [];
+    clearPendingChat();
     for (const payload of bufferedEvents) {
       applyChatEvent(payload);
     }
@@ -1305,7 +1321,7 @@ async function send(openDashboard) {
     }, 450);
   } catch (error) {
     sending = false;
-    pendingChatEvents = [];
+    clearPendingChat();
     if (visibilitySequence !== sendVisibilitySequence || hiding) {
       updateSendButton();
       return;
@@ -1426,25 +1442,34 @@ document.addEventListener("pointerdown", (event) => {
   }
 });
 
-await listen("quickchat:shown", () => {
-  reveal();
-});
-await listen("quickchat:hide-requested", () => {
-  void requestHide();
-});
-await listen("quickchat:gateway-state", (event) => {
-  setGatewayState(event.payload);
-});
-await listen("quickchat:chat-event", (event) => {
-  handleChatEvent(event.payload);
-});
-
-const readySequence = visibilitySequence;
-try {
-  const shouldShow = await invoke("quickchat_ready", {
+async function initializeRenderer() {
+  await listen("quickchat:shown", () => {
+    reveal();
+  });
+  await listen("quickchat:hide-requested", () => {
+    void requestHide();
+  });
+  await listen("quickchat:gateway-state", (event) => {
+    setGatewayState(event.payload);
+  });
+  await listen("quickchat:chat-event", (event) => {
+    handleChatEvent(event.payload);
+  });
+  await listen("quickchat:send-prepared", (event) => {
+    prepareChatSend(event.payload);
+  });
+  return invoke("quickchat_ready", {
     sessionId: rendererSessionId,
     rendererEpoch,
   });
+}
+
+// Startup is a barrier; native session and generation checks still authorize each operation.
+const readySequence = visibilitySequence;
+rendererAdmission = initializeRenderer();
+try {
+  const shouldShow = await rendererAdmission;
+  rendererAdmission = null;
   if (visibilitySequence === readySequence) {
     if (shouldShow) {
       reveal();
@@ -1453,5 +1478,6 @@ try {
     }
   }
 } catch {
+  rendererAdmission = null;
   void requestHide();
 }

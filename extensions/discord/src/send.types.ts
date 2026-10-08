@@ -1,4 +1,3 @@
-// Discord type declarations define plugin contracts.
 import type { APIAllowedMentions } from "discord-api-types/v10";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -62,7 +61,6 @@ export type DiscordReactOpts = {
   timeoutMs?: number;
 };
 
-/** Guild asset upload options: client access plus the sender-scoped media read policy. */
 export type DiscordAssetUploadOpts = DiscordReactOpts & DiscordOutboundMediaOpts;
 
 export type DiscordReactionRuntimeContext = DiscordRuntimeAccountContext & {

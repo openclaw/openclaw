@@ -1,10 +1,10 @@
+import { isSqliteTranscriptMutationConflict } from "../../../config/sessions/session-mutation-conflict-error.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { normalizeUsage, type UsageLike } from "../../usage.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import { log } from "../logger.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "../replay-state.js";
-import type { EmbeddedAgentRunResult } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import {
   mergeAttemptRunStatsIntoAccumulator,
@@ -18,16 +18,16 @@ import { resolveRunFailoverDecision } from "./failover-policy.js";
 import {
   buildErrorAgentMeta,
   normalizeAssistantUsageForContext,
-  resolveActiveErrorContext,
+  resolveReportedModelRef,
   resolveLatestCallUsage,
 } from "./helpers.js";
 import {
   MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
   stepIdleTimeoutBreaker,
-  type createIdleTimeoutBreakerState,
+  type IdleTimeoutBreakerState,
 } from "./idle-timeout-breaker.js";
 import { resolveReplayInvalidFlag } from "./incomplete-turn-resolution.js";
-import { resolveRunRetryKind, type RunRetryKind } from "./retry-budget.js";
+import { resolveRunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
@@ -47,6 +47,10 @@ type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 
 type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
+export type NormalizedEmbeddedRunAttempt = Extract<
+  Awaited<ReturnType<typeof normalizeEmbeddedRunAttempt>>,
+  { action: "proceed" }
+>;
 
 export async function normalizeEmbeddedRunAttempt(input: {
   runInput: PreparedEmbeddedRunInput;
@@ -60,48 +64,12 @@ export async function normalizeEmbeddedRunAttempt(input: {
   bootstrapPromptWarningSignaturesSeen: string[];
   usageAccumulator: ReturnType<typeof createUsageAccumulator>;
   lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-  idleTimeoutBreakerState: ReturnType<typeof createIdleTimeoutBreakerState>;
+  idleTimeoutBreakerState: IdleTimeoutBreakerState;
   contextRecoveryState: ReturnType<typeof createEmbeddedRunContextRecoveryState>;
   recordedCompactionCount?: number;
   replayState: ReplayState;
   lastRetryFailoverReason: Parameters<typeof resolveRunFailoverDecision>[0]["failoverReason"];
-}): Promise<
-  | { action: "complete"; result: EmbeddedAgentRunResult }
-  | {
-      action: "retry";
-      retryKind: RunRetryKind;
-      bootstrapPromptWarningSignaturesSeen: string[];
-      lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-      replayState: ReplayState;
-    }
-  | {
-      action: "proceed";
-      bootstrapPromptWarningSignaturesSeen: string[];
-      lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-      replayState: ReplayState;
-      attempt: ReturnType<typeof normalizeEmbeddedRunAttemptResult>;
-      sessionIdUsed: string;
-      sessionFileUsed: string | undefined;
-      currentAttemptAssistant: ReturnType<
-        typeof normalizeEmbeddedRunAttemptResult
-      >["currentAttemptAssistant"];
-      currentAttemptCompletedAssistant: ReturnType<
-        typeof normalizeEmbeddedRunAttemptResult
-      >["currentAttemptCompletedAssistant"];
-      attemptAssistant: ReturnType<
-        typeof normalizeEmbeddedRunAttemptResult
-      >["currentAttemptAssistant"];
-      terminalState: ReturnType<typeof resolveEmbeddedRunAttemptTerminalState>;
-      setTerminalLifecycleMeta: NonNullable<
-        ReturnType<typeof normalizeEmbeddedRunAttemptResult>["setTerminalLifecycleMeta"]
-      >;
-      attemptCompactionCount: number;
-      activeErrorContext: ReturnType<typeof resolveActiveErrorContext>;
-      resolveReplayInvalidForAttempt: (incompleteTurnText?: string | null) => boolean;
-      assistantErrorText: string | undefined;
-      canRestartForLiveSwitch: boolean;
-    }
-> {
+}) {
   const { runInput, preparedRuntime, dispatchedAttempt, sessionPromptState, provider, modelId } =
     input;
   const params = runInput.runParams;
@@ -142,7 +110,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
   } = attempt;
-  const { idleTimedOut } = projectAgentRunAttemptTerminal(terminal);
+  const { idleTimedOut, promptError } = projectAgentRunAttemptTerminal(terminal);
   const attemptAssistant = resolveCurrentAttemptAssistant(attempt);
   const terminalState = resolveEmbeddedRunAttemptTerminalState({
     attempt,
@@ -162,7 +130,13 @@ export async function normalizeEmbeddedRunAttempt(input: {
       aborted: terminalAborted,
     });
   };
-  applyEmbeddedAttemptSessionIdentity({ sessionPromptState, sessionFileUsed, sessionIdUsed });
+  await applyEmbeddedAttemptSessionIdentity({
+    sessionPromptState,
+    sessionFileUsed,
+    sessionIdUsed,
+    assertCurrent: () => runInput.laneController.throwIfAborted(),
+  });
+  runInput.laneController.throwIfAborted();
   const bootstrapPromptWarningSignaturesSeen =
     attempt.bootstrapPromptWarningSignaturesSeen ??
     (attempt.bootstrapPromptWarningSignature
@@ -190,6 +164,9 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
   mergeAttemptRunStatsIntoAccumulator(input.usageAccumulator, attempt);
+  if (isSqliteTranscriptMutationConflict(promptError)) {
+    throw promptError;
+  }
   // A real mid-turn truncation rewrites the context after earlier usage observations.
   // Keep billing accumulated, but do not carry that pre-mutation context into the retry.
   const contextMutatedByMidTurnTruncation =
@@ -202,7 +179,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const breakerStep = stepIdleTimeoutBreaker(input.idleTimeoutBreakerState, {
     idleTimedOut: terminalTimedOut && idleTimedOut,
     completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),
-    outputTokens: attemptUsage?.output,
   });
   if (breakerStep.tripped) {
     const message =
@@ -240,12 +216,12 @@ export async function normalizeEmbeddedRunAttempt(input: {
     });
     // Escalating provider failures throw above; only returned results carry a terminal stop.
     result.meta.modelFallbackStopReason = "idle_timeout_circuit_breaker";
-    return { action: "complete", result };
+    return { action: "complete" as const, result };
   }
   if (attempt.contextBudgetStatus) {
     input.contextRecoveryState.lastContextBudgetStatus = attempt.contextBudgetStatus;
   }
-  const activeErrorContext = resolveActiveErrorContext({
+  const activeErrorContext = resolveReportedModelRef({
     provider,
     model: modelId,
     assistant: attemptAssistant,
@@ -292,7 +268,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
       toolMetas: attempt.toolMetas,
     });
     return {
-      action: "retry",
+      action: "retry" as const,
       retryKind,
       bootstrapPromptWarningSignaturesSeen,
       lastRunPromptUsage,
@@ -300,7 +276,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     };
   }
   return {
-    action: "proceed",
+    action: "proceed" as const,
     bootstrapPromptWarningSignaturesSeen,
     lastRunPromptUsage,
     replayState,

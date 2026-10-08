@@ -3,30 +3,71 @@
 import { emptyReply, mock, queueTask, source, tempDirs } from "./openclaw-state-read-worker.test-harness.js";
 import fs from "node:fs";
 import path from "node:path";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { expect, it, vi } from "vitest";
 import { createWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { ExecutionIdentityInspectionQuery } from "../audit/execution-identity-inspection.types.js";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
-import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
-import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.js";
-import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
-import { withOpenClawStateSettlementRead } from "./openclaw-state-settlement-read.js";
+import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
+import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
+import type {
+  OpenClawStateReadCommand,
+  OpenClawStateReadReply,
+} from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
-import { selectProfileDisplayEntries } from "./user-profiles-internal.js";
-import { ensureProfileForEmail } from "./user-profiles.js";
+
+it("captures queued read routing and schema facts without reading unrelated environment values", async () => {
+  const { root, pathname } = source();
+  let unrelatedReads = 0;
+  const env: NodeJS.ProcessEnv = {
+    OPENCLAW_STATE_DIR: root,
+    OPENCLAW_SUPERVISOR_MODE: " EXTERNAL ",
+    get UNRELATED_INITIALIZATION_VALUE() {
+      unrelatedReads += 1;
+      return "synthetic initializer input";
+    },
+  };
+  const dispatch = createDeferredCore();
+  const task = queueTask(dispatch.promise);
+  const result = withExistingOpenClawStateSchema({ path: pathname }, () =>
+    executeExistingOpenClawStateRead({ path: pathname, env }, { type: "backup.runs" }),
+  );
+  try {
+    expect((await task.submitted).diagnosticOperation).toBe("backup.runs");
+    env.OPENCLAW_STATE_DIR = path.join(root, "changed-after-capture");
+    env.OPENCLAW_SUPERVISOR_MODE = "internal";
+    dispatch.resolve();
+    const request = await task.captured;
+    expect(request.context.environment).toEqual({
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_SUPERVISOR_MODE: "external",
+    });
+    expect(request.context.existingSchemaPath).toBe(pathname);
+    // Windows captures case-insensitive environment semantics before selecting these facts.
+    if (process.platform !== "win32") {
+      expect(unrelatedReads).toBe(0);
+    }
+    task.result.resolve(emptyReply);
+    await expect(result).resolves.toEqual(emptyReply);
+  } finally {
+    dispatch.resolve();
+    task.result.resolve(emptyReply);
+    await Promise.allSettled([result]);
+  }
+});
 
 it("retains the shared pool after a resource drain fails until canonical retry", async () => {
   const { options } = source();
   const warm = queueTask();
   warm.result.resolve(emptyReply);
-  await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+  await executeExistingOpenClawStateRead(options, { type: "backup.runs" });
   const failure = new Error("accepted resource cleanup failed");
   const close = vi.fn<() => Promise<void>>().mockRejectedValueOnce(failure).mockResolvedValue();
   const unregister = registerOpenClawStateDatabaseAsyncResource({ close });
@@ -45,169 +86,6 @@ it("retains the shared pool after a resource drain fails until canonical retry",
   }
 });
 
-it("drains accepted settlement before retiring the shared pool during whole-cache close", async () => {
-  const root = tempDirs.make("openclaw-settlement-global-close-");
-  const pathname = path.join(root, "source.sqlite");
-  const options = { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
-  const profile = ensureProfileForEmail("global-close@example.test", options);
-  const descriptor = selectProfileDisplayEntries(openOpenClawStateDatabase(options).db, [
-    profile.id,
-  ])[0]![1];
-  await closeOpenClawStateDatabaseAsync();
-  const warm = queueTask();
-  warm.result.resolve(emptyReply);
-  await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
-  const context = captureOpenClawStateWorkerContext(options);
-  const mutationSettled = createDeferredCore();
-  const poolStopping = createDeferredCore();
-  const poolStopped = createDeferredCore();
-  mock.closePool.mockImplementationOnce(() => {
-    poolStopping.resolve();
-    return poolStopped.promise;
-  });
-  const delivery = new Error("mutation result delivery failed");
-  const publish = vi.fn();
-  const release = vi.fn();
-  const result = withOpenClawStateSettlementRead(context, async (read) => {
-    read.bind(
-      { type: "userProfiles.reconcile", profileId: profile.id },
-      Promise.resolve({ kind: "completed" }),
-      publish,
-      release,
-    );
-    await mutationSettled.promise;
-    throw delivery;
-  }).catch((error: unknown) => error);
-  const recovery = queueTask();
-  recovery.result.resolve({
-    ok: true,
-    type: "userProfiles.reconcile",
-    sourceAdmitted: true,
-    profile: descriptor,
-    emailBindings: [],
-  });
-  const closing = closeOpenClawStateDatabaseAsync();
-  void closing.catch(() => {});
-  try {
-    // Let the actual resource drain enter while the accepted producer is still held.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    mutationSettled.resolve();
-    expect(await result).toBe(delivery);
-    expect((await recovery.captured).command).toEqual({
-      type: "userProfiles.reconcile",
-      profileId: profile.id,
-    });
-    expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor, []);
-    expect(release).toHaveBeenCalledOnce();
-    expect(recovery.close).toHaveBeenCalledOnce();
-    await poolStopping.promise;
-    expect(publish.mock.invocationCallOrder[0]).toBeLessThan(
-      mock.closePool.mock.invocationCallOrder[0]!,
-    );
-    poolStopped.resolve();
-    await closing;
-    const exclusion = acquireStateDatabaseHandleExclusion({ databasePath: pathname });
-    exclusion.release();
-  } finally {
-    mutationSettled.resolve();
-    poolStopped.resolve();
-    await Promise.allSettled([result, closing]);
-  }
-});
-
-it.each([false, true])(
-  "preserves settlement task errors and source custody through canonical retry (retry fails=%s)",
-  async (retryFails) => {
-    const root = tempDirs.make("openclaw-settlement-task-failure-");
-    const pathname = path.join(root, "source.sqlite");
-    const options = { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
-    const profile = ensureProfileForEmail("settlement@example.test", options);
-    const descriptor = selectProfileDisplayEntries(openOpenClawStateDatabase(options).db, [
-      profile.id,
-    ])[0]![1];
-    await closeOpenClawStateDatabaseAsync();
-    const context = captureOpenClawStateWorkerContext(options);
-    const command = { type: "userProfiles.reconcile", profileId: profile.id } as const;
-    const reply: OpenClawStateReadReply = {
-      ok: true,
-      type: command.type,
-      sourceAdmitted: true,
-      profile: descriptor,
-      emailBindings: [],
-    };
-    const task = queueTask();
-    const delivery = new Error("mutation result delivery failed");
-    const query = new Error("interrupted settlement task failed");
-    const retirement = new Error("first settlement worker stop failed");
-    const retryFailure = new Error("settlement close retry failed");
-    task.close.mockRejectedValueOnce(retirement);
-    if (retryFails) {
-      task.close.mockRejectedValueOnce(retryFailure);
-    }
-    const mutation = vi.fn();
-    const publish = vi.fn();
-    const release = vi.fn();
-    const result = withOpenClawStateSettlementRead(context, async (read) => {
-      mutation();
-      read.bind(command, Promise.resolve({ kind: "completed" }), publish, release);
-      throw delivery;
-    }).catch((error: unknown) => error);
-    const firstRequest = await task.captured;
-    task.result.reject(query);
-    const failure = await result;
-    expect(failure).toMatchObject({
-      errors: [delivery, expect.objectContaining({ errors: [query, retirement] })],
-    });
-    expect(publish).not.toHaveBeenCalled();
-    expect(release).not.toHaveBeenCalled();
-    expect(() =>
-      acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }),
-    ).toThrow();
-    if (retryFails) {
-      await expect(closeOpenClawStateDatabaseByPathAsync(pathname)).rejects.toBe(retryFailure);
-      expect(publish).not.toHaveBeenCalled();
-      expect(release).not.toHaveBeenCalled();
-    }
-    const retry = queueTask();
-    const retryCloseStarted = createDeferredCore();
-    const stopped = createDeferredCore();
-    retry.close.mockImplementationOnce(() => {
-      retryCloseStarted.resolve();
-      return stopped.promise;
-    });
-    const closing = closeOpenClawStateDatabaseByPathAsync(pathname);
-    try {
-      const retryRequest = await retry.captured;
-      for (const request of [firstRequest, retryRequest]) {
-        expect(request).toMatchObject({
-          command,
-          databasePath: pathname,
-          location: pathname,
-          expectedIdentity: context.admission.identity.key,
-          checkFreshAdmission: false,
-        });
-      }
-      retry.result.resolve(reply);
-      await retryCloseStarted.promise;
-      expect(publish).not.toHaveBeenCalled();
-      expect(release).not.toHaveBeenCalled();
-    } finally {
-      retry.result.resolve(reply);
-      stopped.resolve();
-      await closing;
-    }
-    expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor, []);
-    expect(release).toHaveBeenCalledOnce();
-    expect(mutation).toHaveBeenCalledOnce();
-    expect(task.close).toHaveBeenCalledTimes(retryFails ? 3 : 2);
-    expect(retry.close).toHaveBeenCalledOnce();
-    const exclusion = acquireStateDatabaseHandleExclusion({ databasePath: pathname });
-    exclusion.release();
-  },
-);
-
 it.each([false, true])(
   "preserves task and cleanup errors across explicit retirement retries (retry fails=%s)",
   async (retryFails) => {
@@ -220,7 +98,7 @@ it.each([false, true])(
     if (retryFails) {
       task.close.mockRejectedValueOnce(retryFailure);
     }
-    const result = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+    const result = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
     const assertion = expect(result).rejects.toMatchObject({
       cause: original,
       errors: [original, retirement],
@@ -251,7 +129,7 @@ it("reads externally created state after an absent read without allocating a wor
   const root = tempDirs.make("openclaw-read-first-creation-");
   const pathname = path.join(root, "source.sqlite");
   const options = { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
-  const command = { type: "fleet.list" } as const;
+  const command = { type: "backup.runs" } as const;
   expect(await executeExistingOpenClawStateRead(options, command)).toBeUndefined();
   expect(fs.existsSync(pathname)).toBe(false);
   expect(mock.create).not.toHaveBeenCalled();
@@ -263,55 +141,12 @@ it("reads externally created state after an absent read without allocating a wor
   task.result.resolve(emptyReply);
   expect(await executeExistingOpenClawStateRead(options, command)).toEqual(emptyReply);
   expect(mock.selectSqlite).toHaveBeenCalledOnce();
-  expect(task.close).toHaveBeenCalledExactlyOnceWith(
-    process.versions.bun ? { retire: true } : undefined,
-  );
+  expect(task.close).toHaveBeenCalledExactlyOnceWith(undefined);
   expect(mock.closePool).not.toHaveBeenCalled();
 });
 
-it.each(["query failed", "native reader close failed"])(
-  "retires an encoded %s reply and retains operation custody until stop",
-  async (message) => {
-    const { options } = source();
-    const task = queueTask();
-    const stopping = createDeferredCore();
-    const stopped = createDeferredCore();
-    task.close.mockImplementationOnce(() => {
-      stopping.resolve();
-      return stopped.promise;
-    });
-    const result = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
-    const assertion = expect(result).rejects.toThrow(message);
-    let settled = false;
-    void result.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await task.captured;
-    task.result.resolve({
-      ok: false,
-      sourceAdmitted: true,
-      message,
-      error: encodeOpenClawStateWorkerError(new Error(message), { includeOrdinary: true }),
-    });
-    try {
-      await stopping.promise;
-      expect(task.close).toHaveBeenCalledExactlyOnceWith({ retire: true });
-      expect(settled).toBe(false);
-      expect(mock.closePool).not.toHaveBeenCalled();
-    } finally {
-      stopped.resolve();
-      await assertion;
-    }
-  },
-);
-
-it.each(["cleanup-fact", "bun"] as const)(
-  "preserves a successful read only after required retirement (%s)",
+it.each(["query-failure", "cleanup-fact", "conservative", "capable"] as const)(
+  "retains read custody until release and retires only failed native work (%s)",
   async (reason) => {
     const { options } = source();
     const task = queueTask();
@@ -321,50 +156,52 @@ it.each(["cleanup-fact", "bun"] as const)(
       stopping.resolve();
       return stopped.promise;
     });
-    if (reason === "bun") {
-      // Policy-only control: the task and its native retirement are both mocked.
-      vi.stubGlobal("process", {
-        ...process,
-        versions: { ...process.versions, bun: "1.4.2" },
-      });
-    }
-    try {
-      const result = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
-      let settled = false;
-      void result.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
-      await task.captured;
-      task.result.resolve(
-        reason === "cleanup-fact"
+    mock.capabilities.mockReturnValue({
+      explicitSqliteCloseReleasesNativeResources: reason !== "conservative",
+      decided: true,
+      reason: "test policy",
+    });
+    const message = "query failed";
+    const reply: OpenClawStateReadReply =
+      reason === "query-failure"
+        ? {
+            ok: false,
+            sourceAdmitted: true,
+            message,
+            error: encodeOpenClawStateWorkerError(new Error(message), { includeOrdinary: true }),
+          }
+        : reason === "cleanup-fact"
           ? { ...emptyReply, nativeCleanupFailure: { error: undefined } }
-          : emptyReply,
+          : emptyReply;
+    const result = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+    const assertion =
+      reason === "query-failure"
+        ? expect(result).rejects.toThrow(message)
+        : expect(result).resolves.toMatchObject({ ok: true, type: "backup.runs", runs: [] });
+    let settled = false;
+    const markSettled = () => {
+      settled = true;
+    };
+    void result.then(markSettled, markSettled);
+    try {
+      await task.captured;
+      task.result.resolve(reply);
+      await stopping.promise;
+      expect(task.close).toHaveBeenCalledExactlyOnceWith(
+        reason === "query-failure" || reason === "cleanup-fact" ? { retire: true } : undefined,
       );
-      try {
-        await stopping.promise;
-        expect(task.close).toHaveBeenCalledExactlyOnceWith({ retire: true });
-        expect(mock.selectSqlite).toHaveBeenCalledOnce();
-        expect(mock.selectSqlite.mock.invocationCallOrder[0]).toBeLessThan(
-          mock.create.mock.invocationCallOrder[0]!,
-        );
-        expect(settled).toBe(false);
-        expect(mock.closePool).not.toHaveBeenCalled();
-      } finally {
-        stopped.resolve();
-      }
-      await expect(result).resolves.toMatchObject({ ok: true, type: "fleet.list", cells: [] });
-      expect(task.close).toHaveBeenCalledOnce();
+      expect(mock.selectSqlite).toHaveBeenCalledOnce();
+      expect(mock.selectSqlite.mock.invocationCallOrder[0]).toBeLessThan(
+        mock.create.mock.invocationCallOrder[0]!,
+      );
+      expect(settled).toBe(false);
+      expect(mock.closePool).not.toHaveBeenCalled();
     } finally {
+      task.result.resolve(reply);
       stopped.resolve();
-      if (reason === "bun") {
-        vi.unstubAllGlobals();
-      }
+      await assertion;
     }
+    expect(task.close).toHaveBeenCalledOnce();
   },
 );
 
@@ -381,7 +218,7 @@ it.each([false, true])(
     const primary = new Error("source query failed");
     const stop = new Error("worker native exit not confirmed");
     task.close.mockRejectedValueOnce(stop);
-    const result = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+    const result = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
     const outcome = result.catch((error: unknown) => error);
     await task.captured;
     const reply: OpenClawStateReadReply = sourceFails
@@ -436,81 +273,106 @@ it.each([false, true])(
   },
 );
 
-it("releases one completed read without closing the shared pool or aborting another read", async () => {
-  const { options } = source();
-  const first = queueTask();
-  const sibling = queueTask();
-  const firstRead = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
-  const siblingRead = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
-  await Promise.all([first.captured, sibling.captured]);
-  const siblingOptions = await sibling.submitted;
-  first.result.resolve(emptyReply);
-  expect(await firstRead).toEqual(emptyReply);
-  expect(first.close).toHaveBeenCalledExactlyOnceWith(
-    process.versions.bun ? { retire: true } : undefined,
-  );
-  expect(sibling.close).not.toHaveBeenCalled();
-  expect(siblingOptions.signal?.aborted).toBe(false);
-  expect(mock.closePool).not.toHaveBeenCalled();
-  expect(mock.create).toHaveBeenCalledOnce();
+it.each([false, true])(
+  "releases one read without aborting its sibling (path close=%s)",
+  async (pathClose) => {
+    const firstSource = source("first.sqlite");
+    const siblingSource = pathClose ? source("sibling.sqlite") : firstSource;
+    const first = queueTask();
+    const sibling = queueTask();
+    const firstRead = executeExistingOpenClawStateRead(firstSource.options, {
+      type: "backup.runs",
+    });
+    const assertion = pathClose
+      ? expect(firstRead).rejects.toThrow(/read admission (?:is )?closed/i)
+      : expect(firstRead).resolves.toEqual(emptyReply);
+    const siblingRead = executeExistingOpenClawStateRead(siblingSource.options, {
+      type: "backup.runs",
+    });
+    await Promise.all([first.captured, sibling.captured]);
+    const firstOptions = await first.submitted;
+    const siblingOptions = await sibling.submitted;
+    if (pathClose) {
+      await closeOpenClawStateDatabaseByPathAsync(firstSource.pathname);
+    } else {
+      first.result.resolve(emptyReply);
+    }
+    await assertion;
+    expect(firstOptions.signal?.aborted).toBe(pathClose);
+    expect(first.close).toHaveBeenCalledExactlyOnceWith(pathClose ? { retire: true } : undefined);
+    expect(siblingOptions.signal?.aborted).toBe(false);
+    expect(sibling.close).not.toHaveBeenCalled();
+    expect(mock.closePool).not.toHaveBeenCalled();
+    expect(mock.create).toHaveBeenCalledOnce();
+    sibling.result.resolve(emptyReply);
+    expect(await siblingRead).toEqual(emptyReply);
+    expect(sibling.close).toHaveBeenCalledExactlyOnceWith(undefined);
+    await closeOpenClawStateDatabaseAsync();
+    expect(mock.closePool).toHaveBeenCalledOnce();
+  },
+);
 
-  sibling.result.resolve(emptyReply);
-  expect(await siblingRead).toEqual(emptyReply);
-  expect(sibling.close).toHaveBeenCalledExactlyOnceWith(
-    process.versions.bun ? { retire: true } : undefined,
-  );
-  await closeOpenClawStateDatabaseAsync();
-  expect(mock.closePool).toHaveBeenCalledOnce();
-});
+function captureCase<T extends OpenClawStateReadCommand>(
+  command: T,
+  reply: OpenClawStateReadReply,
+  bytes: number,
+  mutate: (command: T) => void,
+  options: {
+    exact?: boolean;
+    prepared?: boolean;
+    expected?: OpenClawStateReadCommand;
+    queued?: () => void;
+  } = {},
+) {
+  return { command, reply, bytes, mutate: () => mutate(command), ...options };
+}
 
-it("closes only the operation matching a state path while its sibling finishes normally", async () => {
-  const firstSource = source("first.sqlite");
-  const siblingSource = source("sibling.sqlite");
-  const first = queueTask();
-  const sibling = queueTask();
-  const firstRead = executeExistingOpenClawStateRead(firstSource.options, { type: "fleet.list" });
-  const assertion = expect(firstRead).rejects.toThrow(/read admission (?:is )?closed/i);
-  const siblingRead = executeExistingOpenClawStateRead(siblingSource.options, {
-    type: "fleet.list",
-  });
-  await Promise.all([first.captured, sibling.captured]);
-  const firstOptions = await first.submitted;
-  const siblingOptions = await sibling.submitted;
-  await closeOpenClawStateDatabaseByPathAsync(firstSource.pathname);
-  await assertion;
-  expect(firstOptions.signal?.aborted).toBe(true);
-  expect(first.close).toHaveBeenCalledExactlyOnceWith({ retire: true });
-  expect(siblingOptions.signal?.aborted).toBe(false);
-  expect(sibling.close).not.toHaveBeenCalled();
-  expect(mock.closePool).not.toHaveBeenCalled();
-  expect(mock.create).toHaveBeenCalledOnce();
-
-  sibling.result.resolve(emptyReply);
-  expect(await siblingRead).toEqual(emptyReply);
-  await closeOpenClawStateDatabaseAsync();
-  expect(mock.closePool).toHaveBeenCalledOnce();
-});
-
-it.each([
-  "fleet.get",
-  "userProfiles.reconcile",
-  "onboardingRecommendations.read",
-  "workspace.snapshot",
-  "pluginBlob.lookup",
-  "pluginBlob.entries",
-  "sandboxRegistry.get",
-  "sandboxRegistry.runtimeIds",
-  "updateRuns.get",
-] as const)(
-  "captures and charges the retained UTF-8 selector while dispatch waits (%s)",
-  async (type) => {
-    const { options } = source();
-    const selector = "租户🦞".repeat(512);
+const selector = "租户🦞".repeat(512);
+const selectorBytes = Buffer.byteLength(selector);
+const historyInput = { reason: selector, includeRunId: selector, active: true, limit: 100 };
+const reconciliationInput = {
+  runIds: ["更新🦞".repeat(512), "修复🦞".repeat(512)],
+  explicit: true,
+  requireAllActive: false,
+  legacyOnly: true,
+  repairHistorySinceMs: 0,
+};
+const captures = [
+  ...(
+    [
+      "githubPublication.sharedObservation",
+      "userProfiles.reconcile",
+      "onboardingRecommendations.read",
+      "workspace.snapshot",
+      "pluginBlob.lookup",
+      "pluginBlob.entries",
+      "sandboxRegistry.get",
+      "sandboxRegistry.runtimeIds",
+      "updateRuns.get",
+    ] as const
+  ).map((type) => {
     const command =
-      type === "updateRuns.get"
-        ? { type, runId: selector }
-        : type === "fleet.get"
-          ? { type, tenantId: selector }
+      type === "githubPublication.sharedObservation"
+        ? {
+            type,
+            input: {
+              kind: "repository" as const,
+              session: {
+                agentId: selector,
+                sessionKey: selector,
+                sessionId: selector,
+                lifecycleRevision: selector,
+              },
+              selector: { requestId: selector },
+              entry: {
+                repositoryWorkspaceId: selector,
+                lifecycleRevision: selector,
+                worktree: { id: selector, branch: selector, repoRoot: selector },
+              },
+            },
+          }
+        : type === "updateRuns.get"
+          ? { type, runId: selector }
           : type === "userProfiles.reconcile"
             ? { type, profileId: selector }
             : type === "onboardingRecommendations.read"
@@ -524,40 +386,11 @@ it.each([
                     : type === "sandboxRegistry.get"
                       ? { type, containerName: selector }
                       : { type, backendId: selector, scopeKey: selector };
-    const expected = structuredClone(command);
-    const dispatch = createDeferredCore();
-    const task = queueTask(dispatch.promise);
-    const result = executeExistingOpenClawStateRead(options, command);
-    const submitted = await task.submitted;
-    const originalRoot = options.env.OPENCLAW_STATE_DIR;
-    if (command.type === "updateRuns.get") {
-      command.runId = "different run after admission";
-    } else if (command.type === "fleet.get") {
-      command.tenantId = "different tenant after admission";
-    } else if (command.type === "userProfiles.reconcile") {
-      command.profileId = "different profile after admission";
-    } else if (command.type === "onboardingRecommendations.read") {
-      command.configKey = "different key after admission";
-    } else if (command.type === "pluginBlob.lookup" || command.type === "pluginBlob.entries") {
-      command.input.pluginId = "different plugin after admission";
-      command.input.namespace = "different namespace after admission";
-      if (command.type === "pluginBlob.lookup") {
-        command.input.key = "different key after admission";
-      }
-    } else if (command.type === "sandboxRegistry.get") {
-      command.containerName = "different container after admission";
-    } else if (command.type === "sandboxRegistry.runtimeIds") {
-      command.backendId = "different backend after admission";
-      command.scopeKey = "different scope after admission";
-    } else {
-      command.workspaceDir = "different workspace after admission";
-    }
-    options.env.OPENCLAW_STATE_DIR = path.join(originalRoot, "different");
     const returned: OpenClawStateReadReply =
-      type === "updateRuns.get"
-        ? { ok: true, type, sourceAdmitted: true, run: undefined }
-        : type === "fleet.get"
-          ? { ok: true, type, sourceAdmitted: true, cell: undefined }
+      type === "githubPublication.sharedObservation"
+        ? { ok: true, type, sourceAdmitted: true, row: undefined }
+        : type === "updateRuns.get"
+          ? { ok: true, type, sourceAdmitted: true, run: undefined }
           : type === "userProfiles.reconcile"
             ? { ok: true, type, sourceAdmitted: true, profile: undefined, emailBindings: [] }
             : type === "onboardingRecommendations.read"
@@ -580,296 +413,294 @@ it.each([
                             setupExists: false,
                           },
                         };
-    try {
-      expect(Number.isSafeInteger(submitted.inputBytes)).toBe(true);
-      const selectorCount =
-        type === "pluginBlob.lookup"
+    const selectorCount =
+      type === "githubPublication.sharedObservation"
+        ? 10
+        : type === "pluginBlob.lookup"
           ? 3
           : type === "pluginBlob.entries" || type === "sandboxRegistry.runtimeIds"
             ? 2
             : 1;
-      expect(submitted.inputBytes).toBeGreaterThanOrEqual(
-        Buffer.byteLength(selector) * selectorCount,
-      );
-      dispatch.resolve();
-      const request = await task.captured;
-      expect(request.command).toEqual(expected);
-      expect(request.context.environment.OPENCLAW_STATE_DIR).toBe(originalRoot);
-      task.result.resolve(returned);
-      expect(await result).toEqual(returned);
-    } finally {
-      dispatch.resolve();
-      task.result.resolve(returned);
-      await Promise.allSettled([result]);
-    }
-  },
-);
 
-it("captures update history filters and charges retained selectors before dispatch", async () => {
-  const { options } = source();
-  const selector = "更新🦞".repeat(512);
-  const input = { reason: selector, includeRunId: selector, active: true, limit: 100 };
-  const expected = { ...input };
-  const dispatch = createDeferredCore();
-  const task = queueTask(dispatch.promise);
-  const result = executeExistingOpenClawStateRead(options, { type: "updateRuns.list", input });
-  const returned: OpenClawStateReadReply = {
-    ok: true,
-    type: "updateRuns.list",
-    sourceAdmitted: true,
-    runs: [],
-  };
-  try {
-    const submitted = await task.submitted;
-    input.reason = "changed reason";
-    input.includeRunId = "changed owner";
-    input.active = false;
-    input.limit = 1;
-    expect(submitted.inputBytes).toBeGreaterThanOrEqual(Buffer.byteLength(selector) * 2 + 9);
-    dispatch.resolve();
-    expect((await task.captured).command).toEqual({ type: "updateRuns.list", input: expected });
-    task.result.resolve(returned);
-    expect(await result).toEqual(returned);
-  } finally {
-    dispatch.resolve();
-    task.result.resolve(returned);
-    await Promise.allSettled([result]);
-  }
-});
-
-it.each(["skills.library.descriptions", "skills.library.manifests"] as const)(
-  "retains library pins and their byte charge while dispatch waits (%s)",
-  async (type) => {
-    const { options } = source();
-    const input = [{ skillId: "技能🦞".repeat(512), revision: "版本🦞".repeat(512) }];
-    const expected = structuredClone(input);
-    const dispatch = createDeferredCore();
-    const task = queueTask(dispatch.promise);
-    const result = executeExistingOpenClawStateRead(options, { type, input });
-    const returned: OpenClawStateReadReply = { ok: true, type, sourceAdmitted: true, value: [] };
-    try {
-      const submitted = await task.submitted;
-      input[0]!.skillId = "changed";
-      input[0]!.revision = "changed";
-      input.push({ skillId: "extra", revision: "extra" });
-      expect(submitted.inputBytes).toBeGreaterThanOrEqual(
-        Buffer.byteLength(expected[0]!.skillId) + Buffer.byteLength(expected[0]!.revision),
-      );
-      dispatch.resolve();
-      expect((await task.captured).command).toEqual({ type, input: expected });
-      task.result.resolve(returned);
-      expect(await result).toEqual(returned);
-    } finally {
-      dispatch.resolve();
-      task.result.resolve(returned);
-      await Promise.allSettled([result]);
-    }
-  },
-);
-
-it.each(["single", "union"] as const)(
-  "captures and charges %s task selectors while retaining original admission",
-  async (shape) => {
-    const { options } = source();
-    const context = captureOpenClawStateWorkerContext(options);
-    const selector = "任务🦞".repeat(512);
-    const scope = {
-      taskId: selector,
-      flowId: selector,
-      runId: selector,
-      childSessionKey: selector,
-    };
-    const input = shape === "single" ? scope : [scope, { taskId: selector }];
-    const expected = structuredClone(input);
-    const dispatch = createDeferredCore();
-    const task = queueTask(dispatch.promise);
-    const result = executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env: context.environment },
-      { type: "tasks.mutationSnapshot", input },
-      { context },
-    );
-    const returned: OpenClawStateReadReply = {
-      ok: true,
-      type: "tasks.mutationSnapshot",
-      sourceAdmitted: true,
-      snapshot: { tasks: new Map(), deliveryStates: new Map() },
-    };
-    try {
-      const submitted = await task.submitted;
-      scope.taskId = "changed task";
-      scope.flowId = "changed flow";
-      scope.runId = "changed run";
-      scope.childSessionKey = "changed child";
-      if (Array.isArray(input)) {
-        input.push({ taskId: "added while queued" });
+    return captureCase(command, returned, selectorBytes * selectorCount, () => {
+      if (command.type === "githubPublication.sharedObservation") {
+        Object.assign(command.input.session, {
+          agentId: "changed",
+          sessionKey: "changed",
+          sessionId: "changed",
+          lifecycleRevision: "changed",
+        });
+        command.input.selector.requestId = "changed";
+        command.input.entry.repositoryWorkspaceId = "changed";
+        command.input.entry.lifecycleRevision = "changed";
+        Object.assign(command.input.entry.worktree, {
+          id: "changed",
+          branch: "changed",
+          repoRoot: "changed",
+        });
+      } else if (command.type === "updateRuns.get") {
+        command.runId = "different run after admission";
+      } else if (command.type === "userProfiles.reconcile") {
+        command.profileId = "different profile after admission";
+      } else if (command.type === "onboardingRecommendations.read") {
+        command.configKey = "different key after admission";
+      } else if (command.type === "pluginBlob.lookup" || command.type === "pluginBlob.entries") {
+        command.input.pluginId = "different plugin after admission";
+        command.input.namespace = "different namespace after admission";
+        if (command.type === "pluginBlob.lookup") {
+          command.input.key = "different key after admission";
+        }
+      } else if (command.type === "sandboxRegistry.get") {
+        command.containerName = "different container after admission";
+      } else if (command.type === "sandboxRegistry.runtimeIds") {
+        command.backendId = "different backend after admission";
+        command.scopeKey = "different scope after admission";
+      } else {
+        command.workspaceDir = "different workspace after admission";
       }
-      options.env.OPENCLAW_STATE_DIR = "/changed-after-capture";
-      expect(submitted.inputBytes).toBeGreaterThanOrEqual(
-        Buffer.byteLength(selector) * (shape === "single" ? 4 : 5),
-      );
-      dispatch.resolve();
-      const request = await task.captured;
-      expect(request.command).toEqual({ type: "tasks.mutationSnapshot", input: expected });
-      expect(request.databasePath).toBe(context.admission.databasePath);
-      expect(request.context.environment).toEqual(context.environment);
-      const failure = new Error("Original task admission retired");
-      vi.spyOn(context.admission, "assertCurrent").mockImplementation(() => {
-        throw failure;
-      });
-      const rejected = expect(result).rejects.toThrow(failure.message);
-      task.result.resolve(returned);
-      await rejected;
-    } finally {
-      dispatch.resolve();
-      task.result.resolve(returned);
-      await Promise.allSettled([result]);
-    }
-  },
-);
-
-it.each([
-  {
-    input: {
-      runId: "运行🦞",
-      now: 0,
-      executionOffset: 0,
-      executionLimit: 0,
-      decisionLimit: 0,
-      decisionCursor: "游标🦞",
+    });
+  }),
+  captureCase(
+    {
+      type: "updateRuns.list",
+      input: historyInput,
     },
-    numericBytes: 32,
-  },
-  { input: { runId: "运行🦞", now: 0 }, numericBytes: 8 },
-  {
-    input: { executionId: "执行🦞", now: 0, decisionLimit: 0, decisionCursor: "游标🦞" },
-    numericBytes: 16,
-  },
-  { input: { executionId: "执行🦞", now: 0 }, numericBytes: 8 },
-] satisfies Array<{ input: ExecutionIdentityInspectionQuery; numericBytes: number }>)(
-  "captures audit query before preparation and charges queued scalar input: $input",
-  async ({
-    input,
-    numericBytes,
-  }: {
-    input: ExecutionIdentityInspectionQuery;
-    numericBytes: number;
-  }) => {
+    { ok: true, type: "updateRuns.list", sourceAdmitted: true, runs: [] },
+    selectorBytes * 2 + 9,
+    ({ input }) => {
+      input.reason = "changed";
+      input.includeRunId = "changed";
+      input.active = false;
+      input.limit = 1;
+    },
+  ),
+  ...(["descendants", "maintenance"] as const).map((kind) => {
+    const input = {
+      sessionKeys: ["父会话🦞".repeat(256)],
+      liveTopology: [
+        { childSessionKey: "子会话🦞".repeat(256), requesterSessionKey: "请求者🦞".repeat(256) },
+      ],
+    };
+    return captureCase(
+      { type: "subagents.runs", scope: kind === "descendants" ? { kind, ...input } : { kind } },
+      kind === "maintenance"
+        ? {
+            ok: true,
+            type: "subagents.runs",
+            sourceAdmitted: true,
+            projection: "maintenance",
+            runs: new Map(),
+            maintenanceDigest: "fixture",
+          }
+        : { ok: true, type: "subagents.runs", sourceAdmitted: true, runs: new Map() },
+      kind === "descendants"
+        ? Buffer.byteLength(input.sessionKeys[0]!) +
+            Buffer.byteLength(input.liveTopology[0]!.childSessionKey) +
+            Buffer.byteLength(input.liveTopology[0]!.requesterSessionKey)
+        : 0,
+      () => {
+        input.sessionKeys[0] = "changed";
+        input.sessionKeys.push("added after admission");
+        input.liveTopology[0]!.childSessionKey = "changed child";
+        input.liveTopology[0]!.requesterSessionKey = "changed requester";
+        input.liveTopology.push({
+          childSessionKey: "added child",
+          requesterSessionKey: "added requester",
+        });
+      },
+      { exact: true },
+    );
+  }),
+  captureCase(
+    {
+      type: "updateRuns.reconciliationCandidates",
+      input: reconciliationInput,
+    },
+    { ok: true, type: "updateRuns.reconciliationCandidates", sourceAdmitted: true, candidates: [] },
+    Buffer.byteLength("更新🦞修复🦞".repeat(512)) + 11,
+    ({ input }) => {
+      input.runIds[0] = "changed";
+      input.runIds.push("added after admission");
+      input.explicit = false;
+      input.requireAllActive = true;
+      input.legacyOnly = false;
+      input.repairHistorySinceMs = 999;
+    },
+    { exact: true },
+  ),
+  ...(["skills.library.descriptions", "skills.library.manifests"] as const).map((type) =>
+    captureCase(
+      { type, input: [{ skillId: "技能🦞".repeat(512), revision: "版本🦞".repeat(512) }] },
+      { ok: true, type, sourceAdmitted: true, value: [] },
+      selectorBytes * 2,
+      ({ input }) => {
+        input[0]!.skillId = "changed";
+        input[0]!.revision = "changed";
+        input.push({ skillId: "extra", revision: "extra" });
+      },
+    ),
+  ),
+  ...(
+    [
+      {
+        input: {
+          runId: "运行🦞",
+          now: 0,
+          executionOffset: 0,
+          executionLimit: 0,
+          decisionLimit: 0,
+          decisionCursor: "游标🦞",
+        },
+        numericBytes: 32,
+      },
+      { input: { runId: "运行🦞", now: 0 }, numericBytes: 8 },
+      {
+        input: { executionId: "执行🦞", now: 0, decisionLimit: 0, decisionCursor: "游标🦞" },
+        numericBytes: 16,
+      },
+      { input: { executionId: "执行🦞", now: 0 }, numericBytes: 8 },
+    ] satisfies Array<{ input: ExecutionIdentityInspectionQuery; numericBytes: number }>
+  ).map(
+    ({ input, numericBytes }: { input: ExecutionIdentityInspectionQuery; numericBytes: number }) =>
+      captureCase(
+        { type: "audit.run.inspect", input },
+        emptyReply,
+        Buffer.byteLength("executionId" in input ? input.executionId : input.runId) +
+          Buffer.byteLength(input.decisionCursor ?? "") +
+          numericBytes,
+        () => {
+          input.now = 999;
+          input.decisionCursor = "changed before read";
+          input.decisionLimit = 99;
+          if ("executionId" in input) {
+            input.executionId = "changed execution";
+          } else {
+            input.runId = "changed run";
+            input.executionOffset = 99;
+            input.executionLimit = 99;
+          }
+        },
+        {
+          exact: true,
+          prepared: true,
+          queued: () => {
+            input.now = 1234;
+            input.decisionCursor = "changed while queued";
+          },
+        },
+      ),
+  ),
+  captureCase(
+    { type: "channelIngress.failedHealth", callerContext: { onClosed: () => {} } },
+    { ok: true, type: "channelIngress.failedHealth", sourceAdmitted: true, result: [] },
+    0,
+    () => {},
+    { prepared: true, expected: { type: "channelIngress.failedHealth" } },
+  ),
+  (() => {
+    const command = {
+      type: "cron.observeRunRecovery" as const,
+      storeKey: "租户🦞",
+      proposals: [
+        { jobId: "任务雪", queuedAtMs: 1, runningAtMs: 2 },
+        { jobId: "运行🌊", runningAtMs: 3 },
+      ],
+    };
+    return captureCase(
+      command,
+      {
+        ok: true,
+        type: command.type,
+        sourceAdmitted: true,
+        observation: { kind: "observed", proposals: [] },
+      },
+      Buffer.byteLength("租户🦞任务雪运行🌊") + 24,
+      () => {
+        command.storeKey = "changed partition";
+        command.proposals[0]!.jobId = "changed before preparation";
+        command.proposals[0]!.queuedAtMs = 9;
+      },
+      {
+        exact: true,
+        prepared: true,
+        queued: () => {
+          command.proposals.splice(0);
+        },
+      },
+    );
+  })(),
+];
+
+it.each(captures)(
+  "captures $command.type selectors and byte charges before queued dispatch (%#)",
+  async (fixture) => {
     const { pathname, options } = source();
+    const expected = fixture.expected ?? structuredClone(fixture.command);
+    const originalRoot = options.env.OPENCLAW_STATE_DIR;
     const context = captureOpenClawStateWorkerContext(options);
     const location = { context, location: pathname, checkFreshAdmission: false };
     const authority = { signal: new AbortController().signal, assertCurrent: () => {} };
-    const expected = { ...input };
-    const command = { type: "audit.run.inspect" as const, input };
-    const transport = createOpenClawStateReadTransport(command);
-    const baseline = createOpenClawStateReadTransport({ type: "fleet.list" });
-    // The caller can mutate its input while the owner prepares a read location.
-    input.now = 999;
-    input.decisionCursor = "changed before read";
-    input.decisionLimit = 99;
-    if ("executionId" in input) {
-      input.executionId = "changed execution";
-    } else {
-      input.runId = "changed run";
-      input.executionOffset = 99;
-      input.executionLimit = 99;
+    const transport = fixture.prepared
+      ? captureOpenClawStateReadSource().createTransport(fixture.command)
+      : undefined;
+    const baselineTransport = fixture.prepared
+      ? captureOpenClawStateReadSource().createTransport({ type: "backup.runs" })
+      : undefined;
+    if (transport) {
+      fixture.mutate();
     }
     const dispatch = createDeferredCore();
     const baselineTask = queueTask(dispatch.promise);
     const task = queueTask(dispatch.promise);
-    const baselineRead = baseline.read(location, authority);
-    const read = transport.read(location, authority);
-    // A pre-admission failure must surface directly rather than leave this test waiting for dispatch.
-    const submitted = Promise.race([
-      task.submitted,
-      read.then(() => {
-        throw new Error("Read completed before dispatch");
-      }),
-    ]);
+    const baseline = baselineTransport
+      ? baselineTransport.startRead(location, authority).result
+      : executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+    const result = transport
+      ? transport.startRead(location, authority).result
+      : executeExistingOpenClawStateRead(options, fixture.command);
     try {
-      const [baselineOptions, auditOptions] = await Promise.all([
+      const [baselineOptions, submitted] = await Promise.all([
         baselineTask.submitted,
-        submitted,
+        Promise.race([
+          task.submitted,
+          result.then(() => {
+            throw new Error("Read settled before queued dispatch");
+          }),
+        ]),
       ]);
-      const selector = "executionId" in expected ? expected.executionId : expected.runId;
-      const additionalBytes =
-        Buffer.byteLength("audit.run.inspect") -
-        Buffer.byteLength("fleet.list") +
-        Buffer.byteLength(selector) +
-        Buffer.byteLength(expected.decisionCursor ?? "") +
-        numericBytes;
-      expect(auditOptions.inputBytes).toBe(Number(baselineOptions.inputBytes) + additionalBytes);
-      input.now = 1234;
-      input.decisionCursor = "changed while queued";
+      if (!transport) {
+        fixture.mutate();
+      }
+      fixture.queued?.();
+      options.env.OPENCLAW_STATE_DIR = path.join(originalRoot, "different");
+      expect(Number.isSafeInteger(submitted.inputBytes)).toBe(true);
+      if (fixture.exact) {
+        expect(submitted.inputBytes).toBe(
+          Number(baselineOptions.inputBytes) +
+            Buffer.byteLength(expected.type) -
+            Buffer.byteLength("backup.runs") +
+            fixture.bytes,
+        );
+      } else {
+        expect(submitted.inputBytes).toBeGreaterThanOrEqual(fixture.bytes);
+      }
       dispatch.resolve();
       const request = await task.captured;
-      expect(request.command).toEqual({ type: "audit.run.inspect", input: expected });
+      expect(request.command).toEqual(expected);
+      expect(request.context.environment.OPENCLAW_STATE_DIR).toBe(originalRoot);
       baselineTask.result.resolve(emptyReply);
-      task.result.resolve(emptyReply);
-      await Promise.all([baselineRead, read]);
+      task.result.resolve(fixture.reply);
+      expect(await result).toEqual(transport ? { value: fixture.reply } : fixture.reply);
+      await baseline;
     } finally {
       dispatch.resolve();
       baselineTask.result.resolve(emptyReply);
-      task.result.resolve(emptyReply);
-      await Promise.allSettled([baselineRead, read]);
-      await Promise.all([baseline.close(), transport.close()]);
+      task.result.resolve(fixture.reply);
+      await Promise.allSettled([baseline, result]);
+      await Promise.all([baselineTransport?.startClose().result, transport?.startClose().result]);
     }
   },
 );
-
-it("captures cron recovery markers and charges their retained bytes before dispatch", async () => {
-  const { pathname, options } = source();
-  const context = captureOpenClawStateWorkerContext(options);
-  const location = { context, location: pathname, checkFreshAdmission: false };
-  const authority = { signal: new AbortController().signal, assertCurrent: () => {} };
-  const command = {
-    type: "cron.observeRunRecovery" as const,
-    storeKey: "租户🦞",
-    proposals: [
-      { jobId: "任务雪", queuedAtMs: 1, runningAtMs: 2 },
-      { jobId: "运行🌊", runningAtMs: 3 },
-    ],
-  };
-  const expected = structuredClone(command);
-  const transport = createOpenClawStateReadTransport(command);
-  const baseline = createOpenClawStateReadTransport({ type: "fleet.list" });
-  command.storeKey = "changed partition";
-  command.proposals[0]!.jobId = "changed before preparation";
-  command.proposals[0]!.queuedAtMs = 9;
-  const dispatch = createDeferredCore();
-  const baselineTask = queueTask(dispatch.promise);
-  const task = queueTask(dispatch.promise);
-  const baselineRead = baseline.read(location, authority);
-  const read = transport.read(location, authority);
-  try {
-    const [baseOptions, submittedOptions] = await Promise.all([
-      baselineTask.submitted,
-      task.submitted,
-    ]);
-    const expectedBytes =
-      Buffer.byteLength(expected.type) -
-      Buffer.byteLength("fleet.list") +
-      Buffer.byteLength(expected.storeKey) +
-      expected.proposals.reduce((total, entry) => total + Buffer.byteLength(entry.jobId), 24);
-    expect(submittedOptions.inputBytes).toBe(Number(baseOptions.inputBytes) + expectedBytes);
-    command.proposals.splice(0);
-    dispatch.resolve();
-    expect((await task.captured).command).toEqual(expected);
-    baselineTask.result.resolve(emptyReply);
-    task.result.resolve({
-      ok: true,
-      type: expected.type,
-      sourceAdmitted: true,
-      observation: { kind: "observed", proposals: [] },
-    });
-    await Promise.all([baselineRead, read]);
-  } finally {
-    dispatch.resolve();
-    baselineTask.result.resolve(emptyReply);
-    task.result.resolve(emptyReply);
-    await Promise.allSettled([baselineRead, read]);
-    await Promise.all([baseline.close(), transport.close()]);
-  }
-});
 
 it("captures and charges independent snapshot and schema paths before queued dispatch", async () => {
   const { root, options } = source();
@@ -894,12 +725,15 @@ it("captures and charges independent snapshot and schema paths before queued dis
   const baselineTask = queueTask(dispatch.promise);
   const rootedTask = queueTask(dispatch.promise);
   const schemaTask = queueTask(dispatch.promise);
-  const baseline = createOpenClawStateReadTransport({ type: "fleet.list" });
-  const rooted = createOpenClawStateReadTransport({ type: "fleet.list" });
-  const schema = createOpenClawStateReadTransport({ type: "fleet.list" });
-  const baselineRead = baseline.read({ ...sourceLocation, snapshotRoot: undefined }, authority);
-  const rootedRead = rooted.read(sourceLocation, authority);
-  const schemaRead = schema.read(schemaLocation, authority);
+  const baseline = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
+  const rooted = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
+  const schema = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
+  const baselineRead = baseline.startRead(
+    { ...sourceLocation, snapshotRoot: undefined },
+    authority,
+  ).result;
+  const rootedRead = rooted.startRead(sourceLocation, authority).result;
+  const schemaRead = schema.startRead(schemaLocation, authority).result;
   try {
     const [baselineOptions, rootedOptions, schemaOptions] = await Promise.all([
       baselineTask.submitted,
@@ -952,6 +786,50 @@ it("captures and charges independent snapshot and schema paths before queued dis
     rootedTask.result.resolve(emptyReply);
     schemaTask.result.resolve(emptyReply);
     await Promise.allSettled([baselineRead, rootedRead, schemaRead]);
-    await Promise.all([baseline.close(), rooted.close(), schema.close()]);
+    await Promise.all([
+      baseline.startClose().result,
+      rooted.startClose().result,
+      schema.startClose().result,
+    ]);
   }
+});
+
+it("services a read and its separate release before promise reactions run", () => {
+  const { options } = source();
+  const context = captureOpenClawStateWorkerContext(options);
+  const authority = {
+    signal: new AbortController().signal,
+    assertCurrent: context.admission.assertCurrent,
+  };
+  let readReady = false;
+  let releaseReady = false;
+  const pending = createRetainedOperation<OpenClawStateReadReply>(() => {
+    if (readReady) {
+      pending.resolve(emptyReply);
+    }
+  });
+  const retirement = createRetainedOperation<void>(() => {
+    if (releaseReady) {
+      retirement.resolve(undefined);
+    }
+  });
+  const release = vi.fn(() => retirement.operation);
+  mock.runTask.mockReturnValueOnce({ ...pending.operation, release });
+  const transport = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
+  const read = transport.startRead(
+    { context, location: options.path, checkFreshAdmission: true },
+    authority,
+  );
+  expect(read.read()).toEqual({ status: "pending" });
+  readReady = true;
+  read.service();
+  expect(read.read()).toEqual({ status: "fulfilled", value: { value: emptyReply } });
+  expect(release).not.toHaveBeenCalled();
+
+  const closing = transport.startClose();
+  expect(closing.read()).toEqual({ status: "pending" });
+  expect(release).toHaveBeenCalledOnce();
+  releaseReady = true;
+  closing.service();
+  expect(closing.read()).toEqual({ status: "fulfilled", value: undefined });
 });

@@ -21,7 +21,6 @@ import {
   runWhatsappResponsivenessHealth,
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
-  collectMemorySearchHealthFindings,
   collectWorkspaceStatusPluginVersionReadiness,
   runBootstrapSizeHealth,
   runHeartbeatCadenceMigrationHealth,
@@ -177,7 +176,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:browser",
       label: "Browser",
-      healthCheckIds: ["core/doctor/browser", "core/doctor/browser-clawd-profile-residue"],
+      healthCheckIds: ["core/doctor/browser"],
       run: runBrowserHealth,
     }),
     createDoctorHealthContribution({
@@ -194,54 +193,25 @@ export function resolveFinalDoctorHealthContributions(params: {
       healthCheckIds: ["core/doctor/hooks-model"],
       run: runHooksModelHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:model-references",
-      label: "Model references",
-      updateWork: { kind: "inspection", scope: "agent" },
-      healthCheckIds: ["core/doctor/model-references"],
-      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/model-references"),
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:acp-agent-model",
-      label: "ACP agent model",
-      updateWork: { kind: "inspection", scope: "agent" },
-      healthCheckIds: ["core/doctor/acp-agent-model"],
-      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/acp-agent-model"),
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:provider-catalog-projection",
-      label: "Provider catalog projection",
-      updateWork: { kind: "inspection", scope: "run" },
-      healthCheckIds: ["core/doctor/provider-catalog-projection"],
-      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/provider-catalog-projection"),
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:local-audio-acceleration",
-      label: "Local audio acceleration",
-      updateWork: { kind: "inspection", scope: "run" },
-      healthCheckIds: ["core/doctor/local-audio-acceleration"],
-      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/local-audio-acceleration"),
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:runtime-tool-schemas",
-      label: "Runtime tool schemas",
-      updateWork: { kind: "inspection", scope: "agent" },
-      healthCheckIds: ["core/doctor/runtime-tool-schemas"],
-      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/runtime-tool-schemas"),
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:skill-workshop-tool-policy",
-      label: "Skill Workshop tool policy",
-      updateWork: { kind: "inspection", scope: "agent" },
-      healthCheckIds: ["core/doctor/skill-workshop-tool-policy"],
-      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy"),
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:skill-workshop-relocation",
-      label: "Skill Workshop relocation",
-      healthCheckIds: ["core/doctor/skill-workshop-relocation"],
-      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-relocation"),
-    }),
+    ...(
+      [
+        ["model-references", "Model references", "agent"],
+        ["acp-agent-model", "ACP agent model", "agent"],
+        ["provider-catalog-projection", "Provider catalog projection", "run"],
+        ["local-audio-acceleration", "Local audio acceleration", "run"],
+        ["runtime-tool-schemas", "Runtime tool schemas", "agent"],
+        ["skill-workshop-tool-policy", "Skill Workshop tool policy", "agent"],
+        ["skill-workshop-relocation", "Skill Workshop relocation"],
+      ] as const
+    ).map(([name, label, scope]) =>
+      createDoctorHealthContribution({
+        id: `doctor:${name}`,
+        label,
+        ...(scope ? { updateWork: { kind: "inspection", scope } as const } : {}),
+        healthCheckIds: [`core/doctor/${name}`],
+        run: (ctx) => runCoreHealthFindingNote(ctx, `core/doctor/${name}`),
+      }),
+    ),
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",
       label: "systemd linger",
@@ -304,7 +274,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",
-      updateWork: { kind: "inspection", scope: "agent" },
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthCheckIds: ["core/doctor/skills-readiness"],
       run: runSkillsHealth,
     }),
@@ -422,11 +392,15 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:memory-search",
       label: "Memory search",
-      updateWork: { kind: "inspection", scope: "agent" },
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthChecks: {
         description: "Memory search provider and backend readiness are captured as findings.",
         defaultEnabled: false,
-        detect: collectMemorySearchHealthFindings,
+        async detect(ctx) {
+          const { collectMemorySearchHealthFindings } =
+            await import("../commands/doctor-memory-search.js");
+          return collectMemorySearchHealthFindings(ctx);
+        },
       },
       run: runMemorySearchHealthContribution,
     }),

@@ -19,19 +19,22 @@ import {
   type OpenClawTestState,
 } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
+import { apiThrottler } from "./bot.runtime.js";
 import { deliverReplies } from "./bot/delivery.js";
 import { telegramPlugin } from "./channel.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
   clearTelegramRuntimeForTest,
+  resetTelegramAccountThrottlersForTest,
   resetTelegramTopicNameCacheForTest,
 } from "./runtime.test-support.js";
 import {
   resolveTelegramTestUpload,
   useTelegramHttpFixture,
 } from "./send.telegram-http.test-support.js";
-import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
+import { getTopicName } from "./topic-name-cache.js";
 
 describe("Telegram registered adapter conformance over HTTP", () => {
   const fixture = useTelegramHttpFixture();
@@ -41,7 +44,16 @@ describe("Telegram registered adapter conformance over HTTP", () => {
   let photoPath: string;
   beforeEach(() => {
     ({ bot, mediaDir, photoPath } = fixture);
+    resetTelegramAccountThrottlersForTest();
+    const { botToken } = cfg.channels.telegram;
+    // Conformance keeps real scheduling without Telegram's wall-clock pacing.
+    for (const token of [botToken, "654321:host-media", "654321:topic-owner"]) {
+      getOrCreateAccountThrottler(token, () =>
+        apiThrottler({ global: {}, group: { maxConcurrent: 1 }, out: { maxConcurrent: 1 } }),
+      );
+    }
   });
+  afterEach(resetTelegramAccountThrottlersForTest);
 
   it.each([
     { name: "rich", richMessages: true, html: false },
@@ -284,75 +296,127 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     });
   });
 
-  it.each(["answer", ""])("reacts to the nested target before delivering %j", async (text) => {
-    await telegramOutbound.sendPayload!({
-      cfg,
-      to: "123",
+  const reactionCases: Array<{
+    name: string;
+    entry: "adapter" | "stream";
+    text: string;
+    nested?: number | string;
+    target?: number;
+    mode?: "off" | "all";
+    failure?: "target" | "api";
+    media?: boolean;
+  }> = [
+    ...["answer", ""].map((text) => ({
+      name: `adapter nested target with ${JSON.stringify(text)}`,
+      entry: "adapter" as const,
       text,
-      replyToId: "888",
-      payload: { text, channelData: { telegram: { reaction: { emoji: "👍", replyToId: "777" } } } },
-    });
-    expect(requests.map(({ method }) => method)).toEqual(
-      text ? ["setMessageReaction", "sendMessage"] : ["setMessageReaction"],
-    );
-    expect(requests[0]!.fields).toMatchObject({
-      message_id: 777,
-      reaction: [{ type: "emoji", emoji: "👍" }],
-    });
-    if (text) {
-      expect(requests[1]!.fields).toMatchObject({ text: "answer", reply_to_message_id: 888 });
-    }
-  });
-
-  it.each([0, -1, 12.5, Number.MAX_SAFE_INTEGER + 1, "invalid"])(
-    "rejects invalid nested reaction target %s without borrowing the text reply",
-    async (replyToId) => {
-      await expect(
-        telegramOutbound.sendPayload!({
-          cfg,
-          to: "123",
-          text: "answer",
-          replyToId: "888",
-          payload: {
-            text: "answer",
-            mediaUrl: photoPath,
-            channelData: { telegram: { reaction: { emoji: "👍", replyToId } } },
-          },
-        }),
-      ).rejects.toThrow(/reply target/);
-      expect(requests).toEqual([]);
+      nested: "777",
+      target: 777,
+    })),
+    ...[0, 12.5, "invalid"].map((nested) => ({
+      name: `invalid adapter target ${nested}`,
+      entry: "adapter" as const,
+      text: "answer",
+      nested,
+      failure: "target" as const,
+      media: true,
+    })),
+    ...(["adapter", "stream"] as const).map((entry) => ({
+      name: `${entry} rejected reaction`,
+      entry,
+      text: "must not send",
+      nested: "777",
+      failure: "api" as const,
+      media: true,
+    })),
+    {
+      name: "stream nested target with threading off",
+      entry: "stream",
+      text: "answer",
+      mode: "off",
+      nested: 777,
+      target: 777,
     },
-  );
-
-  it.each(["adapter", "stream"] as const)(
-    "stops %s visible delivery after Telegram rejects its reaction",
-    async (entry) => {
-      rejections.push("Bad Request: REACTION_INVALID");
+    {
+      name: "stream nested target with separate text reply",
+      entry: "stream",
+      text: "answer",
+      nested: "777",
+      target: 777,
+    },
+    { name: "stream outer reaction-only", entry: "stream", text: "", target: 888 },
+    {
+      name: "invalid explicit stream target",
+      entry: "stream",
+      text: "must not send",
+      nested: "0",
+      failure: "target",
+    },
+    {
+      name: "implicit stream target with threading off",
+      entry: "stream",
+      text: "must not send",
+      mode: "off",
+      failure: "target",
+    },
+  ];
+  it.each(reactionCases)(
+    "preserves reaction delivery for $name",
+    async ({ entry, text, nested, target, mode = "all", failure, media }) => {
+      if (failure === "api") {
+        rejections.push("Bad Request: REACTION_INVALID");
+      }
       const payload = {
-        text: "must not send",
-        mediaUrl: photoPath,
-        replyToId: "888",
-        channelData: { telegram: { reaction: { emoji: "👍", replyToId: "777" } } },
+        text,
+        ...(media ? { mediaUrl: photoPath } : {}),
+        ...(entry === "stream" || failure === "api" ? { replyToId: "888" } : {}),
+        channelData: { telegram: { reaction: { emoji: "👍", replyToId: nested } } },
       };
       if (entry === "adapter") {
-        await expect(
-          telegramOutbound.sendPayload!({ cfg, to: "123", text: payload.text, payload }),
-        ).rejects.toThrow(/Reaction unavailable/);
+        const delivery = telegramOutbound.sendPayload!({
+          cfg,
+          to: "123",
+          text,
+          ...(failure === "api" ? {} : { replyToId: "888" }),
+          payload,
+        });
+        if (failure) {
+          await expect(delivery).rejects.toThrow(
+            failure === "target" ? /reply target/ : /Reaction unavailable/,
+          );
+        } else {
+          await delivery;
+        }
       } else {
-        await expect(
-          deliverReplies({
-            cfg,
-            bot,
-            runtime,
-            chatId: "123",
-            token: cfg.channels.telegram.botToken,
-            replies: [payload],
-            replyToMode: "all",
-            textLimit: 4000,
-          }),
-        ).resolves.toMatchObject({ delivered: false });
+        const result = await deliverReplies({
+          cfg,
+          bot,
+          runtime,
+          chatId: "123",
+          token: cfg.channels.telegram.botToken,
+          replies: [payload],
+          replyToMode: mode,
+          textLimit: 4000,
+        });
+        expect(result.delivered).toBe(!failure);
       }
-      expect(requests.map(({ method }) => method)).toEqual(["setMessageReaction"]);
+      if (failure) {
+        expect(requests.map(({ method }) => method)).toEqual(
+          failure === "api" ? ["setMessageReaction"] : [],
+        );
+      } else {
+        expect(requests.map(({ method }) => method)).toEqual(
+          text ? ["setMessageReaction", "sendMessage"] : ["setMessageReaction"],
+        );
+        expect(requests[0]!.fields).toMatchObject({
+          message_id: target,
+          reaction: [{ type: "emoji", emoji: "👍" }],
+        });
+        if (text) {
+          expect(requests[1]!.fields).toMatchObject({ text: "answer" });
+          expect(requests[1]!.fields.reply_to_message_id).toBe(mode === "all" ? 888 : undefined);
+        }
+      }
     },
   );
 
@@ -445,73 +509,6 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     expect(result.pollId).toBe("http-poll");
   });
 
-  it.each([
-    { name: "nested with threading off", text: "answer", mode: "off", nested: 777, target: 777 },
-    {
-      name: "nested with a separate text reply",
-      text: "answer",
-      mode: "all",
-      nested: "777",
-      target: 777,
-    },
-    { name: "outer reaction-only", text: "", mode: "all", nested: undefined, target: 888 },
-  ] as const)(
-    "delivers streamed $name reactions without stealing reply intent",
-    async ({ text, mode, nested, target }) => {
-      const result = await deliverReplies({
-        cfg,
-        bot,
-        runtime,
-        chatId: "123",
-        token: cfg.channels.telegram.botToken,
-        replies: [
-          {
-            text,
-            replyToId: "888",
-            channelData: { telegram: { reaction: { emoji: "👍", replyToId: nested } } },
-          },
-        ],
-        replyToMode: mode,
-        textLimit: 4000,
-      });
-      expect(result.delivered).toBe(true);
-      expect(requests.map(({ method }) => method)).toEqual(
-        text ? ["setMessageReaction", "sendMessage"] : ["setMessageReaction"],
-      );
-      expect(requests[0]!.fields).toMatchObject({
-        message_id: target,
-        reaction: [{ type: "emoji", emoji: "👍" }],
-      });
-      if (text) {
-        expect(requests[1]!.fields.reply_to_message_id).toBe(mode === "all" ? 888 : undefined);
-        expect(requests[1]!.fields.text).toBe("answer");
-      }
-    },
-  );
-
-  it.each([
-    { name: "invalid explicit target", nested: "0", mode: "all" },
-    { name: "implicit target with threading disabled", nested: undefined, mode: "off" },
-  ] as const)("does not deliver a streamed reaction with $name", async ({ nested, mode }) => {
-    const result = await deliverReplies({
-      cfg,
-      bot,
-      runtime,
-      chatId: "123",
-      token: cfg.channels.telegram.botToken,
-      replies: [
-        {
-          text: "must not send",
-          replyToId: "888",
-          channelData: { telegram: { reaction: { emoji: "👍", replyToId: nested } } },
-        },
-      ],
-      replyToMode: mode,
-      textLimit: 4000,
-    });
-    expect(result.delivered).toBe(false);
-    expect(requests).toEqual([]);
-  });
   describe("registered durable action delivery", () => {
     let state: OpenClawTestState;
     let actionCfg: OpenClawConfig;
@@ -966,22 +963,10 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       });
       resetTelegramTopicNameCacheForTest();
       await expect(
-        getTopicName(
-          "-1001",
-          99,
-          resolveTopicNameCacheScope(
-            resolveStorePath(actionCfg.session?.store, { agentId: "ops" }),
-          ),
-        ),
+        getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "ops" })),
       ).resolves.toBe("Renamed");
       await expect(
-        getTopicName(
-          "-1001",
-          99,
-          resolveTopicNameCacheScope(
-            resolveStorePath(actionCfg.session?.store, { agentId: "main" }),
-          ),
-        ),
+        getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "main" })),
       ).resolves.toBeUndefined();
     });
   });

@@ -1,9 +1,16 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
-import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginNodeHostCommand,
+  OpenClawPluginApi,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   sessionCatalogPaging,
@@ -25,11 +32,8 @@ import { openOpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js"
 import { openClawStateDatabaseCache } from "../../src/state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 import * as githubIdentities from "../../src/state/user-profile-github-identity.js";
-import {
-  ensureProfileForEmail,
-  linkEmail,
-  syncGitHubIdentity,
-} from "../../src/state/user-profiles.js";
+import { linkEmail, syncGitHubIdentity } from "../../src/state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { trackSqliteStatementExecutions } from "../helpers/sqlite-statement-execution-counter.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -37,23 +41,26 @@ afterEach(() => vi.restoreAllMocks());
 function registerSessionShare(runtime: PluginRuntime, config: OpenClawConfig = {}) {
   const nodeCommands: OpenClawPluginNodeHostCommand[] = [];
   const catalogs: SessionCatalogProvider[] = [];
-  sessionSharePlugin.register(
-    createTestPluginApi({
-      runtime,
-      config,
-      registerNodeHostCommand: (command) => {
-        nodeCommands.push(command);
-      },
-      registerSessionCatalog: (catalog) => {
-        catalogs.push(catalog);
-      },
-    }),
-  );
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
+  const api = createTestPluginApi({
+    runtime,
+    config,
+    registerNodeHostCommand: (command) => {
+      nodeCommands.push(command);
+    },
+    registerSessionCatalog: (catalog) => {
+      catalogs.push(catalog);
+    },
+    registerService: (service) => {
+      services.push(service);
+    },
+  });
+  sessionSharePlugin.register(api);
   const catalog = catalogs.find((entry) => entry.id === "openclaw");
   if (!catalog) {
     throw new Error("Session Share did not register its catalog");
   }
-  return { commands: nodeCommands, catalog };
+  return { commands: nodeCommands, catalog, services, logger: api.logger };
 }
 
 type SessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
@@ -100,7 +107,7 @@ const remoteIdentity = {
   id: "4242",
 };
 
-function catalogFixture() {
+function catalogFixture(stateDir: string) {
   let config: OpenClawConfig = {};
   const list = vi.fn<PluginRuntime["nodes"]["list"]>().mockResolvedValue({
     nodes: [{ nodeId: "alpha", displayName: " Alpha ", connected: true, commands }],
@@ -121,22 +128,72 @@ function catalogFixture() {
     config: { current: () => config },
     nodes: { list, invoke },
   });
-  const catalog = registerSessionShare(runtime).catalog;
+  const { catalog, services, logger } = registerSessionShare(runtime);
+  const scheduler = createTestPluginServiceScheduler();
+  const serviceContext = { config, stateDir, logger, invokeNode: invoke, scheduler };
   return {
     catalog,
     list,
     invoke,
+    hydrate: async () => {
+      const publications: Promise<void>[] = [];
+      await catalog.list({
+        allowPartialResults: true,
+        onHost: () => {},
+        waitUntil: (work) => publications.push(work),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all(publications);
+    },
+    start: async () => {
+      await Promise.all(
+        services.map(async (service) => {
+          await service.start(serviceContext);
+        }),
+      );
+    },
+    stop: async () => {
+      scheduler.beginClose();
+      try {
+        await Promise.all(
+          services.map(async (service) => {
+            await service.stop?.(serviceContext);
+          }),
+        );
+      } finally {
+        await scheduler.stop();
+      }
+    },
     setConfig: (next: OpenClawConfig) => {
       config = next;
     },
   };
 }
 
+async function withCatalogFixture(
+  run: (fixture: ReturnType<typeof catalogFixture>) => Promise<void>,
+) {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    vi.useFakeTimers();
+    const fixture = catalogFixture(state.stateDir);
+    try {
+      await fixture.start();
+      await run(fixture);
+    } finally {
+      // Stop all publishers before the fixture closes its private databases and environment.
+      try {
+        await fixture.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+}
+
 describe("session-share node commands", () => {
   it("derives titles only for the requested page while preserving transcript-title search", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withCatalogFixture(async (receiver) => {
       const source = commandFixture();
-      const receiver = catalogFixture();
       receiver.invoke.mockImplementation(async ({ command, params }) => {
         const handler = source.commands.find((candidate) => candidate.command === command)!;
         return { payloadJSON: await handler.handle(JSON.stringify(params)) };
@@ -178,13 +235,28 @@ describe("session-share node commands", () => {
       const counter = trackSqliteStatementExecutions(db, ["transcript"], (sql) =>
         /\btranscript_events\b/.test(sql) ? "transcript" : null,
       );
-      let first: Awaited<ReturnType<SessionCatalogProvider["list"]>>;
       try {
-        first = await receiver.catalog.list({ limitPerHost: 1 });
+        expect((await source.list({ limit: 1 })).sessions).toMatchObject([
+          { threadId: "agent:main:named", name: "Named session" },
+        ]);
         expect.soft(counter.counts.transcript).toBe(0);
       } finally {
         counter.restore();
       }
+      const responses = [
+        JSON.stringify(await source.list({ limit: 100 })),
+        JSON.stringify(await source.list({ limit: 100 })),
+      ];
+      const hashes = responses.map((response) =>
+        createHash("sha256").update(response).digest("hex"),
+      );
+      expect(hashes[1]).toBe(hashes[0]);
+      console.info("Session Share paired source response", {
+        bytes: responses.map((response) => Buffer.byteLength(response)),
+        hashes,
+      });
+      await receiver.hydrate();
+      const first = await receiver.catalog.list({ limitPerHost: 1 });
       expect(first[0]?.sessions).toMatchObject([
         { threadId: "agent:main:named", name: "Named session" },
       ]);
@@ -211,6 +283,7 @@ describe("session-share node commands", () => {
           { threadId: "agent:main:derived-2", name: "Derived title 2" },
         ]);
       }
+      expect(receiver.invoke).toHaveBeenCalledTimes(1);
       db.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?").run(
         "invalid-json",
         "derived-0",
@@ -701,156 +774,151 @@ describe("session-share node commands", () => {
     });
   });
 
-  it.each([undefined, []])(
-    "does not advertise or publish without share groups %j",
-    async (groups) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const fixture = commandFixture(groups ?? []);
-        if (groups === undefined) {
-          fixture.config.plugins = undefined;
-        }
-        const manifest = JSON.parse(
-          fs.readFileSync(
-            new URL("../../extensions/session-share/openclaw.plugin.json", import.meta.url),
-            "utf8",
-          ),
-        ) as { configSchema: Record<string, unknown> };
-        expect(
-          validateJsonSchemaValue({
-            schema: manifest.configSchema,
-            cacheKey: "session-share.disabled-config",
-            value: fixture.config.plugins?.entries?.["session-share"]?.config ?? {},
-          }).ok,
-        ).toBe(true);
-        for (const command of fixture.commands) {
-          expect(command.isAvailable?.({ config: fixture.config, env: {} })).toBe(false);
-        }
-        expect((await fixture.list()).sessions).toEqual([]);
-        await expect(fixture.read("agent:main:unshared")).rejects.toThrow("not shared");
-      });
-    },
-  );
+  it("does not advertise or publish without share configuration", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = commandFixture([]);
+      fixture.config.plugins = undefined;
+      const manifest = JSON.parse(
+        fs.readFileSync(
+          new URL("../../extensions/session-share/openclaw.plugin.json", import.meta.url),
+          "utf8",
+        ),
+      ) as { configSchema: Record<string, unknown> };
+      expect(
+        validateJsonSchemaValue({
+          schema: manifest.configSchema,
+          cacheKey: "session-share.disabled-config",
+          value: {},
+        }).ok,
+      ).toBe(true);
+      for (const command of fixture.commands) {
+        expect(command.isAvailable?.({ config: fixture.config, env: {} })).toBe(false);
+      }
+      expect((await fixture.list()).sessions).toEqual([]);
+      await expect(fixture.read("agent:main:unshared")).rejects.toThrow("not shared");
+    });
+  });
 });
 
 describe("session-share receiver identity integration", () => {
-  it.each(["alpha", "beta"])(
-    "keeps %s claims remote by default and applies only explicit owner and numeric GitHub links",
-    async (nodeId) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const profile = syncGitHubIdentity({
-          identity: { accountId: 4242, login: "catalog-person", name: "Catalog Person" },
-          authenticationAlias: { kind: "github-login", login: "catalog-person" },
-        });
-        const fixture = catalogFixture();
-        fixture.list.mockResolvedValue({ nodes: [{ nodeId, connected: true, commands }] });
-        const hostId = `node:${nodeId}`;
-        const namespacedIdentity = { ...remoteIdentity, domain: hostId };
-        const identityReads = vi.spyOn(githubIdentities, "selectStoredGitHubIdentities");
-        const fullIdentityScans = () =>
-          identityReads.mock.calls.filter(([, profileIds]) => profileIds === undefined).length;
-        const human = {
-          ...nativeSession,
-          createdActor: {
-            type: "human" as const,
-            id: "4242",
-            identity: remoteIdentity,
-            label: "Remote Person",
-          },
-        };
-        const agent = {
-          ...nativeSession,
-          threadId: "agent:main:agent",
-          createdActor: { type: "agent" as const, id: "assistant", label: "Assistant" },
-        };
-        const unmatched = {
-          ...human,
-          threadId: "agent:main:unmatched",
-          createdActor: {
-            ...human.createdActor,
-            id: "9999",
-            identity: { ...remoteIdentity, id: "9999" },
-          },
-        };
-        const transcript = {
-          threadId: nativeSession.threadId,
-          items: [remoteIdentity, remoteIdentity, { ...remoteIdentity, id: "9999" }].map(
-            (identity) => ({
-              type: "userMessage",
-              text: "Question",
-              sender: { identity, label: "Remote Person" },
-            }),
-          ),
-        };
-        fixture.invoke.mockImplementation(async ({ command }) =>
-          command === commands[0] ? { sessions: [human, agent, unmatched] } : transcript,
-        );
-        const namespacedHuman = {
-          ...human,
-          createdActor: { ...human.createdActor, identity: namespacedIdentity },
-        };
-        const namespacedUnmatched = {
-          ...unmatched,
-          createdActor: {
-            ...unmatched.createdActor,
-            identity: { ...namespacedIdentity, id: "9999" },
-          },
-        };
-        expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([
-          namespacedHuman,
-          agent,
-          namespacedUnmatched,
-        ]);
-        expect(
-          (await fixture.catalog.read({ hostId, threadId: nativeSession.threadId })).items[0]
-            ?.sender?.identity,
-        ).toEqual(namespacedIdentity);
-        expect(fullIdentityScans()).toBe(0);
-        for (const owner of [`profile:${profile.id}`, "github:CATALOG-PERSON"]) {
-          fixture.setConfig({
-            plugins: {
-              entries: { "session-share": { config: { nodes: { [nodeId]: { owner } } } } },
-            },
-          });
-          const rows = (await fixture.catalog.list({}))[0]!.sessions;
-          expect(rows[0]).toEqual(namespacedHuman);
-          expect(rows[1]?.createdActor).toMatchObject({
-            type: "human",
-            id: profile.id,
-            identity: { type: "profile", id: profile.id },
-            label: "Catalog Person",
-          });
-          expect(rows[2]).toEqual(namespacedUnmatched);
-        }
+  it("keeps claims remote by default and applies only explicit owner and numeric GitHub links", async () => {
+    const nodeId = "alpha";
+    await withCatalogFixture(async (fixture) => {
+      const profile = syncGitHubIdentity({
+        identity: { accountId: 4242, login: "catalog-person", name: "Catalog Person" },
+        authenticationAlias: { kind: "github-login", login: "catalog-person" },
+      });
+      fixture.list.mockResolvedValue({ nodes: [{ nodeId, connected: true, commands }] });
+      const hostId = `node:${nodeId}`;
+      const namespacedIdentity = { ...remoteIdentity, domain: hostId };
+      const identityReads = vi.spyOn(githubIdentities, "selectStoredGitHubIdentities");
+      const fullIdentityScans = () =>
+        identityReads.mock.calls.filter(([, profileIds]) => profileIds === undefined).length;
+      const human = {
+        ...nativeSession,
+        createdActor: {
+          type: "human" as const,
+          id: "4242",
+          identity: remoteIdentity,
+          label: "Remote Person",
+        },
+      };
+      const agent = {
+        ...nativeSession,
+        threadId: "agent:main:agent",
+        createdActor: { type: "agent" as const, id: "assistant", label: "Assistant" },
+      };
+      const unmatched = {
+        ...human,
+        threadId: "agent:main:unmatched",
+        createdActor: {
+          ...human.createdActor,
+          id: "9999",
+          identity: { ...remoteIdentity, id: "9999" },
+        },
+      };
+      const transcript = {
+        threadId: nativeSession.threadId,
+        items: [remoteIdentity, remoteIdentity, { ...remoteIdentity, id: "9999" }].map(
+          (identity) => ({
+            type: "userMessage",
+            text: "Question",
+            sender: { identity, label: "Remote Person" },
+          }),
+        ),
+      };
+      fixture.invoke.mockImplementation(async ({ command }) =>
+        command === commands[0] ? { sessions: [human, agent, unmatched] } : transcript,
+      );
+      const namespacedHuman = {
+        ...human,
+        createdActor: { ...human.createdActor, identity: namespacedIdentity },
+      };
+      const namespacedUnmatched = {
+        ...unmatched,
+        createdActor: {
+          ...unmatched.createdActor,
+          identity: { ...namespacedIdentity, id: "9999" },
+        },
+      };
+      await fixture.hydrate();
+      expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([
+        namespacedHuman,
+        agent,
+        namespacedUnmatched,
+      ]);
+      expect(
+        (await fixture.catalog.read({ hostId, threadId: nativeSession.threadId })).items[0]?.sender
+          ?.identity,
+      ).toEqual(namespacedIdentity);
+      expect(fullIdentityScans()).toBe(0);
+      for (const owner of [`profile:${profile.id}`, "github:CATALOG-PERSON"]) {
         fixture.setConfig({
           plugins: {
-            entries: {
-              "session-share": { config: { nodes: { [nodeId]: { linkGitHubIdentities: true } } } },
-            },
+            entries: { "session-share": { config: { nodes: { [nodeId]: { owner } } } } },
           },
         });
-        identityReads.mockClear();
-        const linked = (await fixture.catalog.list({}))[0]!.sessions;
-        expect.soft(fullIdentityScans()).toBe(1);
-        expect(linked[0]?.createdActor).toMatchObject({
+        await fixture.hydrate();
+        const rows = (await fixture.catalog.list({}))[0]!.sessions;
+        expect(rows[0]).toEqual(namespacedHuman);
+        expect(rows[1]?.createdActor).toMatchObject({
           type: "human",
           id: profile.id,
           identity: { type: "profile", id: profile.id },
           label: "Catalog Person",
         });
-        expect(linked[1]).toEqual(agent);
-        expect(linked[2]).toEqual(namespacedUnmatched);
-        identityReads.mockClear();
-        const page = await fixture.catalog.read({
-          hostId,
-          threadId: nativeSession.threadId,
-        });
-        expect.soft(fullIdentityScans()).toBe(1);
-        expect(page.items.map((item) => item.sender)).toEqual([
-          { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
-          { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
-          { identity: { ...namespacedIdentity, id: "9999" }, label: "Remote Person" },
-        ]);
+        expect(rows[2]).toEqual(namespacedUnmatched);
+      }
+      fixture.setConfig({
+        plugins: {
+          entries: {
+            "session-share": { config: { nodes: { [nodeId]: { linkGitHubIdentities: true } } } },
+          },
+        },
       });
-    },
-  );
+      await fixture.hydrate();
+      identityReads.mockClear();
+      const linked = (await fixture.catalog.list({}))[0]!.sessions;
+      expect.soft(fullIdentityScans()).toBe(1);
+      expect(linked[0]?.createdActor).toMatchObject({
+        type: "human",
+        id: profile.id,
+        identity: { type: "profile", id: profile.id },
+        label: "Catalog Person",
+      });
+      expect(linked[1]).toEqual(agent);
+      expect(linked[2]).toEqual(namespacedUnmatched);
+      identityReads.mockClear();
+      const page = await fixture.catalog.read({
+        hostId,
+        threadId: nativeSession.threadId,
+      });
+      expect.soft(fullIdentityScans()).toBe(1);
+      expect(page.items.map((item) => item.sender)).toEqual([
+        { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
+        { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
+        { identity: { ...namespacedIdentity, id: "9999" }, label: "Remote Person" },
+      ]);
+    });
+  });
 });

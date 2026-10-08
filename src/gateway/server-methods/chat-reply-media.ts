@@ -16,6 +16,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
+import { WEBCHAT_LOCAL_MEDIA_MAX_BYTES } from "../../media/configured-max-bytes.js";
 import type { LocalMediaAccessError } from "../../media/local-media-access.js";
 import {
   appendLocalMediaParentRoots,
@@ -78,37 +79,46 @@ export function captureWebchatReplyMediaScope(
     sessionKey: string;
     sessionLoadOptions?: Parameters<typeof loadSessionEntry>[1];
   },
-): WebchatReplyMediaScope & { sessionKey: string; assertCurrent: () => void } {
+): WebchatReplyMediaScope & {
+  sessionKey: string;
+  workspace: ReturnType<typeof resolveWebchatReplyWorkspace>;
+  assertCurrent: () => void;
+} {
   const readEntry = () => loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
   const sessionEntry = readEntry();
   const scope = { ...params, sessionEntry: sessionEntry ? { ...sessionEntry } : undefined };
   const authority = (entry: SessionEntry | undefined) => {
     const currentScope = { ...scope, sessionEntry: entry };
     const workspace = resolveWebchatReplyWorkspace(currentScope);
-    return JSON.stringify([
-      entry?.sessionId,
-      entry?.lifecycleRevision,
-      entry?.permissionMode,
-      entry?.execNode,
-      entry?.repositoryWorkspaceId,
-      workspace.remote,
-      workspace.workspaceDir,
-      resolveWebchatReplyWorkspaceOnly(currentScope),
-    ]);
+    return {
+      workspace,
+      key: JSON.stringify([
+        entry?.sessionId,
+        entry?.lifecycleRevision,
+        entry?.permissionMode,
+        entry?.execNode,
+        entry?.repositoryWorkspaceId,
+        workspace.remote,
+        workspace.workspaceDir,
+        resolveWebchatReplyWorkspaceOnly(currentScope),
+      ]),
+    };
   };
   const expected = authority(scope.sessionEntry);
   return {
     ...scope,
+    // The custody fence already read this workspace; preparation consumes that same snapshot.
+    workspace: expected.workspace,
     assertCurrent: () => {
       params.assertCurrent?.();
-      if (authority(readEntry()) !== expected) {
+      if (authority(readEntry()).key !== expected.key) {
         throw new Error("Session media access changed before attachment delivery.");
       }
     },
   };
 }
 
-export async function prepareWebchatReplyMediaForDisplay(params: {
+type WebchatReplyMediaPreparationParams = {
   scope: ReturnType<typeof captureWebchatReplyMediaScope>;
   inputs: readonly ReplyDispatchOperation[];
   storePath?: string;
@@ -119,7 +129,21 @@ export async function prepareWebchatReplyMediaForDisplay(params: {
   onLocalAudioAccessDenied?: (error: LocalMediaAccessError) => void;
   onManagedMediaPrepareError?: (message: string) => void;
   onSensitiveDisplayPrepareError?: (message: string) => void;
-}) {
+};
+
+type WebchatReplyContent = Awaited<ReturnType<typeof buildAssistantReplyContentFromInputs>> & {
+  mediaMessage: Awaited<ReturnType<typeof buildWebchatAssistantMessageFromReplyPayloads>>;
+};
+
+/** Keep normalization and grouped content preparation inside one media custody scope. */
+export async function withPreparedWebchatReplyMedia<T>(
+  params: WebchatReplyMediaPreparationParams,
+  prepare: (media: {
+    payloads: ReplyPayload[];
+    inputsByIndex: ReplyDispatchOperation[][];
+    buildContent: (inputs: readonly ReplyDispatchOperation[]) => Promise<WebchatReplyContent>;
+  }) => Promise<T>,
+): Promise<T> {
   const scope = params.scope;
   const sourcePayloads = params.inputs.map(readChatSendReplyPayload);
   const hasMedia = sourcePayloads.some(
@@ -132,35 +156,55 @@ export async function prepareWebchatReplyMediaForDisplay(params: {
         ...scope,
         payloads: sourcePayloads,
       });
-      const inputs = params.inputs.flatMap((input, index) => {
+      const inputsByIndex = params.inputs.map((input, index) => {
         const payload = payloads[index];
         return payload ? replaceChatSendReplyPayload(input, payload) : [];
       });
-      const localRoots = getWebchatReplyMediaLocalRoots({ ...scope, storePath: params.storePath });
-      const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(
-        inputs.map(readChatSendReplyPayload),
-        {
-          localRoots,
-          assertCurrent: captureChannelReadAuthority(),
-          onLocalAudioAccessDenied: params.onLocalAudioAccessDenied,
+      const localRoots = hasMedia
+        ? getWebchatReplyMediaLocalRoots({ ...scope, storePath: params.storePath })
+        : [];
+      return prepare({
+        payloads,
+        inputsByIndex,
+        buildContent: async (inputs) => {
+          const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(
+            inputs.map(readChatSendReplyPayload),
+            {
+              localRoots,
+              assertCurrent: captureChannelReadAuthority(),
+              onLocalAudioAccessDenied: params.onLocalAudioAccessDenied,
+            },
+          );
+          const content = await buildAssistantReplyContentFromInputs({
+            sessionKey: params.transcriptTarget?.sessionKey ?? scope.sessionKey,
+            agentId: params.transcriptTarget?.agentId ?? scope.agentId,
+            inputs,
+            transcriptMediaMessage: mediaMessage,
+            managedMediaLocalRoots: localRoots,
+            assertCurrent: scope.assertCurrent,
+            abortSignal: params.abortSignal,
+            includeSensitiveMedia: params.includeSensitiveMedia,
+            includeSensitiveDisplay: params.includeSensitiveDisplay,
+            onManagedMediaPrepareError: params.onManagedMediaPrepareError,
+            onSensitiveDisplayPrepareError: params.onSensitiveDisplayPrepareError,
+          });
+          return { ...content, mediaMessage };
         },
-      );
-      const content = await buildAssistantReplyContentFromInputs({
-        sessionKey: params.transcriptTarget?.sessionKey ?? scope.sessionKey,
-        agentId: params.transcriptTarget?.agentId ?? scope.agentId,
-        inputs,
-        transcriptMediaMessage: mediaMessage,
-        managedMediaLocalRoots: localRoots,
-        assertCurrent: scope.assertCurrent,
-        abortSignal: params.abortSignal,
-        includeSensitiveMedia: params.includeSensitiveMedia,
-        includeSensitiveDisplay: params.includeSensitiveDisplay,
-        onManagedMediaPrepareError: params.onManagedMediaPrepareError,
-        onSensitiveDisplayPrepareError: params.onSensitiveDisplayPrepareError,
       });
-      return { ...content, inputs, payloads, mediaMessage };
     },
     hasMedia ? params.abortSignal : undefined,
+  );
+}
+
+export async function prepareWebchatReplyMediaForDisplay(
+  params: WebchatReplyMediaPreparationParams,
+) {
+  return withPreparedWebchatReplyMedia(
+    params,
+    async ({ payloads, inputsByIndex, buildContent }) => {
+      const inputs = inputsByIndex.flat();
+      return { ...(await buildContent(inputs)), inputs, payloads };
+    },
   );
 }
 
@@ -197,9 +241,9 @@ function resolveWebchatReplyWorkspaceOnly(params: WebchatReplyMediaScope): boole
 
 /** Trusted audio bypasses staging, but its reader must use the same session workspace. */
 export function getWebchatReplyMediaLocalRoots(
-  params: WebchatReplyMediaScope & { storePath?: string },
+  params: ReturnType<typeof captureWebchatReplyMediaScope> & { storePath?: string },
 ): readonly string[] {
-  const { remote, workspaceDir } = resolveWebchatReplyWorkspace(params);
+  const { remote, workspaceDir } = params.workspace;
   if (remote) {
     return [getMediaDir()];
   }
@@ -247,9 +291,7 @@ function shouldPreserveDisplayMediaUrl(payload: ReplyPayload, mediaUrl: string):
 
 /** Normalize reply media paths for webchat display without leaking sensitive media. */
 export async function normalizeWebchatReplyMediaPathsForDisplay(
-  params: WebchatReplyMediaScope & {
-    sessionKey: string;
-    accountId?: string;
+  params: ReturnType<typeof captureWebchatReplyMediaScope> & {
     payloads: ReplyPayload[];
   },
 ): Promise<ReplyPayload[]> {
@@ -265,13 +307,13 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
     ) {
       return params.payloads;
     }
-    const { remote, workspaceDir } = resolveWebchatReplyWorkspace(params);
+    const { remote, workspaceDir } = params.workspace;
     if (!workspaceDir) {
       return params.payloads;
     }
     const assertCurrent = captureChannelReadAuthority();
     const { createReplyMediaPathNormalizer } =
-      await import("../../auto-reply/reply/reply-media-paths.runtime.js");
+      await import("../../auto-reply/reply/reply-media-paths.js");
     assertCurrent?.();
     const workspaceOnly = resolveWebchatReplyWorkspaceOnly(params);
     const normalizeMediaPaths = createReplyMediaPathNormalizer({
@@ -284,6 +326,7 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
       allowHostWorkspace: !remote,
       accountId: params.accountId,
       ...resolveRequesterPolicyContext(params.requesterContext),
+      localMediaMaxBytes: WEBCHAT_LOCAL_MEDIA_MAX_BYTES,
     });
     const normalized: ReplyPayload[] = [];
     for (const payload of params.payloads) {

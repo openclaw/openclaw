@@ -24,7 +24,7 @@ import {
   uiConversationMatches,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
-export type SessionArchivedFilter = "active" | "archived" | "all";
+export type SessionArchivedFilter = "active" | "snoozed" | "archived" | "all";
 
 type SessionNavigationInput = {
   result: SessionsListResult | null;
@@ -37,15 +37,6 @@ type SessionNavigationInput = {
   showSystem?: boolean;
   archivedFilter?: SessionArchivedFilter;
   compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
-};
-
-type SessionNavigation = {
-  currentSessionKey: string;
-  selectedAgentId: string;
-  defaultAgentId: string;
-  selectedSession?: GatewaySessionRow;
-  visibleSessions: GatewaySessionRow[];
-  activeRowKey: string | null;
 };
 
 export type SessionScopeHost = {
@@ -180,6 +171,7 @@ export function sessionMatchesVisibleSessionScope(
     sessionMatchesArchivedFilter(row, options.archivedFilter) &&
     row.kind !== "global" &&
     row.kind !== "unknown" &&
+    row.isDock !== true &&
     (options.showCron === true || !isCronSessionDisplayKey(row.key)) &&
     (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
     (!options.filterByAgent ||
@@ -194,6 +186,7 @@ export function filterVisibleSessionRows(
   return rows.filter((row) => {
     if (
       row.key === options.currentSessionKey &&
+      row.isDock !== true &&
       ((options.archivedFilter ?? "active") === "active" ||
         sessionMatchesArchivedFilter(row, options.archivedFilter))
     ) {
@@ -206,13 +199,6 @@ export function filterVisibleSessionRows(
       (!row.spawnedBy || normalizeOptionalString(row.category) != null)
     );
   });
-}
-
-export function getVisibleSessionRows(
-  result: SessionsListResult | null,
-  options: VisibleSessionRowOptions,
-): GatewaySessionRow[] {
-  return filterVisibleSessionRows(result?.sessions ?? [], options);
 }
 
 export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
@@ -230,7 +216,7 @@ export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySe
   return updatedDiff !== 0 ? updatedDiff : a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
 }
 
-export function resolveSessionNavigation(input: SessionNavigationInput): SessionNavigation {
+export function resolveSessionNavigation(input: SessionNavigationInput) {
   const currentSessionKey = resolveSessionKey(input.sessionKey, input.hello);
   const defaultAgentId = resolveUiSelectedGlobalAgentId({
     assistantAgentId: input.assistantAgentId,
@@ -258,7 +244,7 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     !parseCatalogSessionKey(currentSessionKey)
       ? { ...(selectedSession ?? { kind: "direct", updatedAt: null }), key: currentSessionKey }
       : undefined;
-  const sortedSessions = getVisibleSessionRows(input.result, {
+  const sortedSessions = filterVisibleSessionRows(input.result?.sessions ?? [], {
     currentSessionKey: currentSessionKey || undefined,
     agentId: selectedAgentId,
     defaultAgentId,
@@ -272,7 +258,12 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   // hides another one behind a separate route.
   let visibleSessions = sortedSessions;
   let activeRow = visibleSessions.find(matchesCurrentSession);
-  if (!activeRow && activeSession && input.archivedFilter !== "archived") {
+  if (
+    !activeRow &&
+    activeSession &&
+    activeSession.isDock !== true &&
+    input.archivedFilter !== "archived"
+  ) {
     // Deep-linked and archived sessions still need a visible selected row.
     activeRow = activeSession;
     visibleSessions = [activeRow, ...visibleSessions];

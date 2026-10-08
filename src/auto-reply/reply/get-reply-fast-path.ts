@@ -1,4 +1,3 @@
-// Runs lightweight get-reply fast-path commands before full agent setup.
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -9,11 +8,7 @@ import { resolveResetPreservedSelection } from "../../config/sessions/reset-pres
 import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import {
-  DEFAULT_RESET_TRIGGERS,
-  type SessionEntry,
-  type SessionScope,
-} from "../../config/sessions/types.js";
+import { DEFAULT_RESET_TRIGGERS, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../infra/env.js";
 import {
@@ -33,28 +28,14 @@ import {
   usesFullReplyRuntime,
 } from "./reply-config-runtime-mode.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
+import type { SessionInitResult } from "./session-init.types.js";
 import { resolveSessionResetCommand } from "./session-reset-command.js";
-import type { SessionInitResult } from "./session.js";
 
 function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
     (isVitestRuntimeEnv(env) && env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS === "1") ||
     env.OPENCLAW_STRICT_FAST_REPLY_CONFIG === "0"
   );
-}
-
-function resolveFastSessionKey(params: {
-  ctx: MsgContext;
-  sessionScope: SessionScope;
-  mainKey?: string;
-  agentId: string;
-}): string {
-  const { ctx } = params;
-  const nativeCommandTarget = resolveCommandTurnTargetSessionKey(ctx) ?? "";
-  if (nativeCommandTarget) {
-    return nativeCommandTarget;
-  }
-  return resolveSessionKey(params.sessionScope, ctx, params.mainKey, params.agentId);
 }
 
 export function withFullRuntimeReplyConfig<T extends OpenClawConfig>(config: T): T {
@@ -75,28 +56,14 @@ export function resolveGetReplyConfig(params: {
       "Fast reply tests must pass with withFastReplyConfig()/markCompleteReplyConfig(); set OPENCLAW_ALLOW_SLOW_REPLY_TESTS=1 to opt out.",
     );
   }
-  if (params.isFastTestEnv && isCompleteReplyConfig(configOverride)) {
-    return configOverride;
-  }
   if (isCompleteReplyConfig(configOverride)) {
     return configOverride;
   }
   return applyMergePatch(params.getRuntimeConfig(), configOverride) as OpenClawConfig;
 }
 
-export function shouldUseReplyFastTestBootstrap(params: {
-  isFastTestEnv: boolean;
-  configOverride?: OpenClawConfig;
-}): boolean {
-  return (
-    params.isFastTestEnv &&
-    isCompleteReplyConfig(params.configOverride) &&
-    !usesFullReplyRuntime(params.configOverride)
-  );
-}
-
 export function shouldUseReplyFastTestRuntime(params: {
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   isFastTestEnv: boolean;
 }): boolean {
   return (
@@ -104,21 +71,18 @@ export function shouldUseReplyFastTestRuntime(params: {
   );
 }
 
-export function initFastReplySessionState(params: {
+export async function initFastReplySessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentId: string;
   commandAuthorized: boolean;
   workspaceDir: string;
-}): SessionInitResult {
+}): Promise<SessionInitResult> {
   const { ctx, cfg, agentId, commandAuthorized } = params;
   const sessionScope = cfg.session?.scope ?? "per-sender";
-  const sessionKey = resolveFastSessionKey({
-    ctx,
-    sessionScope,
-    mainKey: cfg.session?.mainKey,
-    agentId,
-  });
+  const sessionKey =
+    resolveCommandTurnTargetSessionKey(ctx) ||
+    resolveSessionKey(sessionScope, ctx, cfg.session?.mainKey, agentId);
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const relatedSessionKeys = [
     ctx.ParentSessionKey,
@@ -126,7 +90,7 @@ export function initFastReplySessionState(params: {
     ctx.CommandTargetSessionKey,
     resolveSessionParentSessionKey(sessionKey),
   ].filter((key): key is string => typeof key === "string");
-  const snapshot = loadReplySessionInitializationSnapshot({
+  const snapshot = await loadReplySessionInitializationSnapshot({
     agentId,
     storePath,
     sessionKey,
@@ -140,7 +104,7 @@ export function initFastReplySessionState(params: {
       sessionStore[key] = entry;
     }
   }
-  const commandSource = ctx.commandText ?? "";
+  const commandSource = ctx.commandText;
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup = normalizedChatType != null && normalizedChatType !== "direct";
   const resetCommand = resolveSessionResetCommand({
@@ -165,7 +129,7 @@ export function initFastReplySessionState(params: {
   const previousSessionEntry = resetTriggered && existingEntry ? { ...existingEntry } : undefined;
   const sessionId =
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
-  const bodyStripped = resetTriggered ? (resetCommand.payload ?? "") : (ctx.agentText ?? "");
+  const bodyStripped = resetTriggered ? (resetCommand.payload ?? "") : ctx.agentText;
   const now = Date.now();
   const resetPreservedSelection = resetTriggered
     ? resolveResetPreservedSelection({ entry: existingEntry })
@@ -180,10 +144,13 @@ export function initFastReplySessionState(params: {
       ? {
           previousSessionId: existingEntry.sessionId,
           spawnedBy: existingEntry.spawnedBy,
+          spawnedBySenderIsOwner: existingEntry.spawnedBySenderIsOwner,
+          spawnedBySessionId: existingEntry.spawnedBySessionId,
           spawnedWorkspaceDir: existingEntry.spawnedWorkspaceDir,
           spawnedCwd: existingEntry.spawnedCwd,
           parentSessionKey: existingEntry.parentSessionKey,
           parentSessionId: existingEntry.parentSessionId,
+          parentSessionLifecycleRevision: existingEntry.parentSessionLifecycleRevision,
           forkedFromParent: existingEntry.forkedFromParent,
           forkSource: existingEntry.forkSource,
           createdVia: existingEntry.createdVia,
@@ -225,9 +192,9 @@ export function initFastReplySessionState(params: {
   });
   const sessionCtx: TemplateContext = {
     ...ctx,
-    commandText: ctx.commandText ?? "",
+    commandText: ctx.commandText,
     agentText: bodyStripped,
-    rawText: ctx.rawText ?? "",
+    rawText: ctx.rawText,
     SessionKey: sessionKey,
     CommandAuthorized: commandAuthorized,
     BodyStripped: bodyStripped,

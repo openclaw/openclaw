@@ -11,7 +11,7 @@ import {
   renderCompactAttachmentCard,
 } from "./chat-attachment-card.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
-import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
+import { ChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import {
   canResumeChatAudioPlayback,
   claimChatAudioPlayback,
@@ -19,7 +19,6 @@ import {
 } from "./chat-audio-coordinator.ts";
 import {
   cacheAndRetainChatAudioBlob,
-  canDecodeChatAudioWaveform,
   CHAT_AUDIO_WAVEFORM_MAX_BYTES,
   CHAT_AUDIO_WAVEFORM_SAMPLE_RATE,
   computeChatAudioWaveformPeaks,
@@ -28,7 +27,7 @@ import {
   type CachedChatAudioBlob,
 } from "./chat-audio-waveform.ts";
 import { buildChatMediaFetchHeaders, type ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { chatMediaSourceChanged, ChatMediaSourceController } from "./chat-media-source.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 const SEEK_STEP_SECONDS = 5;
@@ -78,8 +77,10 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   private waveformController: AbortController | null = null;
   private waveformAttempted = false;
   private waveformVisible = false;
-  private viewportElement: HTMLElement | null = null;
-  private stopObservingViewport: (() => void) | undefined;
+  private readonly viewport = new ChatAttachmentViewportRef(() => {
+    this.waveformVisible = true;
+    void this.prepareWaveformAudio().catch(() => undefined);
+  });
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -87,9 +88,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback(): void {
-    this.stopObservingViewport?.();
-    this.stopObservingViewport = undefined;
-    this.viewportElement = null;
+    this.viewport.disconnect();
     this.sourceController.cancel();
     this.releaseWaveformBlob?.();
     this.releaseWaveformBlob = undefined;
@@ -111,10 +110,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   protected override willUpdate(changedProperties: PropertyValues<this>): void {
     if (
       this.sourceController.readiness === "unavailable" &&
-      (changedProperties.has("src") ||
-        changedProperties.has("sourceIdentity") ||
-        changedProperties.has("playback") ||
-        changedProperties.has("authToken"))
+      chatMediaSourceChanged(changedProperties)
     ) {
       this.releaseWaveformBlob?.();
       this.releaseWaveformBlob = undefined;
@@ -124,10 +120,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
 
   override updated(changedProperties: PropertyValues<this>): void {
     if (
-      changedProperties.has("src") ||
-      changedProperties.has("sourceIdentity") ||
-      changedProperties.has("playback") ||
-      changedProperties.has("authToken") ||
+      chatMediaSourceChanged(changedProperties) ||
       changedProperties.has("sizeBytes") ||
       changedProperties.has("serverDurationMs")
     ) {
@@ -167,23 +160,6 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       this.media.muted = this.muted;
     }
     this.syncSource();
-  };
-
-  private setViewportElement = (element: Element | undefined) => {
-    const viewportElement = element instanceof HTMLElement ? element : null;
-    if (this.viewportElement === viewportElement) {
-      return;
-    }
-    this.stopObservingViewport?.();
-    this.stopObservingViewport = undefined;
-    this.viewportElement = viewportElement;
-    if (!viewportElement) {
-      return;
-    }
-    this.stopObservingViewport = observeChatAttachmentViewport(viewportElement, () => {
-      this.waveformVisible = true;
-      void this.prepareWaveformAudio().catch(() => undefined);
-    });
   };
 
   private setWaveform = (element: Element | undefined) => {
@@ -351,7 +327,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const blobUrl = URL.createObjectURL(blob);
     let peaks: readonly number[] | undefined;
     let acceptedDecodedDuration: number | undefined;
-    if (canDecodeChatAudioWaveform({ sizeBytes: bytes.byteLength, durationSeconds })) {
+    if (shouldFetchChatAudioWaveform({ sizeBytes: bytes.byteLength, durationSeconds })) {
       let context: AudioContext | null = null;
       try {
         // Duration is trusted only from the server-side ffprobe metadata.
@@ -557,7 +533,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     return html`
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--audio ${this.voiceNote ? "chat-assistant-attachment-card--voice-note" : ""}"
-        ${ref(this.setViewportElement)}
+        ${ref(this.viewport.setElement)}
         ?data-openable=${!this.voiceNote && Boolean(this.onExpand)}
         @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.voiceNote ? undefined : this.onExpand)}
       >

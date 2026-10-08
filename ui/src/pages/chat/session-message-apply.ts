@@ -69,9 +69,6 @@ export function applySessionMessagePayload(
   source: SessionMessageApplySource,
 ): void {
   const event = asNonArrayRecord(payload);
-  if (!event) {
-    return;
-  }
   const sourceMessage = event.message;
   const sourceRecord = asNonArrayRecord(sourceMessage);
   const incoming = readSessionMessageIdentity(sourceMessage, event);
@@ -133,9 +130,6 @@ export function applySessionMessagePayload(
   if (!incoming.id && !incoming.idempotencyKey && incoming.sequence === null) {
     return;
   }
-  if (!sourceRecord) {
-    return;
-  }
   const sourceMetadata = asNonArrayRecord(sourceRecord["__openclaw"]);
   const message = {
     ...sourceRecord,
@@ -160,6 +154,8 @@ export function applySessionMessagePayload(
     prunePersistedAssistantStreamSegments(state, message);
     if (assistantOwnerRunId && runActive === false) {
       state.chatStream = null;
+      state.chatStreamItemId = undefined;
+      state.chatStreamItemStartOffset = undefined;
       state.chatStreamStartedAt = null;
       maybeResetToolStreamRun(state, assistantOwnerRunId);
     }

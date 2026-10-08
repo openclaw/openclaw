@@ -1,5 +1,3 @@
-/** Parses, clones, verifies, and installs plugin packages from Git specs. */
-import "../infra/fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
@@ -19,6 +17,7 @@ import {
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
 import { withInstallWorkspace } from "../infra/install-source-utils.js";
+import { resolveNpmCommand } from "../infra/npm-command.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
@@ -29,7 +28,6 @@ import { resolveDefaultPluginGitDir } from "./install-paths.js";
 import {
   preflightPluginGitInstallPolicy,
   type InstallSafetyOverrides,
-  type InstallSecurityScanResult,
 } from "./install-security-scan.js";
 import { ensureInstallTargetAvailableForMode, loadPluginInstallRuntime } from "./install-shared.js";
 import {
@@ -37,7 +35,7 @@ import {
   resolvePluginInstallTransactionRequest,
   type PluginInstallTransaction,
 } from "./install-transaction.js";
-import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
+import type { PluginInstallArtifactConsentHandler, PluginInstallLogger } from "./install-types.js";
 import {
   installPluginFromInstalledPackageDir,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -52,11 +50,6 @@ import {
 const GIT_SPEC_PREFIX = "git:";
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
 const FULL_GIT_COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
-
-type PluginInstallLogger = {
-  info?: (message: string) => void;
-  warn?: (message: string) => void;
-};
 
 /** Resolved Git source metadata persisted into plugin install records. */
 type GitPluginResolution = {
@@ -161,14 +154,6 @@ function stripGitSuffix(value: string): string {
   return value.replace(/\.git$/i, "");
 }
 
-function normalizeGitHubRepo(value: string): { url: string; label: string } {
-  const repo = stripGitSuffix(value.replace(/^github\.com\//i, ""));
-  return {
-    url: `https://github.com/${repo}.git`,
-    label: repo,
-  };
-}
-
 function normalizeGitLabel(value: string): string {
   if (hasHttpUrlPrefix(value) || /^(?:ssh|git|file):\/\//i.test(value)) {
     try {
@@ -198,38 +183,23 @@ export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {
     return null;
   }
 
+  const localPath = base.startsWith("./") || base.startsWith("../") || base.startsWith("~/");
+  let normalized: { url: string; label: string };
   if (looksLikeGitHubRepoShorthand(base) || looksLikeGitHubHostPath(base)) {
-    const normalized = normalizeGitHubRepo(base);
-    return {
-      input: trimmed,
-      url: normalized.url,
-      ref: split.ref,
-      label: normalized.label,
-      normalizedSpec: `${GIT_SPEC_PREFIX}${normalized.url}${split.ref ? `@${split.ref}` : ""}`,
-    };
+    const repo = stripGitSuffix(base.replace(/^github\.com\//i, ""));
+    normalized = { url: `https://github.com/${repo}.git`, label: repo };
+  } else if (hasHttpUrlPrefix(base) || isGitUrl(base) || localPath) {
+    const url = localPath ? resolveUserPath(base) : base;
+    normalized = { url, label: normalizeGitLabel(url) };
+  } else {
+    return null;
   }
-
-  if (
-    hasHttpUrlPrefix(base) ||
-    isGitUrl(base) ||
-    base.startsWith("./") ||
-    base.startsWith("../") ||
-    base.startsWith("~/")
-  ) {
-    const url =
-      base.startsWith("./") || base.startsWith("../") || base.startsWith("~/")
-        ? resolveUserPath(base)
-        : base;
-    return {
-      input: trimmed,
-      url,
-      ref: split.ref,
-      label: normalizeGitLabel(url),
-      normalizedSpec: `${GIT_SPEC_PREFIX}${url}${split.ref ? `@${split.ref}` : ""}`,
-    };
-  }
-
-  return null;
+  return {
+    input: trimmed,
+    ...normalized,
+    ref: split.ref,
+    normalizedSpec: `${GIT_SPEC_PREFIX}${normalized.url}${split.ref ? `@${split.ref}` : ""}`,
+  };
 }
 
 function createGitCommandEnv(): NodeJS.ProcessEnv {
@@ -250,15 +220,6 @@ function createGitCommandEnv(): NodeJS.ProcessEnv {
     GIT_EXEC_PATH: undefined,
     GIT_SSL_NO_VERIFY: undefined,
   };
-}
-
-function resolveGitInstallRepoDir(params: {
-  gitDir?: string;
-  source: ParsedGitPluginSpec;
-}): string {
-  const gitRoot = params.gitDir ? resolveUserPath(params.gitDir) : resolveDefaultPluginGitDir();
-  const redactedSpec = redactSensitiveUrlLikeString(params.source.normalizedSpec);
-  return path.join(gitRoot, `git-${sha256HexPrefixCore(redactedSpec, 16)}`, "repo");
 }
 
 async function withGitStagingDir<T>(
@@ -349,20 +310,6 @@ async function replaceManagedGitRepo(params: {
   }
 }
 
-function buildBlockedGitInstallResult(params: {
-  blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
-}): Extract<InstallPluginResult, { ok: false }> {
-  return {
-    ok: false,
-    error: params.blocked.reason,
-    ...(params.blocked.code === "security_scan_failed"
-      ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED }
-      : params.blocked.code === "security_scan_blocked"
-        ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED }
-        : {}),
-  };
-}
-
 export async function installPluginFromGitSpec(
   params: InstallSafetyOverrides & {
     spec: string;
@@ -387,7 +334,13 @@ export async function installPluginFromGitSpec(
   }
 
   const { workTimeoutMs } = resolveTimedInstallModeOptions(params, {});
-  const persistentRepoDir = resolveGitInstallRepoDir({ gitDir: params.gitDir, source: parsed });
+  const gitRoot = params.gitDir ? resolveUserPath(params.gitDir) : resolveDefaultPluginGitDir();
+  const redactedSpec = redactSensitiveUrlLikeString(parsed.normalizedSpec);
+  const persistentRepoDir = path.join(
+    gitRoot,
+    `git-${sha256HexPrefixCore(redactedSpec, 16)}`,
+    "repo",
+  );
   const effectiveMode =
     params.mode === "update" && (await pathExists(persistentRepoDir)) ? "update" : "install";
   const availability = await ensureInstallTargetAvailableForMode({
@@ -448,21 +401,26 @@ export async function installPluginFromGitSpec(
         mode: effectiveMode,
         sourceFamily: "git",
       });
-      return buildBlockedGitInstallResult({ blocked: preflight.blocked });
+      return {
+        ok: false,
+        error: preflight.blocked.reason,
+        ...(preflight.blocked.code === "security_scan_failed"
+          ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED }
+          : preflight.blocked.code === "security_scan_blocked"
+            ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED }
+            : {}),
+      };
     }
 
     if (!params.dryRun) {
       params.logger?.info?.("Installing plugin dependencies with npm…");
       const install = await runCommandWithTimeout(
-        [
-          "npm",
-          ...createSafeNpmInstallArgs({
-            omitDev: true,
-            loglevel: "error",
+        resolveNpmCommand(
+          createSafeNpmInstallArgs({
             noAudit: true,
             noFund: true,
           }),
-        ],
+        ),
         {
           cwd: repoDir,
           timeoutMs: resolveInstallWorkTimeoutMs(
@@ -492,7 +450,6 @@ export async function installPluginFromGitSpec(
       expectedPluginId: params.expectedPluginId,
       logger: params.logger,
       mode: effectiveMode,
-      emitSuccessSecurityEvent: false,
       installPolicyRequest,
     });
     if (!result.ok) {

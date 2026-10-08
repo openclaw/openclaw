@@ -7,21 +7,6 @@ import {
 } from "./tool-policy-pipeline.js";
 import { mergeAlsoAllowPolicy, type ToolPolicyLike } from "./tool-policy.js";
 
-type ResolvedConversationToolPolicies = {
-  profilePolicy?: ToolPolicyLike;
-  providerProfilePolicy?: ToolPolicyLike;
-  globalPolicy?: ToolPolicyLike;
-  globalProviderPolicy?: ToolPolicyLike;
-  agentPolicy?: ToolPolicyLike;
-  agentProviderPolicy?: ToolPolicyLike;
-  groupPolicy?: ToolPolicyLike;
-  senderPolicy?: ToolPolicyLike;
-  sandboxPolicy?: ToolPolicyLike;
-  subagentPolicy?: ToolPolicyLike;
-  runtimeToolPolicy?: ToolPolicyLike;
-  inheritedToolPolicy?: ToolPolicyLike;
-};
-
 function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
   policy: TPolicy | undefined,
   alsoAllow: readonly string[] | undefined,
@@ -41,7 +26,7 @@ export function resolveConversationToolPolicies(params: {
   additionalProfileAllow?: readonly string[];
   additionalPolicyAllow?: readonly string[];
   additionalInheritedAllow?: readonly string[];
-}): ResolvedConversationToolPolicies {
+}) {
   const policy = params.capabilityProfile.policy;
   const profileAllow = [
     ...(policy.profileAlsoAllow ?? []),
@@ -79,7 +64,7 @@ export function resolveConversationToolPolicies(params: {
 /** Builds the canonical ordered policy pipeline for a resolved conversation. */
 export function buildConversationToolPolicyPipelineSteps(params: {
   capabilityProfile: ResolvedConversationCapabilityProfile;
-  policies: ResolvedConversationToolPolicies;
+  policies: ReturnType<typeof resolveConversationToolPolicies>;
   additionalStepsAfterSandbox?: ToolPolicyPipelineStep[];
   includeRuntimeToolPolicy: boolean;
   unavailableCoreToolReason?: string;
@@ -100,16 +85,19 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       groupPolicy: params.policies.groupPolicy,
       senderPolicy: params.policies.senderPolicy,
       agentId: profile.agentId,
+      sources: profile.sources,
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     }),
     {
       policy: params.policies.sandboxPolicy,
+      source: { kind: "session" },
       label: "sandbox tools.allow",
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     },
     ...(params.additionalStepsAfterSandbox ?? []),
     {
       policy: params.policies.subagentPolicy,
+      source: { kind: "session" },
       label: "subagent tools.allow",
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     },
@@ -117,6 +105,7 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       ? [
           {
             policy: params.policies.runtimeToolPolicy,
+            source: { kind: "runtime" as const },
             label: "runtime tools.allow",
             unavailableCoreToolReason: params.unavailableCoreToolReason,
           },
@@ -124,6 +113,7 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       : []),
     {
       policy: params.policies.inheritedToolPolicy,
+      source: { kind: "session" },
       label: "inherited tools",
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     },

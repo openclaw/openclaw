@@ -3,10 +3,22 @@ name: OpenClaw Stable Main Closeout
 on:
   push:
     branches: [main]
+    paths:
+      - "package.json"
+      - "CHANGELOG.md"
+      - "CHANGELOG/**"
+      - "appcast*.xml"
+      - ".github/workflows/openclaw-stable-main-closeout.yml"
+      - "scripts/verify-stable-main-closeout.mjs"
+      - "scripts/linux-updater-manifest.mjs"
+      - "scripts/lib/stable-*.mjs"
+      - "scripts/lib/release-*.mjs"
+      - "scripts/lib/release-*.mts"
+      - "scripts/lib/changelog*.mjs"
   workflow_dispatch:
     inputs:
       tag:
-        description: Stable OpenClaw tag to replay or repair, for example v2026.6.8 or v2026.6.8-2
+        description: Stable OpenClaw tag to replay or repair, for example v2026.6.8 or v2026.6.8-2; every other input is optional
         required: false
         type: string
       rollback_drill_id:
@@ -29,7 +41,7 @@ permissions:
 
 concurrency:
   group: openclaw-stable-main-closeout-${{ github.event_name == 'workflow_dispatch' && (inputs.tag || github.run_id) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  cancel-in-progress: false
 
 jobs:
   resolve:
@@ -40,7 +52,6 @@ jobs:
       full_release_validation_run_id: ${{ steps.inputs.outputs.full_release_validation_run_id }}
       full_release_validation_run_attempt: ${{ steps.inputs.outputs.full_release_validation_run_attempt }}
       release_publish_run_id: ${{ steps.inputs.outputs.release_publish_run_id }}
-      stable_soak_waiver: ${{ steps.inputs.outputs.stable_soak_waiver }}
       rollback_drill_date: ${{ steps.inputs.outputs.rollback_drill_date }}
       rollback_drill_id: ${{ steps.inputs.outputs.rollback_drill_id }}
       evidence_tag: ${{ steps.inputs.outputs.evidence_tag }}
@@ -92,9 +103,6 @@ jobs:
           TRIGGER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [[ "$EVENT_NAME" == "push" ]]; then
-            sleep 45
-          fi
           . "$RUNNER_TEMP/github-api-backoff.sh"
           if [[ "$EVENT_NAME" == "push" ]]; then
             main_ref="$TRIGGER_SHA"
@@ -339,12 +347,10 @@ jobs:
             echo "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides." >&2
             exit 1
           fi
-          stable_soak_waiver="$(jq -c '.stableSoakWaiver // "" | if type == "string" then . else error("Invalid stable soak waiver") end' "$evidence_path")"
           {
             echo "full_release_validation_run_id=$full_release_validation_run_id"
             echo "full_release_validation_run_attempt=$full_release_validation_run_attempt"
             echo "release_publish_run_id=$release_publish_run_id"
-            echo "stable_soak_waiver=$stable_soak_waiver"
             echo "rollback_drill_date=$ROLLBACK_DRILL_DATE"
             echo "rollback_drill_id=$ROLLBACK_DRILL_ID"
             echo "evidence_tag=$evidence_source_tag"
@@ -358,6 +364,10 @@ jobs:
   verify:
     name: Verify stable main closeout
     needs: resolve
+    # Verification is keyed by the resolved stable tag, never by the main ref.
+    concurrency:
+      group: openclaw-stable-main-closeout-verify-${{ needs.resolve.outputs.tag }}
+      cancel-in-progress: false
     if: ${{ needs.resolve.outputs.should_closeout == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -433,17 +443,16 @@ jobs:
 
       - name: Set up Docker verification for manual recovery
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery }}
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Verify release workflow evidence
         env:
-          STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve.outputs.stable_soak_waiver) }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}

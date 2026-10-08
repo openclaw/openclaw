@@ -1,11 +1,4 @@
-// Telegram plugin module implements scoped topic conversation serialization.
-
-import {
-  normalizeTelegramChatId,
-  normalizeTelegramLookupTarget,
-  parseTelegramTarget,
-  type TelegramTarget,
-} from "./targets.js";
+import { normalizeTelegramLookupTarget, parseTelegramTarget } from "./targets.js";
 import type { TelegramThreadSpec } from "./thread-spec.js";
 
 export type ParsedTelegramTopicConversation = {
@@ -14,19 +7,11 @@ export type ParsedTelegramTopicConversation = {
   canonicalConversationId: string;
 };
 
-function threadSpecFromTarget(target: TelegramTarget): TelegramThreadSpec | null {
-  if (target.directMessagesTopicId != null) {
-    return { id: target.directMessagesTopicId, scope: "direct-messages" };
-  }
-  return target.messageThreadId == null ? null : { id: target.messageThreadId, scope: "forum" };
-}
-
 function serializeTelegramTopicConversation(params: {
   chatId: string;
   thread: TelegramThreadSpec;
 }): string | null {
-  const chatId =
-    normalizeTelegramChatId(params.chatId) ?? normalizeTelegramLookupTarget(params.chatId);
+  const chatId = normalizeTelegramLookupTarget(params.chatId);
   const id = params.thread.id == null ? undefined : Math.trunc(params.thread.id);
   if (!chatId || id == null || !Number.isFinite(id)) {
     return null;
@@ -56,9 +41,13 @@ export function parseTelegramTopicConversation(params: {
     .trim()
     .replace(/:(direct-topic|topic):/i, (_match, marker: string) => `:${marker.toLowerCase()}:`);
   const target = parseTelegramTarget(conversationId);
-  const chatId =
-    normalizeTelegramChatId(target.chatId) ?? normalizeTelegramLookupTarget(target.chatId);
-  const thread = threadSpecFromTarget(target);
+  const chatId = normalizeTelegramLookupTarget(target.chatId);
+  const thread: TelegramThreadSpec | null =
+    target.directMessagesTopicId != null
+      ? { id: target.directMessagesTopicId, scope: "direct-messages" }
+      : target.messageThreadId == null
+        ? null
+        : { id: target.messageThreadId, scope: "forum" };
   if (chatId && thread) {
     const canonicalConversationId = serializeTelegramTopicConversation({ chatId, thread });
     return canonicalConversationId ? { chatId, thread, canonicalConversationId } : null;

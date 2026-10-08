@@ -14,7 +14,13 @@ type SessionViewerPresenceStore = {
 
 const stores = new WeakMap<ApplicationGateway, SessionViewerPresenceStore>();
 
-function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
+export function sessionViewerPresenceForGateway(
+  gateway: ApplicationGateway,
+): SessionViewerPresenceStore {
+  const existing = stores.get(gateway);
+  if (existing) {
+    return existing;
+  }
   const watchedByOwner = new Map<object, Set<string>>();
   let knownClient = gateway.snapshot.client;
   let lastHello: object | null = null;
@@ -30,6 +36,13 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
   };
 
   const isActive = () => watchedByOwner.size > 0;
+
+  const clearReceipt = () => {
+    lastHello = null;
+    lastSignature = null;
+    acknowledgedSignature = null;
+    acknowledgedGeneration = 0;
+  };
 
   const visibleSessionKeys = (): string[] => {
     const hello = gateway.snapshot.hello;
@@ -49,18 +62,12 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     sync,
     onAttach: () => {
       knownClient = gateway.snapshot.client;
-      lastHello = null;
-      lastSignature = null;
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
+      clearReceipt();
     },
     onDetach: () => {
       requestGeneration += 1;
       retireRequest();
-      lastHello = null;
-      lastSignature = null;
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
+      clearReceipt();
     },
   });
   const { retry } = lifecycle;
@@ -71,10 +78,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     if (client !== knownClient) {
       retry.reset();
       knownClient = client;
-      lastHello = null;
-      lastSignature = null;
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
+      clearReceipt();
     }
     const available =
       snapshot.phase === "connected" &&
@@ -82,11 +86,8 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       snapshot.hello !== null &&
       isGatewayMethodAdvertised(snapshot, SESSION_VIEWERS_SET_METHOD) === true;
     if (!available) {
-      lastHello = null;
-      lastSignature = null;
+      clearReceipt();
       retireRequest();
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
       if (!isActive()) {
         lifecycle.detach();
       }
@@ -171,17 +172,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     }
   };
 
-  return { watch, unwatch: (owner) => watch(owner, []) };
-}
-
-export function sessionViewerPresenceForGateway(
-  gateway: ApplicationGateway,
-): SessionViewerPresenceStore {
-  const existing = stores.get(gateway);
-  if (existing) {
-    return existing;
-  }
-  const store = createStore(gateway);
+  const store: SessionViewerPresenceStore = { watch, unwatch: (owner) => watch(owner, []) };
   stores.set(gateway, store);
   return store;
 }

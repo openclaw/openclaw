@@ -9,13 +9,18 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 
+function createReadMarkerPane(result: Record<string, never> | null = null) {
+  const patch = vi.fn().mockResolvedValue(result);
+  const { pane, state } = createTestChatPane({
+    client: {} as GatewayBrowserClient,
+    sessions: createSessionCapabilityFixture({ patch }),
+  });
+  return { pane, state, patch };
+}
+
 describe("chat pane read markers", () => {
   it("marks an unread failure read even when its regular unread flag is false", () => {
-    const patch = vi.fn().mockResolvedValue(null);
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, patch } = createReadMarkerPane();
 
     pane.markSessionRead({
       key: "agent:main:current",
@@ -35,11 +40,7 @@ describe("chat pane read markers", () => {
   });
 
   it("marks an active agent status read even without other unread state", () => {
-    const patch = vi.fn().mockResolvedValue(null);
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, patch } = createReadMarkerPane();
 
     pane.markSessionRead({
       key: "agent:main:current",
@@ -83,11 +84,7 @@ describe("chat pane read markers", () => {
       session: { visibility: "draft" as const, sharingRole: "member" as const },
     },
   ])("does not mutate unread state with $name", ({ methods, scopes, session }) => {
-    const patch = vi.fn().mockResolvedValue(null);
-    const { pane, state } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, state, patch } = createReadMarkerPane();
     pane.context.gateway.snapshot.hello = {
       auth: { role: "operator", scopes },
       features: { methods },
@@ -115,11 +112,7 @@ describe("chat pane read markers", () => {
     { visibility: "draft", sharingRole: "owner", scopes: ["operator.write"] },
     { visibility: "draft", sharingRole: "admin", scopes: ["operator.admin"] },
   ] as const)("acknowledges unread state for $visibility $sharingRole", (session) => {
-    const patch = vi.fn().mockResolvedValue({});
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, patch } = createReadMarkerPane({});
     pane.context.gateway.snapshot.hello = {
       auth: { role: "operator", scopes: [...session.scopes] },
       features: { methods: ["sessions.patch"] },
@@ -147,11 +140,7 @@ describe("chat pane read markers", () => {
     // sessions.patch resolves null without a request when the connection
     // scope is lost; the guard must unlatch like a failure or the badge
     // stays lit until navigation.
-    const patch = vi.fn().mockResolvedValue(null);
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, patch } = createReadMarkerPane();
     const row = {
       key: "agent:main:current",
       kind: "direct" as const,
@@ -219,11 +208,7 @@ describe("chat pane read markers", () => {
   });
 
   it("does not clear unread from a hidden retained pane", () => {
-    const patch = vi.fn().mockResolvedValue(null);
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, patch } = createReadMarkerPane();
     const sessionsState = (presented: boolean) => {
       pane.presented = presented;
       pane.applySessionsState({
@@ -263,36 +248,8 @@ describe("chat pane read markers", () => {
     );
   });
 
-  it("preserves a manual unread marker received after activation", () => {
-    const patch = vi.fn().mockResolvedValue(null);
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
-
-    pane.markSessionRead({
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 10,
-      unread: false,
-    });
-    pane.markSessionRead({
-      key: "agent:main:current",
-      kind: "direct",
-      markedUnreadAt: 20,
-      updatedAt: 20,
-      unread: true,
-    });
-
-    expect(patch).not.toHaveBeenCalled();
-  });
-
   it("acknowledges a manual unread marker when a retained pane is presented again", () => {
-    const patch = vi.fn().mockResolvedValue({});
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, patch } = createReadMarkerPane({});
     const row = {
       key: "agent:main:current",
       kind: "direct" as const,
@@ -324,5 +281,130 @@ describe("chat pane read markers", () => {
       { unread: false },
       { agentId: "main", expectedMarkedUnreadAt: 20 },
     );
+  });
+
+  describe("hidden runs folded into the parent", () => {
+    const parentKey = "agent:main:current";
+    const parent: GatewaySessionRow = {
+      key: parentKey,
+      kind: "direct",
+      updatedAt: 10,
+      unread: false,
+    };
+    const run = (name: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
+      key: `agent:main:subagent:${name}`,
+      kind: "direct",
+      spawnedBy: parentKey,
+      updatedAt: 20,
+      status: "done",
+      unread: true,
+      ...extra,
+    });
+
+    function createParentPane(rows: GatewaySessionRow[]) {
+      const pane = createReadMarkerPane({});
+      pane.state.sessionsResult = sessionsResult([parent, ...rows], 20);
+      return pane;
+    }
+
+    it("acknowledges unread hidden runs when the parent is already read", () => {
+      const nested = run("nested", { spawnedBy: "agent:main:subagent:done" });
+      const { pane, patch } = createParentPane([run("done"), nested]);
+
+      pane.markSessionRead(parent);
+      pane.markSessionRead(parent);
+
+      expect(patch.mock.calls).toEqual([
+        [
+          "agent:main:subagent:done",
+          { unread: false },
+          { agentId: "main", expectedMarkedUnreadAt: null },
+        ],
+        [nested.key, { unread: false }, { agentId: "main", expectedMarkedUnreadAt: null }],
+      ]);
+    });
+
+    it("does not acknowledge a hidden child's active attention when its parent opens", () => {
+      const blocked = run("blocked", {
+        agentStatus: {
+          note: "Waiting for debugger authentication",
+          attention: "key",
+          expiresAt: Date.now() + 60_000,
+        },
+      });
+      const { pane, state, patch } = createParentPane([blocked]);
+      pane.markSessionRead(parent);
+      expect(patch).not.toHaveBeenCalled();
+      state.sessionsResult = sessionsResult([parent, { ...blocked, agentStatus: undefined }], 21);
+      pane.markSessionRead(parent);
+      expect(patch).toHaveBeenCalledExactlyOnceWith(
+        blocked.key,
+        { unread: false },
+        { agentId: "main", expectedMarkedUnreadAt: null },
+      );
+    });
+
+    it("leaves persistent children, read runs, failures, and manual markers unread", () => {
+      const { pane, patch } = createParentPane([
+        {
+          key: "agent:main:dashboard:child",
+          kind: "direct",
+          parentSessionKey: parentKey,
+          spawnedBy: parentKey,
+          updatedAt: 20,
+          unread: true,
+        },
+        run("read", { unread: false }),
+        run("failed", { status: "failed" }),
+        run("marked", { markedUnreadAt: 15 }),
+      ]);
+
+      pane.markSessionRead(parent);
+
+      expect(patch).not.toHaveBeenCalled();
+    });
+
+    it("acknowledges newer run activity only on a later read", () => {
+      const { pane, state, patch } = createParentPane([run("done", { unread: false })]);
+
+      pane.markSessionRead(parent);
+      expect(patch).not.toHaveBeenCalled();
+
+      state.sessionsResult = sessionsResult([parent, run("done", { updatedAt: 30 })], 30);
+      pane.markSessionRead(parent);
+
+      expect(patch).toHaveBeenCalledOnce();
+      expect(patch).toHaveBeenCalledWith(
+        "agent:main:subagent:done",
+        { unread: false },
+        { agentId: "main", expectedMarkedUnreadAt: null },
+      );
+    });
+
+    it.each([
+      { code: ErrorCodes.UNAVAILABLE, calls: 2 },
+      { code: ErrorCodes.INVALID_REQUEST, calls: 1 },
+    ])(
+      "retries a hidden run after a $code failure only when transient",
+      async ({ code, calls }) => {
+        const { pane, patch } = createParentPane([run("done")]);
+        patch.mockRejectedValueOnce(new GatewayRequestError({ code, message: "ack failed" }));
+
+        pane.markSessionRead(parent);
+        await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
+        await Promise.resolve();
+        pane.markSessionRead(parent);
+
+        expect(patch).toHaveBeenCalledTimes(calls);
+      },
+    );
+
+    it("does not acknowledge hidden runs from a parent the caller only views", () => {
+      const { pane, patch } = createParentPane([run("done")]);
+
+      pane.markSessionRead({ ...parent, visibility: "shared", sharingRole: "viewer" });
+
+      expect(patch).not.toHaveBeenCalled();
+    });
   });
 });

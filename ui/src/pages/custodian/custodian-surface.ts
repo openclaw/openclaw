@@ -60,14 +60,8 @@ class CustodianSurface extends OpenClawLightDomElement {
   constructor() {
     super();
     void new SubscriptionsController(this)
-      .watch(
-        () => this.store,
-        (store, notify) => store.subscribe(notify),
-      )
-      .watch(
-        () => custodianAlertStore,
-        (alerts, notify) => alerts.subscribe(notify),
-      );
+      .watchStore(() => this.store)
+      .watchStore(() => custodianAlertStore);
   }
 
   protected override async getUpdateComplete(): Promise<boolean> {
@@ -208,18 +202,16 @@ class CustodianSurface extends OpenClawLightDomElement {
         >
           ${alertCard}
           ${
-            this.channelOnboardingError
-              ? eventNudgeState.renderCustodianChannelOnboardingError({
+            this.channelOnboardingError || this.showChannelOnboardingNudge
+              ? eventNudgeState.renderCustodianChannelOnboardingNudge({
+                  error: Boolean(this.channelOnboardingError),
                   retrying: this.channelOnboardingRetrying,
-                  onRetry: this.onRetryChannelOnboarding,
+                  onAction: this.channelOnboardingError
+                    ? this.onRetryChannelOnboarding
+                    : () => store.openChannelsFromOnboarding(),
                   onDismiss: () => store.dismissChannelOnboardingNudge(),
                 })
-              : this.showChannelOnboardingNudge
-                ? eventNudgeState.renderCustodianChannelOnboardingNudge({
-                    onOpenChannels: () => store.openChannelsFromOnboarding(),
-                    onDismiss: () => store.dismissChannelOnboardingNudge(),
-                  })
-                : nothing
+              : nothing
           }
           ${
             !this.onboarding && store.eventNudge && !store.eventNudgePending
@@ -236,28 +228,23 @@ class CustodianSurface extends OpenClawLightDomElement {
               ? html`<div class="custodian__plugin-intro">
                   <h2>${t("custodian.pluginIntroTitle", { plugin: plugin.name })}</h2>
                   <div class="custodian__plugin-starters">
-                    ${[
-                      {
-                        label: t("custodian.pluginStarterPurpose"),
-                        prompt: t("custodian.pluginPromptPurpose", { plugin: plugin.name }),
-                      },
-                      {
-                        label: t("custodian.pluginStarterTools"),
-                        prompt: t("custodian.pluginPromptTools", { plugin: plugin.name }),
-                      },
-                      {
-                        label: t("custodian.pluginStarterSetup"),
-                        prompt: t("custodian.pluginPromptSetup", { plugin: plugin.name }),
-                      },
-                    ].map(
-                      ({ label, prompt }) => html`<button
+                    ${(
+                      [
+                        ["custodian.pluginStarterPurpose", "custodian.pluginPromptPurpose"],
+                        ["custodian.pluginStarterTools", "custodian.pluginPromptTools"],
+                        ["custodian.pluginStarterSetup", "custodian.pluginPromptSetup"],
+                      ] as const
+                    ).map(([labelKey, promptKey]) => {
+                      const label = t(labelKey);
+                      const prompt = t(promptKey, { plugin: plugin.name });
+                      return html`<button
                         class="btn"
                         type="button"
                         @click=${() => void askPlugin?.({ question: prompt })}
                       >
                         ${label}
-                      </button>`,
-                    )}
+                      </button>`;
+                    })}
                   </div>
                 </div>`
               : nothing

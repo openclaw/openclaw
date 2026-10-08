@@ -1,10 +1,12 @@
 import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
 import type { GatewayStoredSessionTarget } from "../../config/sessions/combined-store-gateway.js";
-import type { SessionRowDatabaseFacts } from "../../config/sessions/session-transcript-worker.types.js";
+import type { SessionRowDatabaseFacts } from "../../config/sessions/session-row-facts.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { projectSessionActivitySummary } from "../session-activity-summary-state.js";
+import { sessionModelRevision } from "../session-model-revision.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
 import type { SessionRowPlacementFactsReader } from "../session-row-placement-projection.types.js";
 import {
@@ -13,13 +15,16 @@ import {
   readWorkerPlacementIdentity,
   type WorkerPlacementDiskSpaceReader,
   type WorkerPlacementRunnerAvailabilityReader,
+  type WorkerPlacementRuntimeInstallReader,
 } from "../worker-environments/placement-projector.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/placement-target.js";
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
+import { canRedispatchFailedWorkerPlacement } from "../worker-environments/session-placement-lifecycle.js";
 
 type PlacementReadContext = {
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
+  workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
   workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape">;
 };
 
@@ -44,6 +49,7 @@ export function readSessionRowFacts(params: {
       move,
       environment,
       workspaceResultReconciling = false,
+      workspaceRecoveryPending = false,
     } = placementSource ?? {};
     const identity = placement
       ? readWorkerPlacementIdentity(
@@ -63,13 +69,20 @@ export function readSessionRowFacts(params: {
           ? "restart"
           : "stop-first"
         : undefined;
+    const retryOnSend =
+      placement?.state === "failed" &&
+      !move &&
+      !workspaceRecoveryPending &&
+      canRedispatchFailedWorkerPlacement(placement, environment);
     return {
       placement,
       move,
       workspaceResultReconciling,
       environment,
       identity,
+      sessionModelRevision: sessionModelRevision(entry, identity?.inference),
       failedRecoveryAction,
+      retryOnSend,
     };
   };
   let placementFacts = readPlacementFacts();
@@ -96,9 +109,12 @@ export function readSessionRowFacts(params: {
         workspaceResultReconciling,
         environment,
         identity,
+        sessionModelRevision: revision,
         failedRecoveryAction,
+        retryOnSend,
       } = placementFacts;
       return {
+        sessionModelRevision: revision,
         ...(placement
           ? {
               placement: projectWorkerSessionPlacement(
@@ -111,6 +127,13 @@ export function readSessionRowFacts(params: {
                 identity,
                 failedRecoveryAction,
                 workspaceResultReconciling,
+                retryOnSend,
+                {
+                  workerRuntimeInstall: context.workerPlacementRuntimeInstallReader?.read(
+                    placement,
+                    environment ?? null,
+                  ),
+                },
               ),
             }
           : {}),
@@ -122,14 +145,16 @@ export function readSessionRowFacts(params: {
   };
 }
 
-/** Selection can check board membership without materializing placement or display fields. */
-export function readSessionRowHasBoard(target: {
+function readSessionRowHasBoard(target: {
   key: string;
   storeTarget: GatewayStoredSessionTarget["storeTarget"];
 }) {
   const { key, storeTarget } = target;
+  if (!isIncognitoOpenClawAgentSqlitePath(storeTarget.storePath, storeTarget)) {
+    throw new Error("Session Board membership requires prepared database facts");
+  }
   const board = withOpenClawAgentDatabaseReadOnly(
-    (database) => readBoardSessionKeys(database, key).length > 0,
+    (database) => readBoardSessionKeys(database, [key]).has(key),
     { agentId: storeTarget.agentId, path: storeTarget.storePath },
   );
   return board.found && board.value;

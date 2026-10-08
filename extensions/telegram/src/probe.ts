@@ -1,6 +1,7 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithTimeout, runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -10,7 +11,6 @@ import {
   resolveTelegramTransport,
   type TelegramTransport,
 } from "./fetch.js";
-import { makeProxyFetch } from "./proxy.js";
 
 export type TelegramProbe = BaseProbeResult & {
   status?: number | null;
@@ -132,10 +132,17 @@ export async function probeTelegram(
       const options = resolveProbeOptions(proxyOrOptions);
       const abortSignal = options?.abortSignal;
       const includeWebhookInfo = options?.includeWebhookInfo !== false;
+      const apiBase = resolveTelegramApiBase(options?.apiRoot);
       const transport = resolveProbeTransport(token, options);
       const fetcher = transport.fetch;
-      const apiBase = resolveTelegramApiBase(options?.apiRoot);
       const base = `${apiBase}/bot${token}`;
+      const fetchMethod = (method: "getMe" | "getWebhookInfo", remainingBudgetMs: number) =>
+        fetchWithTimeout(
+          `${base}/${method}`,
+          { signal: abortSignal },
+          Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs)),
+          fetcher,
+        );
       const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
       const resolveRemainingBudgetMs = () => Math.max(0, deadlineMs - Date.now());
       const result: Omit<TelegramProbe, "elapsedMs"> = {
@@ -153,12 +160,7 @@ export async function probeTelegram(
           break;
         }
         try {
-          meRes = await fetchWithTimeout(
-            `${base}/getMe`,
-            { signal: abortSignal },
-            Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs)),
-            fetcher,
-          );
+          meRes = await fetchMethod("getMe", remainingBudgetMs);
           break;
         } catch (err) {
           fetchError = err;
@@ -169,7 +171,7 @@ export async function probeTelegram(
           // fallback dispatcher so the next retry (and all future probes
           // sharing this cached transport) skip the stalled IPv6 path.
           // Keep the original socket code in transport fallback diagnostics.
-          transport.forceFallback?.("probe timeout/network error", err);
+          transport.forceFallback?.("check timeout/network error", err);
           if (i < 2) {
             const remainingAfterAttemptMs = resolveRemainingBudgetMs();
             if (remainingAfterAttemptMs <= 0) {
@@ -185,7 +187,7 @@ export async function probeTelegram(
 
       if (!meRes) {
         throw toErrorObject(
-          fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`),
+          fetchError ?? new Error(`check timed out after ${timeoutBudgetMs}ms`),
           "Non-Error thrown",
         );
       }
@@ -234,12 +236,7 @@ export async function probeTelegram(
         try {
           const webhookRemainingBudgetMs = resolveRemainingBudgetMs();
           if (webhookRemainingBudgetMs > 0) {
-            const webhookRes = await fetchWithTimeout(
-              `${base}/getWebhookInfo`,
-              { signal: abortSignal },
-              Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
-              fetcher,
-            );
+            const webhookRes = await fetchMethod("getWebhookInfo", webhookRemainingBudgetMs);
             const webhookJson = JSON.parse(
               (
                 await readTelegramDiagnosticBody(

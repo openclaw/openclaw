@@ -6,6 +6,7 @@ import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { detectAssistantTranscriptRoleHeaderText } from "../shared/text/assistant-transcript-role-headers.js";
 import { detectToolCallShapedText } from "../shared/text/tool-call-shaped-text.js";
+import { isToolCallBlockType } from "../shared/tool-block-contract.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 
@@ -21,17 +22,8 @@ function hasStructuredToolInvocation(message: AssistantMessage): boolean {
     }
     const rawType = Reflect.get(block, "type");
     const type = typeof rawType === "string" ? rawType.trim() : "";
-    if (
-      type === "toolCall" ||
-      type === "toolUse" ||
-      type === "tool_call" ||
-      type === "tool_use" ||
-      type === "functionCall" ||
-      type === "function_call"
-    ) {
-      return true;
-    }
     return (
+      isToolCallBlockType(type) ||
       Array.isArray(Reflect.get(block, "tool_calls")) ||
       Array.isArray(Reflect.get(block, "toolCalls"))
     );

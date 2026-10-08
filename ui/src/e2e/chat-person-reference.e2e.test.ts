@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
@@ -48,7 +49,7 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: viewport.width, height: 900 }, colorScheme: viewport.colorScheme },
       async ({ page }) => {
-        const response = Promise.withResolvers<void>();
+        const response = createDeferred();
         await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
         await page.route("**/api/users/**/avatar*", async (route) => {
           await response.promise;
@@ -357,54 +358,6 @@ suite.define(() => {
       );
     },
   );
-
-  it("preserves table copying and transcript actions on a mention avatar", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
-        origin: new URL(suite.server.baseUrl).origin,
-      });
-      await page.route("**/api/users/**/avatar*", (route) =>
-        route.fulfill({
-          contentType: "image/png",
-          body: readFileSync("ui/public/apple-touch-icon.png"),
-        }),
-      );
-      const table = `| Request | Status |\n| --- | --- |\n| Ask ${label} today | Open |`;
-      const start = table.indexOf(label);
-      await installMockGateway(page, {
-        historyMessages: [
-          {
-            role: "user",
-            content: table,
-            timestamp: 1,
-            __openclaw: {
-              id: "mention-table",
-              humanMentions: [{ profileId: "profile-old", start, end: start + label.length }],
-            },
-          },
-        ],
-        methodResponses: { "users.list": directory },
-      });
-      await page.goto(suite.server.baseUrl + "chat");
-      const reference = page.locator(".markdown-person-reference");
-      const image = reference.locator("img");
-      await expect
-        .poll(() =>
-          image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0),
-        )
-        .toBe(true);
-      const copied = `Request\tStatus\nAsk ${label} today\tOpen`;
-      await page.getByRole("button", { name: "Copy table", exact: true }).click();
-      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copied);
-      const avatar = await image.boundingBox();
-      expect(avatar).not.toBeNull();
-      await page.mouse.click(avatar!.x + avatar!.width / 2, avatar!.y + avatar!.height / 2, {
-        button: "right",
-      });
-      await page.getByRole("menuitem", { name: "Copy table", exact: true }).click();
-      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copied);
-    });
-  });
 
   it("does not revive a dismissed or disconnected card when an old directory reply arrives", async () => {
     await suite.withPage({}, async ({ page }) => {

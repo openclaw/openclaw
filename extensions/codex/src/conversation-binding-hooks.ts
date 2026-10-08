@@ -7,6 +7,7 @@ import type {
   PluginHookInboundClaimEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
 import { assertCodexBindingMayBeReplaced } from "./app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
@@ -18,7 +19,6 @@ import {
   readCodexConversationBindingData,
   readCodexConversationBindingDataRecord,
 } from "./conversation-binding-data.js";
-import { isIncognitoSessionKey } from "./incognito-session.js";
 import type { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 type CodexConversationRunOptions = {
@@ -75,8 +75,8 @@ export async function handleCodexConversationInboundClaim(
     return { handled: true, reply: { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR } };
   }
   const sessionKey = event.sessionKey ?? ctx.sessionKey;
-  if (data.kind === "codex-cli-node-session") {
-    try {
+  try {
+    if (data.kind === "codex-cli-node-session") {
       const result = await getNodeConversationState().queue.enqueue(
         `${data.nodeId}:${data.sessionId}`,
         async () => {
@@ -121,16 +121,7 @@ export async function handleCodexConversationInboundClaim(
         },
       );
       return { handled: true, reply: result.reply };
-    } catch (error) {
-      return {
-        handled: true,
-        reply: {
-          text: `Codex CLI node turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
-        },
-      };
     }
-  }
-  try {
     const identity = { kind: "conversation" as const, bindingId: data.bindingId };
     // Capture and reserve before any import yields: retirement must not overtake
     // an already-arrived message, even when the execution module is still cold.
@@ -181,10 +172,11 @@ export async function handleCodexConversationInboundClaim(
     });
     return { handled: true, reply: result.reply };
   } catch (error) {
+    const runtime = data.kind === "codex-cli-node-session" ? "Codex CLI node" : "Codex app-server";
     return {
       handled: true,
       reply: {
-        text: `Codex app-server turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
+        text: `${runtime} turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
       },
     };
   }

@@ -6,11 +6,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { isUsageIncomplete } from "../../lib/incomplete-usage-retry.ts";
 import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import {
   GatewayPageController,
@@ -18,7 +18,7 @@ import {
 } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { isUsageCacheIncomplete } from "./cache-status.ts";
+import { isUsageCacheIncomplete, resolveUsagePublication } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { UsageDetailsController } from "./detail-controller.ts";
 import { createUsageJsonExportRequest } from "./export.ts";
@@ -26,22 +26,12 @@ import {
   createDefaultUsageDateRange,
   selectUsageSessionKeys,
   toggleUsageRangeSelection,
-  toUsageErrorMessage,
 } from "./helpers.ts";
 import { renderUsagePageShell } from "./page-shell.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
-import {
-  providerUsageFromSnapshotResult,
-  type ProviderUsageSnapshot,
-  requestUsageSnapshot,
-} from "./request-usage-snapshot.ts";
+import { type ProviderUsageSnapshot, requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import { createUsageRequest } from "./request.ts";
-import {
-  DEFAULT_VISIBLE_COLUMNS,
-  type SessionLogRole,
-  type UsageProps,
-  type UsageRouteData,
-} from "./types.ts";
+import type { SessionLogRole, UsageProps, UsageRouteData } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
 export type { UsageRouteData } from "./types.ts";
@@ -87,7 +77,6 @@ class UsagePage extends OpenClawLightDomElement {
   @state() private usageContextExpanded = false;
   @state() private usageHeaderPinned = false;
   @state() private usageSessionsTab: "all" | "recent" = "all";
-  @state() private usageVisibleColumns = [...DEFAULT_VISIBLE_COLUMNS];
   @state() private usageLogFilterRoles: SessionLogRole[] = [];
   @state() private usageLogFilterTools: string[] = [];
   @state() private usageLogFilterHasTools = false;
@@ -97,12 +86,20 @@ class UsagePage extends OpenClawLightDomElement {
   private queryDebounceTimer: number | null = null;
   // The client survives transport reconnects, so retry budgets need a separate epoch.
   private connectionEpoch: object = {};
+  private usageUpdatedAt = 0;
+  // Publication and reconnect replace immutable receipts, retiring their acknowledgments.
+  private readonly acknowledgedUsageFailures = new WeakSet<
+    ReturnType<typeof resolveUsagePublication>["failures"][number]
+  >();
   private routeDataInitialized = false;
   private routeDataEnabled = true;
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () => this.usageLoading,
     reload: (reason) => {
-      this.clearDateDebounce();
+      if (reason === "manual") {
+        this.usageUpdatedAt = this.usagePublication.updatedAt;
+      }
+      this.clearDebounce("dateDebounceTimer");
       const sessionKey =
         reason === "manual" && this.usageSelectedSessions.length === 1
           ? this.usageSelectedSessions[0]
@@ -171,7 +168,7 @@ class UsagePage extends OpenClawLightDomElement {
         this.applyUsageError(snapshot.error.cause);
       }
       this.applyUsageLoadState(
-        providerUsageFromSnapshotResult(snapshot),
+        snapshot.ok ? snapshot.value.providerUsage : snapshot.error.providerUsage,
         value.epoch,
         current && snapshot.ok ? undefined : null,
       );
@@ -205,10 +202,7 @@ class UsagePage extends OpenClawLightDomElement {
       () => this.context?.agentSelection,
       (selection) => this.observeAgentScope(selection),
     )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    );
+    .watchStore(() => this.context?.agents);
 
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
@@ -219,8 +213,8 @@ class UsagePage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    this.clearDateDebounce();
-    this.clearQueryDebounce();
+    this.clearDebounce("dateDebounceTimer");
+    this.clearDebounce("queryDebounceTimer");
     this.refreshPolicy.dispose();
     this.usageRequest.cancel();
     this.details.cancel();
@@ -263,6 +257,14 @@ class UsagePage extends OpenClawLightDomElement {
     };
     this.applyUsageLoadState(data.providerUsage, this.connectionEpoch, data.loadedAtMs);
     this.usageError = data.error;
+    const preloadUpdatedAt = resolveUsagePublication(
+      data.gatewaySnapshot.usagePublications,
+      this.currentQuery.agentId,
+    ).updatedAt;
+    if (this.usagePublication.committedAt > preloadUpdatedAt) {
+      this.refreshPolicy.request("publication");
+    }
+    this.refreshPolicy.flushPending();
   }
 
   private ensureInitialData() {
@@ -279,7 +281,7 @@ class UsagePage extends OpenClawLightDomElement {
   }
 
   private resetForClientChange() {
-    this.clearDateDebounce();
+    this.clearDebounce("dateDebounceTimer");
     this.usageRequest.cancel();
     if (this.routeDataInitialized) {
       this.routeDataEnabled = false;
@@ -307,18 +309,29 @@ class UsagePage extends OpenClawLightDomElement {
     if (snapshot.state === "settled") {
       const result = snapshot.result;
       this.providerUsageUnavailable = !result.ok;
-      this.providerUsageIncomplete = !result.ok || isUsageIncomplete(result.value);
+      this.providerUsageIncomplete = !result.ok || result.value.refreshing === true;
       if (result.ok && !this.providerUsageIncomplete) {
         this.providerUsageSummary = result.value;
       }
     }
-    // Retained incomplete snapshots still need convergence after a failed load
-    // or reconnect; an unknown failure alone must not create retry work.
-    const incomplete = this.providerUsageIncomplete || this.usageCacheIncomplete;
-    this.refreshPolicy.setLastLoadedAtMs(snapshot.state === "pending" ? null : loadedAtMs, {
-      incomplete,
-      connection,
-    });
+    // Session rollups converge on publication; only provider usage needs timed retries.
+    this.refreshPolicy.setLastLoadedAtMs(
+      snapshot.state === "pending" || this.usageCacheIncomplete ? null : loadedAtMs,
+      { incomplete: this.providerUsageIncomplete, connection },
+    );
+  }
+
+  private get usagePublication() {
+    return resolveUsagePublication(
+      this.gateway.snapshot?.usagePublications,
+      this.currentQuery.agentId,
+    );
+  }
+
+  private get usageRefreshFailed(): boolean {
+    return this.usagePublication.failures.some(
+      (receipt) => !this.acknowledgedUsageFailures.has(receipt),
+    );
   }
 
   private get usageCacheIncomplete(): boolean {
@@ -379,7 +392,7 @@ class UsagePage extends OpenClawLightDomElement {
     const missingScope = isMissingOperatorReadScopeError(error);
     this.usageError = missingScope
       ? formatMissingOperatorReadScopeMessage("usage")
-      : toUsageErrorMessage(error);
+      : formatUiError(error, "request failed");
     if (missingScope) {
       this.usageSnapshot = null;
     }
@@ -404,27 +417,24 @@ class UsagePage extends OpenClawLightDomElement {
     return this.usageRequest.run([client, refreshSessionKey]);
   }
 
-  private clearSelections() {
+  private clearSelectionsAndDetails() {
+    this.usageExportRequest.cancel();
     this.usageSelectedDays = [];
     this.usageSelectedHours = [];
     this.usageSelectedSessions = [];
-  }
-
-  private clearSelectionsAndDetails() {
-    this.usageExportRequest.cancel();
-    this.clearSelections();
     this.details.clear();
   }
 
-  private clearDateDebounce() {
-    if (this.dateDebounceTimer !== null) {
-      window.clearTimeout(this.dateDebounceTimer);
-      this.dateDebounceTimer = null;
+  private clearDebounce(timer: "dateDebounceTimer" | "queryDebounceTimer") {
+    if (this[timer] !== null) {
+      window.clearTimeout(this[timer]);
+      this[timer] = null;
     }
   }
 
   private scheduleUsageLoad() {
-    this.clearDateDebounce();
+    this.clearSelectionsAndDetails();
+    this.clearDebounce("dateDebounceTimer");
     this.usageRequest.cancel();
     this.usageError = null;
     // Cancel the old query's poll before it can consume this debounce and retry budget.
@@ -441,11 +451,16 @@ class UsagePage extends OpenClawLightDomElement {
       return;
     }
     void this.context.agents.ensureList();
+    const publication = this.usagePublication;
+    const usageCommitted = publication.committedAt > this.usageUpdatedAt;
+    this.usageUpdatedAt = publication.updatedAt;
     if (change.identityChanged || change.becameConnected) {
       this.connectionEpoch = {};
       if (this.routeDataInitialized) {
         this.refreshPolicy.request("reconnect");
       }
+    } else if (usageCommitted && this.routeDataInitialized) {
+      this.refreshPolicy.request("publication");
     }
     const sessionKey =
       this.usageSelectedSessions.length === 1 ? this.usageSelectedSessions[0] : undefined;
@@ -457,13 +472,6 @@ class UsagePage extends OpenClawLightDomElement {
       ]) {
         void detail.recover(sessionKey, detail === this.details.contextWeight);
       }
-    }
-  }
-
-  private clearQueryDebounce() {
-    if (this.queryDebounceTimer !== null) {
-      window.clearTimeout(this.queryDebounceTimer);
-      this.queryDebounceTimer = null;
     }
   }
 
@@ -498,16 +506,13 @@ class UsagePage extends OpenClawLightDomElement {
         error: this.usageError,
         sessions: this.usageResult?.sessions ?? [],
         creatorOptions: this.usageCreatorOptions,
-        agents:
-          this.context.agents.state.agentsList?.agents.map((entry) => entry.id).filter(Boolean) ??
-          [],
         sessionsLimitReached: (this.usageResult?.sessions.length ?? 0) >= 1000,
         totals: this.usageResult?.totals ?? null,
         aggregates: this.usageResult?.aggregates ?? null,
         costDaily: this.usageCostSummary?.daily ?? [],
         cacheRefresh: this.usageCacheIncomplete
-          ? this.refreshPolicy.incompleteUsageExhausted
-            ? "exhausted"
+          ? this.usageRefreshFailed
+            ? "failed"
             : "retrying"
           : "complete",
         providerUsage: this.providerUsageSummary?.providers ?? [],
@@ -521,7 +526,6 @@ class UsagePage extends OpenClawLightDomElement {
         selectedSessions: this.usageSelectedSessions,
         selectedDays: this.usageSelectedDays,
         selectedHours: this.usageSelectedHours,
-        agentId: this.usageAgentId,
         creatorKey: this.usageCreatorKey,
         query: this.usageQuery,
         queryDraft: this.usageQueryDraft,
@@ -534,7 +538,6 @@ class UsagePage extends OpenClawLightDomElement {
         sessionSortDir: this.usageSessionSortDir,
         recentSessions: this.usageRecentSessions,
         sessionsTab: this.usageSessionsTab,
-        visibleColumns: this.usageVisibleColumns,
         contextExpanded: this.usageContextExpanded,
         headerPinned: this.usageHeaderPinned,
       },
@@ -566,12 +569,10 @@ class UsagePage extends OpenClawLightDomElement {
         filters: {
           onStartDateChange: (date) => {
             this.usageStartDate = date;
-            this.clearSelectionsAndDetails();
             this.scheduleUsageLoad();
           },
           onEndDateChange: (date) => {
             this.usageEndDate = date;
-            this.clearSelectionsAndDetails();
             this.scheduleUsageLoad();
           },
           onScopeChange: (scope) => {
@@ -579,15 +580,17 @@ class UsagePage extends OpenClawLightDomElement {
             this.clearSelectionsAndDetails();
             this.refreshPolicy.request("manual");
           },
-          onAgentChange: (agentId) => {
-            this.context.agentSelection.setScope(agentId);
-          },
           onCreatorChange: (creatorKey) => {
             this.usageCreatorKey = creatorKey;
             this.clearSelectionsAndDetails();
             this.refreshPolicy.request("manual");
           },
-          onRefresh: () => this.refreshPolicy.request("manual"),
+          onRefresh: () => {
+            for (const receipt of this.usagePublication.failures) {
+              this.acknowledgedUsageFailures.add(receipt);
+            }
+            this.refreshPolicy.request("manual");
+          },
           onTimeZoneChange: (timeZone) => {
             this.usageTimeZone = timeZone;
             this.clearSelectionsAndDetails();
@@ -605,18 +608,18 @@ class UsagePage extends OpenClawLightDomElement {
           },
           onQueryDraftChange: (query) => {
             this.usageQueryDraft = query;
-            this.clearQueryDebounce();
+            this.clearDebounce("queryDebounceTimer");
             this.queryDebounceTimer = window.setTimeout(() => {
               this.usageQuery = this.usageQueryDraft;
               this.queryDebounceTimer = null;
             }, 250);
           },
           onApplyQuery: () => {
-            this.clearQueryDebounce();
+            this.clearDebounce("queryDebounceTimer");
             this.usageQuery = this.usageQueryDraft;
           },
           onClearQuery: () => {
-            this.clearQueryDebounce();
+            this.clearDebounce("queryDebounceTimer");
             this.usageQueryDraft = "";
             this.usageQuery = "";
           },
@@ -646,11 +649,6 @@ class UsagePage extends OpenClawLightDomElement {
           onSessionSortChange: (sort) => (this.usageSessionSort = sort),
           onSessionSortDirChange: (direction) => (this.usageSessionSortDir = direction),
           onSessionsTabChange: (tab) => (this.usageSessionsTab = tab),
-          onToggleColumn: (column) => {
-            this.usageVisibleColumns = this.usageVisibleColumns.includes(column)
-              ? this.usageVisibleColumns.filter((entry) => entry !== column)
-              : [...this.usageVisibleColumns, column];
-          },
         },
         details: {
           onToggleContextExpanded: () => (this.usageContextExpanded = !this.usageContextExpanded),

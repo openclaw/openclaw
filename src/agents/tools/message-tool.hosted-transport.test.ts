@@ -11,8 +11,8 @@ import {
   clearCronJobActive,
   markCronJobActive,
 } from "../../cron/active-jobs.js";
-import { prepareCronPromptRunAdmission } from "../../cron/isolated-agent/run-admission.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-identity-token.js";
+import { prepareCronRunAdmission } from "../../cron/run-admission.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   readMessageActionInvocationConfig,
@@ -92,13 +92,11 @@ it("dispatches a hosted message action without connecting to either Gateway endp
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       listeners.push(server);
       const connections = vi.fn();
-      const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
       server.on("connection", (socket) => {
         connections();
         sendMinimalGatewayConnectChallenge(socket);
         socket.on("message", (data) => {
           const frame = parseMinimalGatewayRequestFrame(data);
-          requests.push(frame);
           if (frame.id) {
             sendMinimalGatewayResponse(
               socket,
@@ -115,26 +113,21 @@ it("dispatches a hosted message action without connecting to either Gateway endp
       if (!address || typeof address === "string") {
         throw new Error("Expected a loopback listener address");
       }
-      return { connections, requests, port: address.port, url: `ws://127.0.0.1:${address.port}` };
+      return { connections, port: address.port, url: `ws://127.0.0.1:${address.port}` };
     };
     const local = await openListener("hosted-local");
     const remote = await openListener("remote-primary");
     const plugin: ChannelPlugin = {
-      id: "gatewaychat",
-      meta: {
+      ...createChannelTestPluginBase({
         id: "gatewaychat",
-        label: "Gateway Chat",
-        selectionLabel: "Gateway Chat",
-        docsPath: "/channels/gatewaychat",
-        blurb: "Synthetic hosted transport fixture.",
-      },
-      capabilities: { chatTypes: ["direct"], reactions: true },
+        capabilities: { chatTypes: ["direct"], reactions: true },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ enabled: true }),
+          isConfigured: () => true,
+        },
+      }),
       outbound: { deliveryMode: "gateway" },
-      config: {
-        listAccountIds: () => ["default"],
-        resolveAccount: () => ({ enabled: true }),
-        isConfigured: () => true,
-      },
       actions: {
         describeMessageTool: () => ({ actions: ["react"] }),
         supportsAction: ({ action }) => action === "react",
@@ -210,7 +203,6 @@ it("dispatches a hosted message action without connecting to either Gateway endp
           }),
       );
     const result = await execute();
-    expect(result.details).toMatchObject({ ok: true, listener: "hosted-local" });
     expect(dispatched).toHaveBeenCalledOnce();
     expect(dispatched.mock.calls[0]?.[0].client?.internal?.agentRuntimeIdentity).toMatchObject({
       agentId: "ops",
@@ -218,6 +210,8 @@ it("dispatches a hosted message action without connecting to either Gateway endp
       operationalRunInstance,
     });
     expect(result.details).toMatchObject({
+      ok: true,
+      listener: "hosted-local",
       action: {
         channel: "gatewaychat",
         action: "react",
@@ -276,7 +270,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
   const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
   const entered = createDeferred<OpenClawConfig>();
   const release = createDeferred();
-  let promptAdmission: ReturnType<typeof prepareCronPromptRunAdmission> | undefined;
+  let promptAdmission: ReturnType<typeof prepareCronRunAdmission> | undefined;
   let pending: ReturnType<ReturnType<typeof createMessageTool>["execute"]> | undefined;
   try {
     const configA: OpenClawConfig = {
@@ -338,7 +332,8 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     } as GatewayRequestContext;
     const resolveGatewayContext = () => context;
     promptAdmission = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
-      prepareCronPromptRunAdmission({
+      prepareCronRunAdmission({
+        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: configA,
         agentId: "ops",
         runId,

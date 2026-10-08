@@ -1,21 +1,21 @@
-import {
-  matchesAgentHarnessTaskAssignment,
-  type AgentHarnessTaskAssignment,
-  type captureAgentHarnessCompletionCustody,
-  type createAgentHarnessTaskEventSink,
-  type deliverAgentHarnessTaskCompletion,
-  type AgentHarnessCompletionDelivery,
-  type AgentHarnessScopedSetDeliveryStatusParams,
-  type AgentHarnessTaskRecord,
-  type AgentHarnessTaskRuntime,
-  type AgentHarnessTaskRuntimeScope,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import type {
+  deliverAgentHarnessCompletion,
+  captureAgentHarnessCompletionCustody,
+  createAgentHarnessCompletionEventSink,
+  AgentHarnessCompletionDelivery,
+  AgentHarnessCompletionScope,
+} from "openclaw/plugin-sdk/agent-harness-completion";
 import { onTestFinished, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import {
   createCodexNativeSubagentHistoryOwner,
   type CodexNativeSubagentHistoryOwner,
 } from "./native-subagent-history-owner.js";
+import type {
+  NativeModelSource,
+  NativeModelSourceCapture,
+} from "./native-subagent-monitor-types.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type {
   CodexAppServerRequestResult,
@@ -72,6 +72,34 @@ export const CodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.Moni
 export const registerCodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register;
 type CodexNativeSubagentMonitorInstance = InstanceType<typeof CodexNativeSubagentMonitor>;
 
+export function observeCompletionAttempts() {
+  const attempts = new Map<Promise<void>, string>();
+  const prototype = CodexNativeSubagentCompletionDelivery.prototype;
+  const observer = vi.spyOn(prototype, "deliverPending");
+  prototype.deliverPending = function (this: CodexNativeSubagentCompletionDelivery, state, child) {
+    const attempt = observer.call(this, state, child);
+    attempts.set(attempt, child.runId);
+    return attempt;
+  };
+  onTestFinished(() => observer.mockRestore());
+  return {
+    async settle(runId?: string) {
+      // Join real attempts, including delivery admitted by completion callbacks.
+      while (true) {
+        const batch = [...attempts].filter(([, id]) => runId === undefined || id === runId);
+        if (batch.length === 0) {
+          return;
+        }
+        for (const [attempt] of batch) {
+          attempts.delete(attempt);
+        }
+        await Promise.all(batch.map(([attempt]) => attempt));
+      }
+    },
+    restore: () => observer.mockRestore(),
+  };
+}
+
 export function createClient() {
   type ThreadReadParams = { threadId?: string; includeTurns?: boolean };
   type ThreadTurnsParams = { threadId?: string };
@@ -84,6 +112,9 @@ export function createClient() {
   const threadTurns = new Map<string, JsonValue | Error>();
   let loadedThreads: readonly string[] | undefined;
   const fixture = createFakeCodexAppServerClient(async (method: string, params?: unknown) => {
+    if (method === "thread/unsubscribe") {
+      return {};
+    }
     if (method === "thread/loaded/list") {
       if (!loadedThreads) {
         throw new Error("loaded threads not configured");
@@ -149,120 +180,23 @@ export function createClient() {
 }
 
 export function createRuntime() {
-  const records = new Map<string, AgentHarnessTaskRecord>();
-  const createRunningTaskRun = vi.fn((params): AgentHarnessTaskRecord => {
-    const task: AgentHarnessTaskRecord = {
-      taskId: params.sourceId ?? params.runId,
-      runtime: "subagent",
-      taskKind: "codex-native",
-      sourceId: params.sourceId,
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      agentId: params.agentId,
-      runId: params.runId,
-      label: params.label,
-      task: params.task,
-      status: "running",
-      deliveryStatus: params.deliveryStatus ?? "not_applicable",
-      notifyPolicy: params.notifyPolicy ?? "silent",
-      createdAt: params.startedAt ?? Date.now(),
-      startedAt: params.startedAt,
-      lastEventAt: params.lastEventAt,
-      progressSummary: params.progressSummary,
-      detail: params.detail,
-    };
-    records.set(params.runId, task);
-    return task;
-  });
-  const update = (params: {
-    runId: string;
-    expectedTask?: AgentHarnessTaskAssignment;
-    completionCustody?: unknown;
-  }): AgentHarnessTaskRecord[] => {
-    const { expectedTask, completionCustody: _custody, ...patch } = params;
-    // Recovery fixtures can expose their own store through the listing mock.
-    // Mutations must commit to that same row, without bypassing its receipt fence.
-    const matches = taskRuntime.listTaskRecords().filter((task) => task.runId === params.runId);
-    const task = matches.length === 1 ? matches[0] : undefined;
-    if (!task || (expectedTask && !matchesAgentHarnessTaskAssignment(task, expectedTask))) {
-      return [];
-    }
-    Object.assign(task, patch);
-    records.set(params.runId, task);
-    return [task];
-  };
-  const taskRuntime = {
-    assertTaskAssignmentSupported: vi.fn(),
-    createRunningTaskRun,
-    tryCreateRunningTaskRun: vi.fn((params) => createRunningTaskRun(params)),
-    recordTaskRunProgressByRunId:
-      vi.fn<AgentHarnessTaskRuntime["recordTaskRunProgressByRunId"]>(update),
-    finalizeTaskRunByRunId: vi.fn<AgentHarnessTaskRuntime["finalizeTaskRunByRunId"]>(update),
-    listTaskRecords: vi.fn((): AgentHarnessTaskRecord[] => [...records.values()]),
-    setDetachedTaskDeliveryStatusByRunId: vi.fn(
-      (params: AgentHarnessScopedSetDeliveryStatusParams) => update(params),
-    ),
-  };
   return {
-    ...taskRuntime,
     captureAgentHarnessCompletionCustody: vi.fn<typeof captureAgentHarnessCompletionCustody>(
-      () => undefined,
+      async () => undefined,
     ),
-    createAgentHarnessTaskEventSink: vi.fn<typeof createAgentHarnessTaskEventSink>(() => vi.fn()),
-    createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
-    deliverAgentHarnessTaskCompletion: vi.fn(
+    createAgentHarnessCompletionEventSink: vi.fn<typeof createAgentHarnessCompletionEventSink>(() =>
+      vi.fn(),
+    ),
+    deliverAgentHarnessCompletion: vi.fn(
       async (
-        _params: Parameters<typeof deliverAgentHarnessTaskCompletion>[0],
-      ): Promise<AgentHarnessCompletionDelivery> => ({
-        delivered: true,
-        path: "direct",
-      }),
+        _params: Parameters<typeof deliverAgentHarnessCompletion>[0],
+      ): Promise<AgentHarnessCompletionDelivery> => ({ delivered: true, path: "direct" }),
     ),
   };
 }
 
-export function createRecordedRuntime(
-  records: Map<string, AgentHarnessTaskRecord>,
-  requesterSessionKey = "agent:main:discord:channel:C123",
-) {
-  const runtime = createRuntime();
-  runtime.listTaskRecords.mockImplementation(() =>
-    [...records.values()].toReversed().toSorted((left, right) => right.createdAt - left.createdAt),
-  );
-  runtime.createRunningTaskRun.mockImplementation((params) => {
-    const existing = records.get(params.runId);
-    const task = {
-      ...(existing ?? taskRecord({ childThreadId: "child-thread", requesterSessionKey })),
-      ...params,
-      taskId: existing?.taskId ?? params.runId,
-    };
-    records.set(params.runId, task);
-    return task;
-  });
-  const update = (params: {
-    runId: string;
-    expectedTask?: AgentHarnessTaskAssignment;
-    completionCustody?: unknown;
-  }) => {
-    const { expectedTask, completionCustody: _custody, ...patch } = params;
-    const task = records.get(params.runId);
-    if (!task || (expectedTask && !matchesAgentHarnessTaskAssignment(task, expectedTask))) {
-      return [];
-    }
-    const updated = { ...task };
-    Object.assign(updated, patch);
-    records.set(params.runId, updated);
-    return [updated];
-  };
-  runtime.recordTaskRunProgressByRunId.mockImplementation(update);
-  runtime.finalizeTaskRunByRunId.mockImplementation(update);
-  runtime.setDetachedTaskDeliveryStatusByRunId.mockImplementation(update);
-  return runtime;
-}
-
-export function createTaskScope(requesterSessionKey = "agent:main:discord:channel:C123") {
-  return { requesterSessionKey } as AgentHarnessTaskRuntimeScope;
+export function createCompletionScope(requesterSessionKey = "agent:main:discord:channel:C123") {
+  return { requesterSessionKey, requesterAgentId: "main" } satisfies AgentHarnessCompletionScope;
 }
 
 export function nativeHistoryOwner(parentThreadId = "parent-thread") {
@@ -289,7 +223,7 @@ export function registerParent(
   return monitor.registerParent({
     parentThreadId,
     requesterSessionKey,
-    taskRuntimeScope: createTaskScope(requesterSessionKey),
+    completionScope: createCompletionScope(requesterSessionKey),
     agentId: "main",
     ...(historyOwner ? { historyOwner } : {}),
   });
@@ -329,7 +263,7 @@ export async function registerDetachedChild(
   client: ReturnType<typeof createClient>,
   monitor: CodexNativeSubagentMonitorInstance,
 ): Promise<void> {
-  const owner = registerParent(monitor);
+  const owner = await registerParent(monitor);
   await notifyChildStarted(client);
   await owner.unregister();
 }
@@ -439,12 +373,13 @@ export function childTurnCompletedNotification(params: {
   status: "completed" | "failed" | "interrupted";
   error?: string;
   turnId?: string;
+  threadId?: string;
   items?: JsonValue[];
 }): CodexServerNotification {
   return {
     method: "turn/completed",
     params: {
-      threadId: "child-thread",
+      threadId: params.threadId ?? "child-thread",
       turn: {
         id: params.turnId ?? "child-turn",
         status: params.status,
@@ -535,30 +470,36 @@ export function threadRead(
     },
   } as unknown as CodexThreadReadResponse;
 }
-
-export function taskRecord(params: {
-  childThreadId: string;
-  historyOwner?: CodexNativeSubagentHistoryOwner;
-  requesterSessionKey?: string;
-  status?: AgentHarnessTaskRecord["status"];
-  deliveryStatus?: AgentHarnessTaskRecord["deliveryStatus"];
-  endedAt?: number;
-}): AgentHarnessTaskRecord {
-  const requesterSessionKey = params.requesterSessionKey ?? "agent:main:discord:channel:C123";
-  return {
-    taskId: `task-${params.childThreadId}`,
-    runtime: "subagent",
-    taskKind: "codex-native",
-    requesterSessionKey,
-    ownerKey: requesterSessionKey,
-    scopeKind: "session",
-    runId: `codex-thread:${params.childThreadId}`,
-    task: "check the weather",
-    status: params.status ?? "running",
-    deliveryStatus: params.deliveryStatus ?? "not_applicable",
-    notifyPolicy: "silent",
-    createdAt: Date.now(),
-    endedAt: params.endedAt,
-    ...(params.historyOwner ? { detail: { nativeHistory: params.historyOwner } } : {}),
+export function createNativeModelSourceFixture(models: readonly string[]): NativeModelSource {
+  let released = false;
+  const assertCurrent = () => {
+    if (released) {
+      throw new Error("Test model source was released");
+    }
   };
+  return {
+    assertCurrent,
+    sourceIdentity: {},
+    modelPolicyRequired: true,
+    bindModelExecution: (model) => {
+      assertCurrent();
+      if (model?.provider !== "test-provider" || !models.includes(model.model)) {
+        throw new Error("Test source does not admit this model");
+      }
+      return { signal: new AbortController().signal, assertCurrent, release: () => {} };
+    },
+    release: vi.fn(() => {
+      released = true;
+    }),
+  };
+}
+
+export function requireNativeModelSourceCapture(
+  capture: NativeModelSourceCapture | undefined,
+): NativeModelSourceCapture {
+  if (!capture) {
+    throw new Error("Expected admitted native model source");
+  }
+  onTestFinished(capture.release);
+  return capture;
 }

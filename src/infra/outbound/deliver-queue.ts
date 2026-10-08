@@ -52,7 +52,7 @@ import {
   emitOutboundAuditTerminals,
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
-import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+import { preparedOutboundPayloads } from "./prepared-batch.js";
 import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
@@ -74,6 +74,7 @@ export async function runOutboundDelivery(
   return await runOutboundDeliveryInternal({
     ...params,
     conversationDeliveryTarget: undefined,
+    sessionGeneration: undefined,
     deliveryQueueStateContext: undefined,
   });
 }
@@ -146,10 +147,7 @@ async function runOutboundDeliveryWithIntent(
   const params = { ...currentParams, ...(reply ? { reply } : {}) };
   const stableIntentId = params.deliveryIntentId?.trim();
   if (stableIntentId) {
-    const stableParams =
-      stableIntentId === params.deliveryIntentId
-        ? params
-        : { ...params, deliveryIntentId: stableIntentId };
+    params.deliveryIntentId = stableIntentId;
     // Serializing preparation prevents concurrent producers from running
     // stateful modifiers before SQLite chooses the stable delivery owner.
     const claim = await withActiveDeliveryClaim(stableIntentId, async () => {
@@ -157,14 +155,13 @@ async function runOutboundDeliveryWithIntent(
         {
           id: stableIntentId,
           stateDir: params.deliveryQueueStateDir,
-          run: async (owner) =>
-            await runOutboundDeliveryWithQueue(stableParams, prepare, true, owner),
+          run: async (owner) => await runOutboundDeliveryWithQueue(params, prepare, true, owner),
         },
         params.deliveryQueueStateContext,
       );
       return preparation.status === "claimed"
         ? preparation.value
-        : await runOutboundDeliveryWithQueue(stableParams, prepare, true, undefined, false);
+        : await runOutboundDeliveryWithQueue(params, prepare, true);
     });
     if (claim.status === "claimed") {
       return claim.value;
@@ -246,7 +243,6 @@ async function runOutboundDeliveryWithQueue(
   prepare: typeof prepareOutboundPayloadBatch,
   stableIntentClaimHeld: boolean,
   stablePreparationOwner?: StableDeliveryPreparationOwner,
-  allowFreshPreparation = true,
 ): Promise<OutboundDeliveryResult[]> {
   const auditStartedAt = Date.now();
   const { channel, to, payloads } = params;
@@ -355,9 +351,9 @@ async function runOutboundDeliveryWithQueue(
           : `Stable delivery intent is already queued: ${params.deliveryIntentId}`,
       );
     }
-  }
-  if (params.deliveryIntentId && !existingStableDelivery && !allowFreshPreparation) {
-    throw new Error(`Stable delivery intent is already queued: ${params.deliveryIntentId}`);
+    if (stableIntentClaimHeld) {
+      throw new Error(`Stable delivery intent is already queued: ${params.deliveryIntentId}`);
+    }
   }
   if (existingStableDelivery && !params.reusePendingDeliveryIntent) {
     throw new Error(`Stable delivery intent is already queued: ${params.deliveryIntentId}`);
@@ -378,9 +374,7 @@ async function runOutboundDeliveryWithQueue(
     emitPreparationFailure(error);
     throw error;
   }
-  const preparedPayloads = acceptedPreparedOutboundEntries(preparedBatch).map(
-    (entry) => entry.payload,
-  );
+  const preparedPayloads = preparedOutboundPayloads(preparedBatch);
   const preparedRenderedBatchPlan =
     existingStableDelivery?.renderedBatchPlan ??
     (params.preparedBatch ? params.renderedBatchPlan : undefined) ??
@@ -493,8 +487,6 @@ async function runOutboundDeliveryWithQueue(
         queueId,
         startedAt: auditStartedAt,
       });
-    }
-    if (queueId) {
       params.onDeliveryIntent?.({
         id: queueId,
         channel,
@@ -537,10 +529,7 @@ async function runOutboundDeliveryWithQueue(
       if (queueOwner) {
         queueOwner.claimId = producerClaimId;
       }
-      let claimedDeliveryParams: InternalDeliverOutboundPayloadsParams = {
-        ...deliveryParams,
-        deliveryProducerLeaseRequired: true,
-      };
+      let claimedDeliveryParams = deliveryParams;
       if (queued?.created !== true) {
         const queuedEntry = await loadPendingDelivery(
           queueId,
@@ -550,13 +539,10 @@ async function runOutboundDeliveryWithQueue(
         if (!queuedEntry || queuedEntry.producerClaimId !== producerClaimId) {
           throw new Error(`Delivery platform claim was lost: ${queueId}`);
         }
-        claimedDeliveryParams = {
-          ...restoreQueuedDeliveryCustody(deliveryParams, queuedEntry),
-          deliveryProducerLeaseRequired: true,
-        };
+        claimedDeliveryParams = restoreQueuedDeliveryCustody(deliveryParams, queuedEntry);
       }
       return deliverWithProducerLease(
-        claimedDeliveryParams,
+        { ...claimedDeliveryParams, deliveryProducerLeaseRequired: true },
         queueId,
         auditStartedAt,
         producerClaimId,

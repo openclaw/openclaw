@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ExecCommandAnalysis } from "./exec-command-analysis-types.js";
 import { resolveCommandResolutionFromArgv } from "./exec-command-resolution.js";
@@ -53,7 +52,7 @@ function findWindowsUnsupportedToken(command: string): string | null {
   return null;
 }
 
-export function tokenizeWindowsSegment(segment: string): string[] | null {
+function tokenizeWindowsSegment(segment: string): string[] | null {
   const tokens: string[] = [];
   let buf = "";
   let inDouble = false;
@@ -126,24 +125,21 @@ const POWERSHELL_UNQUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}(.+)$`, "is")
 
 function stripWindowsShellWrapperOnce(command: string): string {
   const psCallMatch = command.match(/^&\s+(.+)$/s);
-  if (psCallMatch) {
-    return expectDefined(psCallMatch[1], "ps call match capture group 1");
+  if (psCallMatch?.[1]) {
+    return psCallMatch[1];
   }
 
   const psInvokeMatch = command.match(POWERSHELL_DOUBLE_QUOTED);
-  if (psInvokeMatch) {
-    return expectDefined(psInvokeMatch[1], "ps invoke match capture group 1").replace(/""/g, '"');
+  if (psInvokeMatch?.[1]) {
+    return psInvokeMatch[1].replace(/""/g, '"');
   }
   const psInvokeSingleQuote = command.match(POWERSHELL_SINGLE_QUOTED);
-  if (psInvokeSingleQuote) {
-    return expectDefined(psInvokeSingleQuote[1], "ps invoke single quote capture group 1").replace(
-      /''/g,
-      "'",
-    );
+  if (psInvokeSingleQuote?.[1]) {
+    return psInvokeSingleQuote[1].replace(/''/g, "'");
   }
   const psInvokeNoQuote = command.match(POWERSHELL_UNQUOTED);
-  if (psInvokeNoQuote) {
-    return expectDefined(psInvokeNoQuote[1], "ps invoke no quote capture group 1");
+  if (psInvokeNoQuote?.[1]) {
+    return psInvokeNoQuote[1];
   }
 
   // `cmd /c` stays intact because PowerShell execution would change cmd.exe
@@ -167,7 +163,7 @@ export function analyzeWindowsShellCommand(params: {
     };
   }
   const argv = tokenizeWindowsSegment(effective);
-  if (!argv || argv.length === 0) {
+  if (!argv) {
     return { ok: false, reason: "unable to parse windows command", segments: [] };
   }
   return {

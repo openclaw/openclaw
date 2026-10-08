@@ -1,14 +1,10 @@
 import type { SystemAgentChatQuestion } from "@openclaw/gateway-protocol";
 import { normalizeNullableString as nonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import type { SchemaContract } from "../../../../packages/gateway-protocol/src/schema-contract.js";
 
-export type CustodianStructuredQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  options: Array<{ label: string; description?: string; recommended?: boolean; reply?: string }>;
-  isOther: boolean;
-  skipAction?: "exit";
-};
+export type CustodianStructuredQuestion = SchemaContract<
+  Omit<SystemAgentChatQuestion, "isOther"> & { isOther: boolean }
+>;
 
 /**
  * Sanitize the typed `question` field from `openclaw.chat`. The gateway owns

@@ -1,5 +1,3 @@
-// Message-action specs describe which actions need destinations and which
-// legacy/plugin aliases count as an existing target.
 import {
   hasNonEmptyString,
   normalizeOptionalLowercaseString,
@@ -13,14 +11,8 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
-/**
- * Canonical parameter shape used by an outbound message action target.
- */
 type MessageActionTargetMode = "to" | "channelId" | "none";
 
-/**
- * Target-parameter policy for each supported channel message action.
- */
 const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, MessageActionTargetMode> = {
   send: "to",
   broadcast: "none",
@@ -104,20 +96,11 @@ export function applyTargetToParams(params: {
   if (!target) {
     return;
   }
-  if (mode === "channelId") {
-    params.args.channelId = target;
-    return;
+  if (mode === "none") {
+    throw new Error(`Action ${params.action} does not accept a target.`);
   }
-  if (mode === "to") {
-    params.args.to = target;
-    return;
-  }
-  throw new Error(`Action ${params.action} does not accept a target.`);
+  params.args[mode] = target;
 }
-
-type ActionTargetAliasSpec = {
-  aliases: string[];
-};
 
 export type ActionDeliveryTargetAliasSpec = NonNullable<
   NonNullable<ChannelMessageActionAdapter["messageActionTargetAliases"]>[ChannelMessageActionName]
@@ -131,50 +114,30 @@ type ActionTargetAliasOptions = {
 
 function resolvePluginActionTargetAliasSpec(
   action: ChannelMessageActionName,
-  channel: string,
-  selected: ActionDeliveryTargetAliasSpec | null | undefined,
+  params: Record<string, unknown>,
+  options?: ActionTargetAliasOptions,
 ): ActionDeliveryTargetAliasSpec | null | undefined {
+  const channel = normalizeOptionalLowercaseString(options?.channel);
+  // Screen standard params before consulting plugin bootstrap metadata.
+  if (!channel || !hasPotentialPluginActionParam(params)) {
+    return undefined;
+  }
+  const selected = options?.aliasSpec;
   return selected !== undefined
     ? selected
     : getBootstrapChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[action];
 }
 
-const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>> = {
-  unsend: { aliases: ["messageId"] },
-  edit: { aliases: ["messageId"] },
-  react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-  renameGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-  setGroupIcon: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-  addParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-  removeParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-  leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>> = {
+  unsend: ["messageId"],
+  edit: ["messageId"],
+  react: ["chatGuid", "chatIdentifier", "chatId"],
+  renameGroup: ["chatGuid", "chatIdentifier", "chatId"],
+  setGroupIcon: ["chatGuid", "chatIdentifier", "chatId"],
+  addParticipant: ["chatGuid", "chatIdentifier", "chatId"],
+  removeParticipant: ["chatGuid", "chatIdentifier", "chatId"],
+  leaveGroup: ["chatGuid", "chatIdentifier", "chatId"],
 };
-
-function listActionTargetAliasSpecs(
-  action: ChannelMessageActionName,
-  params: Record<string, unknown>,
-  options?: ActionTargetAliasOptions,
-): ActionTargetAliasSpec[] {
-  const specs: ActionTargetAliasSpec[] = [];
-  const coreSpec = ACTION_TARGET_ALIASES[action];
-  if (coreSpec) {
-    specs.push(coreSpec);
-  }
-  const normalizedChannel = normalizeOptionalLowercaseString(options?.channel);
-  if (!normalizedChannel || !hasPotentialPluginActionParam(params)) {
-    return specs;
-  }
-  // Plugin aliases are only checked after cheap param-shape screening to avoid bootstrap reads.
-  const channelSpec = resolvePluginActionTargetAliasSpec(
-    action,
-    normalizedChannel,
-    options?.aliasSpec,
-  );
-  if (channelSpec) {
-    specs.push(channelSpec);
-  }
-  return specs;
-}
 
 /** Resolves a plugin-declared delivery alias into the shared target contract. */
 export function resolveActionDeliveryTargetAlias(
@@ -182,16 +145,15 @@ export function resolveActionDeliveryTargetAlias(
   params: Record<string, unknown>,
   options?: ActionTargetAliasOptions,
 ): string | undefined {
-  const channel = normalizeOptionalLowercaseString(options?.channel);
-  if (!channel || !hasPotentialPluginActionParam(params)) {
+  const aliases = resolvePluginActionTargetAliasSpec(action, params, options);
+  if (!aliases) {
     return undefined;
   }
-  const aliases = resolvePluginActionTargetAliasSpec(action, channel, options?.aliasSpec);
-  const resolved = aliases?.resolveDeliveryTarget?.({ args: params });
+  const resolved = aliases.resolveDeliveryTarget?.({ args: params });
   if (resolved !== undefined) {
     return normalizeOptionalString(resolved);
   }
-  const deliveryAliases = aliases?.deliveryTargetAliases ?? [];
+  const deliveryAliases = aliases.deliveryTargetAliases ?? [];
   const targets = deliveryAliases
     .map((alias) => normalizeOptionalStringifiedId(params[alias]))
     .filter((value): value is string => Boolean(value));
@@ -207,66 +169,33 @@ export function actionHasResourceReference(
   params: Record<string, unknown>,
   options?: ActionTargetAliasOptions,
 ): boolean {
-  const channel = normalizeOptionalLowercaseString(options?.channel);
-  if (!channel || !hasPotentialPluginActionParam(params)) {
-    return false;
-  }
-  const aliases = resolvePluginActionTargetAliasSpec(action, channel, options?.aliasSpec);
+  const aliases = resolvePluginActionTargetAliasSpec(action, params, options);
   // Legacy alias specs do not distinguish conversations from resources.
   // Do not infer ambient authority unless the owner explicitly partitions them.
   if (!aliases?.deliveryTargetAliases) {
     return false;
   }
   const deliveryAliases = new Set(aliases.deliveryTargetAliases);
-  return aliases.aliases.some((alias) => {
-    if (deliveryAliases.has(alias)) {
-      return false;
-    }
-    const value = params[alias];
-    if (typeof value === "string") {
-      return Boolean(normalizeOptionalString(value));
-    }
-    return typeof value === "number" && Number.isFinite(value);
-  });
+  return aliases.aliases.some(
+    (alias) =>
+      !deliveryAliases.has(alias) && normalizeOptionalStringifiedId(params[alias]) !== undefined,
+  );
 }
 
-/**
- * Reports whether an action normally needs a destination target.
- */
 export function actionRequiresTarget(action: ChannelMessageActionName): boolean {
   return MESSAGE_ACTION_TARGET_MODE[action] !== "none";
 }
 
-/**
- * Detects whether an action invocation already carries a usable target.
- */
 export function actionHasTarget(
   action: ChannelMessageActionName,
   params: Record<string, unknown>,
   options?: ActionTargetAliasOptions,
 ): boolean {
-  const to = normalizeOptionalString(params.to) ?? "";
-  if (to) {
+  if (hasNonEmptyString(params.to) || hasNonEmptyString(params.channelId)) {
     return true;
   }
-  const channelId = normalizeOptionalString(params.channelId) ?? "";
-  if (channelId) {
-    return true;
-  }
-  const specs = listActionTargetAliasSpecs(action, params, options);
-  if (specs.length === 0) {
-    return false;
-  }
-  return specs.some((spec) =>
-    spec.aliases.some((alias) => {
-      const value = params[alias];
-      if (typeof value === "string") {
-        return Boolean(normalizeOptionalString(value));
-      }
-      if (typeof value === "number") {
-        return Number.isFinite(value);
-      }
-      return false;
-    }),
+  const pluginAliases = resolvePluginActionTargetAliasSpec(action, params, options)?.aliases;
+  return [...(ACTION_TARGET_ALIASES[action] ?? []), ...(pluginAliases ?? [])].some(
+    (alias) => normalizeOptionalStringifiedId(params[alias]) !== undefined,
   );
 }

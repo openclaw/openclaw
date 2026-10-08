@@ -5,8 +5,10 @@ import path from "node:path";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   buildGatewayDistEntrypointCandidates,
+  buildGatewayInstallEntrypointCandidates,
   findFirstAccessibleGatewayEntrypoint,
   isGatewayDistEntrypointPath,
 } from "./gateway-entrypoint.js";
@@ -20,28 +22,26 @@ type GatewayProgramArgs = {
 
 export const OPENCLAW_WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
 
-async function resolveCliEntrypointPathForService(): Promise<string> {
-  const argv1 = process.argv[1];
+const canAccessEntrypoint = (candidate: string) =>
+  fs.access(candidate).then(
+    () => true,
+    () => false,
+  );
+
+async function resolveCliEntrypointPathForService(argv1 = process.argv[1]): Promise<string> {
   if (!argv1) {
     throw new Error("Unable to resolve CLI entrypoint path");
   }
 
   const normalized = path.resolve(argv1);
-  const resolvedPath = await resolveRealpathSafe(normalized);
+  const resolvedPath = await fs.realpath(normalized).catch(() => normalized);
   const looksLikeDist = isGatewayDistEntrypointPath(resolvedPath);
   if (looksLikeDist) {
     // Existing installed command lines may point at versioned pnpm realpaths.
     // Repair prefers stable package symlink paths when they still exist.
     const preferredDistEntrypoint = await findFirstAccessibleGatewayEntrypoint(
       buildGatewayDistEntrypointCandidates(normalized, resolvedPath),
-      async (candidate) => {
-        try {
-          await fs.access(candidate);
-          return true;
-        } catch {
-          return false;
-        }
-      },
+      canAccessEntrypoint,
     );
     if (preferredDistEntrypoint) {
       return preferredDistEntrypoint;
@@ -51,27 +51,24 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
     // since symlinks like node_modules/openclaw -> .pnpm/openclaw@X.Y.Z/...
     // are automatically updated by pnpm, while the resolved path contains
     // version-specific directories that break after updates.
-    const normalizedLooksLikeDist = isGatewayDistEntrypointPath(normalized);
-    if (normalizedLooksLikeDist && normalized !== resolvedPath) {
-      try {
-        await fs.access(normalized);
-        return normalized;
-      } catch {
-        // Fall through to return resolvedPath
-      }
+    if (
+      isGatewayDistEntrypointPath(normalized) &&
+      normalized !== resolvedPath &&
+      (await canAccessEntrypoint(normalized))
+    ) {
+      return normalized;
     }
     return resolvedPath;
   }
 
   const distCandidates = buildDistCandidates(resolvedPath, normalized);
 
-  for (const candidate of distCandidates) {
-    try {
-      await fs.access(candidate);
-      return candidate;
-    } catch {
-      // keep going
-    }
+  const entrypoint = await findFirstAccessibleGatewayEntrypoint(
+    distCandidates,
+    canAccessEntrypoint,
+  );
+  if (entrypoint) {
+    return entrypoint;
   }
 
   throw new Error(
@@ -79,66 +76,19 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
   );
 }
 
-async function resolveRealpathSafe(inputPath: string): Promise<string> {
-  try {
-    return await fs.realpath(inputPath);
-  } catch {
-    return inputPath;
-  }
-}
-
 function buildDistCandidates(...inputs: string[]): string[] {
-  const candidates: string[] = [];
-  const seen = new Set<string>();
-
+  const roots: string[] = [];
   for (const inputPath of inputs) {
-    if (!inputPath) {
-      continue;
-    }
     const baseDir = path.dirname(inputPath);
-    appendDistCandidates(candidates, seen, path.resolve(baseDir, ".."));
-    appendDistCandidates(candidates, seen, baseDir);
-    appendNodeModulesBinCandidates(candidates, seen, inputPath);
-  }
-
-  return candidates;
-}
-
-function appendDistCandidates(candidates: string[], seen: Set<string>, baseDir: string): void {
-  const distDir = path.resolve(baseDir, "dist");
-  const distEntries = [
-    path.join(distDir, "index.js"),
-    path.join(distDir, "index.mjs"),
-    path.join(distDir, "entry.js"),
-    path.join(distDir, "entry.mjs"),
-  ];
-  for (const entry of distEntries) {
-    if (seen.has(entry)) {
-      continue;
+    roots.push(path.resolve(baseDir, ".."), baseDir);
+    const parts = inputPath.split(path.sep);
+    const binIndex = parts.lastIndexOf(".bin");
+    if (binIndex > 0 && parts[binIndex - 1] === "node_modules") {
+      // node_modules/.bin commands select the package root sibling.
+      roots.push(path.join(parts.slice(0, binIndex).join(path.sep), path.basename(inputPath)));
     }
-    seen.add(entry);
-    candidates.push(entry);
   }
-}
-
-function appendNodeModulesBinCandidates(
-  candidates: string[],
-  seen: Set<string>,
-  inputPath: string,
-): void {
-  const parts = inputPath.split(path.sep);
-  const binIndex = parts.lastIndexOf(".bin");
-  if (binIndex <= 0) {
-    return;
-  }
-  if (parts[binIndex - 1] !== "node_modules") {
-    return;
-  }
-  // openclaw from node_modules/.bin points at the package root sibling.
-  const binName = path.basename(inputPath);
-  const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
-  const packageRoot = path.join(nodeModulesDir, binName);
-  appendDistCandidates(candidates, seen, packageRoot);
+  return [...new Set(roots.flatMap(buildGatewayInstallEntrypointCandidates))];
 }
 
 function resolveRepoRootForDev(): string {
@@ -182,6 +132,7 @@ export async function resolveOpenClawWrapperPath(
 }
 
 async function resolveCliProgramArguments(params: {
+  cliEntrypoint?: string;
   args: string[];
   dev?: boolean;
   runtime: GatewayDaemonRuntime;
@@ -209,16 +160,17 @@ async function resolveCliProgramArguments(params: {
     return {
       programArguments:
         params.runtime === "bun"
-          ? [runtimePath, devCliPath, ...params.args]
+          ? [runtimePath, ...resolveRuntimeArgs(params.runtime), devCliPath, ...params.args]
           : [runtimePath, "--import", "tsx", devCliPath, ...params.args],
       workingDirectory: repoRoot,
     };
   }
 
-  const cliEntrypointPath = await resolveCliEntrypointPathForService();
+  const cliEntrypointPath = await resolveCliEntrypointPathForService(params.cliEntrypoint);
   return {
     programArguments: [
       runtimePath,
+      ...resolveRuntimeArgs(params.runtime),
       (await resolveBrewOpenClawPath(cliEntrypointPath)) ?? cliEntrypointPath,
       ...params.args,
     ],
@@ -226,6 +178,8 @@ async function resolveCliProgramArguments(params: {
 }
 
 export async function resolveGatewayProgramArguments(params: {
+  /** Retained CLI entrypoint to plan for instead of this process's argv[1]. */
+  cliEntrypoint?: string;
   port: number;
   allowUnconfigured?: boolean;
   dev?: boolean;
@@ -239,11 +193,8 @@ export async function resolveGatewayProgramArguments(params: {
     gatewayArgs.push("--allow-unconfigured");
   }
   const result = await resolveCliProgramArguments({
+    ...params,
     args: gatewayArgs,
-    dev: params.dev,
-    runtime: params.runtime,
-    runtimePath: params.runtimePath,
-    wrapperPath: params.wrapperPath,
   });
   if (params.runtime === "node" && !params.wrapperPath?.trim()) {
     // Size only the managed Gateway, before Node loads its entrypoint. Keeping
@@ -297,11 +248,5 @@ export async function resolveNodeProgramArguments(params: {
   } else if (params.commands !== undefined) {
     args.push("--commands", params.commands.join(","));
   }
-  return resolveCliProgramArguments({
-    args,
-    dev: params.dev,
-    runtime: params.runtime,
-    runtimePath: params.runtimePath,
-    wrapperPath: params.wrapperPath,
-  });
+  return resolveCliProgramArguments({ ...params, args });
 }

@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import {
-  createSupersededActorError,
-  ensureManagerRuntimeHandle,
-} from "./manager.runtime-handle-ensure.js";
-import { baseCfg, createRuntime, type SessionAcpMeta } from "./manager.test-helpers.js";
+import { ensureManagerRuntimeHandle } from "./manager.runtime-handle-ensure.js";
+import { baseCfg, createRuntime, readySessionMeta } from "./manager.test-helpers.js";
 import type { WriteManagerSessionMeta } from "./manager.types.js";
+import { createSupersededActorError } from "./manager.utils.js";
 
 describe("reset during ensured runtime metadata publication", () => {
   it("closes the unpublished stale handle and retains the concurrently accepted successor", async () => {
@@ -18,14 +16,10 @@ describe("reset during ensured runtime metadata publication", () => {
     let current = true;
     let ensures = 0;
     let writes = 0;
-    let persisted: SessionAcpMeta = {
-      backend: "acpx",
-      agent: "codex",
+    let persisted = readySessionMeta({
       runtimeSessionName: "stored-runtime",
-      mode: "persistent",
-      state: "idle",
       lastActivityAt: 1,
-    };
+    });
     state.ensureSession.mockImplementation(async () => {
       const id = ++ensures;
       return {
@@ -51,7 +45,10 @@ describe("reset during ensured runtime metadata publication", () => {
       ...target,
       cfg: baseCfg,
       meta: persisted,
-      deps: { requireRuntimeBackend: () => ({ id: "acpx", runtime: state.runtime }) },
+      deps: {
+        requireRuntimeBackend: () => ({ id: "acpx", runtime: state.runtime }),
+        loadSessionEntryAsync: async () => null,
+      },
       runtimeHandles: cache,
       writeSessionMeta,
     };

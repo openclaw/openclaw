@@ -33,9 +33,9 @@ export async function mockAcceptedWaitingStatusRun(
     | ((params: RunEmbeddedAgentInternalParams) => Promise<EmbeddedAgentRunResult>),
 ): Promise<void> {
   const testState = await createOpenClawTestState({ label: "reply-waiting-child" });
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   onTestFinished(async () => {
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await testState.cleanup();
   });
   runner.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
@@ -55,7 +55,7 @@ export async function mockAcceptedWaitingStatusRun(
     await registerSubagentRun(createSubagentRunParams({ ...spawn, ...requester, queued: true }));
     const runResult = typeof result === "function" ? await result(params) : result;
     if (runResult.meta.yielded) {
-      expect(markRequesterTurnYielded(requester)).toBe(1);
+      expect(await markRequesterTurnYielded(requester)).toBe(1);
     }
     return { ...runResult, acceptedSessionSpawns: [spawn] };
   });
@@ -98,6 +98,43 @@ export function registerWaitingStatusCases({
       deliverDespiteSourceReplySuppression: true,
     });
   });
+
+  it.each([
+    { label: "no children", acceptedSessionSpawns: [] },
+    {
+      label: "a fire-and-forget child",
+      acceptedSessionSpawns: [
+        {
+          runId: "fire-and-forget",
+          childSessionKey: "agent:main:subagent:fire-and-forget",
+          expectsCompletionMessage: false,
+        },
+      ],
+    },
+  ])(
+    "delivers the waiting status for a media-run continuation with $label",
+    async ({ acceptedSessionSpawns }) => {
+      runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentInternalParams) => {
+          assert(params.preparedRunAdmission);
+          await params.preparedRunAdmission.admit("embedded");
+          return {
+            payloads: [],
+            meta: { durationMs: 0, continuationPending: true },
+            acceptedSessionSpawns,
+          };
+        },
+      );
+      const onPendingContinuation = vi.fn();
+      const { run } = createMinimalRun({ opts: { onPendingContinuation } });
+
+      await expect(run()).resolves.toMatchObject({
+        text: "I’m continuing this work and will send the result when it is ready.",
+      });
+      // Delivering the status must not require a child that never owns the reply.
+      await onPendingContinuation.mock.calls[0]?.[0]?.settle(true);
+    },
+  );
 
   it.each([false, true])(
     "uses direct delivery completeness at settlement for waiting status (complete=%s)",

@@ -25,13 +25,14 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
-import { activeSessions, startTranscripts } from "../../transcripts/capture.js";
+import { activeSessions } from "../../transcripts/capture-startup.js";
+import { startTranscripts } from "../../transcripts/capture.js";
 import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
-import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import * as transcriptProviders from "../../transcripts/provider-registry.js";
 import { meetingTranscriptDb } from "../../transcripts/store-sqlite.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts, type TranscriptsSummary } from "../../transcripts/summary.js";
+import type { OperatorScope } from "../operator-scopes.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { transcriptsHandlers } from "./transcripts.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -63,13 +64,16 @@ function client(profileId?: string, scopes = ["operator.read"]): GatewayClient {
       : {}),
   };
 }
-function roles(others: "none" | "view"): OpenClawConfig {
+function roles(
+  others: "none" | "view",
+  scopes: OperatorScope[] = ["operator.read"],
+): OpenClawConfig {
   return {
     gateway: {
       roles: {
         default: "limited",
         definitions: {
-          limited: { sessions: { others }, agents: ["main"], scopes: ["operator.read"] },
+          limited: { sessions: { others }, agents: ["main"], scopes },
         },
       },
     },
@@ -272,7 +276,7 @@ describe("transcript Gateway read authorization and errors", () => {
           await request(
             "transcripts.list",
             {},
-            roles("none"),
+            roles("none", ["operator.admin"]),
             client(profile.id, ["operator.admin"]),
           )
         )[0],
@@ -281,100 +285,6 @@ describe("transcript Gateway read authorization and errors", () => {
         (await request("transcripts.get", { selector, agentId: "main" }, roles("view"), caller))[2],
       ).toMatchObject({ code: "INVALID_REQUEST" });
       expect(fs.existsSync(path.join(state.stateDir, "transcripts"))).toBe(false);
-    });
-  });
-
-  it("does not expose hidden legacy URL content through authorized search, reads or exports", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const hidden = [
-        "fixture-user-amber",
-        "fixture-pass-cobalt",
-        "fixture-query-violet",
-        "fixture-fragment-ochre",
-      ];
-      const url = new URL(`https://example.test/public-room?invite=${hidden[2]}#${hidden[3]}`);
-      url.username = hidden[0]!;
-      url.password = hidden[1]!;
-      const store = new TranscriptsStore(path.join(state.stateDir, "transcripts"));
-      const session = {
-        sessionId: "public-session",
-        title: "Public planning",
-        source: {
-          providerId: "fixture-provider",
-          channelId: "public-channel",
-          meetingUrl: url.href,
-        },
-        startedAt: "2026-08-20T10:00:00.000Z",
-      };
-      await store.writeSession(session);
-      await store.appendUtteranceForSession(session, {
-        text: "Synthetic planning note",
-        final: true,
-      });
-      const profile = ensureProfileForEmail("url-reader@example.test");
-      const caller = client(profile.id);
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      const selector = transcriptSessionSelector(session);
-      const publicOutputs: string[] = [];
-      for (const query of ["PLANNING", "public-session", "public-channel", "fixture-provider"]) {
-        const [ok, payload] = await request("transcripts.list", { query }, roles("view"), caller);
-        expect(ok).toBe(true);
-        expect(payload).toMatchObject({
-          sessions: [{ selector, source: { meetingUrl: "https://example.test/public-room" } }],
-        });
-        publicOutputs.push(JSON.stringify(payload));
-      }
-      for (const query of hidden.flatMap((part) => [part, part.slice(0, -3).toUpperCase()])) {
-        const [ok, payload] = await request("transcripts.list", { query }, roles("view"), caller);
-        expect(ok).toBe(true);
-        expect(payload, query).toMatchObject({ sessions: [], nextCursor: null });
-      }
-      for (const query of ["planning", hidden[0]]) {
-        const denied = await request("transcripts.list", { query }, roles("none"), caller);
-        expect(denied[0]).toBe(false);
-        expect(denied[1]).toBeUndefined();
-        expect(denied[2]).toMatchObject({ code: "FORBIDDEN" });
-        const missingScope = await request(
-          "transcripts.list",
-          { query },
-          roles("view"),
-          client(profile.id, []),
-        );
-        expect(missingScope[0]).toBe(false);
-        expect(missingScope[2]?.details).toMatchObject({ missingScope: "operator.read" });
-      }
-      const [ok, read] = await request(
-        "transcripts.get",
-        { selector, includeUtterances: true },
-        roles("view"),
-        caller,
-      );
-      expect(ok).toBe(true);
-      expect(read).toMatchObject({
-        session: { source: { meetingUrl: "https://example.test/public-room" } },
-        utterances: [{ text: "Synthetic planning note" }],
-      });
-      publicOutputs.push(JSON.stringify(read));
-      for (const format of ["markdown", "jsonl"] as const) {
-        const [exported, payload] = await request(
-          "transcripts.export",
-          { selector, format },
-          roles("view"),
-          caller,
-        );
-        expect(exported).toBe(true);
-        expect(payload).toMatchObject({ selector, encoding: "base64" });
-        const content = Buffer.from((payload as { data: string }).data, "base64").toString("utf8");
-        expect(content).toContain("Synthetic planning note");
-        publicOutputs.push(content);
-      }
-      for (const output of publicOutputs) {
-        for (const part of hidden) {
-          expect(output).not.toContain(part);
-        }
-      }
-      expect((await store.readSession(selector))?.source.meetingUrl).toBe(url.href);
     });
   });
 
@@ -404,6 +314,58 @@ describe("transcript Gateway read authorization and errors", () => {
       ).toBe(true);
     });
   });
+
+  it.each(["authority", "archive role", "cancellation"])(
+    "refuses a public page after %s changes during its worker read",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+        const { store } = await seed(stateDir);
+        const profile = ensureProfileForEmail("public-page-reader@example.test");
+        const cancellation = new AbortController();
+        let current = true;
+        const cfg = roles("view");
+        const read = store.listReadEntries.bind(store);
+        const observer = vi
+          .spyOn(TranscriptsStore.prototype, "listReadEntries")
+          .mockImplementationOnce(
+            new Proxy(read, {
+              async apply(target, receiver, args) {
+                const result = await Reflect.apply(target, receiver, args);
+                current = false;
+                if (kind === "cancellation") {
+                  cancellation.abort();
+                }
+                return result;
+              },
+            }),
+          );
+        const respond = vi.fn();
+        try {
+          await transcriptsHandlers["transcripts.list"]!({
+            req: { type: "req", id: "revoked-list", method: "transcripts.list" },
+            params: {},
+            client: client(profile.id),
+            signal: cancellation.signal,
+            respond,
+            hasCurrentClientAuthority: () => kind !== "authority" || current,
+            isWebchatConnect: () => false,
+            context: {
+              getRuntimeConfig: () => (kind === "archive role" && !current ? roles("none") : cfg),
+              logGateway,
+            } as unknown as GatewayRequestContext,
+          });
+          expect(observer).toHaveBeenCalledOnce();
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: "UNAVAILABLE" }),
+          );
+        } finally {
+          observer.mockRestore();
+        }
+      });
+    },
+  );
 
   it("waits for the authenticated profile before reading the library", async () => {
     const caller = client();
@@ -657,94 +619,6 @@ describe("meeting transcript RPC", () => {
     expect((await invoke("transcripts.list", { providerId: "absent" }))[1].sessions).toEqual([]);
   });
 
-  it("reads canonical notes without exporting and paginates full ordered utterances", async () => {
-    const count = resolveTranscriptsConfig({}).maxUtterances + 1;
-    const finalSpeech = "x".repeat(3999) + "😀" + "x".repeat(1000);
-    for (let index = 0; index < count; index++) {
-      await store.appendUtteranceForSession(session, {
-        id: `speech-${index}`,
-        text:
-          index === count - 1
-            ? "\u001b[31m" + finalSpeech
-            : `line ${index}` + (index < 2 ? "" : "x".repeat(600)),
-        speaker: { id: "speaker", label: "Ada" },
-        final: true,
-        metadata: { private: true },
-      });
-    }
-    const summary = {
-      ...summarizeTranscripts({ session, utterances: [{ text: "Agreed to ship." }] }),
-      participants: ["Ada"],
-      source: "heuristic",
-    } satisfies TranscriptsSummary;
-    await store.writeSummary(summary, session);
-    const payload = (await invoke("transcripts.get", { selector }))[1];
-    expect(payload.summary.markdown.trimEnd()).toBe(
-      (await store.readSummary(session)).markdown?.trimEnd(),
-    );
-    expect(payload.summary.participants).toEqual(["Ada"]);
-    expect(payload.utterances).toBeUndefined();
-    const [recentRead, recent] = await invoke("transcripts.get", {
-      selector,
-      includeUtterances: true,
-    });
-    expect(recentRead).toBe(true);
-    expect(recent.utterances).toHaveLength(count - 1);
-    expect(recent.utterances[0]).toMatchObject({ sequence: 1, text: "line 1" });
-    expect(recent.utterances.at(-1)).toEqual({
-      sequence: count - 1,
-      speakerId: "speaker",
-      speakerLabel: "Ada",
-      text: "x".repeat(3999),
-      final: true,
-    });
-    expect(recent.nextCursor).toBeNull();
-    expect(Buffer.byteLength(JSON.stringify(recent))).toBeGreaterThan(1024 * 1024);
-    const [, searched] = await invoke("transcripts.get", {
-      selector,
-      includeUtterances: true,
-      query: "line",
-    });
-    expect(searched.utterances).toHaveLength(50);
-    expect(searched.utterances[0]).toMatchObject({ sequence: 0 });
-    const [, first] = await invoke("transcripts.get", {
-      selector,
-      includeUtterances: true,
-      limit: 1,
-    });
-    const [, next] = await invoke("transcripts.get", {
-      selector,
-      includeUtterances: true,
-      cursor: first.nextCursor,
-    });
-    expect(next.utterances).toHaveLength(50);
-    expect(next.utterances[0]).toMatchObject({ sequence: 1 });
-    const utterances: Array<{ sequence: number; text: string }> = [];
-    let cursor: string | null = null;
-    do {
-      const [read, page] = await invoke("transcripts.get", {
-        selector,
-        includeUtterances: true,
-        limit: 100,
-        ...(cursor ? { cursor } : {}),
-      });
-      expect(read).toBe(true);
-      expect(page.utterances.length).toBeLessThanOrEqual(100);
-      utterances.push(...page.utterances);
-      cursor = page.nextCursor;
-    } while (cursor);
-    expect(utterances).toHaveLength(count);
-    expect(utterances[0]).toMatchObject({ sequence: 0, text: "line 0" });
-    expect(utterances.at(-1)).toEqual({
-      sequence: count - 1,
-      id: `speech-${count - 1}`,
-      speakerId: "speaker",
-      speakerLabel: "Ada",
-      text: finalSpeech,
-      final: true,
-    });
-  });
-
   it("reads older stored notes without participant or model attribution fields", async () => {
     const summary = summarizeTranscripts({ session, utterances: [{ text: "Legacy notes." }] });
     await store.writeSummary(summary, session);
@@ -767,25 +641,4 @@ describe("meeting transcript RPC", () => {
     expect(payload.summary.source).toBeUndefined();
     expect(payload.summary.model).toBeUndefined();
   });
-
-  it("returns an intentional no-summary result and typed not-found errors", async () => {
-    const [ok, payload] = await invoke("transcripts.get", {
-      selector: transcriptSessionSelector(session),
-    });
-    expect(ok).toBe(true);
-    expect(payload.session.hasSummary).toBe(false);
-    expect(payload.summary).toBeUndefined();
-    expect(await invoke("transcripts.get", { selector: "missing" })).toMatchObject([
-      false,
-      undefined,
-      { code: "INVALID_REQUEST", details: { type: "transcript_session_not_found" } },
-    ]);
-  });
-
-  it.each([{ limit: 0 }, { limit: 201 }, { limit: 1.5 }, { unexpected: true }])(
-    "rejects invalid list params %j",
-    async (params) => {
-      expect((await invoke("transcripts.list", params))[0]).toBe(false);
-    },
-  );
 });

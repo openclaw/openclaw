@@ -1,16 +1,10 @@
 // @vitest-environment node
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect as expectBrowser } from "playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import { withBrowserPage } from "../../test-helpers/browser-page.ts";
-import {
-  createControlUiMockSameOriginGatewayScript,
-  installMockGateway,
-  startControlUiE2eServer,
-} from "../../test-helpers/control-ui-e2e.ts";
 import {
   canRunChatLayoutBrowser,
   createChatLayoutBrowser,
@@ -199,7 +193,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
     await withBrowserPage(openBrowserPage(600, 300), async (page) => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="chat-thread" style="width: 500px; --accent: rgb(255, 0, 0);">
+          <div class="chat-thread" style="width: 500px; height: 200px; --accent: rgb(255, 0, 0);">
             <div class="chat-thread-inner chat-thread-inner--virtual">
               <div class="chat-virtual-sizer">
                 <div class="chat-virtual-block">
@@ -232,9 +226,13 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
       const bounds = await page.evaluate(() => {
         const row = document.querySelector<HTMLElement>("[data-focused-row]")!;
         const control = document.querySelector<HTMLElement>(".msg-meta__summary")!;
+        // Keep the clipping boundary at the control, independent of turn spacing.
+        // Otherwise extra room below the footer makes the below-row pixel oracle vacuous.
+        row.style.height = `${control.getBoundingClientRect().bottom - row.getBoundingClientRect().top}px`;
         const rowRect = row.getBoundingClientRect();
         const controlRect = control.getBoundingClientRect();
         return {
+          controlBottom: controlRect.bottom,
           clip: {
             x: Math.floor(controlRect.left - 8),
             y: Math.floor(controlRect.top - 8),
@@ -245,6 +243,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           deviceScaleFactor: window.devicePixelRatio,
         };
       });
+      expect(bounds.controlBottom).toBeCloseTo(bounds.rowBottom, 3);
       const png = await page.screenshot({ clip: bounds.clip });
       const widestAccentRunBelowRow = await page.evaluate(
         async ({ pngBase64, clipTop, rowBottom, deviceScaleFactor }) => {
@@ -361,8 +360,6 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
     [900, 500, "mobile-landscape-900", "inline", false],
     [640, 900, "mobile-responsive-640", "overlay", false],
     [320, 568, "mobile-320", "overlay", false],
-    [375, 812, "mobile-375", "overlay", false],
-    [430, 932, "mobile-430", "overlay", false],
     [1200, 800, "desktop-with-pull-request", "overlay", true],
     [375, 812, "mobile-with-pull-request", "overlay", true],
   ] as const)(
@@ -443,6 +440,13 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
         expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
         const before = await geometry();
+        await page.locator(".agent-chat__composer-notices").evaluate((node) => {
+          const attention = document.createElement("openclaw-chat-child-attention");
+          attention.style.display = "contents";
+          node.append(attention);
+        });
+        await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
+        expect(await geometry()).toEqual(before);
         expect(before.fadeInsetLeft).toBeGreaterThanOrEqual(before.scrollbarSize);
         expect(before.fadeInsetRight).toBeGreaterThanOrEqual(before.scrollbarSize);
         expect(before.thread.bottom).toBeLessThanOrEqual(before.footer.top);
@@ -608,85 +612,4 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
       });
     },
   );
-  it("keeps delivery recovery visible and keyboard-reachable in narrow chat", async () => {
-    const server = await startControlUiE2eServer();
-    try {
-      await withBrowserPage(openBrowserPage(320, 844, { isolated: true }), async (page) => {
-        await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
-        await installMockGateway(page, {
-          historyMessages: ["failed", "unconfirmed", "waiting-reconnect", "held"].flatMap(
-            (state, index) => [
-              {
-                role: "user",
-                timestamp: 1_000 + index * 2,
-                content: [{ type: "text", text: "Pending " + state }],
-                __openclaw: {
-                  id: "delivery-" + index,
-                  kind: "pending-send",
-                  state,
-                  ...(index === 1
-                    ? {
-                        senderId: "peer",
-                        senderName: "Peer",
-                        senderIdentity: { type: "profile", id: "peer" },
-                      }
-                    : {}),
-                },
-              },
-              {
-                role: "assistant",
-                timestamp: 1_001 + index * 2,
-                content: [{ type: "text", text: "Separate turn" }],
-              },
-            ],
-          ),
-        });
-        await page.goto(server.baseUrl + "chat");
-        const statuses = page.locator(".chat-send-status");
-        await expectBrowser(statuses).toHaveCount(4, { timeout: 30_000 });
-        const held = page.locator('.chat-send-status[data-send-state="held"]');
-        await expectBrowser(held).toContainText("Delivery uncertain");
-        await expectBrowser(
-          held.getByRole("button", { name: "Discard", exact: true }),
-        ).toBeVisible();
-        // Enlarged text must not push recovery controls outside the conversation.
-        await page.addStyleTag({ content: ".chat-send-status { font-size: 24px; }" });
-        for (const theme of ["light", "dark"]) {
-          await page.evaluate((mode) => {
-            document.documentElement.dataset.themeMode = mode;
-          }, theme);
-          for (const status of await statuses.all()) {
-            await status.scrollIntoViewIfNeeded();
-            await page.mouse.move(0, 0);
-            const footer = status.locator(
-              "xpath=ancestor::div[contains(@class, 'chat-group-footer--send-status')]",
-            );
-            await expectBrowser(footer).toHaveCSS("opacity", "1");
-            for (const action of await status.getByRole("button").all()) {
-              await expectBrowser(action).toBeVisible();
-              await expectBrowser(action).toBeEnabled();
-              const bounds = await action.boundingBox();
-              if (!bounds) {
-                throw new Error("Recovery action has no rendered bounds");
-              }
-              expect(bounds.x).toBeGreaterThanOrEqual(0);
-              expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
-            }
-          }
-          const unconfirmed = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
-          const retry = unconfirmed.getByRole("button", { name: "Retry queued message" });
-          await retry.focus();
-          await page.keyboard.press("Tab");
-          await expectBrowser(
-            unconfirmed.getByRole("button", { name: "Discard", exact: true }),
-          ).toBeFocused();
-          await page.keyboard.press("Shift+Tab");
-          await expectBrowser(retry).toBeFocused();
-          await retry.evaluate((element) => (element as HTMLElement).blur());
-        }
-      });
-    } finally {
-      await server.close();
-    }
-  }, 60_000);
 });

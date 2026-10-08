@@ -1,6 +1,4 @@
-/**
- * Merges media payloads discovered from attempt tool results.
- */
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
@@ -32,9 +30,7 @@ type ToolMediaMergeParams = ToolMediaBatch & {
 };
 
 function selectToolMedia(params: ToolMediaMergeParams) {
-  let mediaUrls = Array.from(
-    new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
-  );
+  let mediaUrls = normalizeUniqueTrimmedStringList(params.toolMediaUrls);
   const payloads = params.payloads?.length ? [...params.payloads] : [];
   const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning && !payload.isError);
   const visiblePayload = payloads[payloadIndex];
@@ -81,15 +77,9 @@ function mergeSelectedToolMedia(
   }: ReturnType<typeof selectToolMedia>,
 ): EmbeddedRunPayload[] | undefined {
   const mediaUrlSet = new Set(mediaUrls);
-  const autoDeliveryMediaUrls = Array.from(
-    new Set(params.toolAutoDeliveryMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
-  );
-  const hostOwnedMediaUrls = Array.from(
-    new Set(
-      params.hostOwnedToolMediaUrls
-        ?.map((url) => url.trim())
-        .filter((url) => url.length > 0 && mediaUrlSet.has(url)) ?? [],
-    ),
+  const autoDeliveryMediaUrls = normalizeUniqueTrimmedStringList(params.toolAutoDeliveryMediaUrls);
+  const hostOwnedMediaUrls = normalizeUniqueTrimmedStringList(params.hostOwnedToolMediaUrls).filter(
+    (url) => mediaUrlSet.has(url),
   );
   if (
     mediaUrls.length === 0 &&
@@ -122,26 +112,23 @@ function mergeSelectedToolMedia(
         )
       : mediaUrls;
   const appendOwnedMedia = (nextPayloads: EmbeddedRunPayload[]): EmbeddedRunPayload[] => {
-    const withHostOwnedMedia = !shouldSplitHostOwnedMedia
-      ? nextPayloads
-      : [
-          ...nextPayloads,
-          markReplyPayloadForSourceSuppressionDelivery(
-            buildMediaPayload(hostOwnedMediaUrls, false),
-          ),
-        ];
-    if (!shouldSplitAutoDeliveryMedia) {
-      return withHostOwnedMedia;
+    const owned: EmbeddedRunPayload[] = [];
+    if (shouldSplitHostOwnedMedia) {
+      owned.push(
+        markReplyPayloadForSourceSuppressionDelivery(buildMediaPayload(hostOwnedMediaUrls, false)),
+      );
     }
     // Contract-owned media remains separate from private assistant text and
     // generic tool media so only its explicit provenance bypasses suppression.
-    return [
-      ...withHostOwnedMedia,
-      markReplyPayloadForSourceSuppressionDelivery({
-        ...buildMediaPayload(autoDeliveryOnlyMediaUrls, true),
-        trustedLocalMedia: true,
-      }),
-    ];
+    if (shouldSplitAutoDeliveryMedia) {
+      owned.push(
+        markReplyPayloadForSourceSuppressionDelivery({
+          ...buildMediaPayload(autoDeliveryOnlyMediaUrls, true),
+          trustedLocalMedia: true,
+        }),
+      );
+    }
+    return owned.length ? [...nextPayloads, ...owned] : nextPayloads;
   };
 
   // A transcript mirror is already delivered; every batch observes the same
@@ -150,11 +137,8 @@ function mergeSelectedToolMedia(
     return appendOwnedMedia(payloads);
   }
 
-  if (payloadIndex >= 0) {
-    const payload = payloads.at(payloadIndex);
-    if (!payload) {
-      return payloads;
-    }
+  const payload = payloads[payloadIndex];
+  if (payload) {
     if (
       mergeableMediaUrls.length === 0 &&
       (shouldSplitHostOwnedMedia || shouldSplitAutoDeliveryMedia)
@@ -174,16 +158,12 @@ function mergeSelectedToolMedia(
     return appendOwnedMedia(payloads);
   }
 
-  if (shouldSplitHostOwnedMedia || shouldSplitAutoDeliveryMedia) {
-    const genericMediaPayload =
-      mergeableMediaUrls.length > 0 ? [buildMediaPayload(mergeableMediaUrls, true)] : [];
-    return appendOwnedMedia([...payloads, ...genericMediaPayload]);
-  }
-
-  const mediaPayload = buildMediaPayload(mergeableMediaUrls, true);
-
   // Reasoning-only turns still need a concrete media payload so channel delivery sees the attachment.
-  return appendOwnedMedia([...payloads, mediaPayload]);
+  const needsMediaPayload =
+    mergeableMediaUrls.length > 0 || (!shouldSplitHostOwnedMedia && !shouldSplitAutoDeliveryMedia);
+  return appendOwnedMedia(
+    needsMediaPayload ? [...payloads, buildMediaPayload(mergeableMediaUrls, true)] : payloads,
+  );
 }
 
 /** Keeps unsent artifacts with the logical run while their plugin generation retires. */
@@ -232,13 +212,9 @@ export function createPendingToolMediaCarry() {
       const projected = allBatches.map((batch) =>
         Object.assign({}, batch, {
           hadMedia: Boolean(batch.toolMediaUrls?.length || batch.toolAutoDeliveryMediaUrls?.length),
-          toolMediaUrls: [
-            ...new Set(
-              batch.toolMediaUrls
-                ?.map((url) => url.trim())
-                .filter((url) => selectedUrls.has(url)) ?? [],
-            ),
-          ],
+          toolMediaUrls: normalizeUniqueTrimmedStringList(batch.toolMediaUrls).filter((url) =>
+            selectedUrls.has(url),
+          ),
         }),
       );
       const owners = new Map<string, ToolMediaBatch>();

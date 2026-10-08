@@ -4,6 +4,8 @@ import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
+// v20 fences possibly delivered cron completions across restart recovery.
+// v19 preserves original channel-owner authorization across recovery.
 // v18 binds shared GitHub publication to its original requesting authority.
 // v17 records one-use prepared worker capacity and node workspace ownership.
 // v16 makes Skill Workshop ownership directory-based instead of row-provenance-based.
@@ -18,11 +20,14 @@ export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() =
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 18;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 20;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
+// Absence records lost history; only Doctor may reconstruct these on existing state.
+export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
+  "user_profile_identities",
   "local_workspace_projections",
   "update_runs",
   "session_repository_workspaces",
@@ -39,6 +44,7 @@ export const FIRST_USE_STATE_TABLES = [
   "mcp_oauth_pending_authorizations",
   "node_worker_launch_containers",
   "node_worker_launch_cleanup",
+  "node_worker_launch_process_scopes",
   "node_worker_launches",
   "node_worker_prepared_workspaces",
   "node_worker_turns",
@@ -52,6 +58,8 @@ export const FIRST_USE_STATE_TABLES = [
   "outbound_message_progress",
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
+  "idx_user_profile_identities_profile_id",
+  "idx_user_profile_identities_authorization",
   "idx_update_runs_created",
   "idx_update_runs_active",
   "idx_github_repository_publication_shared_request",
@@ -130,25 +138,34 @@ export type OpenClawStateDatabaseOptions = {
   path?: string;
   database?: OpenClawStateDatabase;
   readOnly?: boolean;
+  /** Additional known agent stores can only make first-use classification more conservative. */
+  initializationAgentPaths?: readonly string[];
 };
+export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
+  "agent-databases-composite-primary-key": "agent database registry primary key → agent_id,path",
+  "audit-events-v2": "audit event ledger → versioned message lifecycle schema",
+  "commitments-retirement-v7": "retired commitments storage → discarded rows, table, and indexes",
+  "worker-placement-execution-mode-v8": "cloud worker placements → execution-mode claims",
+  "agent-databases-relative-paths-v9": "agent database registry paths → state-relative storage",
+  "state-table-retirement-v10": "retired shared-state tables → removed tables and indexes",
+  "state-table-retirement-v11": "retired skill curator tables → removed tables and indexes",
+  "singleton-state-foldin-v12": "singleton state tables → shared configuration state",
+  "state-consolidation-v13": "cron jobs and subagent runs → canonical JSON storage",
+  "creator-namespace-v14": "historical cron creators → unknown source attribution",
+  "conversation-binding-targets-v15":
+    "conversation bindings → exact target keys without agent/session projections",
+  "skill-workshop-directory-ownership-v16":
+    "Skill Workshop ownership → per-agent directory containment",
+  "prepared-worker-ownership-v17":
+    "prepared workers → one-use capacity and fixed workspace ownership",
+  "github-publication-requester-authority-v18":
+    "GitHub publication receipts → original requesting authority",
+  "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
+  "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",
+  "strict-tables-v3": "tables → SQLite STRICT typing",
+} as const;
+
 export type OpenClawStateDatabaseSchemaMigration = {
-  kind:
-    | "agent-databases-composite-primary-key"
-    | "audit-events-v2"
-    | "commitments-retirement-v7"
-    | "worker-placement-execution-mode-v8"
-    | "agent-databases-relative-paths-v9"
-    | "state-table-retirement-v10"
-    | "state-table-retirement-v11"
-    | "singleton-state-foldin-v12"
-    | "state-consolidation-v13"
-    | "creator-namespace-v14"
-    | "conversation-binding-targets-v15"
-    | "skill-workshop-directory-ownership-v16"
-    | "prepared-worker-ownership-v17"
-    | "github-publication-requester-authority-v18"
-    | "operator-approvals-system-agent"
-    | "session-watch-cursor-provenance-v4"
-    | "strict-tables-v3";
+  kind: keyof typeof STATE_SCHEMA_MIGRATION_DESCRIPTIONS;
   path: string;
 };

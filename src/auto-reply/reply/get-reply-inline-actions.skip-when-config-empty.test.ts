@@ -1,12 +1,11 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 // Tests inline action skipping when channel config does not define actions.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { buildCommandContext } from "./commands-context.js";
@@ -29,6 +28,8 @@ import { stripInlineStatus } from "./reply-inline.js";
 import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-inline-acp-policy-");
+
 const {
   buildStatusReplyMock,
   getChannelPluginMock,
@@ -41,7 +42,8 @@ const {
   prepareSkillCommandsForWorkspaceMock: vi.fn(),
 }));
 
-vi.mock("./commands.runtime.js", () => ({
+vi.mock("./commands.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./commands.js")>()),
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
   buildStatusReply: (...args: unknown[]) => buildStatusReplyMock(...args),
 }));
@@ -190,14 +192,12 @@ function expandedOfficeHoursRequest(body: string): string {
 
 describe("handleInlineActions", () => {
   beforeEach(() => {
-    handleCommandsMock.mockReset();
-    handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
+    handleCommandsMock.mockReset().mockResolvedValue({ shouldContinue: true, reply: undefined });
     prepareSkillCommandsForWorkspaceMock.mockReset();
     prepareSkillCommandsForWorkspaceMock.mockReturnValue([]);
     getChannelPluginMock.mockReset();
     createOpenClawToolsMock.mockReset();
-    buildStatusReplyMock.mockReset();
-    buildStatusReplyMock.mockResolvedValue({ text: "status" });
+    buildStatusReplyMock.mockReset().mockResolvedValue({ text: "status" });
     createOpenClawToolsMock.mockReturnValue([]);
     getChannelPluginMock.mockImplementation((channelId?: string) =>
       channelId === "whatsapp"
@@ -206,22 +206,6 @@ describe("handleInlineActions", () => {
           ? { mentions: { stripPatterns: () => ["<@!?\\d+>"] } }
           : undefined,
     );
-  });
-
-  it("skips whatsapp replies when config is empty and From !== To", async () => {
-    const typing = createTypingController();
-
-    const ctx = buildTestCtx({
-      From: "whatsapp:+999",
-      To: "whatsapp:+123",
-      Body: "hi",
-    });
-    await expectInlineActionSkipped({
-      ctx,
-      typing,
-      cleanedBody: "hi",
-      command: { to: "whatsapp:+123" },
-    });
   });
 
   it("notifies session metadata changes before continuing after a command", async () => {
@@ -435,16 +419,6 @@ describe("handleInlineActions", () => {
     expect(requireRecord(commandArgs.sessionEntry, "sessionEntry").sessionId).toBe(
       "target-session",
     );
-  });
-
-  it("does not run command handlers after replying to an inline status-only turn", async () => {
-    const { result, typing } = await runInlineStatusAction();
-
-    expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
-    expect(mockObjectArg(buildStatusReplyMock, "buildStatusReply").storePath).toBeUndefined();
-    expect(handleCommandsMock).not.toHaveBeenCalled();
-    expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("preserves storePath when routing inline status through the shared status builder", async () => {
@@ -1766,62 +1740,58 @@ describe("handleInlineActions", () => {
   });
 
   it("applies subagent policy to ACP envelope inline dispatch sessions", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-inline-acp-policy-"));
-    try {
-      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
-      await writeSessionStore(storeTemplate, "main", {
-        "agent:main:acp:leaf": {
-          sessionId: "session-acp-leaf",
-          updatedAt: Date.now(),
-          spawnedBy: "agent:main:subagent:parent",
-          spawnDepth: 2,
-          subagentRole: "leaf",
-          subagentControlScope: "none",
-        },
-      });
+    const tmpDir = sessionDirs.make();
+    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+    await writeSessionStore(storeTemplate, "main", {
+      "agent:main:acp:leaf": {
+        sessionId: "session-acp-leaf",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:subagent:parent",
+        spawnDepth: 2,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      },
+    });
 
-      const { typing, toolExecute, ctx, skillCommands } = createInlineToolDispatchFixture({
-        body: "/spawn_subagent investigate",
-        toolName: "sessions_spawn",
-        execute: async () => ({ content: "spawned" }),
-        skill: {
-          name: "spawn_subagent",
-          skillName: "spawn-subagent",
-          description: "Spawn a subagent",
-        },
-        sourceFilePath: "/tmp/plugin/commands/spawn-subagent.md",
-      });
+    const { typing, toolExecute, ctx, skillCommands } = createInlineToolDispatchFixture({
+      body: "/spawn_subagent investigate",
+      toolName: "sessions_spawn",
+      execute: async () => ({ content: "spawned" }),
+      skill: {
+        name: "spawn_subagent",
+        skillName: "spawn-subagent",
+        description: "Spawn a subagent",
+      },
+      sourceFilePath: "/tmp/plugin/commands/spawn-subagent.md",
+    });
 
-      const result = await runTestInlineActions({
-        ctx,
-        typing,
-        cleanedBody: "/spawn_subagent investigate",
-        command: {
-          isAuthorizedSender: true,
-          senderId: "sender-1",
-          senderIsOwner: true,
-          abortKey: "sender-1",
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: "/spawn_subagent investigate",
+      command: {
+        isAuthorizedSender: true,
+        senderId: "sender-1",
+        senderIsOwner: true,
+        abortKey: "sender-1",
+      },
+      overrides: {
+        cfg: {
+          commands: { text: true },
+          session: { store: storeTemplate },
+          agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
         },
-        overrides: {
-          cfg: {
-            commands: { text: true },
-            session: { store: storeTemplate },
-            agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
-          },
-          sessionKey: "agent:main:acp:leaf",
-          allowTextCommands: true,
-          skillCommands,
-        },
-      });
+        sessionKey: "agent:main:acp:leaf",
+        allowTextCommands: true,
+        skillCommands,
+      },
+    });
 
-      expect(result).toEqual({
-        kind: "reply",
-        reply: { text: "❌ Tool not available: sessions_spawn" },
-      });
-      expect(toolExecute).not.toHaveBeenCalled();
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: "❌ Tool not available: sessions_spawn" },
+    });
+    expect(toolExecute).not.toHaveBeenCalled();
   });
 
   it("passes sandboxed runtime state into inline tool construction", async () => {

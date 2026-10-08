@@ -7,7 +7,7 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { asBoolean, asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LLAMA_SERVER_DEFAULT_ORIGIN } from "./defaults.js";
 import { normalizeLlamaServerProviderConfig } from "./endpoint.js";
 
@@ -93,18 +93,16 @@ function buildCompat(
   props: LlamaServerPropsWire | undefined,
 ): NonNullable<ModelDefinitionConfig["compat"]> {
   const caps = props?.chat_template_caps;
-  const supportsTools = asBoolean(caps?.supports_tool_calls) === true;
-  const supportsTypedContent = asBoolean(caps?.supports_typed_content) === true;
   return {
     supportsStore: false,
     supportsDeveloperRole: false,
-    supportsReasoningEffort: asBoolean(caps?.supports_reasoning_effort) === true,
+    supportsReasoningEffort: caps?.supports_reasoning_effort === true,
     supportsTemperature: true,
     supportsUsageInStreaming: true,
-    supportsTools,
+    supportsTools: caps?.supports_tool_calls === true,
     supportsStrictMode: false,
     supportsJsonSchemaResponseFormat: true,
-    requiresStringContent: !supportsTypedContent,
+    requiresStringContent: caps?.supports_typed_content !== true,
     maxTokensField: "max_tokens",
   };
 }
@@ -137,34 +135,22 @@ export function mapLlamaServerModel(
   };
 }
 
-/** Keeps explicit rows first and appends models discovered from the server. */
-function mergeLlamaServerModels(params: {
-  explicitModels?: ModelDefinitionConfig[];
+export function buildLlamaServerProviderConfig(params: {
+  configured?: ModelProviderConfig;
   discoveredModels: readonly LlamaServerDiscoveredModel[];
-}): ModelDefinitionConfig[] {
-  const explicit = Array.isArray(params.explicitModels) ? params.explicitModels : [];
-  const merged = [...explicit];
-  const seen = new Set(explicit.map((model) => model.id));
+}): ModelProviderConfig {
+  const models = Array.isArray(params.configured?.models) ? [...params.configured.models] : [];
+  const seen = new Set(models.map((model) => model.id));
   for (const discovered of params.discoveredModels) {
     if (seen.has(discovered.config.id)) {
       continue;
     }
     seen.add(discovered.config.id);
-    merged.push(discovered.config);
+    models.push(discovered.config);
   }
-  return merged;
-}
-
-export function buildLlamaServerProviderConfig(params: {
-  configured?: ModelProviderConfig;
-  discoveredModels: readonly LlamaServerDiscoveredModel[];
-}): ModelProviderConfig {
   return normalizeLlamaServerProviderConfig({
     ...params.configured,
     baseUrl: params.configured?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN,
-    models: mergeLlamaServerModels({
-      explicitModels: params.configured?.models,
-      discoveredModels: params.discoveredModels,
-    }),
+    models,
   });
 }

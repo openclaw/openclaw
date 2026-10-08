@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
@@ -6,6 +7,12 @@ import {
 } from "../../agents/harness/gateway-question-dispatch.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionAuthorityError,
+  MessageInjectionTargetUnavailableError,
+  MessageInjectionWithdrawnError,
+} from "./message-injection-authority.js";
 import type {
   ReplyBackendMessageInjectionV2,
   ReplyBackendQueueMessageOptions,
@@ -13,21 +20,87 @@ import type {
 import {
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
-  createReplyOperation,
   replyRunRegistry,
 } from "./reply-run-registry.js";
+import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { testing } from "./reply-run-registry.test-support.js";
 
 afterEach(() => testing.resetReplyRunRegistry());
 
+it("keeps cross-profile question answers out of a backend restricted to its turn owner", async () => {
+  const authority = (profileId: string) =>
+    createAdmittedRunOperatorAuthority({
+      profileId,
+      scopes: ["operator.read", "operator.write"],
+      gatewayAccessGrant: null,
+      assertCurrent() {},
+    });
+  const owner = authority("alice");
+  const other = authority("bob");
+  for (const supportsCrossProfileSteering of [false, true, undefined]) {
+    const operation = createTestReplyOperation();
+    operation.bindToolAuthoritySnapshot({
+      personalToolOwner: { operatorAuthority: owner },
+      fingerprint: () => "same-owner",
+      project: () => "same-owner",
+    });
+    const queueMessage = vi.fn(async () => {});
+    const claimPendingUserInputAnswer = vi.fn(async () => true);
+    operation.attachBackend({
+      kind: "embedded",
+      toolAuthorityFingerprint: "same-owner",
+      supportsCrossProfileSteering,
+      cancel: vi.fn(),
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage,
+        claimPendingUserInputAnswer,
+      },
+    });
+    operation.setPhase("running");
+    try {
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+      const answer = async (operatorAuthority: typeof owner) =>
+        (
+          await beginReplyMessageInjectionTarget(target, "Green", {
+            isInboundUserMessage: true,
+            toolAuthorityFingerprint: "other-route",
+            pendingInputAuthorityFingerprint: "same-owner",
+            personalToolParticipant: { operatorAuthority },
+          })
+        ).outcome;
+      await expect(answer(other)).resolves.toMatchObject(
+        supportsCrossProfileSteering === false
+          ? { status: "rejected", reason: "tool_authority_mismatch" }
+          : { status: "accepted" },
+      );
+      expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(
+        supportsCrossProfileSteering === false ? 0 : 1,
+      );
+      if (supportsCrossProfileSteering === false) {
+        expect(operation.personalToolParticipants?.resolve()?.profileId).toBe("alice");
+        expect(() => operation.personalToolParticipants?.resolve("bob")).toThrow(
+          "User is not a participant",
+        );
+      } else {
+        expect(operation.personalToolParticipants?.resolve("bob")?.profileId).toBe("bob");
+      }
+      await expect(answer(owner)).resolves.toMatchObject({ status: "accepted" });
+      expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(
+        supportsCrossProfileSteering === false ? 1 : 2,
+      );
+      expect(queueMessage).not.toHaveBeenCalled();
+    } finally {
+      operation.complete();
+    }
+  }
+});
+
 it("leaves new human input for a visible followup instead of a hidden coordination turn", async () => {
   const runId = "hidden-coordination-run";
   const queueMessage = vi.fn(async () => {});
-  const operation = createReplyOperation({
-    sessionKey: "agent:main:coordination",
-    sessionId: "session-coordination",
-    resetTriggered: false,
-  });
+  const operation = createTestReplyOperation();
   operation.attachBackend({
     kind: "embedded",
     runId,
@@ -46,10 +119,12 @@ it("leaves new human input for a visible followup instead of a hidden coordinati
       runId,
     });
     await expect(
-      beginReplyMessageInjectionTarget(target, "What is the status?", {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint: "same-owner",
-      }).outcome,
+      (
+        await beginReplyMessageInjectionTarget(target, "What is the status?", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: "same-owner",
+        })
+      ).outcome,
     ).resolves.toMatchObject({ status: "rejected", reason: "input_visibility_mismatch" });
     expect(queueMessage).not.toHaveBeenCalled();
   } finally {
@@ -59,14 +134,10 @@ it("leaves new human input for a visible followup instead of a hidden coordinati
 
 async function withHiddenQuestionRun(
   injection: ReplyBackendMessageInjectionV2,
-  run: (operation: ReturnType<typeof createReplyOperation>) => Promise<void>,
+  run: (operation: ReturnType<typeof createTestReplyOperation>) => Promise<void>,
 ) {
   const runId = "hidden-question-run";
-  const operation = createReplyOperation({
-    sessionKey: "agent:main:hidden-question",
-    sessionId: "session-hidden-question",
-    resetTriggered: false,
-  });
+  const operation = createTestReplyOperation();
   operation.attachBackend({
     kind: "embedded",
     runId,
@@ -85,39 +156,82 @@ async function withHiddenQuestionRun(
 }
 
 it.each([
-  ...(["claim", "image"] as const).flatMap((sink) =>
-    (["unsupported", "refused", "unconfirmed", "wrapped-unconfirmed"] as const).map((failure) => ({
-      sink,
-      failure,
-    })),
-  ),
+  { sink: "claim", failure: "unsupported" },
+  { sink: "claim", failure: "refused" },
+  { sink: "claim", failure: "unconfirmed" },
+  { sink: "image", failure: "unsupported" },
+  { sink: "image", failure: "unconfirmed" },
   { sink: "claim", failure: "accepted" },
   { sink: "claim", failure: "source-closed" },
   { sink: "image", failure: "generic" },
+  { sink: "claim", failure: "target-closed" },
+  { sink: "claim", failure: "target-accepted" },
+  { sink: "claim", failure: "target-source-closed" },
+  { sink: "claim", failure: "accepted-cleanup" },
+  { sink: "claim", failure: "wrapped-accepted-cleanup" },
+  { sink: "claim", failure: "accepted-generic" },
+  { sink: "claim", failure: "accepted-refused" },
+  { sink: "claim", failure: "accepted-source-refusal" },
+  { sink: "claim", failure: "withdrawn-unconfirmed" },
+  { sink: "claim", failure: "withdrawn-source-closed" },
 ] as const)("keeps $sink replay decisions bounded after $failure", async ({ sink, failure }) => {
   const unsupported = new QuestionDispatchUnsupportedError("legacy dispatcher");
+  const withdrawn = new MessageInjectionWithdrawnError("exact input withdrawn");
+  const cleanup = new MessageInjectionAcceptedUnconfirmedError({ cause: new Error("cleanup") });
+  const sourceRefusal = new Error("Source session access was revoked");
   const error =
-    failure === "refused"
-      ? new QuestionDispatchRefusedError("owner refused", { cause: unsupported })
-      : failure === "unconfirmed"
-        ? new Error("runtime failure", { cause: new QuestionAnswerUnconfirmedError(unsupported) })
-        : failure === "wrapped-unconfirmed"
-          ? new Error("runtime failure", {
-              cause: new QuestionAnswerUnconfirmedError(new Error("confirmation lost")),
-            })
-          : failure === "generic"
-            ? new Error("unknown cancellation failure")
-            : unsupported;
+    failure === "accepted-source-refusal"
+      ? new MessageInjectionAuthorityError({
+          cause: new MessageInjectionAuthorityError({ cause: sourceRefusal }),
+        })
+      : failure === "withdrawn-source-closed"
+        ? withdrawn
+        : failure === "refused" || failure === "accepted-refused"
+          ? new QuestionDispatchRefusedError("owner refused", { cause: unsupported })
+          : failure === "unconfirmed" || failure === "withdrawn-unconfirmed"
+            ? new Error("runtime failure", {
+                cause: new QuestionAnswerUnconfirmedError(
+                  failure === "withdrawn-unconfirmed" ? withdrawn : unsupported,
+                ),
+              })
+            : failure === "accepted-cleanup"
+              ? cleanup
+              : failure === "wrapped-accepted-cleanup"
+                ? new Error("backend completion failed", { cause: cleanup })
+                : failure.startsWith("target-")
+                  ? new MessageInjectionAuthorityError({
+                      cause: new MessageInjectionTargetUnavailableError("Terminal delivery closed"),
+                    })
+                  : failure === "generic" || failure === "accepted-generic"
+                    ? new Error("unknown cancellation failure")
+                    : unsupported;
+  const reportsAccepted =
+    failure === "accepted" ||
+    failure === "target-accepted" ||
+    failure === "accepted-generic" ||
+    failure === "accepted-refused" ||
+    failure === "accepted-source-refusal" ||
+    failure === "withdrawn-source-closed";
+  const indeterminate =
+    (reportsAccepted && failure !== "withdrawn-source-closed") ||
+    failure === "unconfirmed" ||
+    failure === "withdrawn-unconfirmed" ||
+    failure === "accepted-cleanup" ||
+    failure === "wrapped-accepted-cleanup";
   let sourceCurrent = true;
   const throwFromSink = (
     options: ReplyBackendQueueMessageOptions | undefined,
     assertCurrent: () => void,
   ): never => {
     assertCurrent();
-    if (failure === "accepted") {
+    if (reportsAccepted) {
       options?.onQueueAccepted?.(true);
     }
-    if (failure === "source-closed") {
+    if (
+      failure === "source-closed" ||
+      failure === "target-source-closed" ||
+      failure === "withdrawn-source-closed"
+    ) {
       sourceCurrent = false;
     }
     throw error;
@@ -135,7 +249,7 @@ it.each([
     },
     async (operation) => {
       const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-      const attempt = beginReplyMessageInjectionTarget(target, "Keep this input", {
+      const attempt = await beginReplyMessageInjectionTarget(target, "Keep this input", {
         isInboundUserMessage: true,
         toolAuthorityFingerprint: "same-owner",
         ...(sink === "image"
@@ -152,17 +266,18 @@ it.each([
       } else {
         await expect(attempt.outcome).resolves.toMatchObject({
           status:
-            failure === "unsupported"
+            failure === "unsupported" || failure === "target-closed"
               ? "rejected"
-              : failure === "unconfirmed" || failure === "wrapped-unconfirmed"
+              : indeterminate
                 ? "indeterminate"
                 : "failed",
-          ...(failure === "unsupported" ? { reason: "injection_unavailable" } : {}),
+          ...(failure === "accepted-source-refusal" ? { errorMessage: sourceRefusal.message } : {}),
+          ...(failure === "unsupported" || failure === "target-closed"
+            ? { reason: "injection_unavailable" }
+            : {}),
         });
       }
-      await expect(attempt.acceptance).resolves.toBe(
-        failure === "accepted" || failure === "unconfirmed" || failure === "wrapped-unconfirmed",
-      );
+      await expect(attempt.acceptance).resolves.toBe(indeterminate || reportsAccepted);
       expect(queueMessage).not.toHaveBeenCalled();
       expect(operation.result).toBeNull();
     },
@@ -187,13 +302,18 @@ it.each([
     async (operation) => {
       const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
       expect(target).toBeDefined();
-      const result = await beginReplyMessageInjectionTarget(target!, "Green", {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint: testCase.fingerprint,
-        pendingInputAuthorityFingerprint: testCase.pending,
-      }).outcome;
+      const onQueueSettled = vi.fn();
+      const result = await (
+        await beginReplyMessageInjectionTarget(target!, "Green", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: testCase.fingerprint,
+          pendingInputAuthorityFingerprint: testCase.pending,
+          onQueueSettled,
+        })
+      ).outcome;
       const authorized = testCase.fingerprint === "same-owner" || testCase.pending === "same-owner";
       expect(result.status).toBe(authorized && testCase.claimed ? "accepted" : "rejected");
+      expect(onQueueSettled).toHaveBeenCalledTimes(authorized && testCase.claimed ? 1 : 0);
       expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(authorized ? 1 : 0);
       expect(queueMessage).not.toHaveBeenCalled();
     },
@@ -225,7 +345,7 @@ it.each(["source", "backend"] as const)(
       async (operation) => {
         const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
         expect(target).toBeDefined();
-        const attempt = beginReplyMessageInjectionTarget(target!, "Green", {
+        const attempt = await beginReplyMessageInjectionTarget(target!, "Green", {
           isInboundUserMessage: true,
           toolAuthorityFingerprint: "same-owner",
           assertCurrent: () => {
@@ -284,12 +404,14 @@ it.each(["same-owner", "other-owner"])(
         const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
         expect(target).toBeDefined();
         await expect(
-          beginReplyMessageInjectionTarget(target!, "Use this image", {
-            isInboundUserMessage: true,
-            toolAuthorityFingerprint: fingerprint,
-            images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
-            assertCurrent: () => operation.abortSignal.throwIfAborted(),
-          }).outcome,
+          (
+            await beginReplyMessageInjectionTarget(target!, "Use this image", {
+              isInboundUserMessage: true,
+              toolAuthorityFingerprint: fingerprint,
+              images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+              assertCurrent: () => operation.abortSignal.throwIfAborted(),
+            })
+          ).outcome,
         ).resolves.toMatchObject({ status: "rejected", reason: "input_visibility_mismatch" });
         expect(cancelPendingUserInput).toHaveBeenCalledTimes(fingerprint === "same-owner" ? 1 : 0);
         expect(claimPendingUserInputAnswer).not.toHaveBeenCalled();
@@ -303,11 +425,7 @@ it.each(["same-owner", "other-owner"])(
 it.each(["same-owner", "different-owner"])(
   "status steering preserves question ownership and caller authority (%s)",
   async (fingerprint) => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:refresh",
-      sessionId: "refresh-session",
-      resetTriggered: false,
-    });
+    const operation = createTestReplyOperation();
     const claim = vi.fn(async () => true);
     const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
       async (_text, options, assertCurrent) => {
@@ -330,12 +448,14 @@ it.each(["same-owner", "different-owner"])(
     });
     operation.setPhase("running");
     const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-    const result = await beginReplyMessageInjectionTarget(target, "Refresh the card", {
-      isInboundUserMessage: true,
-      toolAuthorityFingerprint: fingerprint,
-      allowPendingUserInputAnswer: false,
-      assertCurrent: () => operation.abortSignal.throwIfAborted(),
-    }).outcome;
+    const result = await (
+      await beginReplyMessageInjectionTarget(target, "Refresh the card", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: fingerprint,
+        allowPendingUserInputAnswer: false,
+        assertCurrent: () => operation.abortSignal.throwIfAborted(),
+      })
+    ).outcome;
     expect(result.status).toBe(fingerprint === "same-owner" ? "accepted" : "rejected");
     expect(queueMessage).toHaveBeenCalledTimes(fingerprint === "same-owner" ? 1 : 0);
     expect(claim).not.toHaveBeenCalled();
@@ -345,11 +465,7 @@ it.each(["same-owner", "different-owner"])(
 it.each([false, true])(
   "only status-only callers preserve work on an uncertain steering receipt (statusOnly=%s)",
   async (statusOnly) => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:receipt",
-      sessionId: "receipt-session",
-      resetTriggered: false,
-    });
+    const operation = createTestReplyOperation();
     operation.attachBackend({
       kind: "embedded",
       runId: "receipt-run",
@@ -365,7 +481,7 @@ it.each([false, true])(
     });
     operation.setPhase("running");
     const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-    const attempt = beginReplyMessageInjectionTarget(target, "Queued guidance");
+    const attempt = await beginReplyMessageInjectionTarget(target, "Queued guidance");
     const result = await finalizeReplyMessageInjectionAttempt({
       attempt,
       target,

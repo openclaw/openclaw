@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
@@ -6,6 +6,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { listAuditEvents } from "./audit-event-store.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import { input, messageEvent, decisionReceipt } from "./audit-event-writer.test-support.js";
@@ -58,36 +60,20 @@ describe("audit writer shared worker", () => {
       calibration.close();
       expect(nativeOpens).toBe(1);
       nativeOpens = 0;
-      let eventLoopTicks = 0;
-      const progress = setInterval(() => {
-        eventLoopTicks += 1;
-      }, 1);
-      const counters = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        vi.spyOn(native.DatabaseSync.prototype, "close"),
-        ...(["get", "all", "run", "iterate"] as const).map((operation) =>
-          vi.spyOn(native.StatementSync.prototype, operation),
-        ),
-      ];
-      const startedAt = performance.now();
-      const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+      const counters = observeMainThreadSql({ includeClose: true });
+      const writer = createAuditEventWriter({
+        scheduler: createTestGatewayScheduler(),
+        stateDir,
+        onError: (error) => errors.push(error),
+      });
       const recorder = createAuditEventRecorder({
+        scheduler: createTestGatewayScheduler(),
         getConfig: () => ({ logging: { audit: { messages: "all" } } }),
         writer,
       });
       const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
-      let hostSqlCounts: number[];
-      let readyMs = 0;
-      let readyTicks = 0;
-      let batchStartedAt = startedAt;
-      let batchDrainMs = 0;
-      let stopMs = 0;
       try {
         await writer.ready;
-        readyMs = performance.now() - startedAt;
-        readyTicks = eventLoopTicks;
-        batchStartedAt = performance.now();
         expect(
           enqueueExecutionIdentityContextAtAdmission(
             {
@@ -124,14 +110,11 @@ describe("audit writer shared worker", () => {
       } finally {
         clearSink();
         try {
-          const stopStartedAt = performance.now();
           await recorder.stop();
-          stopMs = performance.now() - stopStartedAt;
-          batchDrainMs = performance.now() - batchStartedAt;
+          expect(nativeOpens).toBe(0);
+          counters.expectIdle();
         } finally {
-          clearInterval(progress);
-          hostSqlCounts = [nativeOpens, ...counters.map((counter) => counter.mock.calls.length)];
-          counters.forEach((counter) => counter.mockRestore());
+          counters.restore();
           restoreConstructor();
         }
       }
@@ -169,21 +152,6 @@ describe("audit writer shared worker", () => {
       );
 
       expect(owner.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
-      expect(hostSqlCounts).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
-      console.info(
-        "audit writer probe",
-        JSON.stringify({
-          mode,
-          node: process.versions.node,
-          requests: 6,
-          constructorCalibrationOpens: 1,
-          readyMs,
-          batchDrainMs,
-          stopMs,
-          eventLoopTicks: { readiness: readyTicks, drain: eventLoopTicks - readyTicks },
-          hostSqlCounts,
-        }),
-      );
     },
   );
 });

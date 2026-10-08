@@ -1,16 +1,5 @@
-/**
- * Contract gate for live-discovered Anthropic models the manifest does not
- * publish. Claude request shaping is selected by model-version predicates, so a
- * model those predicates do not recognize is shaped like a pre-4.6 model:
- * manual `budget_tokens` thinking plus caller sampling parameters. Current
- * Claude models reject both, so surfacing an unrecognized model would offer a
- * selectable entry whose every request 400s.
- *
- * Rather than hand-maintaining a family allowlist that rots on each launch,
- * accept a discovered model only when Anthropic's advertised capabilities agree
- * with what our contracts would apply. Disagreement means our shaping is stale
- * for that model, so it stays hidden until the contracts are updated.
- */
+// Unknown model generations fall back to older request shaping. Advertise a discovered
+// model only when its capability tree agrees with the contracts that would shape it.
 import {
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
@@ -29,11 +18,6 @@ function readCapabilityFlag(root: unknown, path: readonly string[]): boolean | u
   return typeof current === "boolean" ? current : undefined;
 }
 
-/**
- * Anthropic publishes a capability tree on `/v1/models`. Each entry pairs a
- * capability we can read from that tree with the contract predicate that must
- * agree, so a mismatch on any axis rejects the model.
- */
 const CLAUDE_CONTRACT_CAPABILITY_CHECKS = [
   {
     path: ["thinking", "types", "adaptive", "supported"],
@@ -43,11 +27,6 @@ const CLAUDE_CONTRACT_CAPABILITY_CHECKS = [
   { path: ["effort", "max", "supported"], matches: supportsClaudeNativeMaxEffort },
 ] as const;
 
-/**
- * Return whether a live-discovered Claude model can be shaped by the current
- * contracts. Fails closed: a model without a readable capability tree is
- * rejected, because we cannot prove our shaping matches it.
- */
 export function acceptsAnthropicLiveModelContract(params: {
   id: string;
   record: Record<string, unknown>;

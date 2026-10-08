@@ -9,6 +9,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
   matching: (query: Query, kind?: string) => Row[];
   mark: (change: SessionRowChange) => void;
   read: (id: string) => Row | undefined;
+  invalidate: (id: string) => void;
   refresh: (id: string) => void;
 }) {
   const windows = new Map<string, { timer: ReturnType<typeof setTimeout>; pending: boolean }>();
@@ -54,7 +55,11 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
     }
     for (const row of found) {
       const id = identity(row);
+      params.invalidate(id);
       const pending = row.pendingDatabaseFacts !== undefined;
+      // Revoke reusable and in-flight watermarks even when presentation is throttled.
+      row.retainedDatabaseFacts = undefined;
+      row.databaseFactsRevision++;
       // Accepted snapshots must lose their watermark before cold-row or throttle
       // suppression; an exact read may resume before the next refresh window.
       if (pending) {

@@ -4,8 +4,15 @@ import {
   buildModelsKeyboard,
   buildProviderKeyboard,
   type ProviderInfo,
+  type ModelsKeyboardParams,
 } from "./model-buttons.js";
 import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
+
+function withTelegramButtons(
+  buttons: ReturnType<typeof buildModelsKeyboard>,
+): ReplyPayload["channelData"] {
+  return { telegram: { buttons } };
+}
 
 export function buildCommandsPaginationKeyboard(
   currentPage: number,
@@ -37,10 +44,6 @@ export function buildCommandsPaginationKeyboard(
   return [buttons];
 }
 
-export function buildTelegramModelsMenuButtons(params: { providers: ProviderInfo[] }) {
-  return buildProviderKeyboard(params.providers);
-}
-
 export function buildTelegramCommandsListChannelData(params: {
   currentPage: number;
   totalPages: number;
@@ -49,15 +52,9 @@ export function buildTelegramCommandsListChannelData(params: {
   if (params.totalPages <= 1) {
     return null;
   }
-  return {
-    telegram: {
-      buttons: buildCommandsPaginationKeyboard(
-        params.currentPage,
-        params.totalPages,
-        params.agentId,
-      ),
-    },
-  };
+  return withTelegramButtons(
+    buildCommandsPaginationKeyboard(params.currentPage, params.totalPages, params.agentId),
+  );
 }
 
 export function buildTelegramModelsProviderChannelData(params: {
@@ -66,11 +63,7 @@ export function buildTelegramModelsProviderChannelData(params: {
   if (params.providers.length === 0) {
     return null;
   }
-  return {
-    telegram: {
-      buttons: buildProviderKeyboard(params.providers),
-    },
-  };
+  return withTelegramButtons(buildProviderKeyboard(params.providers));
 }
 
 export function buildTelegramModelsAddProviderChannelData(params: {
@@ -85,33 +78,15 @@ export function buildTelegramModelsAddProviderChannelData(params: {
       callback_data: buildTelegramNativeCommandCallbackData(`/models add ${provider.id}`),
     },
   ]);
-  return {
-    telegram: {
-      buttons,
-    },
-  };
+  return withTelegramButtons(buttons);
 }
 
-export function buildTelegramModelsListChannelData(params: {
-  provider: string;
-  models: readonly string[];
-  currentModel?: string;
-  currentPage: number;
-  totalPages: number;
-  pageSize?: number;
-  modelNames?: ReadonlyMap<string, string>;
-}): ReplyPayload["channelData"] | null {
-  return {
-    telegram: {
-      buttons: buildModelsKeyboard(params),
-    },
-  };
+export function buildTelegramModelsListChannelData(
+  params: ModelsKeyboardParams,
+): ReplyPayload["channelData"] | null {
+  return withTelegramButtons(buildModelsKeyboard(params));
 }
 
 export function buildTelegramModelBrowseChannelData(): ReplyPayload["channelData"] {
-  return {
-    telegram: {
-      buttons: buildBrowseProvidersButton(),
-    },
-  };
+  return withTelegramButtons(buildBrowseProvidersButton());
 }

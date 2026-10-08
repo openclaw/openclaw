@@ -1,5 +1,6 @@
 // Typed provider-accepted partial delivery errors live outside turn contracts
 // so outbound send entrypoints can use them without importing the turn graph.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ChannelDeliveryOutcome } from "./delivery-outcome.js";
 
@@ -29,19 +30,10 @@ export function createChannelPartialDeliveryError(
 export function isChannelPartialDeliveryError(
   error: unknown,
 ): error is ChannelPartialDeliveryEnvelope {
-  if (!error || typeof error !== "object" || Array.isArray(error)) {
-    return false;
-  }
-  // SAFETY: the guard above narrows error to a non-array object before reading fields.
-  const candidate = error as { code?: unknown; deliveryResult?: unknown };
   return (
-    candidate.code === CHANNEL_PARTIAL_DELIVERY_ERROR_CODE &&
-    Boolean(
-      candidate.deliveryResult &&
-      typeof candidate.deliveryResult === "object" &&
-      !Array.isArray(candidate.deliveryResult) &&
-      // SAFETY: the checks above narrow deliveryResult to a non-array object.
-      (candidate.deliveryResult as { visibleReplySent?: unknown }).visibleReplySent === true,
-    )
+    isRecord(error) &&
+    error.code === CHANNEL_PARTIAL_DELIVERY_ERROR_CODE &&
+    isRecord(error.deliveryResult) &&
+    error.deliveryResult.visibleReplySent === true
   );
 }

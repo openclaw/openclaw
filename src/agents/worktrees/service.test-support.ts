@@ -5,7 +5,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { insertRegistryWorktree } from "./registry.js";
 import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
 
@@ -41,20 +40,19 @@ export async function initializeManagedWorktreeTestRepository(root: string): Pro
 
 export function useManagedWorktreeTestRepository(): (root: string) => Promise<string> {
   const templateDirs = useAutoCleanupTempDirTracker(afterAll);
-  let templateRepo: string;
+  let templateRoot: string;
   beforeAll(async () => {
-    const templateRoot = templateDirs.make("openclaw-worktree-template-");
-    const repo = path.join(templateRoot, "repo");
-    await initializeRepository(repo);
-    templateRepo = repo;
+    templateRoot = templateDirs.make("openclaw-worktree-template-");
+    await initializeManagedWorktreeTestRepository(templateRoot);
   });
 
-  // Only initial history is shared, within this suite. Each case still owns its
-  // Git metadata and real remote; no fetched refs, locks, or state DB are copied.
+  // Copy the initial push too. Each case owns independent Git metadata and a
+  // real remote; later fetches, pushes, locks, and state cannot reach the template.
   return async (root) => {
     const repo = path.join(root, "repo");
-    await fs.cp(templateRepo, repo, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
-    return await addRemote(root, repo);
+    await fs.cp(templateRoot, root, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+    await git(repo, "remote", "set-url", "origin", path.join(root, "remote.git"));
+    return await fs.realpath(repo);
   };
 }
 
@@ -82,6 +80,7 @@ type ManagedWorktreeFixtureParams = {
   ownerKind?: ManagedWorktreeOwnerKind;
   ownerId?: string;
   provisionedPaths?: readonly string[];
+  repoFingerprint?: string;
   repoRoot: string;
   stateDir: string;
 };
@@ -89,12 +88,13 @@ type ManagedWorktreeFixtureParams = {
 export async function materializeManagedWorktreeFixtures(
   params: Omit<ManagedWorktreeFixtureParams, "name"> & { names: string[] },
 ): Promise<ManagedWorktreeRecord[]> {
+  const repoFingerprint = params.repoFingerprint ?? "downstream-fixture";
   const records = params.names.map((name): ManagedWorktreeRecord => ({
     id: `fixture-${name}`,
     name,
-    repoFingerprint: "downstream-fixture",
+    repoFingerprint,
     repoRoot: params.repoRoot,
-    path: path.join(params.stateDir, "worktrees", "downstream-fixture", name),
+    path: path.join(params.stateDir, "worktrees", repoFingerprint, name),
     branch: `openclaw/${name}`,
     baseRef: "HEAD",
     ownerKind: params.ownerKind ?? "manual",
@@ -142,16 +142,8 @@ export async function materializeManagedWorktreeFixtures(
       provisionedPaths,
     });
   }
-  const register = () => {
-    for (const record of records) {
-      insertRegistryWorktree(params.env, record, { provisionedPaths });
-    }
-  };
-  if (records.length > 1) {
-    // All asynchronous setup is complete before committing the fixture rows together.
-    runOpenClawStateWriteTransaction(register, { env: params.env });
-  } else {
-    register();
+  for (const record of records) {
+    await insertRegistryWorktree(params.env, record, { provisionedPaths });
   }
   return records;
 }

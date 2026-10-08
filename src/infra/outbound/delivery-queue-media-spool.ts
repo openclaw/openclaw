@@ -2,6 +2,7 @@
 // whose producer-owned source may disappear before retry.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileStore } from "@openclaw/fs-safe/store";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { hasNonEmptyString as isNonEmptyMediaSource } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -15,7 +16,6 @@ import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
-import { fileStore } from "../file-store.js";
 import { generateSecureUuid } from "../secure-random.js";
 import {
   ARTIFACT_NAME_RE,
@@ -52,10 +52,6 @@ function isSpoolableSource(source: string): boolean {
   return !isPassThroughRemoteMediaSource(source) && !/^data:/i.test(source);
 }
 
-function isSensitivePayload(payload: ReplyPayload): boolean {
-  return payload.sensitiveMedia === true && payloadMediaSources(payload).length > 0;
-}
-
 type StageQueueMediaResult =
   | {
       status: "staged";
@@ -75,21 +71,37 @@ export async function stageQueuePayloadMedia(
     mediaAccess?: OutboundMediaAccess;
     maxBytes: number;
     stateDir?: string;
+    artifactFormat?: "session-generation-v1" | "command-owner-v1";
   },
   context?: DeliveryQueueStateContext,
 ): Promise<StageQueueMediaResult> {
   const stateDir = context?.stateDir ?? params.stateDir;
-  if (params.payloads.some(isSensitivePayload)) {
+  if (
+    params.payloads.some(
+      (payload) => payload.sensitiveMedia === true && payloadMediaSources(payload).length > 0,
+    )
+  ) {
     return { status: "not-durable", reason: "sensitive-media" };
   }
 
   const spoolRoot = path.resolve(resolveDeliveryQueueMediaDir(stateDir));
+  // Older queue readers skip these artifacts instead of collecting media whose
+  // authority-bound queue namespace they cannot inventory.
+  const artifactPrefix =
+    params.artifactFormat === "command-owner-v1"
+      ? "c1-"
+      : params.artifactFormat === "session-generation-v1"
+        ? "g1-"
+        : "";
   const artifactsBySource = new Map<string, string>();
   for (const source of params.payloads.flatMap(payloadMediaSources)) {
     if (isSpoolableSource(source) && !artifactsBySource.has(source)) {
       artifactsBySource.set(
         source,
-        path.join(spoolRoot, `${generateSecureUuid()}${resolveArtifactExtension(source)}`),
+        path.join(
+          spoolRoot,
+          `${artifactPrefix}${generateSecureUuid()}${resolveArtifactExtension(source)}`,
+        ),
       );
     }
   }
@@ -98,11 +110,10 @@ export async function stageQueuePayloadMedia(
   // or expires it; enqueue then consumes it atomically or fails closed.
   const mediaStageId =
     artifacts.length > 0
-      ? createDeliveryQueueMediaRetention(
+      ? await createDeliveryQueueMediaRetention(
           artifacts,
           "outbound-media-stage",
           stateDir,
-          undefined,
           context,
         )
       : undefined;
@@ -168,7 +179,7 @@ export async function stageQueuePayloadMedia(
       stagedPayloads.push(staged);
     }
   } catch (err) {
-    cancelDeliveryQueueMediaRetention(mediaStageId, stateDir, context);
+    await cancelDeliveryQueueMediaRetention(mediaStageId, stateDir, context);
     await releaseSpoolArtifacts(artifacts, stateDir);
     throw err;
   }
@@ -180,23 +191,18 @@ export async function stageQueuePayloadMedia(
   };
 }
 
-async function removeArtifact(absolutePath: string, stateDir: string | undefined): Promise<void> {
-  const relative = spoolRelativePath(absolutePath, stateDir);
-  if (!relative) {
-    return;
-  }
-  try {
-    await openSpoolStore(stateDir).remove(relative);
-  } catch {}
-}
-
 /** Discards spool artifacts whose durable row is already gone. Never throws. */
 export async function releaseSpoolArtifacts(
   artifacts: readonly string[],
   stateDir?: string,
 ): Promise<void> {
   for (const artifact of artifacts) {
-    await removeArtifact(artifact, stateDir);
+    const relative = spoolRelativePath(artifact, stateDir);
+    if (relative) {
+      try {
+        await openSpoolStore(stateDir).remove(relative);
+      } catch {}
+    }
   }
 }
 
@@ -205,15 +211,23 @@ export async function releaseSpoolArtifacts(
  * age; the grace covers the stage-before-row-commit crash window and bounds all
  * final and partial artifacts that never acquire a row.
  */
-async function pruneDeliveryQueueMedia(params: {
-  retainPaths: ReadonlySet<string>;
-  stateDir?: string;
-  nowMs?: number;
-  orphanGraceMs?: number;
-}): Promise<void> {
-  const spoolRoot = path.resolve(resolveDeliveryQueueMediaDir(params.stateDir));
-  const retainPaths = new Set([...params.retainPaths].map((entry) => path.resolve(entry)));
-  const cutoffMs = (params.nowMs ?? Date.now()) - (params.orphanGraceMs ?? ORPHAN_GRACE_MS);
+export async function pruneOrphanedDeliveryQueueMedia(
+  params?: { stateDir?: string; nowMs?: number },
+  context?: DeliveryQueueStateContext,
+): Promise<void> {
+  const captured = context ?? captureDeliveryQueueStateContext(params?.stateDir);
+  const stateDir = captured.stateDir;
+  const cutoffMs = (params?.nowMs ?? Date.now()) - ORPHAN_GRACE_MS;
+  const snapshot = await loadDeliveryQueueMediaRetentionSnapshot(
+    { expireBeforeMs: cutoffMs },
+    captured,
+  );
+  const spoolRoot = path.resolve(resolveDeliveryQueueMediaDir(stateDir));
+  const retainPaths = new Set(
+    snapshot.stagedArtifacts
+      .concat(snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, stateDir)))
+      .map((entry) => path.resolve(entry)),
+  );
   const entries = await fs.readdir(spoolRoot, { withFileTypes: true }).catch((err: unknown) => {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
@@ -242,31 +256,8 @@ async function pruneDeliveryQueueMedia(params: {
     if (!stats || stats.mtimeMs > cutoffMs) {
       continue;
     }
-    await removeArtifact(artifactPath, params.stateDir);
+    await releaseSpoolArtifacts([artifactPath], stateDir);
   }
-}
-
-/** Reclaims queue media using the complete pending inventory as the retain set. */
-export async function pruneOrphanedDeliveryQueueMedia(
-  params?: { stateDir?: string; nowMs?: number },
-  context?: DeliveryQueueStateContext,
-): Promise<void> {
-  const captured = context ?? captureDeliveryQueueStateContext(params?.stateDir);
-  const stateDir = captured.stateDir;
-  const nowMs = params?.nowMs ?? Date.now();
-  const snapshot = await loadDeliveryQueueMediaRetentionSnapshot(
-    { expireBeforeMs: nowMs - ORPHAN_GRACE_MS },
-    captured,
-  );
-  await pruneDeliveryQueueMedia({
-    retainPaths: new Set(
-      snapshot.stagedArtifacts.concat(
-        snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, stateDir)),
-      ),
-    ),
-    stateDir,
-    nowMs,
-  });
 }
 
 export { collectEntrySpoolPaths } from "./delivery-queue-media-paths.js";

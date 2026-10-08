@@ -1,43 +1,55 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const { sysctl, pidPath, csops, errno, dead } = vi.hoisted(() => ({
+const { sysctl, errno, dead, rosetta } = vi.hoisted(() => ({
   sysctl: vi.fn(),
-  pidPath: vi.fn(),
-  csops: vi.fn(),
   errno: vi.fn(),
   dead: vi.fn(),
+  rosetta: vi.fn(),
 }));
 vi.mock("node:module", () => ({
   createRequire: () => () => ({
     load: () => ({
-      func: (signature: string) =>
-        signature.includes("sysctl(") ? sysctl : signature.includes("csops(") ? csops : pidPath,
+      func: () => sysctl,
     }),
     errno,
   }),
 }));
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ debug: vi.fn() }),
+}));
 vi.mock("../../shared/pid-alive.js", () => ({ isPidDefinitelyDead: dead }));
+// mock-isolation: the real detector reads and caches the test host's CPU brand.
+vi.mock("../../shared/rosetta-translation.js", () => ({ isRosettaTranslatedProcess: rosetta }));
 import { readDarwinProcessCommand } from "./darwin-process-command.js";
 
 let reply: Buffer | undefined;
-let executable: string | undefined;
 const uid = process.getuid?.() ?? 501;
 const foreignUid = uid + 1;
+const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
 
-function argumentsReply(argv: string[], argc = argv.length) {
+afterEach(() => {
+  if (getuidDescriptor) {
+    Object.defineProperty(process, "getuid", getuidDescriptor);
+  } else {
+    Reflect.deleteProperty(process, "getuid");
+  }
+});
+
+function argumentsReply(argv: string[], argc = argv.length, environment = "SYNTHETIC_ENV=private") {
   const header = Buffer.alloc(4);
   header.writeInt32LE(argc);
   return Buffer.concat([
     header,
-    Buffer.from(`/runtime path/node\0\0\0${argv.join("\0")}\0SYNTHETIC_ENV=private\0`),
+    Buffer.from(`/runtime path/node\0\0\0${argv.join("\0")}\0${environment}\0`),
   ]);
 }
 
 beforeEach(() => {
+  Object.defineProperty(process, "getuid", { configurable: true, value: () => uid });
   reply = undefined;
-  executable = undefined;
   errno.mockReset().mockReturnValue(1);
   dead.mockReset().mockReturnValue(false);
+  rosetta.mockReset().mockReturnValue(false);
   sysctl
     .mockReset()
     .mockImplementation((mib: Int32Array, _count: number, output: Buffer, size: Buffer) => {
@@ -53,80 +65,65 @@ beforeEach(() => {
       size.writeBigUInt64LE(BigInt(reply.length));
       return 0;
     });
-  pidPath.mockReset().mockImplementation((_pid: number, output: Buffer) => {
-    if (!executable) {
-      return 0;
-    }
-    return output.write(`${executable}\0`);
+});
+
+it.each([
+  { argv: ["node", "/app with spaces/openclaw.mjs", "", "doctor"], serviceMarker: undefined },
+  { argv: ["openclaw-gateway", "", "", ""], serviceMarker: undefined },
+  { argv: ["node", "dist/index.js"], serviceMarker: "openclaw" },
+])("preserves native argv $argv and only the service marker", ({ argv, serviceMarker }) => {
+  reply = argumentsReply(
+    argv,
+    argv.length,
+    `UNRELATED_PRIVATE_VALUE=fixture${serviceMarker ? `\0OPENCLAW_SERVICE_MARKER=${serviceMarker}` : ""}`,
+  );
+  expect(readDarwinProcessCommand(12, uid)).toEqual({
+    argv,
+    ...(serviceMarker ? { serviceMarker } : {}),
   });
-  csops.mockReset().mockImplementation((_pid: number, _operation: number, output: Buffer) => {
-    output.writeUInt32LE(0x0400_0001);
-    return 0;
-  });
 });
 
-it("preserves exact native argv boundaries without including environment bytes", () => {
-  const argv = ["node", "/app with spaces/openclaw.mjs", "", "doctor"];
-  reply = argumentsReply(argv);
-  expect(readDarwinProcessCommand(12, uid)).toEqual({ argv });
-});
-
-it("preserves a rewritten process title with emptied original argument slots", () => {
-  const argv = ["openclaw-gateway", "", "", ""];
-  reply = argumentsReply(argv);
-  expect(readDarwinProcessCommand(12, uid)).toEqual({ argv });
-});
-
-it.each(["invalid count", "truncated argument"])("rejects %s native argument bytes", (fault) => {
-  reply = fault === "invalid count" ? argumentsReply(["node"], -1) : argumentsReply(["node"], 100);
+it.each([-1, 100])("rejects invalid native argument count %s", (argc) => {
+  reply = argumentsReply(["node"], argc);
   expect(() => readDarwinProcessCommand(12, uid)).toThrow(/Darwin process arguments/);
 });
 
 it.each([
-  "/usr/libexec/native-service",
-  "/System/Volumes/Update/MobileAsset/fixture.asset/Service.xpc/Contents/MacOS/Service",
-])("records live kernel platform-signing evidence for foreign service %s", (file) => {
-  executable = file;
-  expect(readDarwinProcessCommand(12, foreignUid)).toEqual({
-    executable,
-    uid: foreignUid,
-    argvUnavailable: true,
-  });
-});
+  { observedUid: uid, inspectorUid: uid, exited: false, error: 1, outcome: "uncertain" },
+  { observedUid: undefined, inspectorUid: uid, exited: false, error: 13, outcome: "uncertain" },
+  {
+    observedUid: foreignUid,
+    inspectorUid: undefined,
+    exited: false,
+    error: 1,
+    outcome: "uncertain",
+  },
+  { observedUid: foreignUid, inspectorUid: uid, exited: false, error: 1, outcome: "foreign" },
+  { observedUid: foreignUid, inspectorUid: uid, exited: false, error: 13, outcome: "foreign" },
+  { observedUid: foreignUid, inspectorUid: uid, exited: true, error: 1, outcome: "gone" },
+])(
+  "classifies unreadable PID as $outcome ($observedUid/$inspectorUid, errno $error)",
+  ({ observedUid, inspectorUid, exited, error, outcome }) => {
+    Object.defineProperty(process, "getuid", {
+      configurable: true,
+      value: inspectorUid === undefined ? undefined : () => inspectorUid,
+    });
+    errno.mockReturnValue(error);
+    dead.mockReturnValue(exited);
+    const inspect = () => readDarwinProcessCommand(12, observedUid);
+    if (outcome === "uncertain") {
+      expect(inspect).toThrow("Could not classify PID 12: cannot inspect Darwin arguments");
+    } else {
+      expect(inspect()).toEqual(
+        outcome === "gone" ? undefined : { uid: foreignUid, argvUnavailable: true },
+      );
+    }
+  },
+);
 
-it.each([
-  "/usr/bin/python3",
-  "/System/Library/Frameworks/Python.framework/Versions/2.7/bin/python",
-  "/usr/libexec/node",
-  "/usr/local/bin/bun",
-  "/Applications/Fixture.app/Contents/MacOS/Fixture",
-  "/System/Library/CoreServices/Fixture.app/Contents/MacOS/Fixture",
-  "/tmp/openclaw-plugin-build-abc123/vendor/codex",
-])("rejects unreadable argv for an ambiguous executable %s", (file) => {
-  executable = file;
-  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow("Cannot inspect Darwin arguments");
-});
-
-it.each([
-  { kind: "non-platform executable", flags: 0x0000_0001, result: 0 },
-  { kind: "invalid platform signature", flags: 0x0400_0000, result: 0 },
-  { kind: "unavailable signing status", flags: 0x0400_0001, result: -1 },
-])("rejects executable-only evidence from $kind", ({ flags, result }) => {
-  executable = "/usr/libexec/fixture-native-service";
-  csops.mockImplementation((_pid: number, _operation: number, output: Buffer) => {
-    output.writeUInt32LE(flags);
-    return result;
-  });
-  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow("Cannot inspect Darwin arguments");
-});
-
-it("does not extend foreign-service evidence to an unreadable current-user process", () => {
-  executable = "/usr/libexec/native-service";
-  expect(() => readDarwinProcessCommand(12, uid)).toThrow("Cannot inspect Darwin arguments");
-});
-
-it("distinguishes an exited process from an unavailable executable inspection", () => {
-  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow("Cannot inspect Darwin arguments");
-  dead.mockReturnValue(true);
-  expect(readDarwinProcessCommand(12, foreignUid)).toBeUndefined();
+it("fails visibly instead of calling sysctl through koffi under Rosetta", () => {
+  rosetta.mockReturnValue(true);
+  reply = argumentsReply(["node", "dist/index.js"]);
+  expect(() => readDarwinProcessCommand(12, uid)).toThrow(/under Rosetta/);
+  expect(sysctl).not.toHaveBeenCalled();
 });

@@ -1,24 +1,14 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
-  isToolErrorOutput,
   isToolResultContentType,
   readToolErrorFlag,
 } from "../../chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
-import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
-import {
-  extractChatHistoryBlockText,
-  extractChatToolResultCanvasPreview,
-} from "../chat-display-projection.canvas.js";
-import {
-  hasTranscriptMediaFacts,
-  isAssistantInternalReasoningContentType,
-  isAssistantTextContentType,
-} from "../chat-display-projection.helpers.js";
+import type { InFlightRunSnapshot } from "../chat-abort.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
@@ -81,103 +71,25 @@ export function chatHistoryActivityBytes(activity: readonly AgentHistoryActivity
   return activity.length > 0 ? jsonUtf8Bytes({ activity }) - 1 : 0;
 }
 
-function hasHistoryToolPresentation(
-  message: Record<string, unknown>,
-  inheritedError?: boolean,
-): boolean {
-  return Boolean(
-    asOptionalRecord(message.details) ||
-    (readToolErrorFlag(message) ?? inheritedError) === true ||
-    extractChatToolResultCanvasPreview(message),
-  );
-}
-
-function isPlainHistoryToolResult(
-  message: Record<string, unknown>,
-  inheritedError?: boolean,
-): boolean {
-  if (
-    hasHistoryToolPresentation(message, inheritedError) ||
-    (readToolErrorFlag(message) ??
-      inheritedError ??
-      isToolErrorOutput(extractChatHistoryBlockText(message)))
-  ) {
-    return false;
-  }
-  const content = message.content ?? message.text;
-  return (
-    content === undefined ||
-    typeof content === "string" ||
-    (Array.isArray(content) &&
-      content.every((block) => {
-        const entry = asOptionalRecord(block);
-        return isAssistantTextContentType(entry?.type) && typeof entry?.text === "string";
-      }))
-  );
-}
-
-function isChatHistoryActivity(message: unknown): boolean {
-  const entry = asOptionalRecord(message);
-  if (!entry || hasTranscriptMediaFacts(entry) || hasHistoryToolPresentation(entry)) {
-    return false;
-  }
-  const metadata = asOptionalRecord(entry["__openclaw"]);
-  if (
-    metadata?.kind !== undefined ||
-    metadata?.turnBoundary === true ||
-    metadata?.replyToId !== undefined ||
-    metadata?.replyToPreview !== undefined ||
-    entry.openclawDelivery !== undefined ||
-    entry.stopReason === "error"
-  ) {
-    return false;
-  }
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role === "toolresult" || role === "tool_result" || role === "tool" || role === "function") {
-    return isPlainHistoryToolResult(entry);
-  }
-  if (
-    (role !== "assistant" && role !== "user") ||
-    (typeof entry.text === "string" && entry.text.trim()) ||
-    !Array.isArray(entry.content) ||
-    entry.content.length === 0
-  ) {
-    return false;
-  }
-  // Tool rows can also carry canvas previews, media, or other visible outcomes.
-  // Only known activity without such presentation is eligible for trimming.
-  return entry.content.every((block) => {
-    const content = asOptionalRecord(block);
-    if (!content) {
-      return false;
+/** Delta envelopes share one prepared plain-data snapshot throughout their synchronous projection. */
+export function createChatHistoryDeltaByteCounter(sessionSnapshot: Record<string, unknown>) {
+  let snapshot: { bytes: number; keys: Set<string> } | undefined;
+  return (envelope: Record<string, unknown>): number => {
+    snapshot ??= {
+      bytes: jsonUtf8BytesOrInfinity(sessionSnapshot),
+      keys: new Set(Object.keys(sessionSnapshot)),
+    };
+    const fields: Record<string, unknown> = {};
+    for (const key in envelope) {
+      // The snapshot is the final writer, including keys whose undefined value omits a field.
+      if (!snapshot.keys.has(key) && Object.hasOwn(envelope, key)) {
+        fields[key] = envelope[key];
+      }
     }
-    return isToolResultContentType(content.type)
-      ? isPlainHistoryToolResult(content, readToolErrorFlag(entry))
-      : !hasHistoryToolPresentation(content, readToolErrorFlag(entry)) &&
-          (isToolCallContentType(content.type) ||
-            isAssistantInternalReasoningContentType(content.type));
-  });
-}
-
-export function trimChatHistoryActivity(params: {
-  messages: unknown[];
-  maxBytes: number;
-  byteCounter: ReturnType<typeof createChatHistoryByteCounter>;
-}): unknown[] {
-  const { messages, maxBytes, byteCounter } = params;
-  let bytes = byteCounter.messagesBytes(messages);
-  if (bytes <= maxBytes) {
-    return messages;
-  }
-  let remaining = messages.length;
-  return messages.filter((message) => {
-    if (bytes <= maxBytes || !isChatHistoryActivity(message)) {
-      return true;
-    }
-    bytes -= byteCounter.messageBytes(message) + (remaining > 1 ? 1 : 0);
-    remaining -= 1;
-    return false;
-  });
+    const fieldsBytes = jsonUtf8BytesOrInfinity(fields);
+    // Merge the object bodies with one brace pair and, when both have fields, one comma.
+    return snapshot.bytes + fieldsBytes - 2 + (snapshot.bytes > 2 && fieldsBytes > 2 ? 1 : 0);
+  };
 }
 
 function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
@@ -188,7 +100,7 @@ function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   };
 }
 
-function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
+export function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const entry = asOptionalRecord(message) ?? {};
   const role = typeof entry.role === "string" ? entry.role : "assistant";
   const timestamp = typeof entry.timestamp === "number" ? entry.timestamp : Date.now();
@@ -216,6 +128,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
     __openclaw: {
       ...(metadata.toolOutput ? { toolOutput: metadata.toolOutput } : {}),
       ...(metadataId ? { id: metadataId } : {}),
+      ...(typeof metadata.runId === "string" ? { runId: metadata.runId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       ...(turnBoundary ? { turnBoundary: true } : {}),
@@ -233,9 +146,6 @@ export function replaceOversizedChatHistoryMessages(params: {
 }): { messages: unknown[]; replacedCount: number } {
   const { messages, maxSingleMessageBytes } = params;
   const byteCounter = params.byteCounter ?? createChatHistoryByteCounter();
-  if (messages.length === 0) {
-    return { messages, replacedCount: 0 };
-  }
   let replacedCount = 0;
   const next = messages.map((message) => {
     if (byteCounter.messageBytes(message) <= maxSingleMessageBytes) {
@@ -251,20 +161,12 @@ export function replaceOversizedChatHistoryMessages(params: {
 }
 
 export function reportOmittedChatHistory(params: {
-  originalMessages: unknown[];
-  finalMessages: unknown[];
-  getNormalizedBytes: () => number;
+  omittedCount: number;
+  normalizedBytes: number;
   maxHistoryBytes: number;
   logDebug: (message: string) => void;
 }): number {
-  const { originalMessages, finalMessages, getNormalizedBytes, maxHistoryBytes, logDebug } = params;
-  const survivors = new Set(finalMessages);
-  let omittedCount = 0;
-  for (const message of originalMessages) {
-    if (!survivors.has(message)) {
-      omittedCount += 1;
-    }
-  }
+  const { omittedCount, normalizedBytes, maxHistoryBytes, logDebug } = params;
   if (omittedCount === 0) {
     return 0;
   }
@@ -272,7 +174,7 @@ export function reportOmittedChatHistory(params: {
   logLargePayload({
     surface: "gateway.chat.history",
     action: "truncated",
-    bytes: getNormalizedBytes(),
+    bytes: normalizedBytes,
     limitBytes: maxHistoryBytes,
     count: omittedCount,
     reason: "chat_history_budget",
@@ -281,4 +183,66 @@ export function reportOmittedChatHistory(params: {
     `chat.history omitted oversized payloads count=${omittedCount} total=${chatHistoryOmittedEmitCount}`,
   );
   return omittedCount;
+}
+
+export function boundInFlightRunSnapshotForChatHistory(params: {
+  snapshot: InFlightRunSnapshot | undefined;
+  messages: unknown[];
+  getMessagesBytes?: () => number;
+  maxBytes: number;
+}): InFlightRunSnapshot | undefined {
+  if (!params.snapshot) {
+    return undefined;
+  }
+  const messagesBytes = params.getMessagesBytes?.() ?? jsonUtf8Bytes(params.messages);
+  const snapshotBytes = jsonUtf8Bytes(params.snapshot);
+  if (messagesBytes + snapshotBytes <= params.maxBytes) {
+    return params.snapshot;
+  }
+  // Recovery priority is run adoption, authoritative timing, active progress,
+  // plan replay, and opportunistic text. Explicit empty projections
+  // authoritatively clear stale client state when a richer snapshot cannot fit.
+  let bounded: InFlightRunSnapshot = {
+    runId: params.snapshot.runId,
+    text: "",
+    ...(params.snapshot.sessionAbortable ? { sessionAbortable: true } : {}),
+    ...(params.snapshot.events ? { events: [] } : {}),
+    ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
+  };
+  const retainIfWithinBudget = (candidate: InFlightRunSnapshot): boolean => {
+    if (!(messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes)) {
+      return false;
+    }
+    bounded = candidate;
+    return true;
+  };
+
+  if (params.snapshot.startedAt !== undefined) {
+    retainIfWithinBudget({ ...bounded, startedAt: params.snapshot.startedAt });
+  }
+
+  if (params.snapshot.events) {
+    const events = params.snapshot.events;
+    let start = 0;
+    let end = events.length;
+    // Try all progress first, then search suffixes instead of serializing each eviction.
+    let middle = 0;
+    while (start < end) {
+      if (retainIfWithinBudget({ ...bounded, events: events.slice(middle) })) {
+        end = middle;
+      } else {
+        start = middle + 1;
+      }
+      middle = Math.floor((start + end) / 2);
+    }
+  }
+
+  if (params.snapshot.plan) {
+    retainIfWithinBudget({ ...bounded, plan: params.snapshot.plan });
+  }
+
+  if (params.snapshot.text) {
+    retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
+  }
+  return bounded;
 }

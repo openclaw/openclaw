@@ -83,11 +83,11 @@ describe("chat realtime actions", () => {
       startSpy.mockImplementation(async function (this: RealtimeTalkSession) {
         ids.set(this, `voice-${++creates}`);
       });
-      vi.spyOn(RealtimeTalkSession.prototype, "getVoiceSessionId").mockImplementation(
-        function (this: RealtimeTalkSession) {
-          return ids.get(this);
-        },
-      );
+      vi.spyOn(RealtimeTalkSession.prototype, "getVoiceSessionId").mockImplementation(function (
+        this: RealtimeTalkSession,
+      ) {
+        return ids.get(this);
+      });
       vi.spyOn(RealtimeTalkSession.prototype, "getTransport").mockReturnValue("webrtc");
       if (useSystemDefault) {
         startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
@@ -148,13 +148,15 @@ describe("chat realtime actions", () => {
         itemId: "same",
         order: 0,
       });
-      expect(state.realtimeTalkConversation.map(({ text }) => text)).toEqual([
+      expect(state.realtimeTalkConversationState.entries.map(({ text }) => text)).toEqual([
         "Old speech",
         "Still speaking",
         "New speech",
       ]);
-      expect(new Set(state.realtimeTalkConversation.map(({ id }) => id)).size).toBe(3);
-      expect(state.realtimeTalkConversation.every(({ isStreaming }) => !isStreaming)).toBe(true);
+      expect(new Set(state.realtimeTalkConversationState.entries.map(({ id }) => id)).size).toBe(3);
+      expect(
+        state.realtimeTalkConversationState.entries.every(({ isStreaming }) => !isStreaming),
+      ).toBe(true);
       expect(request.mock.calls).toEqual([]);
       replacement.callbacks.onTalkEvent?.({
         id: "ready",
@@ -175,7 +177,7 @@ describe("chat realtime actions", () => {
         ),
       );
       await state.toggleRealtimeTalk();
-      expect(state.realtimeTalkConversation).toEqual([]);
+      expect(state.realtimeTalkConversationState.entries).toEqual([]);
       expect(listeners.size).toBe(0);
     },
   );
@@ -658,7 +660,7 @@ describe("chat realtime actions", () => {
     callbacks.onTranscript?.({ role: "assistant", text: "Checking", final: false });
     callbacks.onTranscript?.({ role: "user", text: "Can you check?", final: true });
 
-    expect(state.realtimeTalkConversation).toMatchObject([
+    expect(state.realtimeTalkConversationState.entries).toMatchObject([
       { role: "user", text: "Can you check?", isStreaming: false },
       { role: "assistant", text: "Checking", isStreaming: true },
     ]);
@@ -673,7 +675,7 @@ describe("chat realtime actions", () => {
     callbacks.onTranscript?.({ role: "assistant", text: "Checking", final: false });
     callbacks.onTranscript?.({ role: "user", text: "Second request", final: true });
 
-    expect(state.realtimeTalkConversation).toMatchObject([
+    expect(state.realtimeTalkConversationState.entries).toMatchObject([
       { role: "user", text: "First request", isStreaming: false },
       { role: "assistant", text: "Checking", isStreaming: false },
       { role: "user", text: "Second request", isStreaming: false },
@@ -710,7 +712,7 @@ describe("chat realtime actions", () => {
     expect(state.realtimeTalkStatus).toBe("error");
     expect(state.realtimeTalkDetail).toBe("startup failed");
     expect(state.realtimeTalkInputLevel.value).toBe(0);
-    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkConversationState.entries).toEqual([]);
     expect(state.realtimeTalkVideoStream).toBeNull();
     expect(state.realtimeTalkCameraDevices).toEqual([]);
     expect(state.realtimeTalkVideoCapable).toBe(false);
@@ -750,7 +752,7 @@ describe("chat realtime actions", () => {
     expect(state.realtimeTalkStatus).toBe("listening");
     expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkInputLevel.value).toBe(0);
-    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkConversationState.entries).toEqual([]);
     expect(state.realtimeTalkVideoStream).toBeNull();
     expect(state.realtimeTalkVideoCapable).toBe(false);
     expect(state.realtimeTalkCameraError).toBe(false);

@@ -691,7 +691,7 @@ suite.define(() => {
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
 
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar.getByRole("button", { name: "Edit pinned items", exact: true }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-more-menu")
         .getByRole("menuitem", { name: "Edit pinned items" })
@@ -702,9 +702,9 @@ suite.define(() => {
       await expect
         .poll(() => customizeMenu.locator(".sidebar-customize-menu__provenance").textContent())
         .toContain("Stored in this browser only");
-      const tasks = customizeMenu.getByRole("menuitemcheckbox", { name: "Tasks" });
-      await tasks.click();
-      await expect.poll(() => tasks.getAttribute("aria-checked")).toBe("true");
+      const usage = customizeMenu.getByRole("menuitemcheckbox", { name: "Usage" });
+      await usage.click();
+      await expect.poll(() => usage.getAttribute("aria-checked")).toBe("true");
       await page.waitForTimeout(100);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
@@ -722,7 +722,7 @@ suite.define(() => {
         )
         .toBe("false");
 
-      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar.getByRole("button", { name: "Edit pinned items", exact: true }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-more-menu")
         .getByRole("menuitem", { name: "Edit pinned items" })
@@ -733,7 +733,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           customizeMenu
-            .getByRole("menuitemcheckbox", { name: "Tasks" })
+            .getByRole("menuitemcheckbox", { name: "Usage" })
             .getAttribute("aria-checked"),
         )
         .toBe("true");

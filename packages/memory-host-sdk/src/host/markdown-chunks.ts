@@ -3,7 +3,7 @@ import {
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
+import type { EmbeddingInput } from "./embedding-inputs.js";
 import { hashText } from "./hash.js";
 import type { MemoryEntryProvenance } from "./types.js";
 
@@ -21,7 +21,7 @@ export type MemoryChunk = {
 // Persisted with index metadata so boundary changes rebuild unchanged files.
 export const MEMORY_CHUNKING_VERSION = 5;
 
-export type CuratedMarkdownEntry = {
+type CuratedMarkdownEntry = {
   startLine: number;
   endLine: number;
   text: string;
@@ -105,7 +105,7 @@ export function chunkMarkdown(
       endLine,
       text,
       hash: hashText(text),
-      embeddingInput: buildTextEmbeddingInput(text),
+      embeddingInput: { text },
     });
   };
 

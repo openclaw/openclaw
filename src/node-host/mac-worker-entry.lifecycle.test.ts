@@ -51,34 +51,28 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([0, 143])("finalizes the worker's requested exit code %s", async (code) => {
-  const { defaultRuntime } = await import("../runtime.js");
-  const { requestExitAfterOneShotOutput } = await import("../cli/one-shot-exit.js");
-  const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
-  fixture.worker.mockImplementation(async () => {
-    process.exitCode = code;
-    requestExitAfterOneShotOutput();
-  });
-
-  await import("./mac-worker-entry.js");
-
-  expect(fixture.worker).toHaveBeenCalledOnce();
-  expect(exit).toHaveBeenCalledExactlyOnceWith(code);
-});
-
 it.each([
-  { args: [], enabled: undefined },
-  { args: ["--desktop-sharing"], enabled: true },
-  { args: ["--no-desktop-sharing"], enabled: false },
-])("passes the parsed desktop preference into worker startup: $args", async ({ args, enabled }) => {
-  const { defaultRuntime } = await import("../runtime.js");
-  vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
-  process.argv.push(...args);
+  { args: [], enabled: undefined, code: 0 },
+  { args: ["--desktop-sharing"], enabled: true, code: 143 },
+  { args: ["--no-desktop-sharing"], enabled: false, code: 0 },
+])(
+  "starts with desktop preference $enabled and finalizes exit $code",
+  async ({ args, enabled, code }) => {
+    const { defaultRuntime } = await import("../runtime.js");
+    const { requestExitAfterOneShotOutput } = await import("../cli/one-shot-exit.js");
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
+    process.argv.push(...args);
+    fixture.worker.mockImplementation(async () => {
+      process.exitCode = code;
+      requestExitAfterOneShotOutput();
+    });
 
-  await import("./mac-worker-entry.js");
+    await import("./mac-worker-entry.js");
 
-  expect(fixture.worker).toHaveBeenCalledExactlyOnceWith({ desktopSharingEnabled: enabled });
-});
+    expect(fixture.worker).toHaveBeenCalledExactlyOnceWith({ desktopSharingEnabled: enabled });
+    expect(exit).toHaveBeenCalledExactlyOnceWith(code);
+  },
+);
 
 it("reports startup failure and finalizes an unsuccessful exit", async () => {
   const { defaultRuntime } = await import("../runtime.js");

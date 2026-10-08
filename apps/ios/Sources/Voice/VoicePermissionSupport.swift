@@ -5,33 +5,16 @@ import Speech
 
 enum VoicePermissionSupport {
     static func requestMicrophonePermission(timeoutErrorDomain: String) async -> Bool {
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted:
-            return true
-        case .denied:
-            return false
-        case .undetermined:
-            return await self.requestPermissionWithTimeout(errorDomain: timeoutErrorDomain) { completion in
-                AVAudioApplication.requestRecordPermission(completionHandler: completion)
-            }
-        @unknown default:
-            return false
+        let status = AVAudioApplication.shared.recordPermission
+        guard status == .undetermined else { return status == .granted }
+        return await self.requestPermissionWithTimeout(errorDomain: timeoutErrorDomain) { completion in
+            AVAudioApplication.requestRecordPermission(completionHandler: completion)
         }
     }
 
     static func requestSpeechPermission(timeoutErrorDomain: String) async -> Bool {
         let status = SFSpeechRecognizer.authorizationStatus()
-        switch status {
-        case .authorized:
-            return true
-        case .denied, .restricted:
-            return false
-        case .notDetermined:
-            break
-        @unknown default:
-            return false
-        }
-
+        guard status == .notDetermined else { return status == .authorized }
         return await self.requestPermissionWithTimeout(errorDomain: timeoutErrorDomain) { completion in
             SFSpeechRecognizer.requestAuthorization { authStatus in
                 completion(authStatus == .authorized)
@@ -43,28 +26,15 @@ enum VoicePermissionSupport {
         kind: String,
         status: SFSpeechRecognizerAuthorizationStatus) -> String
     {
-        switch status {
-        case .denied:
-            return String(
-                format: String(localized: "%@ permission denied"),
-                kind)
+        let format = switch status {
         case .restricted:
-            return String(
-                format: String(localized: "%@ permission restricted"),
-                kind)
+            String(localized: "%@ permission restricted")
         case .notDetermined:
-            return String(
-                format: String(localized: "%@ permission not granted"),
-                kind)
-        case .authorized:
-            return String(
-                format: String(localized: "%@ permission denied"),
-                kind)
-        @unknown default:
-            return String(
-                format: String(localized: "%@ permission denied"),
-                kind)
+            String(localized: "%@ permission not granted")
+        default:
+            String(localized: "%@ permission denied")
         }
+        return String(format: format, kind)
     }
 
     private static func requestPermissionWithTimeout(

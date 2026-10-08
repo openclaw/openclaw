@@ -6,36 +6,24 @@ import { slackQaCliRegistration } from "./slack/cli.js";
 import { telegramQaCliRegistration } from "./telegram/cli.js";
 import { whatsappQaCliRegistration } from "./whatsapp/cli.js";
 
-function createBlockedQaRunnerCliRegistration(params: {
-  commandName: string;
-  description?: string;
-  pluginId: string;
-}): LiveTransportQaCliRegistration {
-  return {
-    commandName: params.commandName,
-    register(qa) {
-      qa.command(params.commandName)
-        .description(params.description ?? `Run the ${params.commandName} live QA lane`)
-        .action(() => {
-          throw new Error(
-            `QA runner "${params.commandName}" is installed but not active. Enable or allow plugin "${params.pluginId}" in your OpenClaw config, then try again.`,
-          );
-        });
-    },
-  };
-}
-
 function createQaRunnerCliRegistration(
   runner: ReturnType<typeof listQaRunnerCliContributions>[number],
 ): LiveTransportQaCliRegistration {
   if (runner.status === "available") {
     return runner.registration;
   }
-  return createBlockedQaRunnerCliRegistration({
+  return {
     commandName: runner.commandName,
-    description: runner.description,
-    pluginId: runner.pluginId,
-  });
+    register(qa) {
+      qa.command(runner.commandName)
+        .description(runner.description ?? `Run the ${runner.commandName} live QA lane`)
+        .action(() => {
+          throw new Error(
+            `QA runner "${runner.commandName}" is installed but not active. Enable or allow plugin "${runner.pluginId}" in your OpenClaw config, then try again.`,
+          );
+        });
+    },
+  };
 }
 
 const LIVE_TRANSPORT_QA_CLI_REGISTRATIONS: readonly LiveTransportQaCliRegistration[] = [

@@ -1,8 +1,10 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
+import { hasNodeErrorCode } from "./path-guards.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "./sqlite-readonly-worker.js";
 import {
   createUpdateStateInspectionDiagnostics,
@@ -43,6 +45,38 @@ const inventorySource = `
 const inventorySchema = z.array(
   z.object({ path: z.string(), sizeBytes: z.string().regex(/^\d+$/).optional() }),
 );
+
+/** Maintenance custody permits metadata reads without an isolated inventory process. */
+export async function readUpdateStateDatabaseSizesInProcess(
+  files: readonly string[],
+  signal?: AbortSignal,
+): Promise<Array<{ path: string; sizeBytes: bigint | undefined }>> {
+  const result: Array<{ path: string; sizeBytes: bigint | undefined }> = [];
+  for (const file of files) {
+    signal?.throwIfAborted();
+    let sizeBytes: bigint | undefined;
+    try {
+      sizeBytes = (await fs.stat(file, { bigint: true })).size;
+    } catch (error) {
+      if (!hasNodeErrorCode(error, "ENOENT")) {
+        result.push({ path: file, sizeBytes: undefined });
+      }
+      continue;
+    }
+    for (const suffix of ["-wal", "-shm", "-journal"]) {
+      try {
+        sizeBytes += (await fs.stat(file + suffix, { bigint: true })).size;
+      } catch (error) {
+        if (!hasNodeErrorCode(error, "ENOENT")) {
+          sizeBytes = undefined;
+          break;
+        }
+      }
+    }
+    result.push({ path: file, sizeBytes });
+  }
+  return result;
+}
 
 /** Measure SQLite families in a bounded child so metadata cannot block updater cancellation. */
 export async function readUpdateStateDatabaseSizes(
@@ -89,10 +123,9 @@ export async function readUpdateStateDatabaseSizes(
       options.signal,
     );
   } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
-      throw inspection.failure(error);
+    if (!hasCommandProcessCleanupError(error)) {
+      options.signal?.throwIfAborted();
     }
-    options.signal?.throwIfAborted();
     throw inspection.failure(error);
   }
   options.signal?.throwIfAborted();

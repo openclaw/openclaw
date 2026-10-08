@@ -1,14 +1,11 @@
 import path from "node:path";
 import {
-  cancelPendingAgentQuestionForSession,
-  claimPendingAgentQuestionAnswer,
   detectAndLoadAgentHarnessPromptImages,
   embeddedAgentLog,
   formatErrorMessage,
   resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { prepareAgentWorkspaceAttachments } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -17,22 +14,34 @@ import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
 import {
   CodexSteeringAcceptedUnconfirmedError,
+  createCodexQuestionInputHandlers,
   createCodexSteeringQueue,
+  type CodexQuestionInputAuthority as InputAuthority,
   type CodexSteeringQueueOptions,
+  type CodexSteeringPreparation,
 } from "./attempt-steering.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
-import { canonicalizeNativeProgressCardInput } from "./plan-compaction-state.js";
+import {
+  createCodexNativeMcpAppResultDetailsPreparer,
+  prepareCodexNativeMcpFormResourceContext,
+} from "./native-mcp-app.js";
+import {
+  canonicalizeNativeProgressCardInput,
+  type CodexNativePlan,
+} from "./plan-compaction-state.js";
 import { isJsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
-import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
+import { createCodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
+import { restoreCodexAttemptCompactionContext } from "./run-attempt-compaction.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexStartedTurn } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { isCodexNativeDelegationDisabledForRun } from "./thread-requests.js";
 import {
   codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
@@ -69,7 +78,7 @@ export function activateCodexAttemptTurn(
     contextSessionKey,
     effectiveCwd,
   } = connection;
-  const { dynamicToolParams, compactionPlanState, computerContextEpoch, toolBridge } = attemptTools;
+  const { dynamicToolParams, toolBridge } = attemptTools;
   const {
     state,
     completion,
@@ -105,7 +114,10 @@ export function activateCodexAttemptTurn(
     : dynamicToolParams;
   const hostPrepareReplyMedia = params.hostCapabilities.prepareReplyMedia;
   const remoteWorkspaceRoot = connection.appServer.remoteWorkspaceRoot;
-  const replyMediaClient = resourceState.client;
+  const readRemoteWorkspaceFile = createCodexRemoteWorkspaceFileReader(
+    resourceState.client,
+    connection.authority,
+  );
   const prepareReplyMedia =
     hostPrepareReplyMedia && remoteWorkspaceRoot
       ? async (
@@ -118,10 +130,8 @@ export function activateCodexAttemptTurn(
             ...content,
             workspaceRoot: remoteWorkspaceRoot,
             signal: runAbortController.signal,
-            readWorkspaceFile: async (relativePath, { maxBytes, signal }) => {
-              connection.assertCurrent();
-              const file = await readBoundedCodexRemoteWorkspaceFile({
-                client: replyMediaClient,
+            readWorkspaceFile: (relativePath, { maxBytes, signal }) =>
+              readRemoteWorkspaceFile({
                 path: mapCodexAppServerRemoteWorkspacePath({
                   value: path.resolve(params.workspaceDir, relativePath),
                   localWorkspaceRoot: params.workspaceDir,
@@ -131,10 +141,7 @@ export function activateCodexAttemptTurn(
                 maxBytes,
                 signal: transferSignal ? AbortSignal.any([signal, transferSignal]) : signal,
                 timeoutMs: connection.appServer.requestTimeoutMs,
-              });
-              connection.assertCurrent();
-              return Buffer.from(file.dataBase64, "base64");
-            },
+              }),
           })
       : undefined;
   const progressCardTool = toolBridge.availableTools.find((tool) => tool.name === "progress_card");
@@ -193,26 +200,13 @@ export function activateCodexAttemptTurn(
       runAbortSignal: runAbortController.signal,
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
       remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
-      readRemoteWorkspaceFile: ({ path: remotePath, maxBytes, signal, timeoutMs }) =>
-        readBoundedCodexRemoteWorkspaceFile({
-          client: resourceState.client,
-          path: remotePath,
-          maxBytes,
-          signal,
-          timeoutMs,
-        }),
+      readRemoteWorkspaceFile,
       trajectoryRecorder,
       resolveDynamicToolResultContentSource: toolBridge.resultContentSourceForTool,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
       ...(progressCardTool
         ? {
-            onNativePlanUpdate: async (update: {
-              markdown?: string;
-              steps: Array<{
-                step: string;
-                status: "pending" | "in_progress" | "completed";
-              }>;
-            }) => {
+            onNativePlanUpdate: async (update: CodexNativePlan) => {
               nativePlanUpdateOrdinal += 1;
               try {
                 const input = canonicalizeNativeProgressCardInput(update);
@@ -233,25 +227,7 @@ export function activateCodexAttemptTurn(
         : {}),
       ...(prepareNativeMcpAppResultDetails ? { prepareNativeMcpAppResultDetails } : {}),
       upstreamUserText,
-      onContextCompacted: async () => {
-        computerContextEpoch.value += 1;
-        delete computerContextEpoch.frameToolCallId;
-        delete computerContextEpoch.frameImageIdentity;
-        try {
-          await compactionPlanState.restore({
-            client: resourceState.client,
-            threadId: resourceState.thread.threadId,
-            timeoutMs: connection.appServer.requestTimeoutMs,
-            signal: runAbortController.signal,
-          });
-        } catch (error) {
-          embeddedAgentLog.warn("failed to restore Codex plan state after compaction", {
-            runId: params.runId,
-            threadId: resourceState.thread.threadId,
-            error: formatErrorMessage(error),
-          });
-        }
-      },
+      onContextCompacted: () => restoreCodexAttemptCompactionContext(resources),
     },
   );
   const activeProjector = projectorRef.current;
@@ -273,7 +249,7 @@ export function activateCodexAttemptTurn(
             : "Codex cancellation could not confirm the turn stopped; background terminals may still be running.",
         );
       }
-      if (resources.nativeProcessAuthority) {
+      if (resources.nativeProcessAuthority?.requiresProcessAdmission) {
         await resources.nativeProcessAuthority.cancelTurn(
           resourceState.client,
           resourceState.thread.threadId,
@@ -339,10 +315,12 @@ export function activateCodexAttemptTurn(
       state.activeLocalProjections -= 1;
     }
   };
+  const isSteeringAvailable = () =>
+    !state.completed && !state.terminalTurnNotificationQueued && !runAbortController.signal.aborted;
   const assertSteeringActive = () => {
     connection.assertCurrent();
     runAbortController.signal.throwIfAborted();
-    if (state.completed || state.terminalTurnNotificationQueued) {
+    if (!isSteeringAvailable()) {
       throw new Error("codex app-server turn is no longer accepting steering");
     }
   };
@@ -368,17 +346,17 @@ export function activateCodexAttemptTurn(
     requestTimeoutMs: connection.appServer.requestTimeoutMs,
     signal: runAbortController.signal,
     assertActive: assertSteeringActive,
+    withCurrent: connection.withCurrent,
+    withPreparedCurrent: connection.authority.withPreparedCurrent,
     prepareMessage: async (text, options, assertMessageCurrent) => {
-      const attachmentNote = await prepareAgentWorkspaceAttachments({
-        workspaceDir: params.workspaceDir,
+      const attachmentNote = await connection.prepareInputAttachments({
+        maxChars: Math.max(0, CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - text.length - 2),
         turn: {
-          config: params.config,
           media: options.media,
-          timeoutMs: params.timeoutMs,
-          abortSignal: runAbortController.signal,
           userTurnTranscriptRecorder: options.userTurnTranscriptRecorder,
         },
         assertCurrent: assertMessageCurrent,
+        signal: runAbortController.signal,
       });
       const result = await detectAndLoadAgentHarnessPromptImages({
         ...imageContext,
@@ -435,7 +413,11 @@ export function activateCodexAttemptTurn(
       const messages = activeProjector.buildSteeringTranscriptPrefix();
       if (params.sessionTarget && messages.length > 0) {
         await codexTranscriptMirrorRuntime.mirror({
-          assertCurrent: assertSteeringActive,
+          // Transcript SDK commit callback must remain synchronous.
+          assertCurrent: () => {
+            connection.assertLegacyCurrent();
+            assertSteeringActive();
+          },
           agentId: sessionAgentId,
           sessionKey: contextSessionKey,
           sessionId: params.sessionId,
@@ -445,10 +427,11 @@ export function activateCodexAttemptTurn(
           idempotencyScope: `codex-app-server:${resourceState.thread.threadId}`,
           runId: params.runId,
           runMirrorIdentityPrefix: `${activeTurnId}:`,
+          onAssistantMessageOwned: (identity) =>
+            activeProjector.markSteeringTranscriptMessagePersisted(identity),
           config: params.config,
         });
         assertSteeringActive();
-        activeProjector.markSteeringTranscriptPersisted();
       }
       for (const item of transcriptItems) {
         const recorder = item.userTurnTranscriptRecorder;
@@ -464,66 +447,43 @@ export function activateCodexAttemptTurn(
     },
   });
   steeringQueueRef.current = activeSteeringQueue;
-  type InputAuthority = NonNullable<
-    Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"]
-  >;
+  const { claimPendingUserInputAnswer, cancelPendingUserInput } = createCodexQuestionInputHandlers(
+    params.sessionKey ?? params.sessionId,
+    assertSteeringActive,
+  );
   const injectionGuard = (assertCurrent?: () => void) => () => {
     assertCurrent?.();
     assertSteeringActive();
     return true;
   };
-  const claimPendingUserInputAnswer = async (
-    text: string,
-    optionsLocal?: CodexSteeringQueueOptions,
-    assertCurrent?: () => void,
-    authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
-  ) => {
-    if (optionsLocal?.isInboundUserMessage !== true || hasPromptImageInput(optionsLocal)) {
-      return false;
-    }
-    assertSteeringActive();
-    return await claimPendingAgentQuestionAnswer({
-      sessionKey: params.sessionKey ?? params.sessionId,
-      text,
-      authority: { kind: authorityKind, assertCurrent: injectionGuard(assertCurrent) },
-      sourceRecorder: optionsLocal.userTurnTranscriptRecorder,
-      // Older supported hosts use the ordinary-question callback. Current hosts
-      // prefer the recorder owner so staged secret inputs commit before consumption.
-      persist: optionsLocal.userTurnTranscriptRecorder
-        ? async () => {
-            await optionsLocal.userTurnTranscriptRecorder?.persistApproved();
-          }
-        : undefined,
-    });
-  };
-  const cancelPendingUserInput = (
-    resolvedBy: string,
-    assertCurrent?: () => void,
-    authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
-  ) =>
-    cancelPendingAgentQuestionForSession({
-      sessionKey: params.sessionKey ?? params.sessionId,
-      resolvedBy,
-      authority: { kind: authorityKind, assertCurrent: injectionGuard(assertCurrent) },
-    });
   // V1 retains backend-only authority; V2 requires a host assertion.
   const queueMessage = async (
     text: string,
     optionsLocal?: CodexSteeringQueueOptions,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    preparation?: CodexSteeringPreparation,
   ) => {
     const canClaim = injectionGuard(assertCurrent);
-    if (await claimPendingUserInputAnswer(text, optionsLocal, assertCurrent, authorityKind)) {
+    if (
+      await claimPendingUserInputAnswer(
+        text,
+        optionsLocal,
+        assertCurrent,
+        authorityKind,
+        preparation,
+      )
+    ) {
       // A question claim is already consumption. Closing the run during its
       // response must not turn that answer into a rejected, replayable steer.
       optionsLocal?.onQueueAccepted?.(true);
+      optionsLocal?.onQueueSettled?.();
       return undefined;
     }
     if (optionsLocal?.isInboundUserMessage === true && hasPromptImageInput(optionsLocal)) {
       assertSteeringActive();
       try {
-        await cancelPendingUserInput("image-reply", assertCurrent, authorityKind);
+        await cancelPendingUserInput("image-reply", assertCurrent, authorityKind, preparation);
       } catch (error) {
         canClaim();
         if (error instanceof Error && error.name === "QuestionDispatchRefusedError") {
@@ -536,7 +496,7 @@ export function activateCodexAttemptTurn(
       }
     }
     try {
-      await activeSteeringQueue.queue(text, optionsLocal, injectionGuard(assertCurrent));
+      await activeSteeringQueue.queue(text, optionsLocal, canClaim, preparation);
     } catch (error) {
       if (error instanceof CodexSteeringAcceptedUnconfirmedError) {
         return {
@@ -550,19 +510,26 @@ export function activateCodexAttemptTurn(
   };
   const messageInjection = {
     version: 2 as const,
-    isAvailable: () =>
-      !state.completed &&
-      !state.terminalTurnNotificationQueued &&
-      !runAbortController.signal.aborted,
+    isAvailable: isSteeringAvailable,
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
-  };
+    claimPendingUserInputAnswerAsync: (text, options, preparation, kind) =>
+      claimPendingUserInputAnswer(text, options, preparation.assertCurrent, kind, preparation),
+    cancelPendingUserInputAsync: (resolvedBy, preparation, kind) =>
+      cancelPendingUserInput(resolvedBy, preparation.assertCurrent, kind, preparation),
+    queueMessageAsync: connection.authority.withPreparedCurrent
+      ? (text, options, preparation, kind) =>
+          queueMessage(text, options, preparation.assertCurrent, kind, preparation)
+      : undefined,
+  } satisfies NonNullable<Parameters<typeof setActiveEmbeddedRun>[1]["messageInjectionV2"]>;
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,
     startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    supportsCrossProfileSteering:
+      isCodexNativeDelegationDisabledForRun(params) || resourceState.nativeSpawnAdmissionInstalled,
     permissionChangeOwner: params.permissionChange?.owner,
     applyPermissionMode: async (
       mode: NonNullable<typeof params.permissionMode> | null,
@@ -622,6 +589,14 @@ export function activateCodexAttemptTurn(
       emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
       userInputBridgeRef.current = createCodexUserInputBridge({
         paramsForRun: params,
+        prepareResourceContext: (request) =>
+          prepareCodexNativeMcpFormResourceContext({
+            client: resourceState.client,
+            threadId: resourceState.thread.threadId,
+            attempt: params,
+            request,
+            readOrigin: (serverName) => activeProjector.getActiveMcpToolCall(serverName),
+          }),
         onOrdinaryResponse: (response) => activeProjector.recordUserInputResponse(response),
         threadId: resourceState.thread.threadId,
         turnId: activeTurnId,
@@ -654,9 +629,7 @@ export function activateCodexAttemptTurn(
             resourceState.turnRoute === route &&
             route?.signal.aborted === false &&
             turnRuntime.turnIdRef.current === activeTurnId &&
-            !state.completed &&
-            !state.terminalTurnNotificationQueued &&
-            !runAbortController.signal.aborted,
+            isSteeringAvailable(),
         );
       }
       params.replyOperation?.attachBackend(handle);

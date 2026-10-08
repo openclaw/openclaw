@@ -10,6 +10,19 @@
   --sidebar-session-row-floor: 44px;
 }
 
+/* Keep metadata, but do not charge a title for an empty endcap. */
+.shell--mobile-nav .sidebar-recent-session--single-line:not(.sidebar-recent-session--team) {
+  .sidebar-recent-session__text {
+    gap: var(--sidebar-row-gap);
+  }
+
+  .sidebar-recent-session__details:not(
+    :has(.session-row-badges, .viewer-facepile, .session-row-trail)
+  ) {
+    display: none;
+  }
+}
+
 /* The mobile drawer keeps management actions in its always-reachable menu. */
 .shell--mobile-nav .sidebar-recent-session {
   padding-right: 0;
@@ -29,10 +42,6 @@
     opacity: 1;
     pointer-events: auto;
   }
-}
-
-.shell--mobile-nav .sidebar-zone-entry .sidebar-recent-session {
-  padding-right: 4px;
 }
 
 .shell--mobile-nav .sidebar-recent-session:not(.sidebar-recent-session--child) {

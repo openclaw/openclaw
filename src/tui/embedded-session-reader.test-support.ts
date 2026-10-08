@@ -1,7 +1,24 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { createEmbeddedCallGateway } from "../agents/tools/embedded-gateway-stub.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
+
+export function createPreparedProjectionMethods(read: () => unknown) {
+  const methods = {
+    present: vi.fn((record: { entry: { sessionId?: unknown }; target: { key: string } }) => ({
+      key: record.target.key,
+      sessionId: record.entry.sessionId,
+    })),
+    withPreparedExactRows: vi.fn(
+      async (_queries: unknown, consume: (read: unknown) => unknown) => ({
+        kind: "complete" as const,
+        value: consume(read()),
+      }),
+    ),
+  };
+  return methods;
+}
 
 export function registerEmbeddedSessionReaderTests<
   Projection extends { dispose: () => void },
@@ -11,6 +28,12 @@ export function registerEmbeddedSessionReaderTests<
   createSessionRowProjectionMock: Mock<(_options?: unknown) => Promise<Projection>>;
   listProjectedSessionsMock: Mock<(_options?: unknown) => Promise<{ sessions: unknown[] }>>;
   runSessionStartupMigrationMock: Mock<(...args: unknown[]) => Promise<void>>;
+  getRuntimeConfigMock: Mock<() => OpenClawConfig>;
+  refreshPreparedModelRuntimeSnapshotsMock: Mock<
+    (_config: unknown, _options?: unknown) => Promise<void>
+  >;
+  agentCommandFromIngressMock: Mock;
+  unregisterConfigWriteListenerMock: Mock;
   flushMicrotasks: () => Promise<void>;
 }) {
   const {
@@ -19,8 +42,56 @@ export function registerEmbeddedSessionReaderTests<
     createSessionRowProjectionMock,
     listProjectedSessionsMock,
     runSessionStartupMigrationMock,
+    getRuntimeConfigMock,
+    refreshPreparedModelRuntimeSnapshotsMock,
+    agentCommandFromIngressMock,
+    unregisterConfigWriteListenerMock,
     flushMicrotasks,
   } = params;
+
+  it("publishes the current runtime after startup maintenance and before the first local turn", async () => {
+    const initialConfig = { agents: { entries: { main: {} } } };
+    const nextConfig = { agents: { entries: { main: {} }, defaults: { model: "openai/next" } } };
+    getRuntimeConfigMock.mockReturnValue(initialConfig);
+    const migrating = deferred();
+    const migration = deferred();
+    runSessionStartupMigrationMock.mockImplementationOnce(() => {
+      migrating.resolve();
+      return migration.promise;
+    });
+    const publication = deferred();
+    refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(publication.promise);
+
+    const backend = createBackend();
+    backend.start();
+
+    const send = backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "hello",
+      runId: "run-waits-for-published-runtime",
+    });
+    try {
+      await migrating.promise;
+      expect(refreshPreparedModelRuntimeSnapshotsMock).not.toHaveBeenCalled();
+      expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
+
+      getRuntimeConfigMock.mockReturnValue(nextConfig);
+      migration.resolve();
+      await flushMicrotasks();
+
+      expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(nextConfig);
+      expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
+
+      publication.resolve();
+      await send;
+      await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1));
+    } finally {
+      migration.resolve();
+      publication.resolve();
+      await Promise.allSettled([send]);
+      await backend.stop();
+    }
+  });
 
   it("shares one resident projection between local lists and embedded session tools", async () => {
     const backend = createBackend();
@@ -62,14 +133,19 @@ export function registerEmbeddedSessionReaderTests<
   });
 
   it("disposes projection startup that finishes after shutdown begins", async () => {
-    const startup = deferred<typeof sessionProjection>();
-    createSessionRowProjectionMock.mockReturnValueOnce(startup.promise);
+    const starting = deferred();
+    const startup = deferred();
+    runSessionStartupMigrationMock.mockImplementationOnce(() => {
+      starting.resolve();
+      return startup.promise;
+    });
     const backend = createBackend();
     backend.start();
-    await vi.waitFor(() => expect(createSessionRowProjectionMock).toHaveBeenCalledOnce());
+    await starting.promise;
     const stopped = backend.stop();
-    startup.resolve(sessionProjection);
+    startup.resolve();
     await stopped;
+    expect(unregisterConfigWriteListenerMock).toHaveBeenCalledOnce();
     expect(sessionProjection.dispose).toHaveBeenCalledOnce();
     await expect(backend.listSessions()).rejects.toThrow(
       "Embedded session projection is unavailable",

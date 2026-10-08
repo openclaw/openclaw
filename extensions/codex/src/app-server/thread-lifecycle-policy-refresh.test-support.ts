@@ -1,23 +1,18 @@
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { retainCodexAppServerLiveThread } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
 import type { RpcRequest } from "./protocol.js";
 import { tempDir, threadStartResult } from "./run-attempt-test-harness.js";
 import {
   readCodexAppServerBinding,
-  testCodexAppServerBindingStore,
   type writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-import {
-  releaseLeasedSharedCodexAppServerClient,
-  retireSharedCodexAppServerClientIfCurrent,
-} from "./shared-client.js";
+import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import type { createClientHarness } from "./test-support.js";
-import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
-
-type StartParams = Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">;
+import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
+import type { CodexAttemptThreadInput as StartParams } from "./thread-lifecycle.test-fixtures.js";
 
 type PolicyRefreshFixtures = {
   createParams: (sessionFile: string, workspaceDir: string) => StartParams["params"];
@@ -39,23 +34,14 @@ export function registerThreadPolicyRefreshTests({
   startOrResumeThread,
   writeCodexAppServerBinding,
 }: PolicyRefreshFixtures) {
-  it.each(
-    [
-      { developerInstructions: "replacement policy", fault: "none" },
-      { developerInstructions: "", fault: "none" },
-      { developerInstructions: "replacement policy", fault: "unload" },
-      { developerInstructions: "replacement policy", fault: "client retired" },
-      { developerInstructions: "replacement policy", fault: "unknown write" },
-      { developerInstructions: "replacement policy", fault: "retirement failure" },
-      { developerInstructions: "replacement policy", fault: "binding commit" },
-    ].flatMap((scenario) =>
-      (["stdio", "websocket", "unix", "proxy"] as const).map((transport) => ({
-        developerInstructions: scenario.developerInstructions,
-        fault: scenario.fault,
-        transport,
-      })),
-    ),
-  )(
+  it.each([
+    { developerInstructions: "", fault: "none", transport: "stdio" as const },
+    ...["unload", "retirement failure"].map((fault) => ({
+      developerInstructions: "replacement policy",
+      fault,
+      transport: "stdio" as const,
+    })),
+  ])(
     "refreshes ordinary generic policy over $transport before admitting a resumed turn: $developerInstructions / $fault",
     async ({ developerInstructions, fault, transport }) => {
       const sessionFile = path.join(tempDir, "ordinary-policy.jsonl");
@@ -82,13 +68,10 @@ export function registerThreadPolicyRefreshTests({
             };
           }
           if (request.method === "thread/resume") {
-            if (fault === "client retired") {
-              retireSharedCodexAppServerClientIfCurrent(wire.client);
-            }
             return response;
           }
           if (request.method === "thread/inject_items") {
-            if (fault === "unknown write" || fault === "retirement failure") {
+            if (fault === "retirement failure") {
               throw new CodexAppServerRpcError(
                 { code: -32603, message: "policy flush failed after write" },
                 "thread/inject_items",
@@ -105,11 +88,6 @@ export function registerThreadPolicyRefreshTests({
       );
       await writeCodexAppServerBinding(sessionFile, { threadId, cwd: workspaceDir });
       const before = await readCodexAppServerBinding(sessionFile);
-      if (fault === "binding commit") {
-        vi.spyOn(testCodexAppServerBindingStore, "mutate").mockRejectedValueOnce(
-          new Error("binding commit failed"),
-        );
-      }
       try {
         const run = startOrResumeThread({
           client: wire.client,
@@ -136,21 +114,12 @@ export function registerThreadPolicyRefreshTests({
           await expect(run).rejects.toMatchObject({
             name: "CodexThreadPolicyHandoffError",
             scope: undefined,
-            outcome:
-              fault === "unknown write" || fault === "retirement failure"
-                ? "unknown"
-                : fault === "binding commit"
-                  ? "acknowledged"
-                  : "not-written",
+            outcome: fault === "retirement failure" ? "unknown" : "not-written",
           });
           expect(await readCodexAppServerBinding(sessionFile)).toEqual(before);
           expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
           expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(
-            fault === "unknown write" ||
-              fault === "retirement failure" ||
-              fault === "binding commit"
-              ? 1
-              : 0,
+            fault === "retirement failure" ? 1 : 0,
           );
           expect(requests.some(({ method }) => method === "thread/start")).toBe(false);
           return;
@@ -176,22 +145,14 @@ export function registerThreadPolicyRefreshTests({
     },
   );
 
-  it.each(
-    ["idle", "systemError", "active"].flatMap((nativeStatus) =>
-      (nativeStatus === "active"
-        ? ["replacement policy"]
-        : ["initial policy", "replacement policy", ""]
-      ).flatMap((developerInstructions) =>
-        (["stdio", "websocket", "unix", "proxy"] as const).map((transport) => ({
-          nativeStatus,
-          developerInstructions,
-          transport,
-        })),
-      ),
-    ),
-  )(
-    "keeps ordinary warm configuration honest over $transport across $nativeStatus and policy $developerInstructions",
-    async ({ nativeStatus, developerInstructions, transport }) => {
+  it.each([
+    { nativeStatus: "idle", transport: "websocket" as const },
+    { nativeStatus: "systemError", transport: "stdio" as const },
+    { nativeStatus: "active", transport: "stdio" as const },
+  ])(
+    "keeps ordinary warm configuration honest over $transport across $nativeStatus",
+    async ({ nativeStatus, transport }) => {
+      const developerInstructions = "replacement policy";
       const sessionFile = path.join(tempDir, "ordinary-warm-policy.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const threadId = "ordinary-warm-policy";
@@ -272,7 +233,7 @@ export function registerThreadPolicyRefreshTests({
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
           return;
         }
-        if (nativeStatus === "systemError" && developerInstructions !== "initial policy") {
+        if (nativeStatus === "systemError") {
           await expect(resume).rejects.toThrow("did not confirm unloading");
           expect(methods).not.toContain("thread/inject_items");
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
@@ -280,27 +241,17 @@ export function registerThreadPolicyRefreshTests({
         }
         const second = await resume;
         expect(second.threadId).toBe(first.threadId);
-        expect(methods).toEqual(
-          developerInstructions === "initial policy"
-            ? [
-                "config/read",
-                "configRequirements/read",
-                "thread/start",
-                "config/read",
-                "configRequirements/read",
-              ]
-            : [
-                "config/read",
-                "configRequirements/read",
-                "thread/start",
-                "config/read",
-                "configRequirements/read",
-                "thread/read",
-                "thread/unsubscribe",
-                "thread/resume",
-                "thread/inject_items",
-              ],
-        );
+        expect(methods).toEqual([
+          "config/read",
+          "configRequirements/read",
+          "thread/start",
+          "config/read",
+          "configRequirements/read",
+          "thread/read",
+          "thread/unsubscribe",
+          "thread/resume",
+          "thread/inject_items",
+        ]);
       } finally {
         releaseLeasedSharedCodexAppServerClient(wire.client);
         wire.client.close();

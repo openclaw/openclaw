@@ -26,6 +26,7 @@ import { reloadSharedAuthStoreOwnership } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   expectOAuthCredentialFields,
+  failNextRuntimeAuthSnapshotPublication,
   withAuthProfileTestState,
 } from "./profile-mutations.test-support.js";
 import {
@@ -63,7 +64,6 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   restoreAuthProfileStorePersistenceSnapshot,
 } from "./store.js";
-import { testing as storeTesting } from "./store.test-support.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
@@ -81,7 +81,7 @@ vi.mock("../provider-auth-aliases.js", async (importOriginal) => {
 });
 
 afterEach(() => {
-  storeTesting.resetRuntimeSnapshotPublisherForTest();
+  vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
 });
 
@@ -296,10 +296,7 @@ describe("promoteAuthProfileInOrder", () => {
           { agentDir: savingAgentDir, store: loadAuthProfileStoreForRuntime(savingAgentDir) },
           { agentDir: siblingAgentDir, store: siblingStore },
         ]);
-        storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-          publish();
-          throw new Error("postcommit publication failed");
-        });
+        failNextRuntimeAuthSnapshotPublication();
 
         saveAuthProfileStore(
           {
@@ -423,20 +420,8 @@ describe("promoteAuthProfileInOrder", () => {
       replaceRuntimeAuthProfileStoreSnapshots([
         { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
       ]);
-      storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-        publish();
-        throw new Error("postcommit publication failed");
-      });
-      let result: ReturnType<typeof saveAuthProfileStore> = undefined;
-      try {
-        expect(() => {
-          result = saveAuthProfileStore(store("sk-new"), agentDir);
-        }).not.toThrow();
-      } finally {
-        storeTesting.resetRuntimeSnapshotPublisherForTest();
-      }
-
-      expect(result).toBeUndefined();
+      failNextRuntimeAuthSnapshotPublication();
+      expect(saveAuthProfileStore(store("sk-new"), agentDir)).toBeUndefined();
       expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:default"]).toMatchObject({
         key: "sk-new",
       });
@@ -736,11 +721,7 @@ describe("promoteAuthProfileInOrder", () => {
             },
           });
           if (mutationTiming === "before publication") {
-            storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-              storeTesting.resetRuntimeSnapshotPublisherForTest();
-              mutateRuntimeStore();
-              publish();
-            });
+            mutateRuntimeStore();
           }
           expect(committed.publishRuntimeSnapshots()).toBe(true);
           const { owned } = committed;
@@ -1644,22 +1625,17 @@ describe("promoteAuthProfileInOrder", () => {
         };
         const replacement = { ...original, token: "synthetic-replacement" };
         const unrelated = createApiKeyCredential("other", "synthetic-other");
-        saveAuthProfileStore(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles: { [profileId]: original, "other:default": unrelated },
-          },
-          agentDir,
-        );
+        const store = {
+          version: AUTH_STORE_VERSION,
+          profiles: { [profileId]: original, "other:default": unrelated },
+        };
+        saveAuthProfileStore(store, agentDir);
         expect(reloadSharedAuthStoreOwnership().location).toBe("legacy-main");
         const beforeRemove = vi.fn(async () => {
           expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(original);
           if (replaceDuringCleanup) {
             saveAuthProfileStore(
-              {
-                version: AUTH_STORE_VERSION,
-                profiles: { [profileId]: replacement, "other:default": unrelated },
-              },
+              { ...store, profiles: { ...store.profiles, [profileId]: replacement } },
               agentDir,
             );
           }
@@ -1675,7 +1651,7 @@ describe("promoteAuthProfileInOrder", () => {
         });
 
         expect(removed).toBe(!replaceDuringCleanup);
-        expect(beforeRemove).toHaveBeenCalledExactlyOnceWith([profileId]);
+        expect(beforeRemove).toHaveBeenCalledExactlyOnceWith([profileId], expect.any(Array));
         for (const owner of [agentDir, undefined]) {
           const persisted = loadPersistedAuthProfileStore(owner);
           expect(persisted?.profiles[profileId]).toEqual(
@@ -1684,7 +1660,10 @@ describe("promoteAuthProfileInOrder", () => {
           expect(persisted?.profiles["other:default"]).toEqual(unrelated);
         }
         if (replaceDuringCleanup) {
-          expect(onIncomplete).toHaveBeenCalledExactlyOnceWith(new Map([[profileId, replacement]]));
+          expect(onIncomplete).toHaveBeenCalledExactlyOnceWith(
+            new Map([[profileId, replacement]]),
+            expect.any(Array),
+          );
         } else {
           expect(onIncomplete).not.toHaveBeenCalled();
         }

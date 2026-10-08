@@ -17,7 +17,6 @@ import {
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
-import { acquireStateDatabaseHandleExclusion } from "./state-database-coordinator.js";
 
 const logs = vi.hoisted(() => ({ debug: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -220,24 +219,6 @@ describe("scoped SQLite read-only children", () => {
     expect(spawn).toHaveBeenCalledTimes(2);
   });
 
-  it("releases admission between requests and reacquires it against the current exclusion", async () => {
-    const source = createDatabase(0);
-    await withSqliteReadOnlyWorkerScope(async () => {
-      await readSnapshotVersion(source);
-      const exclusion = acquireStateDatabaseHandleExclusion({
-        databasePath: source,
-        busyTimeoutMs: 0,
-      });
-      try {
-        await expect(readSnapshotVersion(source)).rejects.toThrow("state-handles");
-      } finally {
-        exclusion.release();
-      }
-      expect(await readSnapshotVersion(source)).toBe(0);
-    });
-    expect(spawn).toHaveBeenCalledTimes(2);
-  });
-
   it("refuses a descendant inspection after its scope closes", async () => {
     let resume: () => void;
     const resumed = new Promise<void>((resolve) => {
@@ -349,6 +330,28 @@ it("uses online backup instead of raw WAL copying for live inspection", async ()
   } finally {
     writer.close();
   }
+});
+
+it("preserves an intermittent failed launch without parsing absent worker output", async () => {
+  const source = createDatabase(null);
+  const stagingRoot = tempDirs.make("openclaw-snapshot-launch-");
+  const run = () => runSqliteReadOnlyWorkerSync(source, stagingRoot);
+  expect(fs.existsSync(run())).toBe(true);
+
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  // Use Node's actual failed-launch result: its declared string outputs can be absent.
+  vi.mocked(spawnSync).mockImplementationOnce((_command, args, options) =>
+    actual.spawnSync(path.join(stagingRoot, "missing-node"), args, options),
+  );
+  expect(run).toThrow(
+    expect.objectContaining({
+      message: expect.stringContaining(`failed to start for ${source}`),
+      cause: expect.objectContaining({ code: "ENOENT" }),
+    }),
+  );
+
+  expect(fs.existsSync(run())).toBe(true);
+  expect(fs.readFileSync(source)).toEqual(Buffer.alloc(0));
 });
 
 describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)", (mode) => {

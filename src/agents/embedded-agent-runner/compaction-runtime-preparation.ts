@@ -1,4 +1,3 @@
-/** Shared model, harness, and auth preparation for embedded compaction. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -123,14 +122,13 @@ export function resolveCompactionRuntimeSelection(params: {
   const provider = target.provider ?? DEFAULT_PROVIDER;
   const modelId = target.model ?? DEFAULT_MODEL;
   const selectedRuntime = normalizeOptionalAgentRuntimeId(selectedHarnessRuntime);
-  const attemptNativeHarnessCompaction = Boolean(
-    selectedRuntime &&
-    selectedRuntime !== "auto" &&
-    selectedRuntime !== "openclaw" &&
-    (!isOpenAIProvider(provider) || target.nativeHarnessCompaction === true),
-  );
   return {
-    attemptNativeHarnessCompaction,
+    attemptNativeHarnessCompaction: Boolean(
+      selectedRuntime &&
+      selectedRuntime !== "auto" &&
+      selectedRuntime !== "openclaw" &&
+      (!isOpenAIProvider(provider) || target.nativeHarnessCompaction === true),
+    ),
     runtimePolicySessionKey,
     runtimePolicyAgentId,
     boundHarnessRuntime,
@@ -177,16 +175,15 @@ export async function prepareCompactionHarnessAuth(params: {
     }
   | { ok: false; error: unknown }
 > {
-  const runtimeAuthProfileStore = isOpenAIProvider(params.provider)
-    ? ensureAuthProfileStore(params.agentDir, {
-        profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
-        externalCliProviderIds: ["openai"],
-        allowKeychainPrompt: false,
-      })
-    : ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-        profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
-        allowKeychainPrompt: false,
-      });
+  const useOpenAi = isOpenAIProvider(params.provider);
+  const ensureStore = useOpenAi
+    ? ensureAuthProfileStore
+    : ensureAuthProfileStoreWithoutExternalProfiles;
+  const runtimeAuthProfileStore = ensureStore(params.agentDir, {
+    profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
+    ...(useOpenAi ? { externalCliProviderIds: ["openai"] } : {}),
+    allowKeychainPrompt: false,
+  });
   const harnessSelectionParams = {
     provider: params.provider,
     modelId: params.modelId,

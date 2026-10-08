@@ -1,5 +1,8 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -11,6 +14,7 @@ import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.
 import { PluginInstance } from "./plugin-instance.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
+import { packagedDiscoveryProbePath } from "./provider-discovery.packaged.test-support.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import { resolveSyntheticAuthWithProvider } from "./provider-synthetic-auth.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -19,6 +23,46 @@ import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-s
 import { createPluginRecord } from "./status.test-helpers.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
+
+it("resolves host SDK imports in a packaged discovery hook after leaving its inventory scope", async () => {
+  const root = temp.make("packaged-discovery-");
+  const config = JSON.parse(fs.readFileSync(path.resolve("tsconfig.json"), "utf8")) as {
+    compilerOptions: { paths: Record<string, string[]> };
+  };
+  const tsconfig = path.join(root, "tsconfig.json");
+  // Compile host workspace imports without giving the packaged plugin a source SDK alias.
+  fs.writeFileSync(
+    tsconfig,
+    JSON.stringify({
+      extends: path.resolve("tsconfig.json"),
+      compilerOptions: {
+        paths: Object.fromEntries(
+          Object.entries(config.compilerOptions.paths)
+            .filter(([name]) => !name.startsWith("openclaw/"))
+            .map(([name, targets]) => [name, targets.map((target) => path.resolve(target))]),
+        ),
+      },
+    }),
+  );
+  const result = await promisify(execFile)(
+    process.execPath,
+    [
+      "--import",
+      pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
+      packagedDiscoveryProbePath,
+      root,
+    ],
+    {
+      cwd: root,
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        TSX_TSCONFIG_PATH: tsconfig,
+      },
+    },
+  );
+  expect(result.stderr).toBe("");
+});
 
 it.each([true, false])(
   "keeps discovery with its exact source owner (selected runtime: %s)",

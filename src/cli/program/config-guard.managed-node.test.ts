@@ -7,7 +7,7 @@ import { ensureConfigReady, testApi } from "./config-guard.js";
 
 const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
-  prepareDoctor: vi.fn(),
+  prepareStartup: vi.fn(),
   setRuntimeConfig: vi.fn(),
   offerRecovery: vi.fn(),
 }));
@@ -16,8 +16,8 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: mocks.readConfig,
   setRuntimeConfigSnapshot: mocks.setRuntimeConfig,
 }));
-vi.mock("../../commands/doctor-config-preflight.js", () => ({
-  runDoctorConfigPreflight: mocks.prepareDoctor,
+vi.mock("../../commands/startup-config-preflight.js", () => ({
+  runStartupConfigPreflight: mocks.prepareStartup,
 }));
 vi.mock("../invalid-config-recovery.js", () => ({
   offerInvalidConfigRecovery: mocks.offerRecovery,
@@ -64,7 +64,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_CONFIG_READONLY", undefined);
   statePath = path.join(stateDir, "state", "openclaw.sqlite");
   mocks.readConfig.mockImplementation(async () => snapshot());
-  mocks.prepareDoctor.mockImplementation(async () => ({
+  mocks.prepareStartup.mockImplementation(async () => ({
     snapshot: snapshot(),
     baseConfig: config,
   }));
@@ -73,49 +73,37 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("managed node startup config", () => {
-  it.each([["node", "run"], ["connect"]])(
-    "validates %j without Doctor convergence or config health writes",
-    async (...commandPath) => {
+  it.each([
+    { commandPath: ["node", "run"], managed: true, valid: true },
+    { commandPath: ["connect"], managed: true, valid: true },
+    { commandPath: ["node", "run"], managed: false, valid: true },
+    { commandPath: ["node", "run"], managed: true, valid: false },
+  ])(
+    "validates $commandPath with managed=$managed and valid=$valid",
+    async ({ commandPath, managed, valid }) => {
+      mocks.readConfig.mockResolvedValue(snapshot(valid));
       const host = runtime();
-      await withExistingOpenClawStateSchema({ path: statePath }, async () => {
-        await ensureConfigReady({ runtime: host, commandPath });
-      });
-
-      expect(mocks.prepareDoctor).not.toHaveBeenCalled();
+      const check = () => ensureConfigReady({ runtime: host, commandPath });
+      if (!managed) {
+        await check();
+        expect(mocks.prepareStartup).toHaveBeenCalledWith({ gateway: false });
+        return;
+      }
+      const result = withExistingOpenClawStateSchema({ path: statePath }, check);
+      if (valid) {
+        await result;
+        expect(mocks.setRuntimeConfig).toHaveBeenCalledWith(config, config);
+        expect(host.exit).not.toHaveBeenCalled();
+      } else {
+        await expect(result).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(mocks.offerRecovery).not.toHaveBeenCalled();
+        expect(mocks.setRuntimeConfig).not.toHaveBeenCalled();
+        expect(host.error.mock.calls.join("\n")).toContain("invalid plugin value");
+      }
+      expect(mocks.prepareStartup).not.toHaveBeenCalled();
       expect(mocks.readConfig).toHaveBeenCalledWith({ observe: false });
-      expect(mocks.setRuntimeConfig).toHaveBeenCalledWith(config, config);
-      expect(host.exit).not.toHaveBeenCalled();
     },
   );
-
-  it.each([["node", "run"], ["connect"]])(
-    "retains ordinary %j migration ownership outside the managed scope",
-    async (...commandPath) => {
-      await ensureConfigReady({ runtime: runtime(), commandPath });
-      expect(mocks.prepareDoctor).toHaveBeenCalledWith({
-        migrateState: true,
-        migrateLegacyConfig: false,
-        invalidConfigNote: false,
-        requireStateMigrationCheckpoint: true,
-      });
-    },
-  );
-
-  it("rejects invalid plugin configuration without offering to repair shared state", async () => {
-    mocks.readConfig.mockResolvedValue(snapshot(false));
-    const host = runtime();
-    await expect(
-      withExistingOpenClawStateSchema({ path: statePath }, async () => {
-        await ensureConfigReady({ runtime: host, commandPath: ["node", "run"] });
-      }),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-
-    expect(mocks.readConfig).toHaveBeenCalledWith({ observe: false });
-    expect(mocks.prepareDoctor).not.toHaveBeenCalled();
-    expect(mocks.offerRecovery).not.toHaveBeenCalled();
-    expect(mocks.setRuntimeConfig).not.toHaveBeenCalled();
-    expect(host.error.mock.calls.join("\n")).toContain("invalid plugin value");
-  });
 
   it("rejects changed state selectors before config or migration work", async () => {
     const otherDir = temporary.make("other-managed-node-state-");
@@ -127,6 +115,6 @@ describe("managed node startup config", () => {
     ).rejects.toThrow(/state.*(?:bound|changed)/i);
 
     expect(mocks.readConfig).not.toHaveBeenCalled();
-    expect(mocks.prepareDoctor).not.toHaveBeenCalled();
+    expect(mocks.prepareStartup).not.toHaveBeenCalled();
   });
 });

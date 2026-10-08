@@ -10,9 +10,6 @@ import type {
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
 import { resolveTelegramTargetChatType } from "./targets.js";
 
-export const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload =>
-  payload.text === text ? payload : copyReplyPayloadMetadata(payload, { ...payload, text });
-
 export const projectPayloadForDelivery = (
   turn: Turn,
   payload: ReplyPayload,
@@ -68,7 +65,7 @@ export function normalizePreparedDeliveryPayload(turn: Turn, payload: ReplyPaylo
   // rich blocks. Converting a presentation here would strip it while the
   // final funnel is still undecided, so rich accounts defer canonicalization
   // to the sender which knows the text mode.
-  if (turn.telegramCfg.richMessages === true && payload.presentation) {
+  if (turn.richMessages && payload.presentation) {
     return payload;
   }
   return canonicalizeTelegramPresentationPayload(payload, {

@@ -1,10 +1,12 @@
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { ClientOptions, WebSocket } from "ws";
 import { z } from "zod";
 import type {
+  GatewayWebSocketClientOptions,
+  WebSocket,
+} from "../../packages/gateway-client/src/websocket.js";
+import type {
   WorkerConnectParams,
-  WorkerHeartbeatParams,
   WorkerHelloOk,
   WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -36,10 +38,10 @@ export type WorkerConnectionState =
   | { kind: "failed"; error: Error }
   | { kind: "stopped" };
 
-export type WorkerConnectionExit =
-  | { kind: "fenced"; reason: WorkerFencedReason }
-  | { kind: "failed"; error: Error }
-  | { kind: "stopped" };
+export type WorkerConnectionExit = Extract<
+  WorkerConnectionState,
+  { kind: "fenced" | "failed" | "stopped" }
+>;
 
 export type WorkerConnectionOptions = {
   endpoint: WorkerConnectionEndpoint;
@@ -48,10 +50,7 @@ export type WorkerConnectionOptions = {
   admissionTimeoutMs?: number;
   admissionDeadlineMs?: number;
   requestTimeoutMs?: number;
-  createSocket?: (url: string, options: ClientOptions) => WebSocket;
-  heartbeatStatus?: () => WorkerHeartbeatParams["status"];
-  /** The connect frame was written; this does not establish admission. */
-  onAdmissionRequestSent?: () => void;
+  createSocket?: (url: string, options: GatewayWebSocketClientOptions) => WebSocket;
   onConnectionFailure?: (error: Error | undefined) => void;
 };
 
@@ -105,8 +104,7 @@ export type WorkerAdmissionDeadlineResult = z.infer<typeof WorkerAdmissionDeadli
 export function parseWorkerAdmissionDeadlineResult(
   value: unknown,
 ): WorkerAdmissionDeadlineResult | undefined {
-  const parsed = WorkerAdmissionDeadlineResultSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return WorkerAdmissionDeadlineResultSchema.safeParse(value).data;
 }
 
 export class WorkerFencedError extends Error {
@@ -126,10 +124,6 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
   return value;
 }
 
-export function toWorkerConnectionError(error: unknown): Error {
-  return toStructuredErrorObject(error);
-}
-
 export function formatWorkerConnectionFailure(
   options: WorkerConnectionOptions,
   error: unknown,
@@ -144,7 +138,7 @@ export function formatWorkerConnectionFailure(
     address = endpoint.socketPath;
   }
   const target = truncateUtf16Safe(address, 128);
-  let detail = toWorkerConnectionError(error).message;
+  let detail = toStructuredErrorObject(error).message;
   const access = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
   const credentials = [
     options.connectParams.admission.credential,

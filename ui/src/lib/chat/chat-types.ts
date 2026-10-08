@@ -1,14 +1,12 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
-/**
- * Chat message types for the UI layer.
- */
 import type {
   AgentActivityItem,
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
@@ -53,19 +51,58 @@ export type ChatAttachment = {
 };
 
 // Shared payload contract: draft and outbox storage must not import each other's runtime.
-export type DurableComposerDraftAttachment = {
+export type DurableComposerDraftAttachment = Omit<
+  ChatAttachment,
+  "id" | "dataUrl" | "previewUrl"
+> & {
   blob: Blob;
-  mimeType: string;
-  origin?: "paste" | "file";
-  fileName?: string;
-  sizeBytes?: number;
-  browserAnnotation?: BrowserAnnotationAttachment;
-  selectionAnnotation?: ChatSelectionAnnotation;
+};
+
+export type DurableComposerDraftScope = {
+  gatewayOwner: string;
+  recoveryScope: string;
+  scopeKey: string;
+};
+
+export type DurableChatDraftPresence = { revision: number; active: boolean };
+
+export type DurableQuestionDraft = {
+  itemId: string;
+  signature: string;
+  edited: boolean;
+  dismissed?: boolean;
+  answers: { selected: string[]; freeText: string }[];
+  reopenedAfterBoundary?: string;
+};
+
+export type DurableDraftModelSelection = {
+  agentId: string;
+  model: string;
+  agentRuntime?: string;
+  thinkingLevel: string;
+};
+
+export type DurableComposerDraft = {
+  revision: number;
+  text: string;
+  mentions?: readonly HumanMention[];
+  goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
+  modelSelection?: DurableDraftModelSelection;
+  attachments: DurableComposerDraftAttachment[];
+  questionDrafts?: DurableQuestionDraft[];
 };
 
 export type ChatComposerDraftRetry = {
   expectedDraftRevision: number;
   draftRevision: number;
+};
+
+export type ChatReplyTarget = {
+  messageId: string;
+  text: string;
+  senderLabel?: string | null;
+  sourceMessageId?: string | null;
 };
 
 export type ChatGoalDraftMode = { sessionId?: string } & (
@@ -87,8 +124,10 @@ export type ChatGoalRecovery = {
 };
 
 export type ChatComposerMemoryFallback = {
+  incognito?: boolean;
   awaitingDefaults?: true;
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   message: string;
   mentions?: readonly HumanMention[];
   attachments: ChatAttachment[];
@@ -109,17 +148,14 @@ export type ChatGuardianNotice = {
   message?: string;
 };
 
-export type ToolApprovalReview = {
-  id: string;
-  label: string;
-  status: "in_progress" | "approved" | "denied" | "timed_out" | "aborted";
-  riskLevel?: string;
-  userAuthorization?: string;
-  rationale?: string;
-};
+export type { ToolApprovalReview } from "../../../../src/shared/tool-approval-reviews.js";
+
+export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true };
 
 export type ChatQueueItem = {
   id: string;
+  /** Captured local storage identity; never a server credential. */
+  storageScope?: string;
   /** UI question associated with this input; delivery and retry stay outbox-owned. */
   asyncQuestionItemId?: string;
   workContext?: ChatWorkContext;
@@ -127,7 +163,7 @@ export type ChatQueueItem = {
   text: string;
   mentions?: readonly HumanMention[];
   createdAt: number;
-  /** Operator-owned queue position; absent means "wherever arrival put it". */
+  /** Stable arrival position; only an explicit reorder moves an existing input. */
   orderKey?: number;
   /** Immutable bytes belong to this queued input; routing belongs to the outbox metadata. */
   attachmentPayload?: { key: string; recoveryScope: string; tabId: string };
@@ -168,9 +204,15 @@ export type ChatQueueItem = {
   sender?: SenderIdentity;
 };
 
-/** Union type for items in the chat thread */
 export type ChatItem =
-  | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
+  | {
+      kind: "message";
+      key: string;
+      message: unknown;
+      duplicateCount?: number;
+      /** A distinct input remains a presentation boundary before execution starts. */
+      startsTurn?: true;
+    }
   | {
       kind: "notice";
       key: string;
@@ -183,6 +225,8 @@ export type ChatItem =
       tone?: "danger";
       /** Collapse the body behind a disclosure; the label line stays visible. */
       collapsedBody?: true;
+      /** Structural only: separates a handed-off run from its resumption. Never rendered. */
+      handoffBoundary?: true;
     }
   | {
       kind: "divider";
@@ -202,13 +246,22 @@ export type ChatItem =
       startedAt: number;
       isStreaming: boolean;
       replyToSender?: SenderIdentity;
+      replyToMessage?: MessageGroup["replyToMessage"];
       runId?: string;
       boundaryId?: string;
     }
   | {
       kind: "reading-indicator";
       key: string;
+      /** When this status began on the browser clock; no later than `request.askedAt`. */
       startedAt: number;
+      /** The run handed off and is idle; its subagents are what is still working. */
+      waitingOn?: "subagents";
+      /**
+       * Set for a run that resumed a handoff: when its request was asked, on the
+       * transcript's clock, and the earlier runs of the same answer, oldest first.
+       */
+      request?: { askedAt: number; runIds: readonly string[] };
       runId?: string;
       boundaryId?: string;
     }
@@ -230,6 +283,8 @@ export type ChatStreamSegment = {
   retiredItemId?: string;
   /** In-flight handoff owned by the retired cumulative prefix, not its live display. */
   pendingCommentary?: { text: string; prefixLength: number };
+  /** Visible cumulative prefix that must stay before this persisted commentary item. */
+  pendingCommentaryPrefixFor?: string;
   toolCallId?: string;
   itemId?: string;
 };
@@ -290,10 +345,18 @@ export type MessageGroup = {
   sender?: SenderIdentity;
   sourceClients?: MessageClientSource[];
   replyToSender?: SenderIdentity;
+  replyToMessage?: { message: unknown; key: string };
+  /** Reply context: more than one person speaks in the conversation. */
+  replyShared?: true;
+  /** Assistant reply context: the user prompt that opened this turn. */
+  replyTurnSource?: { message: unknown; key: string };
+  /** Assistant reply context: the prompt that started this run, resolving reply_to_current. */
+  replyCurrentSource?: { message: unknown; key: string };
   messages: Array<{
     message: unknown;
     key: string;
     duplicateCount?: number;
+    replyTarget?: NormalizedMessage["replyTarget"];
     /** Rendered reply content, excluding assistant thinking tags. */
     hasVisibleContent: boolean;
   }>;
@@ -317,7 +380,6 @@ export type MessageImageSource = {
   height?: number;
 };
 
-/** Content item types in a normalized message */
 export type MessageContentItem =
   | ClawHubRecommendation
   | {
@@ -364,7 +426,7 @@ export type MessageContentItem =
   | {
       type: "attachment_error";
       attachment: {
-        code: "file-not-found" | "unsupported-format" | "delivery-failed";
+        code: "file-not-found" | "unsupported-format" | "delivery-failed" | "invalid-reference";
         kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;
@@ -376,7 +438,6 @@ export type MessageContentItem =
       rawText?: string | null;
     };
 
-/** Normalized message structure for rendering */
 export type NormalizedMessage = {
   role: string;
   content: MessageContentItem[];
@@ -406,7 +467,6 @@ export type ToolOutputMetadata = {
   captureTruncated?: true;
 };
 
-/** Tool card representation for inline tool call/result rendering */
 export type ToolCard = {
   id: string;
   callId?: string;
@@ -440,27 +500,7 @@ export type ToolCard = {
   /** Tab actions can identify a route without a previewable page URL. */
   browserTab?: BrowserTabTarget;
   preview?:
-    | {
-        kind: "canvas";
-        surface: "assistant_message";
-        render: "url";
-        title?: string;
-        preferredHeight?: number;
-        url?: string;
-        viewId?: string;
-        className?: string;
-        style?: string;
-        sandbox?: "strict" | "scripts";
-        boardWidgetName?: string;
-        mcpApp?: {
-          viewId: string;
-          serverName?: string;
-          toolName?: string;
-          uiResourceUri?: string;
-          toolCallId?: string;
-          originSessionKey?: string;
-        };
-      }
+    | (NonNullable<ReturnType<typeof extractCanvasFromText>> & { surface: "assistant_message" })
     | (BrowserTabTarget & { kind: "browser-tab"; url: string; title?: string });
 };
 

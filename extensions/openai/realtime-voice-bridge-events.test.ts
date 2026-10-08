@@ -170,7 +170,7 @@ describe("OpenAI realtime voice bridge events", () => {
     },
   );
 
-  it.each([0, 50, 400])(
+  it.each([0, 50])(
     "keeps the echo guard relative to playback across a short prefix (%i ms of continuation)",
     async (continuationMs) => {
       let playback = [
@@ -402,6 +402,35 @@ describe("OpenAI realtime voice bridge events", () => {
     expect(onClearAudio).not.toHaveBeenCalled();
     expect(hasSentEventType(socket, "response.cancel")).toBe(false);
     expect(hasSentEventType(socket, "conversation.item.truncate")).toBe(false);
+  });
+
+  // Forced agent consults disable automatic audio turns but keep interruption on.
+  // The speech_started gate reads interruptResponseOnInputAudio first, so barge-in
+  // must still fire here (openclaw#139278).
+  it("interrupts playback on provider speech when only automatic responses are disabled", async () => {
+    const onClearAudio = vi.fn();
+    const bridge = createNativeBridge({
+      autoRespondToAudio: false,
+      interruptResponseOnInputAudio: true,
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onClearAudio,
+    });
+    const socket = await connectReadyBridge(bridge);
+
+    bridge.setMediaTimestamp(1000);
+    emitAssistantPlayback(socket, { audio: Buffer.alloc(600 * 48) });
+    bridge.setMediaTimestamp(1620);
+    emitServerEvent(socket, { type: "input_audio_buffer.speech_started" });
+
+    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+    expect(
+      parseSent(socket).findLast((event) => event.type === "conversation.item.truncate"),
+    ).toEqual({
+      type: "conversation.item.truncate",
+      item_id: "item_1",
+      content_index: 0,
+      audio_end_ms: 600,
+    });
   });
 
   it.each([

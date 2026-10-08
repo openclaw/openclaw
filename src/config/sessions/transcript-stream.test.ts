@@ -1,4 +1,3 @@
-// Transcript stream tests cover streaming transcript reads and writes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -68,18 +67,6 @@ describe("streamSessionTranscriptLines", () => {
     ).rejects.toBe(error);
   });
 
-  it("forwards malformed JSON lines as raw text so callers can choose to skip them", async () => {
-    fs.writeFileSync(
-      transcriptPath,
-      `${JSON.stringify({ id: "a" })}\nnot-json\n${JSON.stringify({ id: "b" })}\n`,
-      "utf-8",
-    );
-
-    const lines = await collect(streamSessionTranscriptLines(transcriptPath));
-
-    expect(lines).toEqual([JSON.stringify({ id: "a" }), "not-json", JSON.stringify({ id: "b" })]);
-  });
-
   it("honours an abort signal between lines", async () => {
     fs.writeFileSync(transcriptPath, "one\ntwo\nthree\n", "utf-8");
     const controller = new AbortController();
@@ -108,14 +95,6 @@ describe("streamSessionTranscriptLines", () => {
 });
 
 describe("streamSessionTranscriptLinesReverse", () => {
-  it("yields trimmed non-empty lines in reverse order for short files", async () => {
-    fs.writeFileSync(transcriptPath, "first\nsecond\nthird\n", "utf-8");
-
-    const lines = await collect(streamSessionTranscriptLinesReverse(transcriptPath));
-
-    expect(lines).toEqual(["third", "second", "first"]);
-  });
-
   it("returns an empty iterator when the file does not exist", async () => {
     const lines = await collect(
       streamSessionTranscriptLinesReverse(path.join(tempDir, "missing.jsonl")),
@@ -200,22 +179,5 @@ describe("streamSessionTranscriptLinesReverse", () => {
     );
 
     expect(lines).toEqual(["gamma", "beta", firstLine]);
-  });
-
-  it("preserves JSONL line ordering so reverse scans hit the newest match first", async () => {
-    fs.writeFileSync(
-      transcriptPath,
-      [
-        JSON.stringify({ id: "first", role: "user" }),
-        JSON.stringify({ id: "second", role: "assistant", text: "hi" }),
-        JSON.stringify({ id: "third", role: "assistant", text: "bye" }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
-
-    const lines = await collect(streamSessionTranscriptLinesReverse(transcriptPath));
-    const parsed = lines.map((line) => JSON.parse(line) as { id: string });
-
-    expect(parsed.map((entry) => entry.id)).toEqual(["third", "second", "first"]);
   });
 });

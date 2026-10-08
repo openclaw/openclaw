@@ -1,8 +1,13 @@
-/**
- * Settles prompt dispatch, stream cleanup, and result projection.
- * It may assume stream runtime preparation and session state are ready.
- */
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readMessageIdempotencyKey } from "../../../config/sessions/transcript-message-identity.js";
+import { sameSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
+import {
+  assertOwnedTranscriptWriteCommit,
+  SessionTranscriptWriterClaimReboundError,
+  withSessionTranscriptWriteAssertion,
+} from "../../../config/sessions/transcript-write-context.js";
+import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
@@ -11,8 +16,11 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { SessionManager } from "../../sessions/index.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { SessionTranscriptMessageCommittedError } from "../../sessions/session-manager-message-error.js";
+import {
+  appendSessionTranscriptNote,
+  withSessionManagerWrite,
+} from "../../sessions/session-manager-write-admission.js";
 import { log } from "../logger.js";
 import { clearActiveEmbeddedRun } from "../runs.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
@@ -31,8 +39,6 @@ import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { buildPromptImageFailureNotice } from "./images.js";
 import type { EmbeddedAttemptExecutionState, EmbeddedRunAttemptParams } from "./types.js";
-
-/** Runs prompt dispatch, stream settlement, cleanup, and result projection. */
 
 const FAILED_PROMPT_MEDIA_NOTE_TYPE = "openclaw.system-note";
 const FAILED_PROMPT_MEDIA_NOTE_SOURCE = "prompt-image-hydration";
@@ -107,7 +113,7 @@ export async function runEmbeddedAttemptSettledPhase(
     toolResultPromptProjectionState,
     transport: { effectivePromptCacheRetention },
   } = sessionRuntime;
-  const { nestedToolActivities } = toolBase;
+  const { nestedToolActivityState } = toolBase;
   const promptState: EmbeddedAttemptPromptState = {
     contextBudgetStatus: undefined,
     preflightRecovery: undefined,
@@ -140,6 +146,13 @@ export async function runEmbeddedAttemptSettledPhase(
       state.terminal,
       error !== null && error !== undefined ? { error, source: source ?? "prompt" } : null,
     );
+  };
+  const markTimedOutDuringCompaction = () => {
+    state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+      kind: "timeout",
+      phase: "compaction",
+      source: "observation",
+    });
   };
 
   try {
@@ -192,7 +205,7 @@ export async function runEmbeddedAttemptSettledPhase(
     let rewoundBeforeAgentFinalizeRevision = false;
     if (beforeAgentFinalizeRevisionReason && beforeAgentFinalizeRevisionEntryId) {
       await input.sessionLock.withOwnedTranscriptWrite(() =>
-        withSessionManagerWrite(sessionManager, () => {
+        withSessionManagerWrite(sessionManager, async () => {
           const rejectedEntry = sessionManager.getEntry(beforeAgentFinalizeRevisionEntryId);
           if (rejectedEntry?.type !== "message" || rejectedEntry.message.role !== "assistant") {
             throw new Error(
@@ -202,7 +215,7 @@ export async function runEmbeddedAttemptSettledPhase(
           }
           // Keep persistence append-only while excluding the rejected draft and
           // every trailing descendant from the hidden retry's active branch.
-          sessionManager.appendLeafControl({
+          await sessionManager.appendLeafControlAsync({
             targetId: rejectedEntry.parentId,
             appendParentId: rejectedEntry.parentId,
           });
@@ -236,27 +249,14 @@ export async function runEmbeddedAttemptSettledPhase(
             input.activeContextEngine && !getBeforeAgentFinalizeRevisionReason(),
           ),
           subscription,
-          readLifecycleState: () => {
-            const terminal = readTerminal();
-            return {
-              aborted: terminal.aborted,
-              timedOut: terminal.timedOut,
-              timedOutDuringCompaction: terminal.timedOutDuringCompaction,
-            };
-          },
-          markTimedOutDuringCompaction: () => {
-            state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
-              kind: "timeout",
-              phase: "compaction",
-              source: "observation",
-            });
-          },
+          readLifecycleState: readTerminal,
+          markTimedOutDuringCompaction,
           runAbortSignal: input.runAbortController.signal,
           isProbeSession,
           onBlockReplyFlush,
           abortable,
           prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
-          nestedToolActivities,
+          nestedToolActivityState,
           cache: {
             getObservation: preparedStreamRuntime.cache.getObservation,
             retention: effectivePromptCacheRetention,
@@ -283,11 +283,7 @@ export async function runEmbeddedAttemptSettledPhase(
     // outer teardown still needs the completed stream snapshot and usage state.
     setFailure(settledStream.promptError, settledStream.promptErrorSource);
     if (settledStream.timedOutDuringCompaction) {
-      state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
-        kind: "timeout",
-        phase: "compaction",
-        source: "observation",
-      });
+      markTimedOutDuringCompaction();
     }
     messagesSnapshot = settledStream.messagesSnapshot;
     sessionIdUsed = settledStream.sessionIdUsed;
@@ -300,14 +296,20 @@ export async function runEmbeddedAttemptSettledPhase(
       ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
     });
 
+    // Keep dedupe stable without exposing the run ID when note metadata is redacted.
+    const imageFailureNoteKey =
+      sessionRuntimeState.currentTurnImageFailureCount > 0
+        ? `${FAILED_PROMPT_MEDIA_NOTE_SOURCE}:${sha256Hex(attempt.runId)}`
+        : undefined;
     if (
-      sessionRuntimeState.currentTurnImageFailureCount > 0 &&
+      imageFailureNoteKey &&
       !activeSession.messages.some(
         (message) =>
-          message.role === "custom" &&
-          message.customType === FAILED_PROMPT_MEDIA_NOTE_TYPE &&
-          asOptionalRecord(message.details)?.source === FAILED_PROMPT_MEDIA_NOTE_SOURCE &&
-          asOptionalRecord(message.details)?.runId === attempt.runId,
+          readMessageIdempotencyKey(message) === imageFailureNoteKey ||
+          (message.role === "custom" &&
+            message.customType === FAILED_PROMPT_MEDIA_NOTE_TYPE &&
+            asOptionalRecord(message.details)?.source === FAILED_PROMPT_MEDIA_NOTE_SOURCE &&
+            asOptionalRecord(message.details)?.runId === attempt.runId),
       )
     ) {
       const note = {
@@ -315,6 +317,7 @@ export async function runEmbeddedAttemptSettledPhase(
         customType: FAILED_PROMPT_MEDIA_NOTE_TYPE,
         content: buildPromptImageFailureNotice(sessionRuntimeState.currentTurnImageFailureCount),
         display: true,
+        idempotencyKey: imageFailureNoteKey,
         details: {
           source: FAILED_PROMPT_MEDIA_NOTE_SOURCE,
           runId: attempt.runId,
@@ -322,22 +325,62 @@ export async function runEmbeddedAttemptSettledPhase(
         },
         timestamp: Date.now(),
       };
-      await input.sessionLock.withOwnedTranscriptWrite(() =>
-        withSessionManagerWrite(sessionManager, () => {
-          const target = sessionManager.getSessionTarget();
+      const target = sessionManager.getSessionTarget();
+      const sessionId = sessionManager.getSessionId();
+      const assertBinding = () => {
+        if (
+          sessionManager.getSessionId() !== sessionId ||
+          !sameSessionTranscriptTargetBinding(target, sessionManager.getSessionTarget())
+        ) {
+          throw new SessionTranscriptWriterClaimReboundError();
+        }
+      };
+      let committedMessageId: string | undefined;
+      try {
+        await input.sessionLock.withOwnedTranscriptWrite(async () => {
+          assertBinding();
           if (target) {
-            SessionManager.appendMessageToTranscript(
-              target,
-              note,
-              attempt.config ? { config: attempt.config } : undefined,
-            );
+            const appendAndPublish = async () => {
+              assertBinding();
+              const committed = await withSessionTranscriptWriteAssertion(
+                target,
+                assertBinding,
+                () =>
+                  appendSessionTranscriptNote(
+                    target,
+                    note,
+                    attempt.config ? { config: attempt.config } : undefined,
+                  ),
+              );
+              committedMessageId = committed.messageId;
+              assertBinding();
+              assertOwnedTranscriptWriteCommit(target);
+              if (committed.appended || committed.currentTail) {
+                activeSession.agent.state.messages = [...activeSession.messages, committed.message];
+                messagesSnapshot = [...messagesSnapshot, committed.message];
+              }
+            };
+            if (isIncognitoSessionKey(target.sessionKey)) {
+              await withSessionManagerWrite(sessionManager, appendAndPublish);
+            } else {
+              await appendAndPublish();
+            }
           } else {
-            sessionManager.appendMessage(note);
+            await withSessionManagerWrite(sessionManager, async () => {
+              assertBinding();
+              await sessionManager.appendMessageAsync(note);
+              assertBinding();
+              activeSession.agent.state.messages = [...activeSession.messages, note];
+              messagesSnapshot = [...messagesSnapshot, note];
+            });
           }
-          activeSession.agent.state.messages = [...activeSession.messages, note];
-        }),
-      );
-      messagesSnapshot = [...messagesSnapshot, note];
+        });
+      } catch (error) {
+        if (committedMessageId && target) {
+          throw new SessionTranscriptMessageCommittedError(committedMessageId, error, target);
+        }
+        throw error;
+      }
     }
   } finally {
     cleanupError = cleanupEmbeddedAttemptStreamExecution({
