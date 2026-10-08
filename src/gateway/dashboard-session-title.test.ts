@@ -171,8 +171,35 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   it.each([
     ['```text\n"Release Planning"\n```', "Release Planning"],
     ["Title:  Release   planning ", "Release planning"],
+    ['Instruction to reply exactly "ok"', 'Instruction to reply exactly "ok"'],
+    ['Instruction to reply exactly "ok', "Instruction to reply exactly ok"],
+    ["Reply with 'ok'", "Reply with 'ok'"],
+    ["Reply with ‘ok’", "Reply with ‘ok’"],
+    ["Reply with ‘ok", "Reply with ok"],
+    ["Reply with ok’", "Reply with ok"],
+    ["Bestätige mit „ok“", "Bestätige mit „ok“"],
+    ["Reply with “ok”", "Reply with “ok”"],
+    ["Reply with «ok»", "Reply with «ok»"],
+    ["„Release planning“", "Release planning"],
+    ["“Release planning”", "Release planning"],
+    ["«Release planning»", "Release planning"],
+    ["Reply with „ok", "Reply with ok"],
+    ["Reply with “ok", "Reply with ok"],
+    ["Reply with «ok", "Reply with ok"],
+    ["Reply with ok”", "Reply with ok"],
+    ["Reply with ok»", "Reply with ok"],
+    ["Don't change the user's title", "Don't change the user's title"],
+    ["Don’t change the user’s title", "Don’t change the user’s title"],
+    ["cafe\u0301’s setup", "cafe\u0301’s setup"],
+    ["\"'Release notes'\"", "Release notes"],
+    ["Reply with »ok«", "Reply with »ok«"],
+    ['"ok" or "later"', '"ok" or "later"'],
+    [`${"a".repeat(52)} "long quoted span"`, `${"a".repeat(52)} long q`],
+    [`${"a".repeat(59)} 🚀`, "a".repeat(59)],
   ])("normalizes generated title wrappers", async (generated, expected) => {
-    generateConversationLabelWithFallback.mockResolvedValue(generated);
+    generateConversationLabelWithFallback.mockImplementation(async ({ normalizeLabel }) =>
+      normalizeLabel(generated),
+    );
 
     await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
 
