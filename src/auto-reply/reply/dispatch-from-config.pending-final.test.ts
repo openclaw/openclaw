@@ -17,6 +17,11 @@ import {
 } from "./dispatch-from-config.pending-final.js";
 import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-claim.js";
 
+// Fixture writes must not schedule retention work into the cleanup request census.
+vi.mock("../../config/sessions/session-accessor.sqlite-maintenance-kick.js", () => ({
+  kickSessionEntryMaintenanceAfterWrite() {},
+}));
+
 describe("pending final delivery restart proof", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-pending-final-");
   let storePath: string;
