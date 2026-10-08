@@ -129,7 +129,9 @@ vi.mock("../session-utils.js", () => ({
   loadGatewaySessionEntryReadOnly: loadGatewaySessionEntry,
 }));
 
+// mock-isolation: Validation fixtures do not read live session delivery metadata.
 vi.mock("../../cron/delivery-preview.js", () => ({
+  resolveCronDeliveryFailurePreview: async () => undefined,
   resolveCronDeliveryPreview,
   resolveCronDeliveryPreviews,
 }));

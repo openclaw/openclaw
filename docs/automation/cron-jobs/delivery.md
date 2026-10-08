@@ -48,6 +48,8 @@ For current agent-turn jobs, configuring unrelated external channels does not ch
 
 From WebChat, create a current-session agent-turn job with `delivery: { mode: "announce" }` (or omit `delivery`). The tool does not copy internal WebChat conversation coordinates into an external announce route. Do not set `delivery.channel: "webchat"`; explicit channels still must pass normal configured-channel validation. Condition triggers use the same delivery rules.
 
+Isolated jobs still default to `announce` through the last channel route. If no channel route exists, delivery fails even when the agent turn succeeds. The automations tool's create and update results include the failing delivery preview and recovery choices: use a `current` job bound to this conversation with `delivery: { mode: "announce" }`, choose `delivery: { mode: "none" }` for silent runs, or configure a channel and target. A warning does not reject the write or change delivery settings.
+
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
   private/internal, link-local, and other special-use targets are refused by

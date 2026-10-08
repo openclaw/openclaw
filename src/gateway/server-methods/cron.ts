@@ -15,7 +15,10 @@ import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
-import { resolveCronDeliveryPreview } from "../../cron/delivery-preview.js";
+import {
+  resolveCronDeliveryFailurePreview,
+  resolveCronDeliveryPreview,
+} from "../../cron/delivery-preview.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { cronAddResultReadView, cronJobReadView } from "../../cron/job-read-view.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
@@ -25,7 +28,12 @@ import {
   resolveCronSessionTargetSessionKey,
 } from "../../cron/session-target.js";
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import type {
+  CronDeliveryPreview,
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+} from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isSubagentSessionKey, normalizeAgentId } from "../../routing/session-key.js";
@@ -492,6 +500,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
     }
     const touchesToolRuntime = patch.payload !== undefined || Object.hasOwn(patch, "trigger");
+    let deliveryPreview: CronDeliveryPreview | undefined;
     const validateUpdate = async (jobToUpdate: CronJob) => {
       const nextJob = await assertValidCronUpdatePatch({
         cfg,
@@ -506,6 +515,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       ) {
         throw new TypeError("agent-runtime tool jobs require an explicit payload.toolsAllow cap");
       }
+      return nextJob;
     };
     try {
       await validateUpdate(currentJob);
@@ -556,7 +566,12 @@ export const cronHandlers: GatewayRequestHandlers = {
               );
             }
           }
-          await validateUpdate(lockedJob);
+          const nextJob = await validateUpdate(lockedJob);
+          deliveryPreview = await resolveCronDeliveryFailurePreview({
+            cfg,
+            defaultAgentId: context.cron.getDefaultAgentId(),
+            job: nextJob,
+          });
           if (updateOptions) {
             updateOptions.toolsAllowProvenance = resolveCronRequesterProvenanceForJob(
               lockedJob,
@@ -596,7 +611,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     context.logGateway.info("cron: job updated", { jobId });
-    respond(true, cronJobReadView(job), undefined);
+    respond(
+      true,
+      { ...cronJobReadView(job), ...(deliveryPreview ? { deliveryPreview } : {}) },
+      undefined,
+    );
   },
   "cron.remove": scopedCronJobHandler(
     "cron.remove",

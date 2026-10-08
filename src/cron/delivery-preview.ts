@@ -37,24 +37,7 @@ function formatTarget(channel?: string, to?: string | null): string {
   return channel;
 }
 
-function formatDeliveryDetail(params: {
-  requestedChannel?: string;
-  resolved: boolean;
-  sessionKey?: string;
-  error?: string;
-}): string {
-  if (params.requestedChannel === "last" || !params.requestedChannel) {
-    if (!params.resolved) {
-      return params.error
-        ? `last -> no route, will fail-closed: ${params.error}`
-        : "last -> no route, will fail-closed";
-    }
-    return params.sessionKey
-      ? `resolved from last, session ${params.sessionKey}`
-      : "resolved from last, main session";
-  }
-  return params.resolved ? "explicit" : (params.error ?? "unresolved");
-}
+type CronDeliveryPreviewResolution = CronDeliveryPreview & { failed?: true };
 
 type CronDeliveryPreviewParams = {
   cfg: OpenClawConfig;
@@ -65,7 +48,11 @@ type CronDeliveryPreviewParams = {
 function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
   if (!hasCanonicalCronDeliveryMode(params.job.delivery)) {
     return {
-      preview: { label: "delivery requires review", detail: CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE },
+      preview: {
+        label: "delivery requires review",
+        detail: CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+        failed: true as const,
+      },
     };
   }
   const agentId = tryResolveCronJobEffectiveAgentId(
@@ -78,6 +65,7 @@ function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
       preview: {
         label: `agent ${agentId} unavailable`,
         detail: `${refusal.reason}\n${refusal.repairHint}`,
+        failed: true as const,
       },
     };
   }
@@ -88,7 +76,13 @@ function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
   if (plan.mode === "webhook") {
     // Webhook previews do not resolve channel targets; runtime only needs the configured URL.
     const target = plan.to ? `webhook:${plan.to}` : "webhook";
-    return { preview: { label: target, detail: plan.to ? "webhook" : "webhook target missing" } };
+    return {
+      preview: {
+        label: target,
+        detail: plan.to ? "webhook" : "webhook target missing",
+        ...(!plan.to ? { failed: true as const } : {}),
+      },
+    };
   }
 
   const requestedChannel = plan.channel ?? "last";
@@ -97,6 +91,7 @@ function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
       preview: {
         label: `${plan.mode} -> unresolved owner`,
         detail: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+        failed: true as const,
       },
     };
   }
@@ -110,7 +105,7 @@ async function resolvePreparedCronDeliveryPreview(
   cfg: OpenClawConfig,
   prepared: ReturnType<typeof prepareCronDeliveryPreview>,
   sessionContext?: Result<CronDeliveryTargetContext, unknown>,
-): Promise<CronDeliveryPreview> {
+): Promise<CronDeliveryPreviewResolution> {
   if (prepared.preview) {
     return prepared.preview;
   }
@@ -152,28 +147,27 @@ async function resolvePreparedCronDeliveryPreview(
         detail: "commits to this conversation (no external channel route)",
       };
     }
-    // Preview mirrors runtime fail-closed behavior for "last" delivery so the
-    // UI can show unresolved routes before the cron job actually runs.
+    const detail =
+      plan.mode === "none"
+        ? `message tool target unresolved: ${resolved.error.message}`
+        : `${requestedChannel === "last" ? "last -> no route, will fail-closed: " : ""}${resolved.error.message}`;
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
       detail:
         plan.mode === "none"
-          ? `message tool target unresolved: ${resolved.error.message}`
-          : formatDeliveryDetail({
-              requestedChannel,
-              resolved: false,
-              sessionKey: deliverySessionKey,
-              error: resolved.error.message,
-            }),
+          ? detail
+          : `${detail}${sessionTarget ? ' Use sessionTarget:"current" with delivery:{mode:"announce"} and the conversation sessionKey to commit there.' : ""} Use delivery:{mode:"none"} for no automatic delivery, or configure a channel and delivery target.`,
+      ...(plan.mode !== "none" ? { failed: true } : {}),
     };
   }
   return {
     label: `${plan.mode} -> ${formatTarget(resolved.channel, resolved.to)}`,
-    detail: formatDeliveryDetail({
-      requestedChannel,
-      resolved: true,
-      sessionKey: deliverySessionKey,
-    }),
+    detail:
+      requestedChannel !== "last"
+        ? "explicit"
+        : deliverySessionKey
+          ? `resolved from last, session ${deliverySessionKey}`
+          : "resolved from last, main session",
   };
 }
 
@@ -181,7 +175,22 @@ async function resolvePreparedCronDeliveryPreview(
 export async function resolveCronDeliveryPreview(
   params: CronDeliveryPreviewParams,
 ): Promise<CronDeliveryPreview> {
-  return resolvePreparedCronDeliveryPreview(params.cfg, prepareCronDeliveryPreview(params));
+  const { failed: _failed, ...preview } = await resolvePreparedCronDeliveryPreview(
+    params.cfg,
+    prepareCronDeliveryPreview(params),
+  );
+  return preview;
+}
+
+/** Reuses the preview decision without adding successful-route bytes to update results. */
+export async function resolveCronDeliveryFailurePreview(
+  params: CronDeliveryPreviewParams,
+): Promise<CronDeliveryPreview | undefined> {
+  const { failed, ...preview } = await resolvePreparedCronDeliveryPreview(
+    params.cfg,
+    prepareCronDeliveryPreview(params),
+  );
+  return failed ? preview : undefined;
 }
 
 /** Builds cron delivery previews keyed by job id. */
@@ -201,10 +210,12 @@ export async function resolveCronDeliveryPreviews(params: {
   const entries = await Promise.all(
     params.jobs.map(async (job, index) => {
       const context = contextByIndex.get(index);
-      return [
-        job.id,
-        await resolvePreparedCronDeliveryPreview(params.cfg, prepared[index]!, context),
-      ] as const;
+      const { failed: _failed, ...preview } = await resolvePreparedCronDeliveryPreview(
+        params.cfg,
+        prepared[index]!,
+        context,
+      );
+      return [job.id, preview] as const;
     }),
   );
   return Object.fromEntries(entries);
