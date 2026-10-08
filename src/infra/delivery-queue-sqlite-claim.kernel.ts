@@ -188,14 +188,9 @@ export function renewDeliveryQueueEntryPlatformSendLeaseInDatabase(
     : undefined;
 }
 
-type PlatformDispatchParams = PlatformClaimParams & {
-  claimId: string;
-  route?: { replyToId?: string | null };
-};
-
 function startDeliveryQueuePlatformSend(
   database: OpenClawStateDatabase,
-  params: PlatformDispatchParams,
+  params: Parameters<typeof promoteDeliveryQueueEntryPlatformSendInDatabase>[1],
   operation: "promote" | "dispatch",
 ): boolean {
   return transitionDeliveryQueueEntryPlatformSendInDatabase(
@@ -237,14 +232,20 @@ function startDeliveryQueuePlatformSend(
 /** Atomically fence the exact unexpired owner at the real provider boundary. */
 export function promoteDeliveryQueueEntryPlatformSendInDatabase(
   database: OpenClawStateDatabase,
-  params: PlatformDispatchParams,
+  params: PlatformClaimParams & {
+    claimId: string;
+    route?: { replyToId?: string | null };
+  },
 ): boolean {
   return startDeliveryQueuePlatformSend(database, params, "promote");
 }
 
 export function dispatchDeliveryQueueEntryPlatformSendInDatabase(
   database: OpenClawStateDatabase,
-  params: PlatformDispatchParams,
+  params: PlatformClaimParams & {
+    claimId: string;
+    route?: { replyToId?: string | null };
+  },
 ): boolean {
   return startDeliveryQueuePlatformSend(database, params, "dispatch");
 }

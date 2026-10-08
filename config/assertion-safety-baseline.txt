@@ -2212,7 +2212,7 @@ src/infra/net/undici-dispatcher-options.ts	3
 src/infra/net/undici-global-dispatcher.ts	2
 src/infra/node-commands.ts	1
 src/infra/node-sqlite.ts	3
-src/infra/npm-managed-root.ts	8
+src/infra/npm-managed-root.ts	6
 src/infra/oauth-loopback-callback.ts	1
 src/infra/openclaw-cli-shim.ts	1
 src/infra/openclaw-root.ts	1
