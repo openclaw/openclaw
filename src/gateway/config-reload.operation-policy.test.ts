@@ -53,6 +53,7 @@ describe("Gateway operation policy reload", () => {
     "broadcast.strategy",
     "memory.citations",
     "worktreeRoot",
+    "worktreeMaxCount",
     "worktreeAcceleration",
     "desktop.host.enabled",
     "cloudWorkers.desktop",

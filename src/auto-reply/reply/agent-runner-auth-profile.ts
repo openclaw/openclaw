@@ -1,4 +1,3 @@
-// Resolves auth profile settings that agent runner forwards to providers.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   resolveProviderIdForAuth,
@@ -29,7 +28,6 @@ export function resolveProviderScopedAuthProfile(params: {
   };
 }
 
-/** Resolves the auth profile override for a queued follow-up run. */
 export function resolveRunAuthProfile(
   run: FollowupRun["run"],
   provider: string,

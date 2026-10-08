@@ -57,7 +57,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("paces authoritative page reads while reusing sidebar snapshots and isolating agents", async () => {
+  it("applies real row events in the page and sidebar before a one-minute fallback", async () => {
     if (!instance) {
       throw new Error("Gateway fixture is not running");
     }
@@ -110,6 +110,10 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         await roster.getByText("Initial rate proof", { exact: true }).first().waitFor();
         await sidebar.locator('[data-session-key="' + key + '"]').waitFor();
+        // Counts join background bootstrap after the visible row window.
+        await expect
+          .poll(() => lists.some(({ params }) => params.includeOwnerSessionCounts))
+          .toBe(true);
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         await page.exposeFunction("recordRosterEvent", (label: string) => {
           labels.add(label);
@@ -158,51 +162,46 @@ suite.define(() => {
         const primaryBefore = primaryReads().length;
         expect(pageBefore).toBeGreaterThan(0);
         expect(primaryBefore).toBeGreaterThan(0);
+        const before = [...lists];
         await patch(key, "First rate update");
-        await page.clock.runFor(4_999);
-        expect(pageReads()).toHaveLength(pageBefore);
-        await page.clock.runFor(1);
-        await expect.poll(() => pageReads().length).toBe(pageBefore + 1);
-        await expect.poll(() => responses.has(pageReads().at(-1)!.id)).toBe(true);
         await roster.getByText("First rate update", { exact: true }).waitFor();
-        // Completion owns the minimum five-second cooldown; later events must
-        // not postpone the fixed collection window.
-        // Keep the clock paused through the real response and rendering completion.
-        await page.evaluate(() => Promise.resolve());
         for (let index = 0; index < 3; index += 1) {
           await patch(key, "Trailing rate update " + index);
+          await roster.getByText("Trailing rate update " + index, { exact: true }).waitFor();
           await page.clock.runFor(1_000);
         }
-        expect(pageReads()).toHaveLength(pageBefore + 1);
-        await page.clock.runFor(1_999);
-        expect(pageReads()).toHaveLength(pageBefore + 1);
-        await page.clock.runFor(1);
-        await expect.poll(() => pageReads().length).toBe(pageBefore + 2);
+        await page.clock.runFor(56_999);
+        expect(lists).toEqual(before);
+        // The first row arms the minute fallback, followed by the shared event
+        // collection window. Later rows neither refetch nor postpone it.
+        await page.clock.runFor(5_001);
+        await expect.poll(() => pageReads().length).toBe(pageBefore + 1);
         await expect.poll(() => responses.has(pageReads().at(-1)!.id)).toBe(true);
         await roster.getByText("Trailing rate update 2", { exact: true }).waitFor();
         await expect
           .poll(() => sidebar.locator('[data-session-key="' + key + '"]').textContent())
           .toContain("Trailing rate update 2");
-        expect(primaryReads()).toHaveLength(primaryBefore);
+        expect(primaryReads()).toHaveLength(primaryBefore + 1);
+        expect(lists.every(({ params }) => params.rowMode === "compact" && params.source)).toBe(
+          true,
+        );
 
         expect(pageReads().every(({ params }) => params.agentId === "main")).toBe(true);
         const beforeOther = lists.length;
         await patch(otherKey, "Unrelated rate update");
         await page.clock.runFor(15_000);
-        // People counts span agents; only that global facet may refresh here.
+        // A changed row in another agent cannot invalidate this page's window.
         const afterOther = lists.slice(beforeOther);
         expect(
           afterOther.filter(({ params }) => params.includeOwnerSessionCounts !== true),
         ).toEqual([]);
-        expect(afterOther).toHaveLength(1);
         // A relevant successor proves the quiet interval did not retire the
         // subscription. Both events travel through the same real connection.
         await patch(key, "Relevant after unrelated");
         await page.clock.runFor(5_000);
-        await expect.poll(() => pageReads().length).toBe(pageBefore + 3);
-        await expect.poll(() => responses.has(pageReads().at(-1)!.id)).toBe(true);
+        expect(pageReads()).toHaveLength(pageBefore + 1);
         await roster.getByText("Relevant after unrelated", { exact: true }).waitFor();
-        expect(primaryReads()).toHaveLength(primaryBefore);
+        expect(primaryReads()).toHaveLength(primaryBefore + 1);
         await page.clock.resume();
       });
     } finally {

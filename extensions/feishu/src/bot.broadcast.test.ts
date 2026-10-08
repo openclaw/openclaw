@@ -86,28 +86,6 @@ describe("broadcast dispatch", () => {
     });
   }
 
-  it("keeps the observer adapter isolated from active delivery", async () => {
-    const activeDeliver = vi.fn(async () => undefined);
-    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: activeDeliver },
-      replyOptions: {},
-      ensureNoVisibleReplyFallback: vi.fn(),
-    });
-
-    await dispatchBroadcast("msg-broadcast-observer-isolation");
-
-    const observerTurn = resolvedTurnCalls.find(
-      (turn) => (turn["admission"] as { kind?: string } | undefined)?.kind === "observeOnly",
-    );
-    const observerDelivery = observerTurn?.["delivery"] as
-      | { deliver: (payload: unknown, context: unknown) => Promise<unknown> }
-      | undefined;
-    expect(observerDelivery?.deliver).not.toBe(activeDeliver);
-    await expect(observerDelivery?.deliver({}, {})).resolves.toEqual({ visibleReplySent: false });
-    expect(activeDeliver).not.toHaveBeenCalled();
-  });
-
   it("sends no-visible-reply fallback for active broadcast failed final delivery", async () => {
     mockDispatchReply
       .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
@@ -117,9 +95,10 @@ describe("broadcast dispatch", () => {
         settledReceipt: failedFinalReceipt,
       });
     const ensureNoVisibleReplyFallback = vi.fn();
+    const activeDeliver = vi.fn(async () => undefined);
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
       dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      delivery: { deliver: activeDeliver },
       replyOptions: {},
       ensureNoVisibleReplyFallback,
     });
@@ -128,6 +107,15 @@ describe("broadcast dispatch", () => {
     expect(ensureNoVisibleReplyFallback).toHaveBeenCalledWith(
       "broadcast-dispatch-complete-no-visible-reply",
     );
+    const observerTurn = resolvedTurnCalls.find(
+      (turn) => (turn["admission"] as { kind?: string } | undefined)?.kind === "observeOnly",
+    );
+    const observerDelivery = observerTurn?.["delivery"] as
+      | { deliver: (payload: unknown, context: unknown) => Promise<unknown> }
+      | undefined;
+    expect(observerDelivery?.deliver).not.toBe(activeDeliver);
+    await expect(observerDelivery?.deliver({}, {})).resolves.toEqual({ visibleReplySent: false });
+    expect(activeDeliver).not.toHaveBeenCalled();
   });
 
   it("skips no-visible-reply fallback for source-suppressed active broadcast dispatch", async () => {

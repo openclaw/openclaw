@@ -1,5 +1,11 @@
 import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createMessageReceiptFromOutboundResults,
   resolveOutboundSendDep,
+  type MessageReceipt,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -23,7 +29,7 @@ import { buildMSTeamsPresentationCard } from "./presentation.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
 type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
-type MSTeamsSendResult = { messageId: string; conversationId: string };
+type MSTeamsSendResult = { messageId: string; conversationId: string; receipt?: MessageReceipt };
 type MSTeamsSendOptions = Pick<
   Parameters<typeof sendMessageMSTeams>[0],
   "assertDirectAdapterHandoff" | "onPlatformSendDispatch" | "onDeliveryResult"
@@ -49,21 +55,56 @@ async function sendWithDeliveryResults(
   onDeliveryResult: Parameters<
     NonNullable<ChannelOutboundAdapter["sendText"]>
   >[0]["onDeliveryResult"],
+  acceptedResults: MSTeamsSendResult[] = [],
 ): Promise<MSTeamsSendResult> {
-  if (!onDeliveryResult) {
-    return send(undefined);
+  const acceptedBeforeSend = acceptedResults.length;
+  try {
+    let childReported = false;
+    const result = await send(
+      onDeliveryResult
+        ? async (delivery) => {
+            childReported = true;
+            acceptedResults.push(delivery);
+            await onDeliveryResult(
+              attachChannelToResult("msteams", toMSTeamsOutboundResult(delivery)),
+            );
+          }
+        : undefined,
+    );
+    // Injected send dependencies can return only their final result. Native sends
+    // already report each accepted activity before a later send can fail.
+    if (!childReported) {
+      acceptedResults.push(result);
+      if (onDeliveryResult) {
+        await onDeliveryResult(attachChannelToResult("msteams", toMSTeamsOutboundResult(result)));
+      }
+    }
+    return result;
+  } catch (error) {
+    const partial = isChannelPartialDeliveryError(error) ? error : undefined;
+    // A native partial receipt already includes this send's progress observations.
+    const earlierResults = partial ? acceptedResults.slice(0, acceptedBeforeSend) : acceptedResults;
+    if (earlierResults.length === 0) {
+      throw error;
+    }
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [
+        ...earlierResults.map((result) => attachChannelToResult("msteams", result)),
+        ...(partial?.deliveryResult.receipt
+          ? [{ receipt: partial.deliveryResult.receipt }]
+          : (partial?.deliveryResult.messageIds ?? []).map((messageId) => ({
+              channel: "msteams",
+              messageId,
+            }))),
+      ],
+    });
+    throw createChannelPartialDeliveryError(partial?.cause ?? error, {
+      ...partial?.deliveryResult,
+      messageIds: receipt.platformMessageIds,
+      receipt,
+      visibleReplySent: true,
+    });
   }
-  let childReported = false;
-  const result = await send(async (delivery) => {
-    childReported = true;
-    await onDeliveryResult(attachChannelToResult("msteams", toMSTeamsOutboundResult(delivery)));
-  });
-  // Injected send dependencies can return only their final result. Native sends
-  // already report each accepted activity before a later send can fail.
-  if (!childReported) {
-    await onDeliveryResult(attachChannelToResult("msteams", toMSTeamsOutboundResult(result)));
-  }
-  return result;
 }
 
 function resolveMSTeamsThreadTarget(to: string, threadId?: string | number | null) {
@@ -156,6 +197,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     threadId,
   }) => {
     const handoff = { assertDirectAdapterHandoff, onPlatformSendDispatch };
+    const acceptedResults: MSTeamsSendResult[] = [];
     const deliveryTarget = resolveMSTeamsThreadTarget(to, threadId);
     const msteamsData = asOptionalRecord(payload.channelData?.msteams);
     const presentationCard = asOptionalRecord(msteamsData?.presentationCard);
@@ -170,6 +212,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
             onDeliveryResult: report,
           }),
         onDeliveryResult,
+        acceptedResults,
       );
       return attachChannelToResult("msteams", toMSTeamsOutboundResult(result));
     }
@@ -184,8 +227,8 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       const result = await sendPayloadMediaSequence<MSTeamsSendResult>({
         text,
         mediaUrls,
-        send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
-          await sendWithDeliveryResults(
+        send: ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
+          sendWithDeliveryResults(
             (report) =>
               send(deliveryTarget, textLocal, {
                 mediaUrl: mediaUrlLocal,
@@ -196,6 +239,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
                 onDeliveryResult: report,
               }),
             onDeliveryResult,
+            acceptedResults,
           ),
       });
       if (result) {
@@ -216,6 +260,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         result = await sendWithDeliveryResults(
           (report) => send(deliveryTarget, chunk, { ...handoff, onDeliveryResult: report }),
           onDeliveryResult,
+          acceptedResults,
         );
       }
       return attachChannelToResult("msteams", toMSTeamsOutboundResult(result!));

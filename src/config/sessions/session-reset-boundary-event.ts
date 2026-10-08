@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { selectRecentUserAssistantReplayRecords } from "./transcript-replay.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 
@@ -21,11 +23,7 @@ type SessionResetBoundaryEvent = {
 };
 
 function recordId(record: unknown): string | undefined {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
-    return undefined;
-  }
-  const id = (record as { id?: unknown }).id;
-  return typeof id === "string" && id.trim() ? id : undefined;
+  return readNonBlankString(asOptionalRecord(record)?.id);
 }
 
 function uniqueBoundaryId(records: readonly unknown[]): string {
@@ -44,10 +42,7 @@ export function createSessionResetBoundaryId(): string {
 
 function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
   const boundaryIndex = entries.findLastIndex((entry) => {
-    const type =
-      entry && typeof entry === "object" && !Array.isArray(entry)
-        ? (entry as { type?: unknown }).type
-        : undefined;
+    const type = asOptionalRecord(entry)?.type;
     return type === "compaction" || type === "reset";
   });
   if (boundaryIndex < 0) {
@@ -79,13 +74,7 @@ export function buildSessionResetBoundaryEvent(
     boundaryId?: string;
   } & SessionResetBoundaryRequest,
 ): SessionResetBoundaryEvent {
-  const entries = params.events.filter(
-    (event) =>
-      event !== null &&
-      typeof event === "object" &&
-      !Array.isArray(event) &&
-      (event as { type?: unknown }).type !== "session",
-  );
+  const entries = params.events.filter((event) => isRecord(event) && event.type !== "session");
   const activeEntries = selectSessionTranscriptLeafControlledPath(entries) ?? entries;
   const keptEntries =
     params.context === "preserve-tail"

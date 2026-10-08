@@ -33,10 +33,16 @@ describe("executeAgentTurn: result and tool delivery", () => {
   it.each([
     { stopReason: "error", isHeartbeat: false, failureText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
     { stopReason: "error", isHeartbeat: true, failureText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT },
+    {
+      stopReason: "error",
+      isHeartbeat: true,
+      useHeartbeatFailureCopy: false,
+      failureText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    },
     { stopReason: "aborted", isHeartbeat: false, failureText: undefined },
     { stopReason: "superseded", isHeartbeat: false, failureText: undefined },
   ])(
-    "preserves canonical $stopReason after private partial output (heartbeat=$isHeartbeat)",
+    "preserves canonical $stopReason after private partial output (heartbeat=$isHeartbeat, heartbeat copy=$useHeartbeatFailureCopy)",
     async (testCase) => {
       const followupRun = createFollowupRun();
       followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
@@ -49,6 +55,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
       const result = await executeAgentTurn({
         ...createMinimalRunAgentTurnParams({ followupRun }),
         isHeartbeat: testCase.isHeartbeat,
+        opts: { useHeartbeatFailureCopy: testCase.useHeartbeatFailureCopy },
       });
 
       expect(result.kind).toBe("success");

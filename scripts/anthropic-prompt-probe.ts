@@ -52,20 +52,6 @@ const SETUP_TOKEN_VALUE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE?.trim() ??
 const SETUP_TOKEN_PROFILE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
 const DIRECT_CLAUDE_ARGS = ["-p", "--append-system-prompt"];
 
-type CaptureSummary = {
-  url?: string;
-  authScheme?: string;
-  xApp?: string;
-  anthropicBeta?: string;
-  systemBlockCount: number;
-  systemBlocks: Array<{ index: number; bytes: number; preview: string }>;
-  containsPromptExact: boolean;
-  bodyContainsPromptExact: boolean;
-  userBytes?: number;
-  userPreview?: string;
-  rawBody?: string;
-};
-
 type PromptResult = {
   prompt: string;
   ok: boolean;
@@ -79,7 +65,7 @@ type PromptResult = {
   stderr?: string;
   error?: string;
   matchedExtraUsage400: boolean;
-  capture?: CaptureSummary;
+  capture?: ReturnType<typeof summarizeCapture>;
   tmpDir?: string;
 };
 
@@ -107,7 +93,6 @@ type StoppableGatewayChild = {
 };
 
 type ClosableLogFile = {
-  appendFile?(data: string | Uint8Array): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -131,10 +116,7 @@ function summarizeText(text: string, max = 120): string {
   return `${truncateUtf16Safe(normalized, max - 1)}…`;
 }
 
-function summarizeCapture(
-  capture: ProxyCapture | undefined,
-  prompt: string,
-): CaptureSummary | undefined {
+function summarizeCapture(capture: ProxyCapture | undefined, prompt: string) {
   if (!capture) {
     return undefined;
   }
@@ -270,14 +252,6 @@ async function resolveSetupTokenSource(): Promise<TokenSource> {
     );
   }
   return { profileId: match.id, token: validateSetupToken(match.token) };
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  fallback: () => T,
-): Promise<T> {
-  return await Promise.race([promise, sleep(timeoutMs).then(() => fallback())]);
 }
 
 async function readRequestBody(
@@ -484,13 +458,12 @@ async function startAnthropicProxy(params: {
       for (const socket of sockets) {
         socket.destroy();
       }
-      await withTimeout(
+      await Promise.race([
         new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
         }),
-        1_000,
-        () => undefined,
-      );
+        sleep(1_000),
+      ]);
     },
   };
 }

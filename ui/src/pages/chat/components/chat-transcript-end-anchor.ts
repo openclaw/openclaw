@@ -169,13 +169,7 @@ export class TranscriptEndAnchor {
       this.clear();
       return;
     }
-    if (suspended) {
-      return;
-    }
-    if (!element || this.maxOffset === null) {
-      return;
-    }
-    if (this.offset === null) {
+    if (suspended || !element || this.maxOffset === null || this.offset === null) {
       return;
     }
     if (atEnd) {

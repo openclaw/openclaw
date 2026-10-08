@@ -95,7 +95,7 @@ async function resolvePythonExecutablePath(): Promise<string | undefined> {
       continue;
     }
     const lines = res.stdout.trim().split(/\r?\n/);
-    const resolved = lines[0]?.trim().split(/\s+/)[0];
+    const resolved = lines[0]?.trim();
     if (!resolved) {
       continue;
     }

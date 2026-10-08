@@ -7,7 +7,7 @@ const TRANSIENT_MEMORY_READ_CODES = new Set(["EAGAIN", "EWOULDBLOCK", "EDEADLK"]
 const TRANSIENT_MEMORY_READ_MESSAGE = /Unknown system error -11\b/i;
 
 /** Return true for transient memory read failures that should be retried. */
-export function isTransientMemoryReadError(error: unknown): boolean {
+function isTransientMemoryReadError(error: unknown): boolean {
   const details = error as { code?: unknown; errno?: unknown } | null | undefined;
   const code = details?.code;
   if (typeof code === "string" && TRANSIENT_MEMORY_READ_CODES.has(code)) {

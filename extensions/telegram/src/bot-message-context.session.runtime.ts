@@ -1,7 +1,7 @@
 export { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 export {
   readAmbientTranscriptWatermark,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtAsync,
   resolveAmbientTranscriptWatermarkKey,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";

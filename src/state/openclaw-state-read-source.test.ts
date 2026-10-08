@@ -18,7 +18,7 @@ it("retires cached readers after independent custody joins and permits reuse", a
   const { options } = source();
   const nativeSource = captureRetainedNativeWorkerSource();
   const task = queueTask();
-  const reading = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+  const reading = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
   try {
     await task.captured;
     expect(await retireIdleOpenClawStateReadWorkers(nativeSource)).toBe(false);
@@ -33,7 +33,7 @@ it("retires cached readers after independent custody joins and permits reuse", a
 
   const next = queueTask();
   next.result.resolve(emptyReply);
-  await expect(executeExistingOpenClawStateRead(options, { type: "fleet.list" })).resolves.toEqual(
+  await expect(executeExistingOpenClawStateRead(options, { type: "backup.runs" })).resolves.toEqual(
     emptyReply,
   );
   expect(mock.create).toHaveBeenCalledTimes(2);
@@ -61,8 +61,8 @@ it("keeps lazy reads with their captured generation when another generation disp
           const secondTask = queueTask();
           firstTask.result.resolve(emptyReply);
           secondTask.result.resolve(emptyReply);
-          const firstTransport = first.createTransport({ type: "fleet.list" });
-          const secondTransport = second.createTransport({ type: "fleet.list" });
+          const firstTransport = first.createTransport({ type: "backup.runs" });
+          const secondTransport = second.createTransport({ type: "backup.runs" });
           try {
             await expect(firstTransport.startRead(location, authority).result).resolves.toEqual({
               value: emptyReply,
@@ -73,12 +73,12 @@ it("keeps lazy reads with their captured generation when another generation disp
             expect(mock.create).toHaveBeenCalledTimes(2);
             expect(mock.create).toHaveBeenNthCalledWith(
               1,
-              expect.objectContaining({ workerUrl: firstUrl, maxWorkers: 2 }),
+              expect.objectContaining({ workerUrl: firstUrl }),
               expect.objectContaining({ retainedTransport: true }),
             );
             expect(mock.create).toHaveBeenNthCalledWith(
               2,
-              expect.objectContaining({ workerUrl: secondUrl, maxWorkers: 2 }),
+              expect.objectContaining({ workerUrl: secondUrl }),
               expect.objectContaining({ retainedTransport: true }),
             );
           } finally {
@@ -116,7 +116,7 @@ it("joins captured domain cleanup before retiring its pool and execution generat
     bind((url) => new URL(`${url.href}?synthetic-generation=owned`));
     captured = captureOpenClawStateReadSource();
     const retainedSource = captured;
-    const transport = retainedSource.createTransport({ type: "fleet.list" });
+    const transport = retainedSource.createTransport({ type: "backup.runs" });
     const task = queueTask();
     task.result.resolve(emptyReply);
     scope.run("accepted reader", () => {

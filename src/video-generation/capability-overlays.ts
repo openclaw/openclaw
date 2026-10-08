@@ -8,12 +8,6 @@ import type {
   VideoGenerationTransformCapabilities,
 } from "./types.js";
 
-function isVideoGenerationTransformCapabilities(
-  capabilities: VideoGenerationModeCapabilities | VideoGenerationTransformCapabilities | undefined,
-): capabilities is VideoGenerationTransformCapabilities {
-  return Boolean(capabilities && "enabled" in capabilities);
-}
-
 export function buildVideoGenerationCapabilityFailure(params: {
   providerId: string;
   model: string;
@@ -50,35 +44,21 @@ export function buildVideoGenerationCapabilityFailure(params: {
         : inputImageCount > 0
           ? "reference image inputs"
           : "reference video inputs";
-    if (!isVideoGenerationTransformCapabilities(capabilities) || !capabilities.enabled) {
+    if (!capabilities || !("enabled" in capabilities) || !capabilities.enabled) {
       return `${label} does not support ${visualLabel}; skipping to avoid silent reference drop`;
     }
   }
 
-  if (inputImageCount > 0) {
-    const maxImages = capabilities?.maxInputImages ?? provider.capabilities.maxInputImages ?? 0;
-    if (inputImageCount > maxImages) {
-      return maxImages === 0
-        ? `${label} does not support reference image inputs; skipping to avoid silent image drop`
-        : `${label} supports at most ${maxImages} reference image(s), ${inputImageCount} requested; skipping`;
-    }
-  }
-
-  if (inputVideoCount > 0) {
-    const maxVideos = capabilities?.maxInputVideos ?? provider.capabilities.maxInputVideos ?? 0;
-    if (inputVideoCount > maxVideos) {
-      return maxVideos === 0
-        ? `${label} does not support reference video inputs; skipping to avoid silent video drop`
-        : `${label} supports at most ${maxVideos} reference video(s), ${inputVideoCount} requested; skipping`;
-    }
-  }
-
-  if (inputAudioCount > 0) {
-    const maxAudio = capabilities?.maxInputAudios ?? provider.capabilities.maxInputAudios ?? 0;
-    if (inputAudioCount > maxAudio) {
-      return maxAudio === 0
-        ? `${label} does not support reference audio inputs; skipping to avoid silent audio drop`
-        : `${label} supports at most ${maxAudio} reference audio(s), ${inputAudioCount} requested; skipping`;
+  for (const [kind, count, limitKey] of [
+    ["image", inputImageCount, "maxInputImages"],
+    ["video", inputVideoCount, "maxInputVideos"],
+    ["audio", inputAudioCount, "maxInputAudios"],
+  ] as const) {
+    const limit = capabilities?.[limitKey] ?? provider.capabilities[limitKey] ?? 0;
+    if (count > 0 && count > limit) {
+      return limit === 0
+        ? `${label} does not support reference ${kind} inputs; skipping to avoid silent ${kind} drop`
+        : `${label} supports at most ${limit} reference ${kind}(s), ${count} requested; skipping`;
     }
   }
 

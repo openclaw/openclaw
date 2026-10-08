@@ -100,19 +100,14 @@ throw new Error('Unexpected operation: ' + JSON.stringify(args));
 }
 
 describe("release publish finalization", () => {
-  it("shares idempotent finalization between both activation routes", () => {
-    expect(finalizationSteps("finalize_github_release_before_docker")).toEqual(
-      finalizationSteps("finalize_github_release"),
-    );
-    expect(finalize).toContain("already-public");
-    expect(finalize).toContain("finalize-core");
-  });
-
   it.each([
     { tag: "v2026.9.6", distTag: "latest", prerelease: false, madeLatest: true },
     { tag: "v2026.9.7-beta.1", distTag: "beta", prerelease: true, madeLatest: false },
     { tag: "v2026.8.33", distTag: "extended-stable", prerelease: false, madeLatest: false },
   ])("records verified public $tag without rewriting it", ({ madeLatest, ...options }) => {
+    expect(finalizationSteps("finalize_github_release_before_docker")).toEqual(
+      finalizationSteps("finalize_github_release"),
+    );
     const result = fixture(options);
     expect(result.status, result.stderr).toBe(0);
     expect(result.evidence).toEqual({

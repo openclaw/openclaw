@@ -1,6 +1,3 @@
-/**
- * Normalizes OpenAI Responses reasoning/tool-call history for safe replay.
- */
 import {
   normalizeOpenAIResponsesFunctionCallId,
   replaceCompactionReplayOwnerContent,
@@ -52,33 +49,20 @@ function isOpenAIToolCallType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
 
-function createOpenAIResponsesToolCallIdResolver(): (id: string) => string {
-  const rewrittenByOriginalId = new Map<string, string>();
-
-  return (id) => {
-    const rewritten = rewrittenByOriginalId.get(id);
-    if (rewritten) {
-      return rewritten;
-    }
-    if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
-      return id;
-    }
-    const normalized = normalizeOpenAIResponsesFunctionCallId(id);
-    rewrittenByOriginalId.set(id, normalized);
-    return normalized;
-  };
-}
+const DROP_REPLAY_MESSAGE = Symbol("dropReplayMessage");
 
 function rewriteReplayMessages(
   messages: AgentMessage[],
-  rewrite: (message: AgentMessage) => AgentMessage,
+  rewrite: (message: AgentMessage) => AgentMessage | typeof DROP_REPLAY_MESSAGE,
 ): AgentMessage[] {
   let changed = false;
   const result: AgentMessage[] = [];
   for (const message of messages) {
     const next = rewrite(message);
     changed ||= !Object.is(next, message);
-    result.push(next);
+    if (next !== DROP_REPLAY_MESSAGE) {
+      result.push(next);
+    }
   }
   return changed ? result : messages;
 }
@@ -110,7 +94,19 @@ function rewriteAssistantContent(
  * pairs directly into the provider payload, so OpenClaw must normalize here.
  */
 export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): AgentMessage[] {
-  const resolveId = createOpenAIResponsesToolCallIdResolver();
+  const rewrittenByOriginalId = new Map<string, string>();
+  const resolveId = (id: string): string => {
+    const rewritten = rewrittenByOriginalId.get(id);
+    if (rewritten) {
+      return rewritten;
+    }
+    if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
+      return id;
+    }
+    const normalized = normalizeOpenAIResponsesFunctionCallId(id);
+    rewrittenByOriginalId.set(id, normalized);
+    return normalized;
+  };
   return rewriteReplayMessages(messages, (msg) => {
     if (!msg || typeof msg !== "object") {
       return msg;
@@ -226,7 +222,6 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
 }
 
 /**
- * Extracts the Responses `phase` (commentary/final_answer) from a v1 textSignature, if present.
  * Used when dropping the paired msg_* id so phase metadata can be preserved independently.
  */
 function extractTextSignaturePhase(signature: string): "commentary" | "final_answer" | undefined {
@@ -255,32 +250,25 @@ export function dropStaleOpenAIReasoning(
   if (dropBefore === undefined) {
     return messages;
   }
-  let anyChanged = false;
-  const out: AgentMessage[] = [];
-
-  for (const msg of messages) {
+  return rewriteReplayMessages(messages, (msg) => {
     if (!msg || typeof msg !== "object") {
-      out.push(msg);
-      continue;
+      return msg;
     }
 
     const role = (msg as { role?: unknown }).role;
     if (role !== "assistant") {
-      out.push(msg);
-      continue;
+      return msg;
     }
 
     const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
     if (!Array.isArray(assistantMsg.content)) {
-      out.push(msg);
-      continue;
+      return msg;
     }
     const messageTimestamp = parseDateFirstTimestampMs(assistantMsg.timestamp);
     // Timestamp-less legacy entries cannot prove they belong to the new route;
     // treat them as pre-switch so stale provider ids never re-enter replay.
     if (messageTimestamp !== undefined && messageTimestamp > dropBefore) {
-      out.push(msg);
-      continue;
+      return msg;
     }
 
     let changed = false;
@@ -305,13 +293,11 @@ export function dropStaleOpenAIReasoning(
     }
 
     if (!changed) {
-      out.push(msg);
-      continue;
+      return msg;
     }
 
-    anyChanged = true;
     if (nextContent.length === 0) {
-      continue;
+      return DROP_REPLAY_MESSAGE;
     }
 
     // When a replayable reasoning (rs_*) item is dropped after a model/fallback
@@ -336,8 +322,6 @@ export function dropStaleOpenAIReasoning(
         })
       : nextContent;
 
-    out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));
-  }
-
-  return anyChanged ? out : messages;
+    return replaceCompactionReplayOwnerContent(assistantMsg, finalContent);
+  });
 }

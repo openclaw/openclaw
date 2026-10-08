@@ -18,10 +18,7 @@ import {
 } from "./test-helpers/fs-fixtures.js";
 import { removePluginFromConfig } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
-import {
-  prepareConfigForDisabledPluginSet,
-  recordPluginPackageUninstallPlan,
-} from "./uninstall-package-plan.js";
+import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
 import {
   applyPluginUninstallDirectoryRemoval,
   planPluginUninstall,
@@ -268,26 +265,6 @@ function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
     },
   });
 }
-
-it("disables only runtime child entries for a package uninstall", () => {
-  const staged = prepareConfigForDisabledPluginSet(
-    {
-      plugins: {
-        entries: {
-          "pack/one": { enabled: true },
-          "pack/two": { enabled: true },
-        },
-      },
-    },
-    ["pack/one", "pack/two"],
-  );
-
-  expect(staged.plugins?.entries).toEqual({
-    "pack/one": { enabled: false },
-    "pack/two": { enabled: false },
-  });
-  expect(staged.plugins?.entries).not.toHaveProperty("pack");
-});
 
 async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
   const pluginDir = path.join(baseDir, pluginId);

@@ -19,7 +19,8 @@ import {
   listUserProfileAuthLinks,
   setUserProfileAuthLink,
 } from "../state/user-model-accounts.js";
-import { getUserPreferences, setUserPreferences } from "../state/user-preferences.js";
+import { getUserPreferences, setUserPreferences } from "../state/user-preferences.test-support.js";
+import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { userProfilesDb } from "../state/user-profiles-internal.js";
@@ -27,7 +28,6 @@ import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
-  getUserProfileListItem,
   resolveUserProfileId,
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";

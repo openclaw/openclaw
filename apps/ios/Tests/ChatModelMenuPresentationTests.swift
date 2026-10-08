@@ -1,4 +1,5 @@
 import OpenClawChatUI
+import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -15,11 +16,11 @@ struct ChatModelMenuPresentationTests {
     }
 
     @Test func `provider identities use canonical repository brand palettes`() {
-        #expect(ChatModelMenuPresentation.brandPalette(providerID: "openai") == .openAI)
-        #expect(ChatModelMenuPresentation.brandPalette(providerID: "anthropic") == .anthropic)
-        #expect(ChatModelMenuPresentation.brandPalette(providerID: "claude-cli") == .anthropic)
-        #expect(ChatModelMenuPresentation.brandPalette(providerID: "google-gemini-cli") == .google)
-        #expect(ChatModelMenuPresentation.brandPalette(providerID: "openrouter") == .adaptiveMonochrome)
+        #expect(ChatModelMenuPresentation.brandColor(providerID: "openai") == OpenClawBrand.providerOpenAI)
+        #expect(ChatModelMenuPresentation.brandColor(providerID: "anthropic") == OpenClawBrand.providerAnthropic)
+        #expect(ChatModelMenuPresentation.brandColor(providerID: "claude-cli") == OpenClawBrand.providerAnthropic)
+        #expect(ChatModelMenuPresentation.brandColor(providerID: "google-gemini-cli") == OpenClawBrand.providerGoogle)
+        #expect(ChatModelMenuPresentation.brandColor(providerID: "openrouter") == .primary)
     }
 
     @Test func `unknown provider keeps a stable branded fallback`() {
@@ -111,17 +112,6 @@ struct ChatModelMenuPresentationTests {
             selectionID: OpenClawChatViewModel.inheritedThinkingSelectionID,
             effectiveLevelID: "ultra",
             options: options) == "Ultra")
-    }
-
-    @Test func `thinking slider exposes one notch per gateway stop`() {
-        let options = [
-            OpenClawChatThinkingLevelOption(id: "off", label: "Off"),
-            OpenClawChatThinkingLevelOption(id: "low", label: "Low"),
-            OpenClawChatThinkingLevelOption(id: "medium", label: "Medium"),
-            OpenClawChatThinkingLevelOption(id: "high", label: "High"),
-        ]
-
-        #expect(ChatThinkingSliderPresentation.notchIndices(options: options) == [0, 1, 2, 3])
     }
 
     @Test func `fast switch reflects effective inheritance and emits only binary values`() {

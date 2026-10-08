@@ -5,12 +5,17 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentActivityItem } from "../../../../../src/agents/agent-activity-presentation.js";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
+import {
+  WIDGET_PROMPT_EVENT,
+  type WidgetPromptEventDetail,
+} from "../../../components/mcp-app-security.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
   resolveCollapsedToolArgumentPreview,
   extractToolCardsCached,
 } from "../../../lib/chat/tool-cards.ts";
+import * as controlUiView from "../../../plugins/control-ui-view.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
@@ -58,19 +63,6 @@ describe("tool-cards", () => {
     const toolContainer = document.createElement("div");
     render(renderToolPreview(preview, "chat_tool", options), toolContainer);
     expect(toolContainer.querySelector("mcp-app-view")).toBeNull();
-  });
-
-  it("renders ordinary external canvas previews in an iframe", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolPreview(
-        { ...canvas, viewId: "cv_canvas", url: "https://canvas.example/widget" },
-        "chat_message",
-        { allowExternalEmbedUrls: true },
-      ),
-      container,
-    );
-    expect(container.querySelector("iframe")).not.toBeNull();
   });
 
   it("switches a completed patch between mutually exclusive diff and raw bodies", async () => {
@@ -416,7 +408,9 @@ describe("tool-cards", () => {
       const container = mountCard(card, { ...options, expanded: false });
 
       const summary = container.querySelector("button.chat-tool-msg-summary");
-      expect(summary?.textContent).not.toContain("Message");
+      expect(textOf(container, ".chat-tool-msg-summary__label")).toBe(
+        shape === "serialized" ? "Message" : undefined,
+      );
       expect(
         summary?.querySelector(".chat-tool-msg-summary__icon")?.getAttribute("aria-label"),
       ).toBe("message");
@@ -523,7 +517,7 @@ describe("tool-card outcomes", () => {
     { status: "skipped", label: "Skipped" },
     { status: undefined, label: "Outcome unknown" },
   ] as const)(
-    "preserves prepared $status outcomes through live items and history attachment",
+    "reconciles prepared $status outcomes through live items and history attachment",
     ({ status, label }) => {
       const item = projectAgentActivityItem({
         itemId: "collaboration-call",
@@ -578,7 +572,7 @@ describe("tool-card outcomes", () => {
         const card = extractToolCardsCached(message)[0]!;
         expect(card.outputText).toBeUndefined();
         expect(card.isError).toBeUndefined();
-        expect(card.completed).not.toBe(true);
+        expect(card.completed === true).toBe(message === live);
       }
       expect(live).toMatchObject({ __openclawToolStreamResultReceived: false });
       expect(saved).not.toHaveProperty("activity");
@@ -618,6 +612,10 @@ describe("tool-card outcomes", () => {
   it.each([
     { name: "write", args: { path: "/workspace/operation.json", content: "{}" } },
     { name: "progress_card", args: { markdown: "Preparing release" } },
+    {
+      name: "tool_call",
+      args: { id: "web_search", args: { query: "OpenClaw release notes" } },
+    },
   ])("shows skipped $name calls without claiming failure or success", ({ name, args }) => {
     const container = document.createElement("div");
     const card: ToolCard = {
@@ -631,9 +629,76 @@ describe("tool-card outcomes", () => {
     };
     for (const expanded of [false, true]) {
       mountCard(card, { expanded }, container);
+      if (name === "tool_call") {
+        expect(textOf(container, ".chat-tool-msg-summary")).toContain("OpenClaw release notes");
+      }
       expect(container.textContent?.toLowerCase()).toContain("skipped");
       expect(container.textContent).not.toMatch(/failed|Completed|updated|Tool error/);
       expect(container.querySelector(".chat-tool-card--error")).toBeNull();
+    }
+  });
+
+  it.each([
+    {
+      name: "web_search",
+      args: { query: "OpenClaw release notes" },
+      text: "OpenClaw release notes",
+    },
+  ])(
+    "renders a Tool Search $name like a direct call and retains the sidebar identity",
+    ({ name, args, text }) => {
+      const input = { id: name, args };
+      const card: ToolCard = {
+        id: "search-release",
+        callId: "search-release",
+        name: "tool_call",
+        args: input,
+        inputText: JSON.stringify(input, null, 2),
+        outputText: "Found the release notes.",
+        completed: true,
+      };
+      const onOpenSidebar = vi.fn();
+      for (const expanded of [false, true]) {
+        const container = mountCard(card, { expanded, onOpenSidebar });
+        expect(textOf(container, ".chat-tool-msg-summary")).toContain(text);
+        const direct = mountCard(
+          { ...card, name, args, inputText: JSON.stringify(args, null, 2) },
+          { expanded, onOpenSidebar },
+        );
+        expect(container.innerHTML).toBe(direct.innerHTML);
+        if (expanded) {
+          container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn")?.click();
+          expect(onOpenSidebar.mock.calls[0]?.[0].card).toBe(card);
+        }
+      }
+      expect(card.name).toBe("tool_call");
+      expect(card.args).toEqual({ id: name, args });
+    },
+  );
+
+  it("passes the raw Tool Search invocation to tool-result plugin replacements", () => {
+    const pluginSurface = vi.spyOn(controlUiView, "renderPluginSurface");
+    onTestFinished(() => pluginSurface.mockRestore());
+    const input = { id: "web_search", args: { query: "OpenClaw release notes" } };
+    const card: ToolCard = {
+      id: "search-release",
+      callId: "search-release",
+      name: "tool_call",
+      args: input,
+      outputText: "Found the release notes.",
+      completed: true,
+    };
+    for (const expanded of [false, true]) {
+      pluginSurface.mockClear();
+      mountCard(card, { expanded });
+      expect(pluginSurface.mock.calls.map(([, props]) => props)).toEqual([
+        expect.objectContaining({
+          toolName: "tool_call",
+          toolCallId: "search-release",
+          input,
+          output: expect.objectContaining({ text: "Found the release notes." }),
+        }),
+      ]);
     }
   });
 
@@ -831,4 +896,161 @@ describe("tool-card source highlighting", () => {
       }
     },
   );
+});
+
+function renderWidgetPreviewFrame(url: string, allowExternalEmbedUrls = false) {
+  const container = document.createElement("div");
+  document.body.append(container);
+  render(
+    renderToolPreview(
+      {
+        kind: "canvas",
+        surface: "assistant_message",
+        render: "url",
+        url,
+      },
+      "chat_message",
+      allowExternalEmbedUrls ? { allowExternalEmbedUrls } : {},
+    ),
+    container,
+  );
+  const frame = container.querySelector("iframe");
+  expect(frame).not.toBeNull();
+  expect(frame!.contentWindow).not.toBeNull();
+  return { container, frame: frame! };
+}
+
+function offerPromptPort(frame: HTMLIFrameElement): MessagePort {
+  const channel = new MessageChannel();
+  window.dispatchEvent(
+    new MessageEvent("message", {
+      data: { type: "openclaw:widget-prompt-offer" },
+      origin: "null",
+      source: frame.contentWindow,
+      ports: [channel.port2],
+    }),
+  );
+  return channel.port1;
+}
+
+function postPrompt(port: MessagePort, prompt: unknown) {
+  port.postMessage({ type: "openclaw:widget-prompt", prompt });
+}
+
+async function flushPorts() {
+  // Port delivery may take more than one macrotask on loaded CI workers.
+  for (let index = 0; index < 5; index += 1) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+}
+
+function emulateInteractableFrame(frame: HTMLIFrameElement) {
+  // jsdom has no layout and cannot focus iframes; emulate a visible frame the
+  // user clicked into, which is what the host checks require.
+  (frame as HTMLIFrameElement & { checkVisibility: () => boolean }).checkVisibility = () => true;
+  Object.defineProperty(document, "activeElement", { get: () => frame, configurable: true });
+}
+
+function collectPromptEvents(container: HTMLElement): string[] {
+  const received: string[] = [];
+  container.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
+    received.push((event as CustomEvent<WidgetPromptEventDetail>).detail.text);
+  });
+  return received;
+}
+
+function restoreActiveElement() {
+  delete (document as unknown as Record<string, unknown>).activeElement;
+}
+
+describe("URL-only widget prompts", () => {
+  it("adopts the bridge's prompt port offer and enforces the prompt contract", async () => {
+    const { container, frame } = renderWidgetPreviewFrame(
+      "/__openclaw__/canvas/documents/cv_prompt/index.html",
+    );
+    // The bridge posts its offer at parse time, before the frame's load event.
+    const port = offerPromptPort(frame);
+    const hostMessages: unknown[] = [];
+    port.addEventListener("message", (event) => hostMessages.push(event.data));
+    port.start();
+    frame.dispatchEvent(new Event("load"));
+    await flushPorts();
+    expect(hostMessages).toContainEqual({ type: "openclaw:widget-prompt-host-ready" });
+    emulateInteractableFrame(frame);
+    const received = collectPromptEvents(container);
+    try {
+      postPrompt(port, "  Show details  ");
+      await flushPorts();
+      expect(received).toEqual(["Show details"]);
+      // Slash and bang commands would run host commands on the widget's behalf;
+      // the send path must only ever receive conversational text.
+      postPrompt(port, "/approve");
+      postPrompt(port, "!pwd");
+      postPrompt(port, "   ");
+      postPrompt(port, 42);
+      postPrompt(port, "x".repeat(4_001));
+      await flushPorts();
+      expect(received).toEqual(["Show details"]);
+      // A replacement document's later offer must not displace or re-arm the
+      // adopted grant, even across another load event.
+      const lateOfferPort = offerPromptPort(frame);
+      frame.dispatchEvent(new Event("load"));
+      postPrompt(lateOfferPort, "From takeover");
+      await flushPorts();
+      expect(received).toEqual(["Show details"]);
+      // Without focus on the frame there is no user-activation signal; drop.
+      restoreActiveElement();
+      postPrompt(port, "Auto send");
+      await flushPorts();
+      expect(received).toEqual(["Show details"]);
+      // Rate limit: 10 accepted prompts per rolling minute per widget document.
+      emulateInteractableFrame(frame);
+      for (let index = 2; index <= 12; index += 1) {
+        postPrompt(port, `Prompt ${index}`);
+      }
+      await flushPorts();
+      expect(received).toHaveLength(10);
+      expect(received.at(-1)).toBe("Prompt 10");
+    } finally {
+      restoreActiveElement();
+      container.remove();
+    }
+  });
+
+  it("adopts a prompt offer that arrives after the frame's load event", async () => {
+    const { container, frame } = renderWidgetPreviewFrame(
+      "/__openclaw__/canvas/documents/cv_late_offer/index.html",
+    );
+    // Posted-message and load tasks have no guaranteed ordering; here load wins.
+    frame.dispatchEvent(new Event("load"));
+    const port = offerPromptPort(frame);
+    emulateInteractableFrame(frame);
+    const received = collectPromptEvents(container);
+    try {
+      postPrompt(port, "Late but valid");
+      await flushPorts();
+      expect(received).toEqual(["Late but valid"]);
+    } finally {
+      restoreActiveElement();
+      container.remove();
+    }
+  });
+
+  it("never adopts prompt offers from externally allowed embed URLs", async () => {
+    const { container, frame } = renderWidgetPreviewFrame("https://canvas.example/widget", true);
+    const port = offerPromptPort(frame);
+    frame.dispatchEvent(new Event("load"));
+    emulateInteractableFrame(frame);
+    const received = collectPromptEvents(container);
+    try {
+      postPrompt(port, "External send");
+      await flushPorts();
+      expect(received).toEqual([]);
+    } finally {
+      restoreActiveElement();
+      container.remove();
+    }
+  });
 });

@@ -15,15 +15,7 @@ export type OnePasswordItemConfig = {
   description?: string;
 };
 
-export type OnePasswordConfig = {
-  vault: string;
-  opBin?: string;
-  defaultPolicy: OnePasswordPolicy;
-  cacheTtlSeconds: number;
-  grantTtlHours: number;
-  opTimeoutMs: number;
-  items: Record<string, OnePasswordItemConfig>;
-};
+export type OnePasswordConfig = NonNullable<ReturnType<typeof parseOnePasswordConfig>>;
 
 function requiredString(record: Record<string, unknown>, key: string): string {
   const value = record[key];
@@ -68,7 +60,7 @@ function readOnePasswordNumber(
   return value;
 }
 
-export function parseOnePasswordConfig(value: unknown): OnePasswordConfig | undefined {
+export function parseOnePasswordConfig(value: unknown) {
   if (!isRecord(value) || Object.keys(value).length === 0) {
     return undefined;
   }

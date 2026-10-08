@@ -181,18 +181,18 @@ async function downloadFile(params: {
     await params.root.create(
       workspacePath(params.root.rootReal, params.relativePath),
       (async function* () {
-        const hash = createHash("sha256");
+        const hash = params.expectedSha256 === undefined ? undefined : createHash("sha256");
         let bytes = 0;
         for await (const value of response) {
           const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
           bytes += chunk.byteLength;
-          hash.update(chunk);
+          hash?.update(chunk);
           yield chunk;
         }
         // Reject invalid content before the completed file is published.
         if (
           (params.expectedBytes !== undefined && bytes !== params.expectedBytes) ||
-          (params.expectedSha256 !== undefined && hash.digest("hex") !== params.expectedSha256)
+          (hash && hash.digest("hex") !== params.expectedSha256)
         ) {
           throw new Error("workspace transfer blob failed integrity validation");
         }
@@ -658,23 +658,18 @@ export async function runNodeWorkerWorkspaceTransfer(
       throw error;
     }
     if (error instanceof NodeWorkerTransferHttpError) {
-      if (error.reason === "cloudflare-access-requires-tls") {
-        throw new NodeWorkerWorkspaceTransferError(
-          "workspace-transfer-failed: Cloudflare Access credentials require HTTPS",
-          { cause: error },
-        );
-      }
-      if (error.reason === "tls-fingerprint-mismatch") {
-        throw new NodeWorkerWorkspaceTransferError(
-          "workspace-transfer-failed: gateway TLS fingerprint mismatch",
-          { cause: error },
-        );
-      }
-      if (error.reason === "invalid-tls-fingerprint") {
-        throw new NodeWorkerWorkspaceTransferError(
-          "workspace-transfer-failed: gateway TLS fingerprint is invalid",
-          { cause: error },
-        );
+      const detail =
+        error.reason === "cloudflare-access-requires-tls"
+          ? "Cloudflare Access credentials require HTTPS"
+          : error.reason === "tls-fingerprint-mismatch"
+            ? "gateway TLS fingerprint mismatch"
+            : error.reason === "invalid-tls-fingerprint"
+              ? "gateway TLS fingerprint is invalid"
+              : undefined;
+      if (detail) {
+        throw new NodeWorkerWorkspaceTransferError(`workspace-transfer-failed: ${detail}`, {
+          cause: error,
+        });
       }
     }
     throw new NodeWorkerWorkspaceTransferError(

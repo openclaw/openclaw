@@ -6,6 +6,17 @@ import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import { resolveReplyExpectation } from "../reply-completion.js";
 import type { CliExecutionTarget, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
+export function unsupportedIsolatedCompletionError(
+  backendId: string,
+): Error & { code: "unsupported" } {
+  return Object.assign(
+    new Error(
+      `CLI backend "${backendId}" does not support isolated completion; OpenClaw did not start the run.`,
+    ),
+    { name: "IsolatedCompletionUnsupportedError", code: "unsupported" as const },
+  );
+}
+
 /** Keep all CLI transports bound to the same reply-operation identity and terminal contract. */
 export function attachCliReplyBackend(params: RunCliAgentParams, cancel: () => void) {
   if (!params.replyOperation) {

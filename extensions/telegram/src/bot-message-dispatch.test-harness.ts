@@ -498,7 +498,6 @@ export function createContext(overrides?: Partial<TelegramMessageContext>): Tele
     sendRecordVoice: vi.fn(),
     sendChatActionHandler: { sendChatAction: vi.fn(async () => undefined) },
     ackReactionPromise: null,
-    reactionApi: null,
   } as unknown as TelegramMessageContext;
   base.turn = {
     // Prepared turns also read pending-delivery state before entering the mocked producer.

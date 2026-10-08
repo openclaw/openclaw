@@ -657,6 +657,71 @@ describe("qa suite runtime agent process helpers", () => {
     },
   );
 
+  it("uses the turn budget for delayed persisted tool completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayCall = vi
+        .fn()
+        .mockResolvedValueOnce({ runId: "run-delayed-evidence" })
+        .mockResolvedValueOnce({ status: "completed" });
+      const summary = {
+        assistantToolCallCounts: { exec: 1 },
+        completedToolCallCounts: {},
+        successfulToolCallCounts: {},
+        finalText: "command finished",
+      };
+      readSessionTranscriptSummaryMock.mockResolvedValue(summary);
+      const pending = runAgentPrompt(createAgentPromptEnv(gatewayCall), {
+        sessionKey: "session-delayed-evidence",
+        message: "run the shell command",
+        timeoutMs: 10_000,
+        transcriptToolName: "exec",
+        requireSuccessfulTranscriptToolResult: true,
+      });
+      const result = expect(pending).resolves.toMatchObject({ waited: { status: "completed" } });
+      await vi.advanceTimersByTimeAsync(6_000);
+      readSessionTranscriptSummaryMock.mockResolvedValue({
+        ...summary,
+        completedToolCallCounts: { exec: 1 },
+        successfulToolCallCounts: { exec: 1 },
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      await result;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a completed turn without the required successful tool result at its deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayCall = vi
+        .fn()
+        .mockResolvedValueOnce({ runId: "run-missing-evidence" })
+        .mockResolvedValueOnce({ status: "completed" });
+      readSessionTranscriptSummaryMock.mockResolvedValue({
+        assistantToolCallCounts: { exec: 1 },
+        completedToolCallCounts: { exec: 1 },
+        successfulToolCallCounts: {},
+        finalText: "command failed",
+      });
+      const pending = runAgentPrompt(createAgentPromptEnv(gatewayCall), {
+        sessionKey: "session-missing-evidence",
+        message: "run the shell command",
+        timeoutMs: 100,
+        transcriptToolName: "exec",
+        requireSuccessfulTranscriptToolResult: true,
+      });
+      const result = expect(pending).rejects.toThrow(
+        "timed out after 100ms waiting for persisted exec transcript evidence",
+      );
+      await vi.advanceTimersByTimeAsync(100);
+      await result;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("waits for the latest assistant history reply", async () => {
     const gatewayCall = vi
       .fn()

@@ -13,6 +13,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { sha256Hex } from "./crypto-digest.js";
+import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import {
   assertNoPendingLegacyExecApprovals,
   ExecApprovalsMigrationRequiredError,
@@ -231,6 +232,30 @@ describe("exec approvals SQLite store", () => {
     });
   });
 
+  it.each(["update", "direct"] as const)(
+    "keeps malformed %s writes fail-closed instead of discarding invalid policy fields",
+    async (writer) => {
+      const file = {
+        version: 1,
+        defaults: { ask: "always" },
+        agents: { runner: { ask: "invalid" } },
+      } as unknown as ExecApprovalsFile;
+      if (writer === "update") {
+        const written = await updateExecApprovals({ update: () => file });
+        expect(written?.file.defaults).toMatchObject({ security: "deny", ask: "off" });
+        expect(written?.raw).toBe(serializeExecApprovals(file));
+      } else {
+        writeExecApprovalsConfigRow({ db: openOpenClawStateDatabase().db, file });
+      }
+      expect(readExecApprovalsSnapshot().raw).toBe(serializeExecApprovals(file));
+      expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+      expect((await loadExecApprovalsReadOnlyAsync()).defaults).toMatchObject({
+        security: "deny",
+        ask: "off",
+      });
+    },
+  );
+
   it("preserves raw-byte CAS hashes and returns null on a stale base", async () => {
     const missing = readExecApprovalsSnapshot();
     const first = await updateExecApprovals({
@@ -252,6 +277,26 @@ describe("exec approvals SQLite store", () => {
       update: (file) => ({ ...file, defaults: { security: "full" } }),
     });
     expect(updated?.file.defaults?.security).toBe("full");
+  });
+
+  it("rolls back a policy replacement when current authority ends before commit", async () => {
+    const before = await ensureExecApprovalsSnapshot();
+    let current = true;
+    await expect(
+      updateExecApprovals({
+        baseHash: before.hash,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("request authority ended");
+          }
+        },
+        update: (file) => {
+          current = false;
+          return { ...file, defaults: { security: "deny" } };
+        },
+      }),
+    ).rejects.toThrow("request authority ended");
+    expect(readExecApprovalsSnapshot().hash).toBe(before.hash);
   });
 
   it("mints one socket token and reuses it on later initialization", async () => {

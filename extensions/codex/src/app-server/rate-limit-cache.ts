@@ -1,4 +1,5 @@
 /** Client-owned Codex app-server rate-limit snapshots. */
+import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
@@ -11,7 +12,11 @@ type CodexRateLimitCacheState = {
   revisionsByLimitId: Record<string, number>;
 };
 
-const rateLimitsByClient = new WeakMap<CodexAppServerClient, CodexRateLimitCacheState>();
+// The physical client has one notification observer even across same-build module copies.
+const rateLimitsByClient = defineCodexBuildState(
+  "openclaw.codexAppServerRateLimits",
+  () => new WeakMap<CodexAppServerClient, CodexRateLimitCacheState>(),
+)();
 
 /** Replaces one physical client's cache with an authoritative rate-limit read response. */
 export function rememberCodexRateLimitsRead(
@@ -84,26 +89,22 @@ export function readRecentCodexRateLimits(
 
 function mergeRateLimitUpdate(current: JsonValue | undefined, update: JsonObject): JsonObject {
   const currentEnvelope = isJsonObject(current) ? current : undefined;
-  const currentPrimary =
-    currentEnvelope && isJsonObject(currentEnvelope.rateLimits)
-      ? currentEnvelope.rateLimits
-      : undefined;
-  const currentByLimitId =
-    currentEnvelope && isJsonObject(currentEnvelope.rateLimitsByLimitId)
-      ? currentEnvelope.rateLimitsByLimitId
-      : undefined;
+  const currentPrimary = readObjectField(currentEnvelope, "rateLimits");
+  const currentByLimitId = readObjectField(currentEnvelope, "rateLimitsByLimitId");
   const limitId = readLimitId(update);
   const currentPrimaryLimitId = currentPrimary ? readLimitId(currentPrimary) : undefined;
   const currentForLimit =
-    (currentByLimitId && isJsonObject(currentByLimitId[limitId])
-      ? currentByLimitId[limitId]
-      : undefined) ?? (currentPrimaryLimitId === limitId ? currentPrimary : undefined);
-  const merged = mergeSparseSnapshot(
-    isJsonObject(currentForLimit) ? currentForLimit : undefined,
-    currentPrimary,
-    update,
-    limitId,
-  );
+    readObjectField(currentByLimitId, limitId) ??
+    (currentPrimaryLimitId === limitId ? currentPrimary : undefined);
+  const merged: JsonObject = { ...update, limitId };
+  // Rolling updates serialize unavailable account metadata as null. Preserve
+  // only those sparse fields; window and reached-state nulls remain authoritative.
+  for (const key of SPARSE_ACCOUNT_METADATA_KEYS) {
+    const previous = currentForLimit?.[key] ?? currentPrimary?.[key];
+    if (merged[key] == null && previous != null) {
+      merged[key] = previous;
+    }
+  }
   const nextPrimary =
     !currentPrimary || currentPrimaryLimitId === limitId ? merged : currentPrimary;
   let nextByLimitId: JsonObject | undefined;
@@ -142,25 +143,11 @@ function readRateLimitIds(value: JsonValue): string[] {
   return [...ids];
 }
 
-function mergeSparseSnapshot(
-  current: JsonObject | undefined,
-  accountFallback: JsonObject | undefined,
-  update: JsonObject,
-  limitId: string,
-): JsonObject {
-  const merged: JsonObject = { ...update, limitId };
-  // Rolling updates serialize unavailable account metadata as null. Preserve
-  // only those sparse fields; window and reached-state nulls remain authoritative.
-  for (const key of SPARSE_ACCOUNT_METADATA_KEYS) {
-    const previous = current?.[key] ?? accountFallback?.[key];
-    if (merged[key] == null && previous != null) {
-      merged[key] = previous;
-    }
-  }
-  return merged;
-}
-
 function readLimitId(snapshot: JsonObject): string {
   const value = snapshot.limitId;
   return typeof value === "string" && value.trim() ? value.trim() : "codex";
+}
+
+function readObjectField(value: JsonObject | undefined, key: string): JsonObject | undefined {
+  return value && isJsonObject(value[key]) ? value[key] : undefined;
 }

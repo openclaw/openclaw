@@ -15,9 +15,9 @@ import type {
 } from "./policy-state-types.js";
 
 export function scanPolicySecrets(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
-  return [...scanPolicySecretProviders(cfg), ...scanPolicySecretInputs(cfg)].toSorted((a, b) =>
-    a.source.localeCompare(b.source),
-  );
+  const entries = [...scanPolicySecretProviders(cfg)];
+  collectSecretInputs(entries, cfg, [], secretRefDefaults(asNonArrayRecord(cfg.secrets).defaults));
+  return entries.toSorted((a, b) => a.source.localeCompare(b.source));
 }
 
 export function scanPolicyAuthProfiles(
@@ -155,7 +155,7 @@ function pushMemorySessionTranscriptIndexing(
     if (agentSessionMemory === undefined) {
       return;
     }
-    const explicit = memorySearchSessionTranscriptIndexingHasLocalConfig(memorySearch);
+    const explicit = readMemorySessionSettings(memorySearch).explicit;
     const experimental = asNonArrayRecord(memorySearch?.experimental);
     entries.push({
       id: `${agentId}-memory-session-transcripts`,
@@ -181,55 +181,35 @@ function memorySearchSessionTranscriptIndexing(
   if (!isRecord(memorySearch)) {
     return undefined;
   }
-  const inherited = asNonArrayRecord(inheritedMemorySearch);
-  const enabled = readBoolean(memorySearch.enabled) ?? readBoolean(inherited.enabled) ?? true;
-  const experimental = asNonArrayRecord(memorySearch.experimental);
-  const inheritedExperimental = asNonArrayRecord(inherited.experimental);
-  const rememberAcrossConversations =
-    readBoolean(memorySearch.rememberAcrossConversations) ??
-    readBoolean(experimental.sessionMemory) ??
-    readBoolean(inherited.rememberAcrossConversations) ??
-    readBoolean(inheritedExperimental.sessionMemory);
-  const sourcesIncludeSessions =
-    memorySearchSourcesIncludeSessions(memorySearch) ??
-    memorySearchSourcesIncludeSessions(inherited) ??
-    false;
-  if (
-    rememberAcrossConversations === undefined &&
-    readBoolean(experimental.sessionMemory) === undefined &&
-    memorySearchSourcesIncludeSessions(memorySearch) === undefined &&
-    readBoolean(memorySearch.enabled) === undefined
-  ) {
+  const local = readMemorySessionSettings(memorySearch);
+  const inherited = readMemorySessionSettings(inheritedMemorySearch);
+  const rememberAcrossConversations = local.remember ?? inherited.remember;
+  if (rememberAcrossConversations === undefined && !local.explicit) {
     return undefined;
   }
-  if (!enabled) {
-    return false;
-  }
-  return rememberAcrossConversations === true && sourcesIncludeSessions;
-}
-
-function memorySearchSessionTranscriptIndexingHasLocalConfig(memorySearch: unknown): boolean {
-  if (!isRecord(memorySearch)) {
-    return false;
-  }
   return (
-    readBoolean(memorySearch.enabled) !== undefined ||
-    readBoolean(memorySearch.rememberAcrossConversations) !== undefined ||
-    readBoolean(
-      isRecord(memorySearch.experimental) ? memorySearch.experimental.sessionMemory : undefined,
-    ) !== undefined ||
-    memorySearchSourcesIncludeSessions(memorySearch) !== undefined
+    (local.enabled ?? inherited.enabled ?? true) &&
+    rememberAcrossConversations === true &&
+    (local.sessions ?? inherited.sessions ?? false)
   );
 }
 
-function memorySearchSourcesIncludeSessions(memorySearch: unknown): boolean | undefined {
-  if (!isRecord(memorySearch) || memorySearch.sources === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(memorySearch.sources)) {
-    return false;
-  }
-  return memorySearch.sources.includes("sessions");
+function readMemorySessionSettings(value: unknown) {
+  const search = asNonArrayRecord(value);
+  const enabled = readBoolean(search.enabled);
+  const remember =
+    readBoolean(search.rememberAcrossConversations) ??
+    readBoolean(asNonArrayRecord(search.experimental).sessionMemory);
+  const sessions =
+    search.sources === undefined
+      ? undefined
+      : Array.isArray(search.sources) && search.sources.includes("sessions");
+  return {
+    enabled,
+    remember,
+    sessions,
+    explicit: enabled !== undefined || remember !== undefined || sessions !== undefined,
+  };
 }
 
 function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
@@ -246,13 +226,6 @@ function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly Polic
     }
     return entry;
   });
-}
-
-function scanPolicySecretInputs(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
-  const entries: PolicySecretEvidence[] = [];
-  const secrets = asNonArrayRecord(cfg.secrets);
-  collectSecretInputs(entries, cfg, [], secretRefDefaults(secrets.defaults));
-  return entries;
 }
 
 function collectSecretInputs(
@@ -272,7 +245,7 @@ function collectSecretInputs(
   }
   for (const [key, child] of Object.entries(value)) {
     const childPath = [...path, key];
-    const source = configPathSource(childPath);
+    const source = `oc://openclaw.config/${childPath.map(ocPathSegment).join("/")}`;
     const secretInputPath = isSecretInputPath(childPath);
     const ref = secretInputPath ? coerceSecretRef(child, defaults) : null;
     if (ref !== null) {
@@ -290,10 +263,6 @@ function collectSecretInputs(
   }
 }
 
-function configPathSource(path: readonly string[]): string {
-  return `oc://openclaw.config/${path.map(ocPathSegment).join("/")}`;
-}
-
 function isSecretInputPath(path: readonly string[]): boolean {
   const key = path.at(-1);
   if (key === undefined) {
@@ -304,51 +273,27 @@ function isSecretInputPath(path: readonly string[]): boolean {
   ) {
     return true;
   }
-  if (isRawEnvMapValuePath(path)) {
+  if (path.at(-2) === "env") {
     return false;
   }
   if (isSecretInputKey(key)) {
     return true;
   }
   return (
-    matchesConfigPath(path, ["models", "providers", "*", "headers", "*"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["models", "providers", "*"]) ||
-    isMediaConfiguredProviderRequestSecretPath(path) ||
-    matchesConfigPath(path, ["memory", "search", "remote", "headers", "*"]) ||
-    matchesConfigPath(path, [
-      "agents",
-      "entries",
-      "*",
-      "memory",
-      "search",
-      "remote",
-      "headers",
-      "*",
-    ]) ||
-    matchesConfigPath(path, [
-      "agents",
-      "list",
-      "#",
-      "memory",
-      "search",
-      "remote",
-      "headers",
-      "*",
-    ]) ||
-    matchesConfigPath(path, ["diagnostics", "otel", "headers", "*"])
-  );
-}
-
-function isRawEnvMapValuePath(path: readonly string[]): boolean {
-  return path.length >= 2 && path.at(-2) === "env";
-}
-
-function isMediaConfiguredProviderRequestSecretPath(path: readonly string[]): boolean {
-  return (
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "models", "#"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "audio"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "image"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "video"])
+    [
+      ["models", "providers", "*", "headers", "*"],
+      ["memory", "search", "remote", "headers", "*"],
+      ["agents", "entries", "*", "memory", "search", "remote", "headers", "*"],
+      ["agents", "list", "#", "memory", "search", "remote", "headers", "*"],
+      ["diagnostics", "otel", "headers", "*"],
+    ].some((pattern) => matchesConfigPath(path, pattern)) ||
+    [
+      ["models", "providers", "*"],
+      ["tools", "media", "models", "#"],
+      ["tools", "media", "audio"],
+      ["tools", "media", "image"],
+      ["tools", "media", "video"],
+    ].some((prefix) => isConfiguredProviderRequestSecretPath(path, prefix))
   );
 }
 
@@ -356,25 +301,16 @@ function isConfiguredProviderRequestSecretPath(
   path: readonly string[],
   prefix: readonly string[],
 ): boolean {
-  if (path.length < prefix.length + 3) {
+  if (!matchesConfigPathPrefix(path, prefix) || path[prefix.length] !== "request") {
     return false;
   }
-  if (!matchesConfigPathPrefix(path, prefix)) {
-    return false;
-  }
-  const requestIndex = prefix.length;
-  if (path[requestIndex] !== "request") {
-    return false;
-  }
-  const suffix = path.slice(requestIndex + 1);
-  if (suffix.length === 2 && suffix[0] === "headers") {
-    return true;
-  }
-  if (suffix.length === 2 && suffix[0] === "auth" && isConfiguredProviderAuthSecretKey(suffix[1])) {
-    return true;
-  }
-  if (suffix.length === 2 && suffix[0] === "tls" && isConfiguredProviderTlsSecretKey(suffix[1])) {
-    return true;
+  const suffix = path.slice(prefix.length + 1);
+  if (suffix.length === 2) {
+    return (
+      suffix[0] === "headers" ||
+      (suffix[0] === "auth" && (suffix[1] === "token" || suffix[1] === "value")) ||
+      (suffix[0] === "tls" && isConfiguredProviderTlsSecretKey(suffix[1]))
+    );
   }
   return (
     suffix.length === 3 &&
@@ -408,21 +344,12 @@ function isConfiguredProviderTlsSecretKey(key: string | undefined): boolean {
   return key === "ca" || key === "cert" || key === "key" || key === "passphrase";
 }
 
-function isConfiguredProviderAuthSecretKey(key: string | undefined): boolean {
-  return key === "token" || key === "value";
-}
-
 function isSecretInputKey(key: string): boolean {
   const normalized = key.toLowerCase();
   return (
-    normalized === "apikey" ||
     normalized === "keyref" ||
-    normalized === "token" ||
     normalized === "tokenref" ||
-    normalized === "password" ||
-    normalized === "secret" ||
     normalized === "encryptkey" ||
-    normalized === "webhooksecret" ||
     normalized === "serviceaccount" ||
     normalized === "serviceaccountref" ||
     normalized === "privatekey" ||
@@ -443,17 +370,10 @@ function secretRefDefaults(value: unknown): SecretRefDefaults | undefined {
     return undefined;
   }
   const defaults: SecretRefDefaults = {};
-  if (typeof value.env === "string") {
-    defaults.env = value.env;
-  }
-  if (typeof value.file === "string") {
-    defaults.file = value.file;
-  }
-  if (typeof value.exec === "string") {
-    defaults.exec = value.exec;
-  }
-  if (typeof value.store === "string") {
-    defaults.store = value.store;
+  for (const source of ["env", "file", "exec", "store"] as const) {
+    if (typeof value[source] === "string") {
+      defaults[source] = value[source];
+    }
   }
   return defaults;
 }

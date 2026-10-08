@@ -181,65 +181,43 @@ describe("auth profile sqlite reader lifecycle", () => {
     });
   });
 
-  it("keeps exit cleanup registered when an unscoped close fails", async () => {
+  it.each(["unscoped", "root"] as const)("retains readers when a %s close fails", async (scope) => {
     await withReaders((agentDir, open) => {
       const listeners = process.listeners("exit");
       expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
-      const reader = expectDefined(
-        open.mock.results[0]?.value,
-        "auth reader awaiting exit cleanup",
-      );
+      const reader = expectDefined(open.mock.results[0]?.value, "auth reader awaiting cleanup");
+      const siblingAgentDir = `${agentDir}-sibling`;
+      if (scope === "root") {
+        expect(loadPersistedAuthProfileStore(siblingAgentDir)).not.toBeNull();
+      }
+      const closeScope =
+        scope === "root" ? { kind: "root" as const, rootPath: agentDir } : undefined;
       const close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
-        throw new Error("native unscoped close failed");
+        throw new Error("native close failed");
       });
       try {
-        expect(() => closeAuthProfileReadPool()).toThrow("native unscoped close failed");
+        expect(() => closeAuthProfileReadPool(closeScope)).toThrow("native close failed");
         expect(reader.isOpen).toBe(true);
-        const exitClosers = process
-          .listeners("exit")
-          .filter((listener) => !listeners.includes(listener));
-        expect(exitClosers).toHaveLength(1);
-        expectDefined(exitClosers[0], "auth reader exit cleanup listener")(0);
-        expect(reader.isOpen).toBe(false);
-        expect(process.listeners("exit")).toEqual(listeners);
-      } finally {
-        close.mockRestore();
-      }
-    });
-  });
-
-  it("retains scoped readers for a retry when native close fails", async () => {
-    await withReaders((agentDir, open) => {
-      const siblingAgentDir = `${agentDir}-sibling`;
-      let reader: DatabaseSync | undefined;
-      try {
-        expect(loadPersistedAuthProfileStore(agentDir)).not.toBeNull();
-        reader = open.mock.results[0]?.value as DatabaseSync;
-        expect(loadPersistedAuthProfileStore(siblingAgentDir)).not.toBeNull();
-        const siblingReader = open.mock.results[1]?.value as DatabaseSync;
-        const close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
-          throw new Error("native close failed");
-        });
-        try {
-          expect(() => closeAuthProfileReadPool({ kind: "root", rootPath: agentDir })).toThrow(
-            "native close failed",
-          );
-          expect(reader.isOpen).toBe(true);
-          closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
-          expect(reader.isOpen).toBe(false);
+        if (scope === "root") {
+          closeAuthProfileReadPool(closeScope);
+          const siblingReader = expectDefined(open.mock.results[1]?.value, "sibling auth reader");
           expect(siblingReader.isOpen).toBe(true);
           expect(loadPersistedAuthProfileStore(siblingAgentDir)).toMatchObject(
             apiKeyStore("qa-sibling"),
           );
-        } finally {
-          close.mockRestore();
+        } else {
+          const exitClosers = process
+            .listeners("exit")
+            .filter((listener) => !listeners.includes(listener));
+          expect(exitClosers).toHaveLength(1);
+          expectDefined(exitClosers[0], "auth reader exit cleanup listener")(0);
+          expect(process.listeners("exit")).toEqual(listeners);
         }
+        expect(reader.isOpen).toBe(false);
       } finally {
-        if (reader?.isOpen) {
-          reader.close();
-        }
+        close.mockRestore();
       }
-    }, true);
+    }, scope === "root");
   });
 
   it("retains failed admission handles without opening more readers until cleanup succeeds", async () => {

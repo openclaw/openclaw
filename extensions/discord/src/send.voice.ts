@@ -10,7 +10,6 @@ import {
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { withTempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
-import type { RequestClient } from "./internal/discord.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import type { sendMessageDiscord } from "./send.outbound.js";
@@ -74,77 +73,62 @@ export async function sendVoiceMessageDiscord(
   audioPath: string,
   opts: VoiceMessageOpts,
 ): Promise<DiscordSendResult> {
-  return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, () =>
-    sendVoiceMessageDiscordInternal(to, audioPath, opts),
-  );
-}
+  return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, async () => {
+    const cfg = requireRuntimeConfig(opts.cfg, "Discord voice send");
+    return await withMaterializedVoiceMessageInput(audioPath, opts, async (localInputPath) => {
+      let ogg: Awaited<ReturnType<typeof ensureOggOpus>> | undefined;
+      let client: ReturnType<typeof createDiscordClient> | undefined;
+      let channelId: string | undefined;
 
-async function sendVoiceMessageDiscordInternal(
-  to: string,
-  audioPath: string,
-  opts: VoiceMessageOpts,
-): Promise<DiscordSendResult> {
-  const cfg = requireRuntimeConfig(opts.cfg, "Discord voice send");
-  return await withMaterializedVoiceMessageInput(audioPath, opts, async (localInputPath) => {
-    let oggPath: string | null = null;
-    let oggCleanup = false;
-    let token: string | undefined;
-    let rest: RequestClient | undefined;
-    let channelId: string | undefined;
+      try {
+        client = createDiscordClient({ ...opts, cfg });
+        const { token, rest, request, account: accountInfo } = client;
+        const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
+        channelId = (await resolveChannelId(rest, recipient, request)).channelId;
 
-    try {
-      const client = createDiscordClient({ ...opts, cfg });
-      token = client.token;
-      rest = client.rest;
-      const request = client.request;
-      const accountInfo = client.account;
-      const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
-      channelId = (await resolveChannelId(rest, recipient, request)).channelId;
+        ogg = await ensureOggOpus(localInputPath);
 
-      const ogg = await ensureOggOpus(localInputPath);
-      oggPath = ogg.path;
-      oggCleanup = ogg.cleanup;
-
-      const metadata = await getVoiceMessageMetadata(oggPath);
-      const audioBuffer = await fs.readFile(oggPath);
-      const result = await sendDiscordVoiceMessage(
-        rest,
-        channelId,
-        audioBuffer,
-        metadata,
-        opts.reply?.messageId,
-        request,
-        opts.silent,
-        token,
-        opts.onPlatformSendDispatch,
-        opts.assertPlatformSendAuthorized,
-      );
-
-      recordChannelActivity({
-        channel: "discord",
-        accountId: accountInfo.accountId,
-        direction: "outbound",
-      });
-
-      return createDiscordSendResult({
-        result,
-        fallbackChannelId: channelId,
-        kind: "voice",
-        reply: opts.reply,
-      });
-    } catch (err) {
-      if (channelId && rest && token) {
-        throw await buildDiscordSendError(err, {
-          channelId,
-          cfg,
+        const metadata = await getVoiceMessageMetadata(ogg.path);
+        const audioBuffer = await fs.readFile(ogg.path);
+        const result = await sendDiscordVoiceMessage(
           rest,
+          channelId,
+          audioBuffer,
+          metadata,
+          opts.reply?.messageId,
+          request,
+          opts.silent,
           token,
-          hasMedia: true,
+          opts.onPlatformSendDispatch,
+          opts.assertPlatformSendAuthorized,
+        );
+
+        recordChannelActivity({
+          channel: "discord",
+          accountId: accountInfo.accountId,
+          direction: "outbound",
         });
+
+        return createDiscordSendResult({
+          result,
+          fallbackChannelId: channelId,
+          kind: "voice",
+          reply: opts.reply,
+        });
+      } catch (err) {
+        if (channelId && client?.rest && client.token) {
+          throw await buildDiscordSendError(err, {
+            channelId,
+            cfg,
+            rest: client.rest,
+            token: client.token,
+            hasMedia: true,
+          });
+        }
+        throw err;
+      } finally {
+        await unlinkIfExists(ogg?.cleanup ? ogg.path : null);
       }
-      throw err;
-    } finally {
-      await unlinkIfExists(oggCleanup ? oggPath : null);
-    }
+    });
   });
 }

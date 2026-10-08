@@ -17,7 +17,6 @@ import {
 import { execGhRead } from "./lib/plain-gh.mjs";
 
 const MAX_INPUT_BYTES = 128 * 1024;
-
 function required(name, pattern) {
   const value = process.env[name] ?? "";
   if (!pattern.test(value)) {
@@ -118,12 +117,8 @@ function seal() {
   ) {
     throw new Error("Child evidence publisher is not in the current active workflow attempt");
   }
-  const lineage = github(repository, `compare/${workflowSha}...main?per_page=1`);
-  if (
-    !["ahead", "identical"].includes(lineage.status) ||
-    lineage.merge_base_commit?.sha !== workflowSha
-  ) {
-    throw new Error("Child evidence workflow SHA is not a main ancestor");
+  if (workflowSha !== targetSha) {
+    throw new Error("Child evidence workflow SHA does not match the target SHA");
   }
   const attempts = [];
   let publisher;

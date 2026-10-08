@@ -26,10 +26,9 @@ The mappings on this page are a migration subset, not the full SDK surface.
 Check both the public subpath and its actual named exports before replacing an
 import.
 
-Reserved bundled-plugin helper seams have been retired from the public SDK
-export map except for explicitly documented compatibility facades such as the
-deprecated `plugin-sdk/discord` shim retained for external plugins that still
-import the published `@openclaw/discord` package directly. Owner-specific
+Reserved bundled-plugin helper seams, including the `plugin-sdk/discord` and
+`plugin-sdk/telegram-account` compatibility facades, have been retired from the
+public SDK export map. Owner-specific
 helpers live inside the owning plugin package; shared host behavior moves
 through generic SDK contracts such as `plugin-sdk/gateway-runtime`,
 `plugin-sdk/security-runtime`, and the injected plugin API.
@@ -37,6 +36,31 @@ through generic SDK contracts such as `plugin-sdk/gateway-runtime`,
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask maintainers which generic
 contract should own it.
+
+### Removed command and channel facades
+
+The `command-auth`, `discord`, and `telegram-account` subpaths were retired on
+October 2, 2026 with explicit SDK-owner approval. Use these replacements:
+
+| Removed surface                                                                         | Replacement                                                                                                                                             |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command-auth` sender authorization helpers and runtime parameter types                 | `resolveChannelMessageIngress` from `channel-ingress-runtime`; adapt the caller to the ingress contract rather than recreating legacy allowlist policy. |
+| `command-auth` native command parsing, specs, authorization, and session-target helpers | The matching named exports from `command-auth-native`.                                                                                                  |
+| `command-auth` help builders                                                            | `buildCommandsMessage`, `buildCommandsMessagePaginated`, and `buildHelpMessage` from `command-status`.                                                  |
+| `command-auth` model-provider data helpers                                              | The matching named exports from `models-provider-runtime`.                                                                                              |
+| `command-auth` access-group helpers                                                     | Delegate sender authorization to `channel-ingress-runtime`; `access-groups` is private-local and is not a third-party replacement.                      |
+| `command-auth` direct-DM access helpers                                                 | The matching named exports from `channel-inbound`.                                                                                                      |
+| `discord` generic channel types and helpers                                             | The matching named exports from `channel-contract`, `channel-core`, `channel-plugin-common`, `channel-status`, or `config-contracts`.                   |
+| `discord` channel-owned helpers and types                                               | Repository consumers use the Discord plugin's `api.ts` / `runtime-api.ts`; external plugins use generic channel contracts and the injected runtime.     |
+| `telegram-account` account resolution and types                                         | Repository consumers use the Telegram plugin's `api.ts`; external plugins use generic channel contracts and injected runtime helpers.                   |
+
+Check each named export before changing an import. The legacy sender-authorization
+types and Discord facade's permissive component/thread-binding types are removed;
+the owning APIs have their own contracts. Some legacy exports have no typed-public
+replacement and require caller changes. Do not replace them with private-local
+host exports or another plugin's private `src/*` files. Older published packages
+that import these facades must be upgraded before loading them on a host containing
+this removal; SDK-owner approval is not evidence of external migration.
 
 <a id="retained-channel-facade-mappings" />
 

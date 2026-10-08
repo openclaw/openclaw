@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import memoryCore from "../../extensions/memory-core/index.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../../src/cron/agent-id.js";
@@ -13,18 +13,29 @@ import { createTestGatewayScheduler } from "../../src/test-utils/gateway-schedul
 const { makeStorePath } = createCronStoreHarness({ prefix: "memory-dreaming-cron-" });
 const services = new Set<PluginServicesHandle>();
 const schedulers = new Set<CronService>();
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 
-afterEach(async () => {
-  await Promise.all([...services].map((service) => service.stop()));
-  services.clear();
-  for (const cron of schedulers) {
-    cron.stop();
-  }
-  schedulers.clear();
-  vi.useRealTimers();
+beforeEach(() => {
+  scheduler = createTestGatewayScheduler();
 });
 
-function registerDreaming(config: OpenClawConfig, logger: ReturnType<typeof createNoopLogger>) {
+afterEach(async () => {
+  scheduler.beginClose();
+  try {
+    await Promise.all([...services].map((service) => service.stop()));
+  } finally {
+    services.clear();
+    for (const cron of schedulers) {
+      cron.stop();
+    }
+    schedulers.clear();
+    await scheduler.stop();
+    vi.useRealTimers();
+  }
+});
+
+async function startDreaming(config: OpenClawConfig, getCronService: () => CronService) {
+  const logger = createNoopLogger();
   const registry = createEmptyPluginRegistry();
   memoryCore.register(
     createTestPluginApi({
@@ -42,13 +53,15 @@ function registerDreaming(config: OpenClawConfig, logger: ReturnType<typeof crea
       },
     }),
   );
-  return registry;
+  const handle = await startPluginServices({ scheduler, registry, config, getCronService });
+  services.add(handle);
+  return { handle, logger };
 }
 
 async function createScheduler(cronEnabled: boolean, owner?: string) {
   const { storePath } = await makeStorePath();
   const cron = new CronService({
-    scheduler: createTestGatewayScheduler(),
+    scheduler,
     nowMs: () => Date.now(),
     storePath,
     cronEnabled,
@@ -62,46 +75,34 @@ async function createScheduler(cronEnabled: boolean, owner?: string) {
   return cron;
 }
 
-it.each([false, true])(
-  "does not author ownerless dreaming work when effective scheduling is disabled (config enabled=%s)",
-  async (configEnabled) => {
-    vi.useFakeTimers();
-    const config: OpenClawConfig = {
-      agents: { ownership: "explicit", list: [{ id: "qa" }, { id: "qa-extra" }] },
-      cron: { enabled: configEnabled },
-    };
-    const cron = await createScheduler(false);
-    const add = vi.spyOn(cron, "add");
-    const logger = createNoopLogger();
-    const registry = registerDreaming(config, logger);
-    const handle = await startPluginServices({ registry, config, getCronService: () => cron });
-    services.add(handle);
+it("does not author ownerless dreaming work when the scheduler overrides enabled config", async () => {
+  vi.useFakeTimers();
+  const config: OpenClawConfig = {
+    agents: { ownership: "explicit", entries: { qa: {}, "qa-extra": {} } },
+    cron: { enabled: true },
+  };
+  const cron = await createScheduler(false);
+  const add = vi.spyOn(cron, "add");
+  const { logger } = await startDreaming(config, () => cron);
 
-    expect(logger.error).not.toHaveBeenCalled();
-    expect(add).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(logger.error).not.toHaveBeenCalled();
-    expect(add).not.toHaveBeenCalled();
-    expect(await cron.list({ includeDisabled: true })).toEqual([]);
-  },
-);
+  expect(logger.error).not.toHaveBeenCalled();
+  expect(add).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(logger.error).not.toHaveBeenCalled();
+  expect(add).not.toHaveBeenCalled();
+  expect(await cron.list({ includeDisabled: true })).toEqual([]);
+});
 
 it("creates one owned declaration after scheduling resumes and across service reload", async () => {
   const config: OpenClawConfig = {
     agents: {
       ownership: "explicit",
       defaults: { systemAgent: { agentId: "qa" } },
-      list: [{ id: "qa" }, { id: "qa-extra" }],
+      entries: { qa: {}, "qa-extra": {} },
     },
   };
   let cron = await createScheduler(false, "qa");
-  const logger = createNoopLogger();
-  const handle = await startPluginServices({
-    registry: registerDreaming(config, logger),
-    config,
-    getCronService: () => cron,
-  });
-  services.add(handle);
+  const { handle, logger } = await startDreaming(config, () => cron);
   expect(await cron.list({ includeDisabled: true })).toEqual([]);
 
   cron = await createScheduler(true, "qa");
@@ -148,18 +149,12 @@ it.each([true, false])(
     const unrelated = await cron.add({ ...job, name: "Unrelated maintenance" });
     const before = await cron.list({ includeDisabled: true });
     const config: OpenClawConfig = {
-      agents: { ownership: "explicit", list: [{ id: "qa" }, { id: "qa-extra" }] },
+      agents: { ownership: "explicit", entries: { qa: {}, "qa-extra": {} } },
       plugins: {
         entries: { "memory-core": { config: { dreaming: { enabled: dreamingEnabled } } } },
       },
     };
-    const logger = createNoopLogger();
-    const handle = await startPluginServices({
-      registry: registerDreaming(config, logger),
-      config,
-      getCronService: () => cron,
-    });
-    services.add(handle);
+    const { logger } = await startDreaming(config, () => cron);
 
     expect(await cron.list({ includeDisabled: true })).toEqual(
       dreamingEnabled ? before : before.filter((entry) => entry.id !== managed.id),

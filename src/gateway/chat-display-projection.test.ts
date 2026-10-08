@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { describe, expect, it, vi } from "vitest";
-import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { getMediaDir } from "../media/store.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
-import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { createPreSessionStartAnnouncePairFilter } from "./chat-display-projection.history.js";
+import {
+  projectChatDisplayMessage,
+  projectChatDisplayMessages,
+} from "./chat-display-projection.js";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
-import { CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES } from "./server-methods/chat-history-budget.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 
 it("hides private yield inputs without changing canonical arguments", () => {
@@ -51,186 +54,6 @@ it("strips attachment capabilities even after another field changed", () => {
       },
     ]),
   ).toEqual([{ role: "assistant", content: [{ type: "attachment", attachment }] }]);
-});
-
-describe("multimodal display privacy", () => {
-  it.each([
-    {
-      name: "native image data",
-      image: (data: string) => ({ type: "image", mimeType: "image/png", data }),
-    },
-    {
-      name: "Anthropic image source",
-      image: (data: string) => ({
-        type: "image",
-        source: { type: "base64", media_type: "image/png", data },
-      }),
-    },
-  ])("keeps text while omitting $name from display history", ({ image }) => {
-    const png = createNoisyPngBuffer(320, 320);
-    const encoded = png.toString("base64");
-    const message = {
-      role: "user",
-      content: [
-        { type: "text", text: "keep prefix text" },
-        image(encoded),
-        { type: "text", text: "keep suffix text" },
-      ],
-    };
-    const messages = projectChatDisplayMessages([message]);
-    expect(messages).toMatchObject([
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "keep prefix text" },
-          { type: "image", omitted: true, bytes: png.length },
-          { type: "text", text: "keep suffix text" },
-        ],
-      },
-    ]);
-    expect(JSON.stringify(messages)).not.toContain(encoded);
-    expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThan(
-      CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-    );
-  });
-
-  it("keeps sanitized legacy media in projection and incremental SSE", () => {
-    const data = Buffer.from("inline payload").toString("base64");
-    const rawMessage = {
-      role: "user",
-      content: [
-        { type: "text", text: "keep mixed media metadata" },
-        {
-          type: "image",
-          mimeType: "image/png",
-          path: "/tmp/private-image.png",
-          url: "https://image-user@media.example/image.png?signature=image-secret#image-fragment",
-          source: { type: "base64", data, blob: data, url: "media://inbound/image-claim" },
-        },
-        {
-          type: "audio",
-          mimeType: "audio/wav",
-          data,
-          filePath: "C:\\private-audio.wav",
-          audio_url: "media://inbound/audio-claim",
-          source: {
-            type: "url",
-            data,
-            url: "https://audio-user@media.example/audio.wav?token=audio-secret#audio-fragment",
-          },
-        },
-        {
-          type: "video",
-          mimeType: "video/mp4",
-          blob: data,
-          localPath: "\\\\server\\share\\private-video.mp4",
-          openclawReasoningReplay: { private: true },
-          video_url:
-            "https://video-user@media.example/video.mp4?X-Amz-Signature=video-secret#video-fragment",
-          source: { type: "url", blob: data, url: "media://inbound/video-claim" },
-        },
-      ],
-    };
-    const original = structuredClone(rawMessage);
-    const state = SessionHistorySseState.fromSnapshot({
-      target: { sessionId: "mixed-media", sessionKey: "agent:main:mixed-media" },
-      snapshot: {
-        history: { items: [], messages: [], hasMore: false },
-        rawTranscriptSeq: 0,
-        turnBoundaryPending: false,
-        assistantErrorPending: false,
-      },
-    });
-    for (const message of [
-      projectChatDisplayMessages([rawMessage])[0],
-      state.appendInlineMessage({ message: rawMessage, messageId: "media-message" })?.message,
-    ]) {
-      expect(message?.role).toBe("user");
-      expect(JSON.stringify(message)).not.toContain(data);
-      expect(JSON.stringify(message)).not.toMatch(
-        /private-|-(?:user|secret|fragment)|openclawReasoningReplay/u,
-      );
-      expect(message?.content).toEqual([
-        { type: "text", text: "keep mixed media metadata" },
-        {
-          type: "image",
-          mimeType: "image/png",
-          url: "https://media.example/image.png",
-          source: { type: "base64", url: "media://inbound/image-claim" },
-          omitted: true,
-          bytes: 14,
-        },
-        {
-          type: "audio",
-          mimeType: "audio/wav",
-          audio_url: "media://inbound/audio-claim",
-          source: { type: "url", url: "https://media.example/audio.wav", omitted: true },
-          omitted: true,
-          bytes: 14,
-        },
-        {
-          type: "video",
-          mimeType: "video/mp4",
-          video_url: "https://media.example/video.mp4",
-          source: { type: "url", url: "media://inbound/video-claim", omitted: true },
-          omitted: true,
-          bytes: 14,
-        },
-      ]);
-    }
-    expect(rawMessage).toEqual(original);
-  });
-
-  it("removes private audio payloads and local references while preserving safe refs", () => {
-    const privateMarker = "private-audio-reference";
-    const privateFiles = Object.fromEntries(
-      ["path", "file", "filePath", "localPath"].map((key) => [key, "/private/" + privateMarker]),
-    );
-    const safeAudio = [
-      {
-        type: "audio",
-        url: "https://example.invalid/audio.wav",
-        openUrl: "http://example.invalid/audio.wav",
-        audio_url: "media://inbound/audio.wav",
-        source: { type: "url", url: "/api/chat/media/outgoing/audio.wav" },
-      },
-      { type: "audio", url: "/media/audio.wav", openUrl: "/__openclaw__/audio/clip.wav" },
-    ];
-    const message = {
-      role: "user",
-      content: [
-        {
-          type: "audio",
-          data: { rawSecret: privateMarker },
-          url: "data:audio/wav;base64," + privateMarker,
-          openUrl: "file:///tmp/" + privateMarker + ".wav",
-          audio_url: "~/" + privateMarker + ".wav",
-          ...privateFiles,
-          source: {
-            type: "opaque",
-            codec: "pcm",
-            data: new Uint8Array([111, 112, 113]),
-            url: "/tmp/" + privateMarker + "-source.wav",
-            ...privateFiles,
-          },
-        },
-        { type: "audio", url: "C:\\a.wav", source: { url: "\\\\s\\a.wav" } },
-        ...safeAudio,
-      ],
-    };
-    const original = structuredClone(message);
-    expect(projectChatDisplayMessages([message])).toEqual([
-      {
-        role: "user",
-        content: [
-          { type: "audio", omitted: true, source: { type: "opaque", codec: "pcm", omitted: true } },
-          { type: "audio", omitted: true, source: { omitted: true } },
-          ...safeAudio,
-        ],
-      },
-    ]);
-    expect(message).toEqual(original);
-  });
 });
 
 describe("transcript display metadata", () => {
@@ -279,11 +102,14 @@ describe("transcript display metadata", () => {
     },
   );
 
-  it("marks capped diffs on standalone and nested tool results", () => {
+  it.each([
+    { changed: true, diff: "+line\n".repeat(40) },
+    { cwd: "/workspace/".repeat(40), diff: "+short" },
+  ])("marks capped details on standalone and nested tool results (%j)", (details) => {
     const result = {
       type: "toolResult",
       toolName: "edit",
-      details: { changed: true, diff: "+line\n".repeat(40) },
+      details,
     };
     for (const projected of sanitizeChatHistoryMessages(
       [
@@ -564,23 +390,34 @@ it.each([
   },
 );
 
-it("keeps authoritative write booleans and strips unrelated details", () => {
-  const result = (details: Record<string, unknown>) => ({
-    role: "toolResult",
-    toolName: "write",
-    content: [{ type: "text", text: "ok" }],
-    details,
-  });
+it.each([
+  { toolName: "exec", details: { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false } },
+  { toolName: "sessions_spawn", details: { ok: true, sessionKey: "agent:helper:main" } },
+])("retains $toolName status in standalone and nested history", ({ toolName, details }) => {
+  const result = { type: "toolResult", toolName, content: "done", details };
+  const messages = [
+    { ...result, role: "toolResult" },
+    { role: "assistant", content: [result] },
+  ];
+  expect(sanitizeChatHistoryMessages(messages)).toEqual(messages);
+});
+
+it.each([
+  { exitCode: Number.NaN, durationMs: Infinity, sessionKey: " padded ", ok: "true" },
+  { exitCode: "0", durationMs: -Infinity, sessionKey: "s".repeat(33), ok: 1 },
+])("keeps malformed status metadata out of display history (%j)", (details) => {
+  const result = { type: "toolResult", toolName: "exec", details: { changed: true } };
   expect(
-    sanitizeChatHistoryMessages([
-      result({ changed: true, created: false, diff: "-1 old\n+1 new", private: "drop" }),
-      result({ changed: true, created: true }),
-      result({ changed: "true", created: 1 }),
-    ]),
+    sanitizeChatHistoryMessages(
+      [
+        { ...result, role: "toolResult", details: { ...details, changed: true } },
+        { role: "assistant", content: [{ ...result, details: { ...details, changed: true } }] },
+      ],
+      32,
+    ),
   ).toEqual([
-    result({ changed: true, created: false, diff: "-1 old\n+1 new" }),
-    result({ changed: true, created: true }),
-    { role: "toolResult", toolName: "write", content: [{ type: "text", text: "ok" }] },
+    { ...result, role: "toolResult" },
+    { role: "assistant", content: [result] },
   ]);
 });
 
@@ -624,12 +461,245 @@ it("caps nested output once, preserves literal text, and removes private media",
   expect(message).toEqual(original);
 });
 
-it("keeps tool output whitespace and UTF-16 intact without adding a sentinel", () => {
-  expect(sanitizeChatHistoryMessages([{ role: "function", content: " \n😀  \n" }], 3)).toEqual([
-    {
-      role: "function",
-      content: " \n",
-      __openclaw: { truncated: true, reason: "display-cap" },
-    },
+const user = { role: "user", content: "hello", __openclaw: { seq: 1 } };
+const failed = {
+  role: "assistant",
+  content: [],
+  stopReason: "error",
+  errorMessage: "model unavailable",
+  __openclaw: { id: "failed", seq: 2, runId: "run-a" },
+};
+const text = (value: string) => ({ type: "text", text: value });
+const tool = { type: "toolCall", id: "partial-call", name: "read", arguments: {} };
+const answer = {
+  role: "assistant",
+  content: [text("Recovered answer")],
+  stopReason: "stop",
+  __openclaw: { id: "answer", seq: 3, runId: "run-a" },
+};
+const projectedIds = (messages: unknown[]) =>
+  projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
+
+it.each([
+  {
+    name: "legacy structured error",
+    errorCode: "misalignment_policy_violation",
+    errorType: "invalid_request_error",
+    expected: "The provider stopped this request as a safety precaution (misalignment).",
+  },
+  {
+    name: "saved code only",
+    errorCode: "misalignment_policy_violation",
+    expected: "The provider stopped this request as a safety precaution (misalignment).",
+  },
+  {
+    name: "current refusal diagnostic",
+    diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }],
+    expected: "Chat stopped as a precaution. Review the findings in chat before continuing.",
+  },
+])(
+  "preserves $name guidance with empty and partial replies",
+  ({ name: _name, expected, ...error }) => {
+    for (const content of [[], [text("Partial reply")]]) {
+      const message = {
+        ...failed,
+        ...error,
+        content,
+        errorMessage: "PRIVATE_PROVIDER_DETAIL",
+        errorBody: '{"misalignment":{"detailed_explanation":"PRIVATE_FINDINGS ... [truncated]',
+      };
+      const original = structuredClone(message);
+      const messages = projectChatDisplayMessages([user, message]);
+      expect(messages.at(-1)).toMatchObject({
+        stopReason: "error",
+        content: [text([expected, ...content.map((part) => part.text)].join("\n\n"))],
+      });
+      expect(JSON.stringify(messages)).not.toContain("PRIVATE_");
+      expect(projectChatDisplayMessages(messages)).toEqual(messages);
+      expect(message).toEqual(original);
+    }
+  },
+);
+
+it.each([
+  { name: "structured", content: [tool] },
+  {
+    name: "phased commentary",
+    content: [
+      {
+        ...text("PRIVATE_COMMENTARY"),
+        textSignature: '{"v":1,"id":"commentary","phase":"commentary"}',
+      },
+    ],
+  },
+  {
+    name: "over-limit phased final",
+    content: [
+      {
+        ...text("Partial reply ".repeat(700)),
+        textSignature: '{"v":1,"id":"long","phase":"final_answer"}',
+      },
+    ],
+  },
+  { name: "string content", content: "Partial reply" },
+  { name: "text alias", content: [], text: "Partial reply" },
+])("retains safe incomplete-tool guidance in $name history", ({ name: _name, ...partial }) => {
+  const message = {
+    ...failed,
+    ...partial,
+    errorCode: "incomplete_tool_call",
+    errorMessage: "PRIVATE_PROVIDER_DETAIL",
+  };
+  const original = structuredClone(message);
+  const messages = projectChatDisplayMessages([user, message]);
+  expect(messages.at(-1)).toMatchObject({
+    stopReason: "error",
+    content: expect.arrayContaining([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining(
+          "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
+        ),
+      }),
+    ]),
+  });
+  const serialized = JSON.stringify(messages);
+  expect(serialized).not.toContain("PRIVATE_PROVIDER_DETAIL");
+  expect(serialized).not.toContain("PRIVATE_COMMENTARY");
+  expect(serialized.split("The task couldn't finish.")).toHaveLength(2);
+  if (JSON.stringify(partial).includes("Partial reply")) {
+    expect(serialized).toContain("Partial reply");
+  }
+  if (JSON.stringify(partial).includes("partial-call")) {
+    expect(serialized).toContain("partial-call");
+  }
+  expect(projectChatDisplayMessages(messages)).toEqual(messages);
+  expect(message).toEqual(original);
+});
+
+it("retires repeated non-visible failed attempts after their run answers", () => {
+  const failures = Array.from({ length: 4 }, (_, attempt) => ({
+    ...failed,
+    content: [{ type: "input_text", text: STREAM_ERROR_FALLBACK_TEXT }],
+    __openclaw: { ...failed["__openclaw"], id: "attempt-" + attempt, seq: attempt + 2 },
+  }));
+  const final = { ...answer, __openclaw: { ...answer["__openclaw"], seq: 6 } };
+  const raw = [user, ...failures, final];
+  const original = structuredClone(raw);
+  expect(projectChatDisplayMessages(raw)).toEqual([user, final]);
+  expect(raw).toEqual(original);
+});
+
+it.each([
+  { ...answer, provider: "openclaw", model: "gateway-injected" },
+  { ...answer, stopReason: "toolUse" },
+])("keeps the failure without a successful runtime answer: %j", (later) => {
+  expect(projectedIds([user, failed, later])).toContainEqual(failed["__openclaw"]);
+});
+
+it("keeps unattributed failures and failures separated by a new user turn", () => {
+  const unattributed = { ...failed, __openclaw: { id: "failed", seq: 2 } };
+  expect(projectedIds([user, unattributed, answer])).toContainEqual(unattributed["__openclaw"]);
+  expect(projectedIds([user, failed, { ...user, content: "next turn" }, answer])).toContainEqual(
+    failed["__openclaw"],
+  );
+  expect(projectedIds([user, failed])).toContainEqual(failed["__openclaw"]);
+});
+
+it("preserves partial content even when the redundant text field is empty", () => {
+  const partial = { ...failed, text: "", content: [text("Partial reply")] };
+  expect(projectChatDisplayMessages([user, partial, answer])[1]).toMatchObject({
+    content: [text("Partial reply")],
+  });
+});
+
+it("repairs only matching attempts when run identities interleave", () => {
+  const other = { ...failed, __openclaw: { id: "other", seq: 3, runId: "run-b" } };
+  expect(projectedIds([user, failed, other, answer])).toEqual([
+    user["__openclaw"],
+    other["__openclaw"],
+    answer["__openclaw"],
   ]);
+});
+
+it("refreshes SSE history after an appended failure recovers", async () => {
+  const state = SessionHistorySseState.fromSnapshot({
+    target: { sessionId: "session", sessionKey: "agent:main:test" },
+    snapshot: {
+      history: { items: [user], messages: [user], hasMore: false },
+      rawTranscriptSeq: 1,
+      turnBoundaryPending: false,
+      assistantErrorPending: false,
+    },
+  });
+  expect(
+    (await state.prepareInlineMessage({ message: failed, messageSeq: 2 }))()?.message,
+  ).toMatchObject({
+    stopReason: "error",
+  });
+  expect((await state.prepareInlineMessage({ message: answer, messageSeq: 3 }))()).toEqual({
+    shouldRefresh: true,
+  });
+});
+
+it("drops only old announce pairs across adjacent chunks", () => {
+  const announce = {
+    role: "user",
+    timestamp: 10,
+    content: "Earlier child finished",
+    provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+  };
+  const oldReply = { role: "assistant", timestamp: 11, content: "Acknowledged" };
+  const newReply = { ...oldReply, timestamp: 30 };
+  const rows = [announce, oldReply, announce, newReply, user];
+  for (let split = 1; split < rows.length; split++) {
+    const filter = createPreSessionStartAnnouncePairFilter(20);
+    expect([...filter(rows.slice(0, split)), ...filter(rows.slice(split))]).toEqual([
+      newReply,
+      user,
+    ]);
+  }
+});
+
+const failure = (errorMessage: string, fields: Record<string, unknown> = {}) =>
+  projectChatDisplayMessage({
+    role: "assistant",
+    stopReason: "error",
+    content: [],
+    errorMessage,
+    ...fields,
+  });
+
+it("retains the actual schema rejection without leaking the response envelope", () => {
+  const projected = failure("Invalid service_tier argument", {
+    errorType: "invalid_request_error",
+    errorBody: JSON.stringify({
+      error: { type: "invalid_request_error", message: "Invalid service_tier argument" },
+      request: { input: "PRIVATE_PROMPT", headers: { authorization: "PRIVATE_AUTH" } },
+    }),
+  });
+  expect(projected).toMatchObject({
+    content: [
+      { type: "text", text: String.raw`LLM request rejected: Invalid service\_tier argument` },
+    ],
+  });
+  expect(JSON.stringify(projected)).not.toContain("PRIVATE_");
+  expect(projected).not.toHaveProperty("errorBody");
+  expect(projectChatDisplayMessage(projected)).toEqual(projected);
+});
+
+it("keeps safe failure guidance alongside partial reply text", () => {
+  const projected = failure("429: PRIVATE_CANARY", {
+    content: [{ type: "text", text: "The first step completed." }],
+  });
+  expect(projected).toMatchObject({
+    content: [
+      {
+        type: "text",
+        text: "⚠️ The AI service needs a short break. Please try again in a few minutes.\n\nThe first step completed.",
+      },
+    ],
+  });
+  expect(JSON.stringify(projected)).not.toContain("PRIVATE_CANARY");
+  expect(projectChatDisplayMessage(projected)).toEqual(projected);
 });

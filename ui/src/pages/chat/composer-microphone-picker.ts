@@ -96,14 +96,9 @@ export class ComposerMicrophonePicker {
 
   /** Ends an in-flight discovery too, so a late result cannot revive the list. */
   dispose(): void {
-    window.removeEventListener("focus", this.refreshOnFocus);
+    this.syncCatalog(null, false);
     this.release();
     this.discoveryRequest++;
-    this.catalogRequest++;
-    this.catalogClient = null;
-    this.catalogConnected = false;
-    this.realtimeStatusValue = "unknown";
-    this.dictationStatusValue = "unknown";
     this.openValue = false;
     this.loadingValue = false;
   }

@@ -121,9 +121,13 @@ describe("chat composer sizing", () => {
 
       inputDraft(container, "Short draft edited");
       expect(onTranscriptScroll).not.toHaveBeenCalled();
+      expect(textarea.style.height).toBe("42px");
+      expect(textarea.style.overflowY).toBe("hidden");
 
       draftHeight = 180;
       inputDraft(container, "A long draft\n".repeat(10));
+      expect(textarea.style.height).toBe("150px");
+      expect(textarea.style.overflowY).toBe("auto");
       expect(thread.clientHeight).toBe(450);
       expect(thread.scrollTop).toBe(position === "end" ? 750 : 100);
       expect(onTranscriptScroll).toHaveBeenCalledExactlyOnceWith({
@@ -186,30 +190,6 @@ describe("chat composer sizing", () => {
     container.remove();
   });
 
-  it("shows the textarea scrollbar only when the draft overflows", () => {
-    const container = renderChatView({});
-    const textarea = getComposerTextarea(container);
-    let scrollHeight = 42;
-    let clientHeight = 42;
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, get: () => scrollHeight },
-      clientHeight: { configurable: true, get: () => clientHeight },
-    });
-
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    expect(textarea.style.height).toBe("42px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    scrollHeight = 180;
-    clientHeight = 150;
-    textarea.value = "A long draft";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    expect(textarea.style.height).toBe("150px");
-    expect(textarea.style.overflowY).toBe("auto");
-  });
-
   it("resizes the draft when responsive layout changes the textarea width", () => {
     let resizeCallback: ResizeObserverCallback | undefined;
     let animationFrameCallback: FrameRequestCallback | undefined;
@@ -238,17 +218,9 @@ describe("chat composer sizing", () => {
     let width = 320;
     let scrollHeight = 42;
     let clientHeight = 42;
-    vi.spyOn(HTMLTextAreaElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
-      bottom: clientHeight,
-      height: clientHeight,
-      left: 0,
-      right: width,
-      top: 0,
-      width,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    }));
+    vi.spyOn(HTMLTextAreaElement.prototype, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(0, 0, width, clientHeight),
+    );
 
     const container = renderChatView({});
     const textarea = getComposerTextarea(container);

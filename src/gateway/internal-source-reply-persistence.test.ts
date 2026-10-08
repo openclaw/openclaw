@@ -126,7 +126,7 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
       },
       () =>
         persistInternalSourceReply({
-          cfg: { agents: { entries: { main: { default: true, workspace: state.workspaceDir } } } },
+          cfg: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
           sessionKey: options.sessionKey ?? sessionKey,
           expectedSessionId: sessionId,
           agentId: "main",

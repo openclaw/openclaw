@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   isSessionHistoryWorkerCold,
   prewarmSessionHistoryWorker,
@@ -15,10 +16,18 @@ const log = createSubsystemLogger("gateway");
 
 export async function prewarmGatewaySessionHistory(
   config: OpenClawConfig,
-  options: { onlyIfCold?: boolean; isCancelled?: () => boolean } = {},
+  options: {
+    onlyIfCold?: boolean;
+    includeMaintenance?: boolean;
+    isCancelled?: () => boolean;
+  } = {},
 ): Promise<void> {
   try {
-    if (options.onlyIfCold && !isSessionHistoryWorkerCold()) {
+    if (
+      options.onlyIfCold &&
+      !isSessionHistoryWorkerCold() &&
+      (!options.includeMaintenance || !isSessionHistoryWorkerCold(maintenanceLane))
+    ) {
       return;
     }
     for (const agentId of listConfiguredSessionStoreAgentIds(config)) {
@@ -41,7 +50,11 @@ export async function prewarmGatewaySessionHistory(
           },
         );
         if (exists && !options.isCancelled?.()) {
-          await prewarmSessionHistoryWorker({ ...database, agentId: database.agentId ?? agentId });
+          const target = { ...database, agentId: database.agentId ?? agentId };
+          await prewarmSessionHistoryWorker(target);
+          if (options.includeMaintenance && !options.isCancelled?.()) {
+            await prewarmSessionHistoryWorker(target, maintenanceLane);
+          }
         }
       } catch (error) {
         log.debug(`Session history prewarm failed for ${agentId}: ${String(error)}`);

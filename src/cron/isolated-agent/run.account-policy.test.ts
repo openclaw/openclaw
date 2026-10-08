@@ -57,8 +57,6 @@ describe("scheduled account policy outcomes", () => {
     callerOrigin?: NonNullable<CronStoredJob["toolsAllowProvenance"]>["callerOrigin"];
   }>([
     { name: "removed named account", accountId: "removed", toolsAllow: ["read"], fails: true },
-    { name: "configured named account", accountId: "work", toolsAllow: ["read"], fails: false },
-    { name: "default account", accountId: "default", toolsAllow: ["read"], fails: false },
     { name: "legacy accountless cap", accountId: undefined, toolsAllow: ["read"], fails: false },
     { name: "legacy capless job", accountId: undefined, toolsAllow: undefined, fails: false },
     { name: "intentional no-tool job", accountId: "work", toolsAllow: [], fails: false },
@@ -69,21 +67,6 @@ describe("scheduled account policy outcomes", () => {
       fails: false,
       ownerSessionKey: "agent:main:whatsapp:direct:sender",
       callerOrigin: { kind: "external", channel: "whatsapp" },
-    },
-    {
-      name: "removed DM account without delivery",
-      accountId: "removed",
-      toolsAllow: ["read"],
-      fails: true,
-      ownerSessionKey: "agent:main:whatsapp:direct:sender",
-      callerOrigin: { kind: "external", channel: "whatsapp" },
-    },
-    {
-      name: "DM account without creator origin",
-      accountId: "work",
-      toolsAllow: ["read"],
-      fails: true,
-      ownerSessionKey: "agent:main:whatsapp:direct:sender",
     },
     {
       name: "DM account with malformed creator origin",

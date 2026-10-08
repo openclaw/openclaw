@@ -2,7 +2,6 @@ import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
 import { readExecApprovalsSnapshot } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { HealthCheckContext, HealthFinding } from "openclaw/plugin-sdk/health";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { EXEC_APPROVALS_POLICY_DOCUMENT_NAME } from "../exec-approvals-uri.js";
 import type { PolicyAuthProfileEvidence } from "../policy-state.js";
@@ -14,8 +13,6 @@ import {
 import { isChannelDenyRule } from "./shape-helpers.js";
 import { readPolicyStringArray } from "./utils.js";
 
-const loadFsPromisesModule = createLazyRuntimeModule(() => import("node:fs/promises"));
-
 export async function readPolicyFile(
   ctx: HealthCheckContext,
 ): Promise<{ raw: string; path: string; displayName: string; ocDocName: string } | null> {
@@ -24,9 +21,7 @@ export async function readPolicyFile(
   return file === null ? null : { ...file, displayName, ocDocName: basename(displayName) };
 }
 
-export async function readExecApprovalsFile(
-  _ctx: HealthCheckContext,
-): Promise<{ raw: string; path: string; displayName: string; ocDocName: string } | null> {
+export async function readExecApprovalsFile() {
   const snapshot = readExecApprovalsSnapshot();
   if (!snapshot.exists || snapshot.raw === null) {
     return null;
@@ -45,7 +40,7 @@ export async function readWorkspaceFile(
 ): Promise<{ raw: string; path: string } | null> {
   const path = resolveWorkspacePath(ctx, fileName);
   try {
-    const fs = await loadFsPromisesModule();
+    const fs = await import("node:fs/promises");
     return { raw: await fs.readFile(path, "utf-8"), path };
   } catch (err) {
     if (isNotFoundPathError(err)) {
@@ -104,32 +99,7 @@ export function workspaceRepairsEnabled(ctx: HealthCheckContext): boolean {
   return policySettings(ctx).workspaceRepairs === true;
 }
 
-export function workspaceRepairsDisabledResult(fileName: string): {
-  readonly status: "skipped";
-  readonly reason: string;
-  readonly changes: readonly string[];
-  readonly warnings: readonly string[];
-} {
-  const reason = "workspace repairs are disabled";
-  return {
-    status: "skipped",
-    reason,
-    changes: [],
-    warnings: [
-      `Skipped ${fileName} repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace files.`,
-    ],
-  };
-}
-
-export function readChannelDenyRules(
-  policy: unknown,
-  policyDocName: string,
-): readonly {
-  readonly id?: string;
-  readonly when?: { readonly provider?: string };
-  readonly reason?: string;
-  readonly requirement: string;
-}[] {
+export function readChannelDenyRules(policy: unknown, policyDocName: string) {
   if (
     !isRecord(policy) ||
     !isRecord(policy.channels) ||

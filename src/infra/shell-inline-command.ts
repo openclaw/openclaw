@@ -97,10 +97,6 @@ const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
   "+o",
 ]);
 
-function isCombinedCommandFlag(token: string): boolean {
-  return parseCombinedCommandFlag(token) !== null;
-}
-
 function countSeparateValueOptionChars(token: string): number {
   let count = 0;
   for (let index = 1; index < token.length; index += 1) {
@@ -230,10 +226,6 @@ export function resolveInlineCommandMatch(
 /** Return true when an inline shell payload directly dispatches positional args. */
 export function isDirectShellPositionalCarrierCommand(command: string): boolean {
   const trimmed = command.trim();
-  if (trimmed.length === 0) {
-    return false;
-  }
-
   const shellWhitespace = String.raw`[^\S\r\n]+`;
   const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
   const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
@@ -340,7 +332,7 @@ function hasPosixStartupModeBeforeInlineCommand(
     if (token === longOption || isPosixShortOption(token, shortOption)) {
       sawStartupMode = true;
     }
-    if (flags.has(token) || isCombinedCommandFlag(token)) {
+    if (flags.has(token) || parseCombinedCommandFlag(token) !== null) {
       return sawStartupMode;
     }
     if (!token.startsWith("-") && !token.startsWith("+")) {

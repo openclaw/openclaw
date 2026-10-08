@@ -313,7 +313,7 @@ async function previewStoreCleanup(params: {
           },
         })
       : 0;
-  const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+  const preserveSessionKeys = await collectSessionMaintenancePreserveKeysForStore({
     storePath: params.target.storePath,
     store: previewStore,
     baseKeys: [params.activeKey],
@@ -325,7 +325,6 @@ async function previewStoreCleanup(params: {
     pruned,
     capped,
   } = planSessionEntryMaintenance({
-    profile: "write",
     maintenance: params.maintenance,
     initialUnarchivedCount: countUnarchivedSessionEntries(previewStore),
     // Cleanup previews apply the same immediate cap as the apply path.

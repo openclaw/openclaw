@@ -12,9 +12,7 @@ struct Semver: Comparable, CustomStringConvertible {
     }
 
     static func < (lhs: Semver, rhs: Semver) -> Bool {
-        if lhs.major != rhs.major { return lhs.major < rhs.major }
-        if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
-        return lhs.patch < rhs.patch
+        (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
     }
 
     static func parse(_ raw: String?) -> Semver? {
@@ -27,8 +25,7 @@ struct Semver: Comparable, CustomStringConvertible {
               let minor = Int(parts[1])
         else { return nil }
         // Strip prerelease suffix (e.g., "11-4" → "11", "5-beta.1" → "5")
-        let patchRaw = String(parts[2])
-        guard let patchToken = patchRaw.split(whereSeparator: { $0 == "-" || $0 == "+" }).first,
+        guard let patchToken = parts[2].split(whereSeparator: { $0 == "-" || $0 == "+" }).first,
               let patchNumeric = Int(patchToken)
         else {
             return nil
@@ -139,14 +136,8 @@ enum GatewayEnvironment {
         return (1...65535).contains(storedPort) ? storedPort : profile.defaultGatewayPort
     }
 
-    static func expectedGatewayVersion() -> Semver? {
-        Semver.parse(self.expectedGatewayVersionString())
-    }
-
     static func appVersionString() -> String? {
-        let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        let trimmed = bundleVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (trimmed?.isEmpty == false) ? trimmed : nil
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)?.nonEmpty
     }
 
     static func expectedGatewayVersionString() -> String? {
@@ -188,8 +179,8 @@ enum GatewayEnvironment {
                 self.logger.debug("gateway env check ok (\(elapsedMs, privacy: .public)ms)")
             }
         }
-        let expected = self.expectedGatewayVersion()
         let expectedString = self.expectedGatewayVersionString()
+        let expected = Semver.parse(expectedString)
 
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
@@ -260,11 +251,8 @@ enum GatewayEnvironment {
 
     // MARK: - Internals
 
-    /// Exposed for tests so CLI version output normalization stays local to gateway checks.
     static func normalizeGatewayVersionOutput(_ raw: String?) -> String? {
-        guard var normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !normalized.isEmpty else {
-            return nil
-        }
+        guard var normalized = raw?.nonEmpty else { return nil }
         if normalized.lowercased().hasPrefix("openclaw ") {
             normalized = String(normalized.dropFirst("openclaw ".count))
         }
@@ -287,43 +275,15 @@ enum GatewayEnvironment {
     }
 
     private static func readGatewayVersion(binary: String, searchPaths: [String]) async -> String? {
-        let start = Date()
-        do {
-            let result = try await BoundedProcess.run(
-                path: binary,
-                arguments: ["--version"],
-                environment: ["PATH": searchPaths.joined(separator: ":")],
-                timeout: CommandResolver.versionProbeTimeout)
-            guard result.terminationStatus == 0 else { return nil }
-            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
-            if elapsedMs > 500 {
-                self.logger.warning(
-                    """
-                    gateway --version slow (\(elapsedMs, privacy: .public)ms) \
-                    bin=\(binary, privacy: .public)
-                    """)
-            } else {
-                self.logger.debug(
-                    """
-                    gateway --version ok (\(elapsedMs, privacy: .public)ms) \
-                    bin=\(binary, privacy: .public)
-                    """)
-            }
-            let raw = String(data: result.output, encoding: .utf8)
-            guard let normalized = self.normalizeGatewayVersionOutput(raw),
-                  Semver.parse(normalized) != nil
-            else { return nil }
-            return normalized
-        } catch {
-            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
-            self.logger.error(
-                """
-                gateway --version failed (\(elapsedMs, privacy: .public)ms) \
-                bin=\(binary, privacy: .public) \
-                err=\(error.localizedDescription, privacy: .public)
-                """)
-            return nil
-        }
+        let raw = await ExecutableVersionProbe.read(
+            binary: binary,
+            pathEnv: searchPaths.joined(separator: ":"),
+            logger: self.logger,
+            label: "gateway")
+        guard let normalized = self.normalizeGatewayVersionOutput(raw),
+              Semver.parse(normalized) != nil
+        else { return nil }
+        return normalized
     }
 
     private static func readLocalGatewayVersion(projectRoot: URL) -> String? {

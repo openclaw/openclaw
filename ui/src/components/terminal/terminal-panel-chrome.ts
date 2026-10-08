@@ -86,7 +86,6 @@ export function renderTerminalPanelViewport({
   `;
 }
 
-/** Operator-facing text for a failed terminal.open; typed errors map to copy. */
 export function terminalOpenErrorText(error: unknown): string {
   if (error instanceof TerminalOpenTimeoutError) {
     return t("terminal.connectionTimedOut");

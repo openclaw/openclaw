@@ -10,7 +10,6 @@ import {
 } from "openclaw/plugin-sdk/cron-store-runtime";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { telegramMessagingTargetsMatch } from "./normalize.js";
 import {
   normalizeTelegramChatId,
@@ -21,41 +20,6 @@ import {
 const writebackLogger = createSubsystemLogger("telegram/target-writeback");
 const TELEGRAM_ADMIN_SCOPE = "operator.admin";
 
-function buildResolvedTelegramTarget(params: {
-  raw: string;
-  parsed: ReturnType<typeof parseTelegramTarget>;
-  resolvedChatId: string;
-}): string {
-  const { raw, parsed, resolvedChatId } = params;
-  if (parsed.directMessagesTopicId != null) {
-    return `${resolvedChatId}:direct-topic:${parsed.directMessagesTopicId}`;
-  }
-  if (parsed.messageThreadId == null) {
-    return resolvedChatId;
-  }
-  return raw.includes(":topic:")
-    ? `${resolvedChatId}:topic:${parsed.messageThreadId}`
-    : `${resolvedChatId}:${parsed.messageThreadId}`;
-}
-
-function resolveLegacyRewrite(params: {
-  raw: string;
-  resolvedChatId: string;
-}): { sourceTarget: string; resolvedTarget: string } | null {
-  const parsed = parseTelegramTarget(params.raw);
-  if (normalizeTelegramChatId(parsed.chatId) || !normalizeTelegramLookupTarget(parsed.chatId)) {
-    return null;
-  }
-  return {
-    sourceTarget: params.raw,
-    resolvedTarget: buildResolvedTelegramTarget({
-      raw: params.raw,
-      parsed,
-      resolvedChatId: params.resolvedChatId,
-    }),
-  };
-}
-
 function rewriteTargetIfMatch(params: {
   rawValue: unknown;
   sourceTarget: string;
@@ -64,11 +28,8 @@ function rewriteTargetIfMatch(params: {
   if (typeof params.rawValue !== "string" && typeof params.rawValue !== "number") {
     return null;
   }
-  const value = normalizeOptionalString(String(params.rawValue)) ?? "";
-  if (!value) {
-    return null;
-  }
-  if (!telegramMessagingTargetsMatch(value, params.sourceTarget)) {
+  const value = String(params.rawValue).trim();
+  if (!value || !telegramMessagingTargetsMatch(value, params.sourceTarget)) {
     return null;
   }
   return params.resolvedTarget;
@@ -85,24 +46,24 @@ function replaceTelegramDefaultToTargets(params: {
     return changed;
   }
 
-  const maybeReplace = (holder: Record<string, unknown>, key: string) => {
+  const maybeReplace = (holder: Record<string, unknown>) => {
     const nextTarget = rewriteTargetIfMatch({
-      rawValue: holder[key],
+      rawValue: holder.defaultTo,
       sourceTarget: params.sourceTarget,
       resolvedTarget: params.resolvedTarget,
     });
     if (!nextTarget) {
       return;
     }
-    holder[key] = nextTarget;
+    holder.defaultTo = nextTarget;
     changed = true;
   };
 
-  maybeReplace(telegram, "defaultTo");
+  maybeReplace(telegram);
   for (const value of Object.values(asObjectRecord(telegram.accounts) ?? {})) {
     const account = asObjectRecord(value);
     if (account) {
-      maybeReplace(account, "defaultTo");
+      maybeReplace(account);
     }
   }
   return changed;
@@ -120,14 +81,20 @@ export async function maybePersistResolvedTelegramTarget(params: {
   if (!raw) {
     return;
   }
-  const rewrite = resolveLegacyRewrite({
-    raw,
-    resolvedChatId: params.resolvedChatId,
-  });
-  if (!rewrite) {
+  const resolvedChatId = params.resolvedChatId;
+  const parsed = parseTelegramTarget(raw);
+  if (normalizeTelegramChatId(parsed.chatId) || !normalizeTelegramLookupTarget(parsed.chatId)) {
     return;
   }
-  const { sourceTarget, resolvedTarget } = rewrite;
+  const sourceTarget = raw;
+  const resolvedTarget =
+    parsed.directMessagesTopicId != null
+      ? `${resolvedChatId}:direct-topic:${parsed.directMessagesTopicId}`
+      : parsed.messageThreadId == null
+        ? resolvedChatId
+        : raw.includes(":topic:")
+          ? `${resolvedChatId}:topic:${parsed.messageThreadId}`
+          : `${resolvedChatId}:${parsed.messageThreadId}`;
   const hasGatewayAdminScope = params.gatewayClientScopes?.includes(TELEGRAM_ADMIN_SCOPE) === true;
   const trustedInternalWriteback =
     params.gatewayClientScopes === undefined && params.trustedInternalWriteback === true;

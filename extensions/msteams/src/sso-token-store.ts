@@ -8,12 +8,7 @@
 
 import { createHash } from "node:crypto";
 import { getMSTeamsRuntime } from "./runtime.js";
-import {
-  resolveMSTeamsSqliteStateEnv,
-  toPluginJsonValue,
-  withMSTeamsSqliteMutationLock,
-  type MSTeamsSqliteStateOptions,
-} from "./sqlite-state.js";
+import { toPluginJsonValue, withMSTeamsSqliteMutationLock } from "./sqlite-state.js";
 
 type MSTeamsSsoStoredToken = {
   /** Connection name from the Bot Framework OAuth connection setting. */
@@ -44,13 +39,10 @@ function makeMSTeamsSsoTokenStoreKey(connectionName: string, userId: string): st
     .digest("hex")}`;
 }
 
-export function createMSTeamsSsoTokenStoreFs(
-  params?: MSTeamsSqliteStateOptions,
-): MSTeamsSsoTokenStore {
+export function createMSTeamsSsoTokenStoreFs(): MSTeamsSsoTokenStore {
   const tokenStore = getMSTeamsRuntime().state.openKeyedStore<MSTeamsSsoStoredToken>({
     namespace: MSTEAMS_SSO_TOKENS_NAMESPACE,
     maxEntries: MSTEAMS_MAX_SSO_TOKENS,
-    env: resolveMSTeamsSqliteStateEnv(params),
   });
 
   return {
@@ -59,7 +51,7 @@ export function createMSTeamsSsoTokenStoreFs(
     },
 
     async save(token) {
-      await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_MUTATION_KEY, async () => {
+      await withMSTeamsSqliteMutationLock(SSO_TOKEN_MUTATION_KEY, async () => {
         await tokenStore.register(
           makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId),
           toPluginJsonValue({ ...token }),
@@ -68,7 +60,7 @@ export function createMSTeamsSsoTokenStoreFs(
     },
 
     async remove({ connectionName, userId }) {
-      return withMSTeamsSqliteMutationLock(params, SSO_TOKEN_MUTATION_KEY, () =>
+      return withMSTeamsSqliteMutationLock(SSO_TOKEN_MUTATION_KEY, () =>
         tokenStore.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId)),
       );
     },

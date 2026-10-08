@@ -40,6 +40,7 @@ import {
   takePluginInstallTransaction,
 } from "./install-transaction.js";
 import {
+  type InstallPluginResult,
   isUnavailableNpmTarget,
   PLUGIN_INSTALL_ERROR_CODE,
   type PluginInstallArtifactConsentRequest,
@@ -104,10 +105,6 @@ export type ManagedPluginSourceInstallRequest =
       spec: string;
       installSources: PluginInstallSource[];
       expectedPluginId?: string;
-      /** Spec recorded for the install; keeps user intent when `spec` is channel-resolved. */
-      recordSpec?: string;
-      pluginId: string;
-      expectedIntegrity?: string;
       mode: "install" | "update";
       pin?: boolean;
     }
@@ -145,21 +142,8 @@ type ManagedPluginSourceInstallResult =
     };
 
 type SourceInstallerResult =
-  | {
-      ok: false;
-      error: string;
-      code?: string;
-      version?: string;
-      warning?: string;
-      installPolicyWarning?: InstallPolicyWarningDetails;
-    }
-  | {
-      ok: true;
-      pluginId: string;
-      targetDir: string;
-      version?: string;
-      npmResolution?: NpmSpecResolution;
-    };
+  | InstallPluginResult
+  | Extract<ManagedPluginSourceInstallResult, { ok: false }>;
 
 /**
  * Official plugin installs target the release stream the gateway is running,

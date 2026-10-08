@@ -1,17 +1,20 @@
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { markMcpLoopbackToolCallStarted } from "../gateway/mcp-http.loopback-runtime.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { supervisorSpawnMock, type createManagedRun } from "./cli-runner.test-support.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
+import { applyCliSessionBindingResult, getCliSessionBinding } from "./cli-session.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
-import { hasModelFallbackStop } from "./failover-error.js";
+import { FailoverError, hasModelFallbackStop } from "./failover-error.js";
 
 /** Register required-reply cases inside the reliability suite's existing process fixture. */
 export function registerCliReplyCompletionTests({
   createContext,
   completeToolCall,
   makeManagedRun,
+  admitContext,
   run,
 }: {
   createContext: (params: Partial<RunCliAgentParams>) => PreparedCliRunContext;
@@ -20,8 +23,111 @@ export function registerCliReplyCompletionTests({
     result: unknown,
   ) => void;
   makeManagedRun: (overrides?: Partial<RunExit>) => ReturnType<typeof createManagedRun>;
+  admitContext: (context: PreparedCliRunContext) => Promise<{ close: () => void }>;
   run: (context: PreparedCliRunContext) => Promise<EmbeddedAgentRunResult>;
 }) {
+  it.each(["abort", "timeout", "session-expired", "fork-abort"] as const)(
+    "does not replay delivery and resumes valid history after %s",
+    async (failure) => {
+      supervisorSpawnMock.mockImplementationOnce(async (input) => {
+        completeToolCall(
+          {
+            captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+            toolName: "message",
+            args: {
+              action: "send",
+              channel: "telegram",
+              target: "chat123",
+              message: "progress before interruption",
+              mediaUrl: "https://example.com/done.png",
+              final: false,
+            },
+          },
+          { status: "sent" },
+        );
+        if (failure === "fork-abort") {
+          input.onStdout?.(
+            `${JSON.stringify({ type: "system", subtype: "init", session_id: "fork-successor" })}\n`,
+          );
+        }
+        if (failure === "abort" || failure === "fork-abort") {
+          throw new DOMException("Stopped by user", "AbortError");
+        }
+        if (failure === "session-expired") {
+          throw new FailoverError("Native session expired", { reason: "session_expired" });
+        }
+        return makeManagedRun({
+          reason: "no-output-timeout",
+          exitCode: null,
+          exitSignal: "SIGKILL",
+          durationMs: 200,
+          timedOut: true,
+          noOutputTimedOut: true,
+        });
+      });
+      const context = createContext({
+        sessionKey: "agent:main:delivered-interruption",
+        runId: "run-delivered-interruption",
+      });
+      context.reusableCliSession = { mode: "reuse", sessionId: "retained-cli-session" };
+      context.openClawHistoryPrompt = "Earlier conversation history";
+      const binding = { sessionId: "retained-cli-session", resumeCheckpointId: "prior-answer" };
+      const entry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": binding },
+      };
+
+      if (failure === "fork-abort") {
+        context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
+        context.preparedBackend.backend.forkArg = "--fork-session";
+        context.preparedBackend.backend.output = "jsonl";
+        context.params.forkCliSessionOnResume = true;
+        context.params.claimCliSessionFork = async () => true;
+        context.params.persistCliSessionForkSuccessor = async (sessionId) => {
+          entry.cliSessionBindings = { "claude-cli": { sessionId } };
+        };
+        onTestFinished((await admitContext(context)).close);
+      }
+      const result = await run(context);
+      if (failure === "fork-abort") {
+        expect(getCliSessionBinding(entry, "claude-cli")?.sessionId).toBe("fork-successor");
+      }
+      applyCliSessionBindingResult(entry, "claude-cli", result.meta.agentMeta);
+
+      expect(result.didSendViaMessagingTool).toBe(true);
+      expect(result.messagingToolSentTexts).toEqual(["progress before interruption"]);
+      expect(result.messagingToolSentMediaUrls).toEqual(["https://example.com/done.png"]);
+      expect(result.messagingToolSentTargets).toEqual([
+        expect.objectContaining({ tool: "message", provider: "telegram", to: "chat123" }),
+      ]);
+      expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("error");
+      expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+      const retained = getCliSessionBinding(entry, "claude-cli");
+      const invalidated = failure === "session-expired" || failure === "fork-abort";
+      expect(retained).toEqual(invalidated ? undefined : binding);
+
+      supervisorSpawnMock.mockImplementationOnce(async () => makeManagedRun({ stdout: "status" }));
+      const next = createContext({});
+      next.reusableCliSession = retained
+        ? { mode: "reuse", sessionId: retained.sessionId }
+        : { mode: "none" };
+      next.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
+      await run(next);
+      const spawn = supervisorSpawnMock.mock.calls[1]?.[0];
+      if (spawn?.mode !== "child") {
+        throw new Error("Expected the next CLI turn to spawn a child process");
+      }
+      const argv = spawn.argv;
+      if (invalidated) {
+        expect(argv).not.toContain("--resume");
+      } else {
+        expect(argv).toEqual(expect.arrayContaining(["--resume", "retained-cli-session"]));
+      }
+    },
+  );
+
   it.each([
     { name: "final source reply", target: "chat123", final: true, expected: "success" },
     { name: "source progress", target: "chat123", final: false, expected: "error" },

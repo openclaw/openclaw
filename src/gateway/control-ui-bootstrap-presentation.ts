@@ -4,12 +4,7 @@ import type { ControlUiBootstrapConfig } from "./control-ui-bootstrap-contract.j
 /** Public presentation settings of the Gateway serving the UI, never model permissions. */
 export function resolveControlUiBootstrapPresentation(config: OpenClawConfig | undefined) {
   return {
-    embedSandbox:
-      config?.gateway?.controlUi?.embedSandbox === "trusted"
-        ? "trusted"
-        : config?.gateway?.controlUi?.embedSandbox === "strict"
-          ? "strict"
-          : "scripts",
+    embedSandbox: config?.gateway?.controlUi?.embedSandbox ?? "scripts",
     allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
     automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,
     seamColor: config?.ui?.seamColor,

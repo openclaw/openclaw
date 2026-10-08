@@ -6,7 +6,6 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
-  readActiveTranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -77,7 +76,7 @@ export async function commitBackgroundResultToSession(params: {
   const identities = [sessionKey, expectedSessionId];
 
   params.assertCurrent?.();
-  return await runExclusiveSessionLifecycleMutation({
+  return await runExclusiveSessionLifecycleMutation("background-result", {
     scope: storePath,
     identities,
     signal: params.signal,
@@ -146,21 +145,26 @@ export async function commitBackgroundResultToSession(params: {
         cwd: current.spawnedCwd,
         expectedSessionId,
         expectedLifecycleRevision: expectedLifecycleRevision ?? null,
+        assertCurrent: () => {
+          params.assertCurrent?.();
+          params.signal?.throwIfAborted();
+        },
         messages: [
           {
             message: priorMessage
               ? { ...priorMessage, content: message.content, openclawAutomation: params.provenance }
               : message,
             idempotencyLookup: "scan",
-            ...(priorId ? { eventId: priorId } : {}),
-            shouldAppendInTransaction: () => {
-              params.assertCurrent?.();
-              params.signal?.throwIfAborted();
-              if (priorId && !readActiveTranscriptEntryAnchor({ ...scope, entryId: priorId })) {
-                throw new Error("background result no longer owns the active transcript");
-              }
-              return true;
-            },
+            ...(priorId
+              ? {
+                  eventId: priorId,
+                  predicate: {
+                    kind: "active-entry" as const,
+                    entryId: priorId,
+                    errorMessage: "background result no longer owns the active transcript",
+                  },
+                }
+              : {}),
           },
         ],
         touchSessionEntry: true,

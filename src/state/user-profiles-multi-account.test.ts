@@ -10,16 +10,14 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import {
-  getUserPreferences,
-  setCanonicalUserPreferences,
-  setUserPreferences,
-} from "./user-preferences.js";
+import { setCanonicalUserPreferences } from "./user-preferences.js";
+import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import {
   prepareUserProfileGitHubAttribution,
   resolveUserProfileGitHubAttribution,
 } from "./user-profile-github-identity.js";
-import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
 import {
   readUserProfileDirectory,
   resolveCanonicalCachedGitHubIdentity,
@@ -31,7 +29,6 @@ import {
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
   getUserProfileDisplay,
-  getUserProfileListItem,
 } from "./user-profiles.js";
 import { userProfileOperations } from "./user-profiles.worker.js";
 
@@ -290,7 +287,9 @@ describe("multi-account people", () => {
       });
     }
     expect(
-      listUserProfilesSync(options).filter((profile) => profile.mergedInto === null),
+      readUserProfileSnapshotSync(options).profiles.filter(
+        (profile) => profile.mergedInto === null,
+      ),
     ).toHaveLength(1);
     expect(await readUserProfileDirectory(10, options)).toEqual({
       profiles: [{ id: person.id, logins: ["person", "person-work"] }],

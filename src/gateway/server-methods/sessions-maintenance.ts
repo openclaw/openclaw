@@ -5,7 +5,7 @@ import {
   validateSessionsStorageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { runSessionsCleanup, serializeSessionCleanupResult } from "../../config/sessions.js";
-import { getSessionColdStorageStatus } from "../../config/sessions/session-cold-storage.js";
+import { getSessionColdStorageStatus } from "../../config/sessions/session-cold-storage-status.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getSessionColdStorageMaintenanceStatus,
@@ -13,33 +13,33 @@ import {
 } from "../session-cold-storage-maintenance.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
+
+const maintenanceError = (error: unknown) =>
+  errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error));
 
 function createSessionStorageHandler(
   method: "sessions.storage.status" | "sessions.storage.run",
 ): GatewayRequestHandlers[string] {
-  return async (options) => {
-    const {
-      params,
+  return defineValidatedGatewayHandler(
+    method,
+    validateSessionsStorageParams,
+    async ({
       respond,
       context,
       sessionMutationAuthorization,
       sessionMutationCommitGuard,
       signal,
       hasCurrentClientAuthority,
-    } = options;
-    if (!assertValidParams(params, validateSessionsStorageParams, method, respond)) {
-      return;
-    }
-    try {
+    }) => {
       const agents = await getSessionColdStorageStatus(context.getRuntimeConfig());
+      signal?.throwIfAborted();
+      sessionMutationCommitGuard?.();
+      sessionMutationAuthorization?.assertCurrent();
+      if (hasCurrentClientAuthority?.() === false) {
+        throw new Error("Transcript maintenance requester is no longer authorized");
+      }
       if (method === "sessions.storage.run") {
-        signal?.throwIfAborted();
-        sessionMutationCommitGuard?.();
-        sessionMutationAuthorization?.assertCurrent();
-        if (hasCurrentClientAuthority?.() === false) {
-          throw new Error("Transcript maintenance requester is no longer authorized");
-        }
         requestGatewaySessionColdStorageMaintenance(context.getRuntimeConfig);
       }
       respond(
@@ -50,20 +50,18 @@ function createSessionStorageHandler(
         },
         undefined,
       );
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
-    }
-  };
+    },
+    maintenanceError,
+  );
 }
 
 export const sessionMaintenanceHandlers: GatewayRequestHandlers = {
   "sessions.storage.status": createSessionStorageHandler("sessions.storage.status"),
   "sessions.storage.run": createSessionStorageHandler("sessions.storage.run"),
-  "sessions.cleanup": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {
-      return;
-    }
-    try {
+  "sessions.cleanup": defineValidatedGatewayHandler(
+    "sessions.cleanup",
+    validateSessionsCleanupParams,
+    async ({ params, respond, context }) => {
       const { mode, appliedSummaries, failure } = await runSessionsCleanup({
         cfg: context.getRuntimeConfig(),
         opts: {
@@ -101,8 +99,7 @@ export const sessionMaintenanceHandlers: GatewayRequestHandlers = {
       if (failure?.lifecycleCommitted) {
         emitSessionsChanged(context, { reason: "cleanup", sessionKey: undefined });
       }
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
-    }
-  },
+    },
+    maintenanceError,
+  ),
 };

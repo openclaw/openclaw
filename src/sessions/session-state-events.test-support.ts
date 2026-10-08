@@ -8,7 +8,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { recordSessionStateEvent } from "./session-state-events.js";
+import { recordSessionStateEventAsync } from "./session-state-events.js";
 
 const tempDirs: string[] = [];
 export const watcher = "agent:main:main";
@@ -22,8 +22,8 @@ export function createDatabaseOptions() {
 }
 
 export function eventInput(
-  overrides: Partial<Parameters<typeof recordSessionStateEvent>[0]> = {},
-): Parameters<typeof recordSessionStateEvent>[0] {
+  overrides: Partial<Parameters<typeof recordSessionStateEventAsync>[0]> = {},
+): Parameters<typeof recordSessionStateEventAsync>[0] {
   return {
     sessionKey: child,
     sessionId: "session-child",
@@ -60,7 +60,7 @@ export function seedChild(
   database: ReturnType<typeof createDatabaseOptions>,
   watcherSessionKey = watcher,
 ) {
-  return recordSessionStateEvent(
+  return recordSessionStateEventAsync(
     eventInput({
       kind: "child_spawned",
       actorType: "agent",
