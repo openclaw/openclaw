@@ -344,9 +344,7 @@ export async function buildDynamicTools(
   const webSearchPresent = visionFilteredTools.some((tool) => tool.name === "web_search");
   const persistentCodexWebSearchSurface =
     params.config?.tools?.web?.search?.enabled !== false &&
-    !(input.pluginConfig.codexDynamicToolsExclude ?? []).some(
-      (name) => normalizeCodexDynamicToolName(name) === "web_search",
-    );
+    !isCodexDynamicToolExcluded(input.pluginConfig, ["web_search"]);
   // A turn-scoped native restriction must not erase persistent hosted availability.
   // Permission still comes from the policy owner, independently of managed tools.
   const persistentHostedWebSearchEligible =
