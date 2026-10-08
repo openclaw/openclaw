@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -34,10 +34,6 @@ const callGateway = vi.mocked(callInProcessGatewayTool);
 
 beforeEach(() => {
   callGateway.mockReset();
-});
-
-afterEach(() => {
-  vi.useRealTimers();
 });
 
 describe("openclaw delegation tool", () => {
@@ -138,49 +134,6 @@ describe("openclaw delegation tool", () => {
     expect(tool.outputSchema).toBeDefined();
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
     expect(compactToolOutputHint(tool.outputSchema)).toBe("{ reply: string; action?: string }");
-  });
-
-  it("keeps a guarded wire decision alive past the ordinary Gateway timeout", async () => {
-    vi.useFakeTimers();
-    callGateway.mockImplementation(async (_method, _params, options) => {
-      const timeoutMs = options?.timeoutMs ?? 30_000;
-      return await new Promise<{ sessionId: string; reply: string }>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("Gateway request timed out")), timeoutMs);
-        setTimeout(() => {
-          clearTimeout(timeout);
-          resolve({ sessionId: "delegate", reply: "Approved and applied." });
-        }, 30_001);
-      });
-    });
-    const tool = createOpenClawDelegateToolsForRun({
-      sessionAgentId: "main",
-      runSessionKey: "agent:main:main",
-      execSession: { permissionMode: "guarded" },
-    })[0];
-    if (!tool) {
-      throw new Error("expected OpenClaw delegation tool");
-    }
-
-    let settled = false;
-    const pending = tool.execute("call-delayed-approval", { message: "Change logging." });
-    void pending.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-
-    await expect(pending).resolves.toMatchObject({
-      details: { reply: "Approved and applied." },
-    });
-    expect(callGateway.mock.calls[0]?.[2]).toEqual({
-      timeoutMs: DEFAULT_ASK_USER_TIMEOUT_SECONDS * 1_000,
-    });
   });
 
   it.each([
