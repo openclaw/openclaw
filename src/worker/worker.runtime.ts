@@ -1,21 +1,22 @@
 import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  WORKER_PORTAL_PROTOCOL_FEATURE,
-  WORKER_PRESENCE_PROTOCOL_FEATURE,
-  type WorkerHelloOk,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerHelloOk } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
 import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  assertNativeInferenceAssignment,
+  type NativeInferenceStartup,
+} from "./native-inference-startup.js";
+import type { NativeRuntime, NativeRuntimeResolved } from "./native-runtime.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import type { WorkerRuntimeResult } from "./worker-process-protocol.js";
@@ -31,10 +32,7 @@ function toWorkerRuntimeError(value: unknown, fallback: string): Error {
 }
 
 function fencedResult(state: WorkerConnectionState): WorkerRuntimeResult | undefined {
-  if (
-    state.kind === "fenced" &&
-    (state.reason === "credential-replaced" || state.reason === "owner-epoch-mismatch")
-  ) {
+  if (state.kind === "fenced") {
     return { status: "fenced", reason: state.reason };
   }
   return undefined;
@@ -81,6 +79,8 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
           throw failed.reason;
         }
         // Exec finalizers can open state; release its handle before Windows removes the file.
+        const { closeOpenClawStateDatabaseByPathAsync } =
+          await import("../state/openclaw-state-db-cache.js");
         await closeOpenClawStateDatabaseByPathAsync(
           resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
         );
@@ -104,6 +104,19 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
   };
 }
 
+export async function loadWorkerTurnRuntime() {
+  const imports = [
+    import("./embedded-agent.runtime.js"),
+    import("./inference-stream.runtime.js"),
+  ] as const;
+  try {
+    return await Promise.all(imports);
+  } finally {
+    // Module evaluation must finish before the caller restores the worker environment.
+    await Promise.allSettled(imports);
+  }
+}
+
 export async function runWorkerDescriptor(
   descriptor: WorkerLaunchDescriptor,
   options: {
@@ -112,6 +125,7 @@ export async function runWorkerDescriptor(
     browserRuntime?: WorkerBrowserRuntime;
     /** Supplied by the managed process owner, which closes state after its final turn. */
     environmentStateDir?: string;
+    nativeInference?: NativeInferenceStartup;
   } = {},
 ): Promise<WorkerRuntimeResult> {
   if (
@@ -120,6 +134,14 @@ export async function runWorkerDescriptor(
   ) {
     registerSecretValueForRedaction(descriptor.connectionEndpoint.cloudflareAccess.clientId);
     registerSecretValueForRedaction(descriptor.connectionEndpoint.cloudflareAccess.clientSecret);
+  }
+  if (descriptor.assignment.inference === "runtime-local") {
+    if (!options.nativeInference) {
+      throw new Error(
+        "Runtime-local inference was requested but no node-local model configuration was provisioned",
+      );
+    }
+    assertNativeInferenceAssignment(options.nativeInference, descriptor);
   }
   const workspaceDir = await assertWorkerDirectory(descriptor.assignment.workspaceDir, "workspace");
   const workerContainmentRoot = descriptor.assignment.workerContainmentRoot
@@ -140,29 +162,13 @@ export async function runWorkerDescriptor(
   const stateDir = options.environmentStateDir ?? environment!.stateDir;
 
   const abortController = new AbortController();
+  let nativeRuntime: NativeRuntime | undefined;
   let turnStarted = false;
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
-  function loadRuntimeImports() {
-    const imports = [
-      import("./embedded-agent.runtime.js"),
-      import("./inference-stream.runtime.js"),
-    ] as const;
-    const ready = Promise.all(imports);
-    // Rejected admission does not await ready; still observe errors and join both
-    // imports before restoring the process environment.
-    void ready.catch(() => undefined);
-    return { ready, settled: Promise.allSettled(imports) };
-  }
-  let runtimeImports: ReturnType<typeof loadRuntimeImports> | undefined;
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
-    onAdmissionRequestSent: () => {
-      if (!abortController.signal.aborted) {
-        runtimeImports ??= loadRuntimeImports();
-      }
-    },
     onConnectionFailure: (error) => {
       options.onConnectionFailure?.(error?.message);
     },
@@ -192,11 +198,19 @@ export async function runWorkerDescriptor(
     initialAckedSeq: descriptor.assignment.liveEvents.ackedSeq,
   });
   const inference = new WorkerInferenceProxyClient(connection);
+  let wasAdmitted = false;
   const unsubscribeState = connection.onStateChange((state) => {
-    if (state.kind === "fenced") {
+    if (state.kind === "ready") {
+      wasAdmitted = true;
+    } else if (state.kind === "fenced") {
       abortController.abort(new Error(`worker fenced: ${state.reason}`));
     } else if (state.kind === "failed") {
       abortController.abort(state.error);
+    } else if (wasAdmitted && descriptor.assignment.inference === "runtime-local") {
+      // Startup may retry before admission. Once admitted, any transport loss
+      // ends local provider authority, even while runtime setup is still awaited.
+      // Reconnection may settle the failed turn; it cannot revive its producer.
+      abortController.abort(new Error("Runtime-local inference lost Gateway admission"));
     }
   });
 
@@ -220,24 +234,36 @@ export async function runWorkerDescriptor(
       }
       throw error;
     }
+    if (
+      !hello.protocolFeatures.includes(WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE) ||
+      !hello.toolSurface
+    ) {
+      throw new Error("Gateway does not support the admitted worker tool surface.");
+    }
+    const toolSurface = hello.toolSurface;
     const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }] =
-      await (runtimeImports ??= loadRuntimeImports()).ready;
+      await loadWorkerTurnRuntime();
     const computerContextEpoch: ComputerContextEpoch = { value: 0 };
-    const stream = createWorkerInferenceStreamAdapter({
-      client: inference,
-      sessionId: descriptor.admission.sessionId,
-      runEpoch: descriptor.admission.ownerEpoch,
-      runId: descriptor.assignment.runId,
-      turnId: descriptor.assignment.turnId,
-      modelRef: descriptor.assignment.modelRef,
-      computerContextEpoch,
-    });
+    const stream =
+      descriptor.assignment.inference === "runtime-local"
+        ? () => {
+            throw new Error("Gateway inference is forbidden for this runtime-local turn");
+          }
+        : createWorkerInferenceStreamAdapter({
+            client: inference,
+            sessionId: descriptor.admission.sessionId,
+            runEpoch: descriptor.admission.ownerEpoch,
+            runId: descriptor.assignment.runId,
+            turnId: descriptor.assignment.turnId,
+            modelRef: descriptor.assignment.modelRef,
+            computerContextEpoch,
+          });
     const github = descriptor.assignment.github
       ? await import("./github-binding.runtime.js").then(({ prepareWorkerGitHubEnvironment }) =>
           prepareWorkerGitHubEnvironment({
             binding: descriptor.assignment.github!,
             stateDir,
-            runId: descriptor.assignment.runId,
+            turnId: descriptor.assignment.turnId,
             cwd: workspaceDir,
             signal: abortController.signal,
           }),
@@ -245,65 +271,80 @@ export async function runWorkerDescriptor(
       : undefined;
     try {
       turnStarted = true;
-      await runWorkerEmbeddedTurn({
-        agentId: descriptor.assignment.agentId,
-        operationalRunInstance: descriptor.assignment.operationalRunInstance,
-        agentRuntimeIdentityToken: descriptor.assignment.agentRuntimeIdentityToken,
-        cwd: workspaceDir,
-        workerContainmentRoot,
-        ...(descriptor.assignment.permissionMode
-          ? { permissionMode: descriptor.assignment.permissionMode }
-          : {}),
-        stateDir,
-        ...(github ? { github } : {}),
-        sessionId: descriptor.admission.sessionId,
-        sessionKey: `worker:${descriptor.admission.sessionId}`,
-        runId: descriptor.assignment.runId,
-        prompt: descriptor.assignment.prompt,
-        suppressPromptTranscript: descriptor.assignment.suppressPromptTranscript,
-        modelRef: descriptor.assignment.modelRef,
-        initialMessages: descriptor.assignment.initialMessages,
-        skillResources: descriptor.assignment.skillResources,
-        skillAuthoring: descriptor.assignment.skillAuthoring,
-        ...(descriptor.assignment.systemPrompt === undefined
-          ? {}
-          : { systemPrompt: descriptor.assignment.systemPrompt }),
-        inferenceOptions: descriptor.assignment.inferenceOptions,
-        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames.filter(
-          (name) =>
-            (name !== "portal" ||
-              hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE)) &&
-            (name !== "presence" ||
-              hello.protocolFeatures.includes(WORKER_PRESENCE_PROTOCOL_FEATURE)),
-        ),
-        execAuthority: descriptor.assignment.toolAuthority.exec,
-        ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
-        ...(descriptor.assignment.computer
-          ? {
-              computer: {
-                contextEpoch: computerContextEpoch,
-                descriptor: descriptor.assignment.computer,
-                requestComputer: (request) => connection.requestComputer(request),
-              },
+      const {
+        workspaceDir: _workspace,
+        github: _github,
+        computer,
+        toolAuthority,
+        transcript: _transcript,
+        liveEvents: _liveEvents,
+        inference: _inference,
+        ...assignment
+      } = descriptor.assignment;
+      const runTurn = (nativeInference?: NativeRuntimeResolved) =>
+        runWorkerEmbeddedTurn({
+          ...assignment,
+          nativeInference,
+          cwd: workspaceDir,
+          workerContainmentRoot,
+          stateDir,
+          ...(github ? { github } : {}),
+          sessionId: descriptor.admission.sessionId,
+          sessionKey: `worker:${descriptor.admission.sessionId}`,
+          allowedToolNames: toolAuthority.allowedToolNames,
+          toolSurface,
+          execAuthority: toolAuthority.exec,
+          ...(computer
+            ? {
+                computer: {
+                  contextEpoch: computerContextEpoch,
+                  descriptor: computer,
+                  requestComputer: (request) => connection.requestComputer(request),
+                },
+              }
+            : {}),
+          ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
+          inference: { stream },
+          transcript: {
+            commit: async (messages) => {
+              await transcript.commit(messages);
+            },
+          },
+          live: {
+            enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
+            emitTerminal: async (event) => {
+              await live.emitTerminal(descriptor.assignment.runId, event);
+              resultFenceAcked = true;
+            },
+          },
+          gatewayTools: connection,
+          signal: abortController.signal,
+        });
+      if (descriptor.assignment.inference === "runtime-local") {
+        const startup = options.nativeInference!;
+        const { createNativeRuntime } = await import("./native-runtime.js");
+        nativeRuntime = await createNativeRuntime(startup.config, startup.credentials);
+        abortController.signal.throwIfAborted();
+        await nativeRuntime.withTurn(
+          {
+            binding: {
+              workspacePath: descriptor.assignment.workspaceDir,
+            },
+            selection: {
+              provider: descriptor.assignment.modelRef.provider,
+              modelId: descriptor.assignment.modelRef.model,
+            },
+          },
+          async (native) => {
+            if (native.workspacePath !== workspaceDir) {
+              throw new Error("Node-local inference workspace binding changed");
             }
-          : {}),
-        ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
-        inference: { stream },
-        transcript: {
-          commit: async (messages) => {
-            await transcript.commit(messages);
+            await runTurn(native);
           },
-        },
-        live: {
-          enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
-          emitTerminal: async (event) => {
-            await live.emitTerminal(descriptor.assignment.runId, event);
-            resultFenceAcked = true;
-          },
-        },
-        sessions: connection,
-        signal: abortController.signal,
-      });
+        );
+      } else {
+        await runTurn();
+      }
       if (options.signal?.aborted && !options.environmentStateDir) {
         throw toWorkerRuntimeError(options.signal.reason, "worker interrupted");
       }
@@ -343,10 +384,10 @@ export async function runWorkerDescriptor(
     }
     unsubscribeState();
     options.signal?.removeEventListener("abort", abortFromCaller);
+    nativeRuntime?.close();
     inference.dispose();
     live.dispose();
     await connection.stop();
-    await runtimeImports?.settled;
     await environment?.close();
   }
 }

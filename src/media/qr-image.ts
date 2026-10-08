@@ -1,14 +1,7 @@
-// QR image helpers generate QR code image files for media delivery.
 import path from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { loadQrCodeRuntime } from "./qr-runtime.ts";
 
-const DEFAULT_QR_PNG_SCALE = 6;
-const DEFAULT_QR_PNG_MARGIN_MODULES = 4;
-const MIN_QR_PNG_SCALE = 1;
-const MAX_QR_PNG_SCALE = 12;
-const MIN_QR_PNG_MARGIN_MODULES = 0;
-const MAX_QR_PNG_MARGIN_MODULES = 16;
 const QR_PNG_DATA_URL_PREFIX = "data:image/png;base64,";
 
 type QrPngRenderOptions = {
@@ -29,22 +22,13 @@ type QrPngTempFile = {
   mediaLocalRoots: string[];
 };
 
-function resolveQrPngIntegerOption(params: {
-  name: string;
-  value: number | undefined;
-  defaultValue: number;
-  min: number;
-  max: number;
-}): number {
-  if (params.value === undefined) {
-    return params.defaultValue;
+function resolveQrPngIntegerOption(name: string, input: number, min: number, max: number): number {
+  if (!Number.isFinite(input)) {
+    throw new RangeError(`${name} must be a finite number.`);
   }
-  if (!Number.isFinite(params.value)) {
-    throw new RangeError(`${params.name} must be a finite number.`);
-  }
-  const value = Math.floor(params.value);
-  if (value < params.min || value > params.max) {
-    throw new RangeError(`${params.name} must be between ${params.min} and ${params.max}.`);
+  const value = Math.floor(input);
+  if (value < min || value > max) {
+    throw new RangeError(`${name} must be between ${min} and ${max}.`);
   }
   return value;
 }
@@ -56,25 +40,16 @@ function resolveQrTempPathSegment(name: string, value: string): string {
   return value;
 }
 
-async function renderQrPngBuffer(input: string, opts: QrPngRenderOptions): Promise<Buffer> {
-  const scale = resolveQrPngIntegerOption({
-    name: "scale",
-    value: opts.scale,
-    defaultValue: DEFAULT_QR_PNG_SCALE,
-    min: MIN_QR_PNG_SCALE,
-    max: MAX_QR_PNG_SCALE,
-  });
-  const marginModules = resolveQrPngIntegerOption({
-    name: "marginModules",
-    value: opts.marginModules,
-    defaultValue: DEFAULT_QR_PNG_MARGIN_MODULES,
-    min: MIN_QR_PNG_MARGIN_MODULES,
-    max: MAX_QR_PNG_MARGIN_MODULES,
-  });
+async function renderQrPngBuffer(
+  input: string,
+  { scale = 6, marginModules = 4 }: QrPngRenderOptions,
+): Promise<Buffer> {
+  const resolvedScale = resolveQrPngIntegerOption("scale", scale, 1, 12);
+  const margin = resolveQrPngIntegerOption("marginModules", marginModules, 0, 16);
   const qrCode = await loadQrCodeRuntime();
   return await qrCode.toBuffer(input, {
-    margin: marginModules,
-    scale,
+    margin,
+    scale: resolvedScale,
   });
 }
 
@@ -86,7 +61,6 @@ export async function renderQrPngBase64(
   return (await renderQrPngBuffer(input, opts)).toString("base64");
 }
 
-/** Renders QR text as a PNG data URL. */
 export async function renderQrPngDataUrl(
   input: string,
   opts: QrPngRenderOptions = {},

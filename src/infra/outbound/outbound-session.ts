@@ -8,7 +8,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { PreparedConversationRegistryScope } from "../../config/sessions/conversation-registry.js";
 import {
@@ -25,6 +25,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import type { SessionEntryPatchGuard } from "../../config/sessions/session-entry-patch.types.js";
 import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -42,7 +43,6 @@ import {
 } from "./channel-target-prefix.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
-/** Session route produced for an outbound message target. */
 export type OutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
@@ -59,7 +59,6 @@ export type OutboundSessionRoute = {
   displayName?: string;
 };
 
-/** Inputs required to resolve an outbound target into a session route. */
 export type ResolveOutboundSessionRouteParams = {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -74,71 +73,11 @@ export type ResolveOutboundSessionRouteParams = {
   threadId?: string | number | null;
 };
 
-function rebaseOutboundSessionRoute(
-  route: OutboundSessionRoute,
-  baseSessionKey: string,
-): OutboundSessionRoute | null {
-  if (
-    route.sessionKey !== route.baseSessionKey &&
-    !route.sessionKey.startsWith(`${route.baseSessionKey}:`)
-  ) {
-    return null;
-  }
-  return {
-    ...route,
-    sessionKey: `${baseSessionKey}${route.sessionKey.slice(route.baseSessionKey.length)}`,
-    baseSessionKey,
-  };
-}
-
 const FALLBACK_TARGET_KIND_PREFIXES: Array<{ kind: ChatType; pattern: RegExp }> = [
   { kind: "direct", pattern: /^(user:|dm:)/i },
   { kind: "channel", pattern: /^(channel:|conversation:|thread:)/i },
   { kind: "group", pattern: /^(group:|room:)/i },
 ];
-
-function normalizeInferredPeerKind(value: ChatType | undefined): ChatType | undefined {
-  return value === "direct" || value === "group" || value === "channel" ? value : undefined;
-}
-
-function inferPeerKindFromPlugin(params: {
-  plugin: ChannelPlugin | undefined;
-  targets: readonly string[];
-}): ChatType | undefined {
-  for (const target of params.targets) {
-    const inferred = normalizeInferredPeerKind(
-      params.plugin?.messaging?.inferTargetChatType?.({ to: target }),
-    );
-    if (inferred) {
-      return inferred;
-    }
-  }
-  return undefined;
-}
-
-function inferPeerKindFromFallbackPrefixes(targets: readonly string[]): ChatType | undefined {
-  for (const target of targets) {
-    for (const fallback of FALLBACK_TARGET_KIND_PREFIXES) {
-      if (fallback.pattern.test(target)) {
-        return fallback.kind;
-      }
-    }
-  }
-  return undefined;
-}
-
-function inferPeerKindFromCapabilities(plugin: ChannelPlugin | undefined): ChatType | undefined {
-  const chatTypes: ChatType[] = [];
-  for (const chatType of plugin?.capabilities?.chatTypes ?? []) {
-    if (
-      (chatType === "direct" || chatType === "group" || chatType === "channel") &&
-      !chatTypes.includes(chatType)
-    ) {
-      chatTypes.push(chatType);
-    }
-  }
-  return chatTypes.length === 1 ? chatTypes[0] : undefined;
-}
 
 function inferPeerKind(params: {
   channel: ChannelId;
@@ -147,31 +86,35 @@ function inferPeerKind(params: {
   resolvedTarget?: ResolvedMessagingTarget;
 }): ChatType {
   const resolvedKind = params.resolvedTarget?.kind;
-  if (resolvedKind === "user") {
-    return "direct";
-  }
-  if (resolvedKind === "channel") {
-    return "channel";
+  if (resolvedKind === "user" || resolvedKind === "channel") {
+    return resolvedKind === "user" ? "direct" : "channel";
   }
   if (resolvedKind === "group") {
     const plugin = params.plugin ?? getChannelPlugin(params.channel);
     const chatTypes = plugin?.capabilities?.chatTypes ?? [];
-    const supportsChannel = chatTypes.includes("channel");
-    const supportsGroup = chatTypes.includes("group");
-    if (supportsChannel && !supportsGroup) {
-      return "channel";
-    }
-    return "group";
+    return chatTypes.includes("channel") && !chatTypes.includes("group") ? "channel" : "group";
   }
   const plugin = params.plugin ?? getChannelPlugin(params.channel);
   const strippedTarget = stripTargetProviderPrefix(params.target, params.channel);
   const targets = uniqueStrings([params.target, strippedTarget].filter(Boolean));
-  return (
-    inferPeerKindFromPlugin({ plugin, targets }) ??
-    inferPeerKindFromFallbackPrefixes(targets) ??
-    inferPeerKindFromCapabilities(plugin) ??
-    "direct"
+  for (const target of targets) {
+    const inferred = plugin?.messaging?.inferTargetChatType?.({ to: target });
+    if (inferred === "direct" || inferred === "group" || inferred === "channel") {
+      return inferred;
+    }
+  }
+  for (const target of targets) {
+    const fallback = FALLBACK_TARGET_KIND_PREFIXES.find(({ pattern }) => pattern.test(target));
+    if (fallback) {
+      return fallback.kind;
+    }
+  }
+  const chatTypes = new Set(
+    plugin?.capabilities?.chatTypes?.filter(
+      (kind) => kind === "direct" || kind === "group" || kind === "channel",
+    ),
   );
+  return chatTypes.size === 1 ? (chatTypes.values().next().value ?? "direct") : "direct";
 }
 
 function resolveFallbackSession(
@@ -181,12 +124,7 @@ function resolveFallbackSession(
   if (!trimmed) {
     return null;
   }
-  const peerKind = inferPeerKind({
-    channel: params.channel,
-    plugin: params.plugin,
-    target: params.target,
-    resolvedTarget: params.resolvedTarget,
-  });
+  const peerKind = inferPeerKind(params);
   const peerId = stripOutboundTargetKindPrefix(trimmed);
   if (!peerId) {
     return null;
@@ -236,7 +174,6 @@ function resolveOutboundSessionDisplayName(params: ResolveOutboundSessionRoutePa
   return identifierDisplays.includes(normalizedDisplay) ? undefined : displayName;
 }
 
-/** Resolves the session route used to mirror outbound delivery into conversation state. */
 export async function resolveOutboundSessionRoute(
   params: ResolveOutboundSessionRouteParams,
 ): Promise<OutboundSessionRoute | null> {
@@ -270,9 +207,20 @@ export async function resolveOutboundSessionRoute(
     // route, but never authorize this agent-local candidate as exact.
     return { ...namedRoute, recipientSessionExact: false };
   }
-  return bindingScope !== globalScope
-    ? rebaseOutboundSessionRoute(namedRoute, bindingRoute.sessionKey)
-    : namedRoute;
+  if (bindingScope === globalScope) {
+    return namedRoute;
+  }
+  if (
+    namedRoute.sessionKey !== namedRoute.baseSessionKey &&
+    !namedRoute.sessionKey.startsWith(`${namedRoute.baseSessionKey}:`)
+  ) {
+    return null;
+  }
+  return {
+    ...namedRoute,
+    sessionKey: `${bindingRoute.sessionKey}${namedRoute.sessionKey.slice(namedRoute.baseSessionKey.length)}`,
+    baseSessionKey: bindingRoute.sessionKey,
+  };
 }
 
 type OutboundSessionEntryParams = {
@@ -284,6 +232,7 @@ type OutboundSessionEntryParams = {
   sourceSessionKey?: string;
   /** Revalidates caller-owned route authority at the final persistence boundary. */
   assertCommitAllowed?: () => void;
+  workerGuard?: SessionEntryPatchGuard;
 };
 
 type CapturedOutboundSessionBinding = {
@@ -348,26 +297,6 @@ export function prepareOutboundSessionBinding(
   };
 }
 
-function resolveOutboundSessionCreation(
-  params: OutboundSessionEntryParams,
-  sourceScope?: PreparedOutboundSessionBinding["source"],
-) {
-  if (params.creation || !params.sourceSessionKey) {
-    return params.creation;
-  }
-  const source = sourceScope
-    ? loadSessionEntryReadOnlyInScope(sourceScope)
-    : loadSessionEntryReadOnly({
-        sessionKey: params.sourceSessionKey,
-        storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
-          agentId: resolveAgentIdFromSessionKey(params.sourceSessionKey),
-        }),
-      });
-  return source?.sandbox === "required"
-    ? { via: source.createdVia ?? "channel", ...inheritSessionCreationPolicy(source) }
-    : undefined;
-}
-
 async function persistOutboundSessionEntry(
   params: OutboundSessionEntryParams,
   prepared?: PreparedOutboundSessionBinding,
@@ -377,6 +306,20 @@ async function persistOutboundSessionEntry(
     resolveSessionStorePathCore(params.cfg.session?.store, {
       agentId: resolveAgentIdFromSessionKey(params.route.sessionKey),
     });
+  let creation = params.creation;
+  if (!creation && params.sourceSessionKey) {
+    const source = prepared?.source
+      ? loadSessionEntryReadOnlyInScope(prepared.source)
+      : loadSessionEntryReadOnly({
+          sessionKey: params.sourceSessionKey,
+          storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+            agentId: resolveAgentIdFromSessionKey(params.sourceSessionKey),
+          }),
+        });
+    if (source?.sandbox === "required") {
+      creation = { via: source.createdVia ?? "channel", ...inheritSessionCreationPolicy(source) };
+    }
+  }
   const ctx: MsgContext = {
     From: params.route.from,
     To: params.route.to,
@@ -392,7 +335,7 @@ async function persistOutboundSessionEntry(
     NativeChannelId: params.route.peer.kind === "direct" ? undefined : params.route.peer.id,
     ConversationLabel: params.route.displayName,
     GroupSubject: params.route.peer.kind === "direct" ? undefined : params.route.displayName,
-    SessionCreation: resolveOutboundSessionCreation(params, prepared?.source),
+    SessionCreation: creation,
   };
   // Shared-main context may still point at another channel. Commit route and
   // origin together so its conversation identity binds the exact destination.
@@ -408,6 +351,7 @@ async function persistOutboundSessionEntry(
     threadId: params.route.threadId,
     ctx,
     ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
+    ...(params.workerGuard ? { workerGuard: params.workerGuard } : {}),
   };
   return prepared
     ? await updateSessionLastRouteInScope(

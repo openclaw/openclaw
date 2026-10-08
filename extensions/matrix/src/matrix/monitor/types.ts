@@ -1,5 +1,5 @@
 import { MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
-import type { EncryptedFile, MessageEventContent } from "../sdk.js";
+import type { MessageEventContent } from "../sdk.js";
 export type { MatrixRawEvent } from "../sdk.js";
 
 export const EventType = {
@@ -10,14 +10,7 @@ export const EventType = {
   Reaction: MATRIX_REACTION_EVENT_TYPE,
 } as const;
 
-export const RelationType = {
-  Replace: "m.replace",
-  Thread: "m.thread",
-} as const;
-
 export type RoomMessageEventContent = MessageEventContent & {
-  url?: string;
-  file?: EncryptedFile;
   info?: {
     mimetype?: string;
     size?: number;

@@ -1,17 +1,20 @@
 import type { nothing, TemplateResult } from "lit";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
+import type { ChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import type { ChatAttachmentReadLifecycle } from "../chat/components/chat-attachment-reads.ts";
 import type { HumanMentionDirectory } from "../chat/components/chat-composer-mention-menu.ts";
-import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
+import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { NewSessionComposerTextareaController } from "./composer-controller.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 
 export type NewSessionComposerOptions = {
+  uploadConfig?: ApplicationConfigCapability;
   renderCritters: (floorEnabled: boolean) => TemplateResult | typeof nothing;
-  attachmentLimits?: { maxBytes: number; maxImageBytes: number };
+  attachmentLimits?: ChatAttachmentLimits;
   attachmentReads?: ChatAttachmentReadLifecycle;
   attachments: ChatAttachment[];
   canSubmit: boolean;
@@ -40,7 +43,7 @@ export type NewSessionComposerOptions = {
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
-  capabilityMenu?: CapabilityMenuProps;
+  capabilityMenu?: ChatComposerCapabilityMenuProps;
   toolOverrides?: SessionToolOverrides | null;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;

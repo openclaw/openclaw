@@ -5,9 +5,10 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
  * plugin SQLite; all other tabs remain process-local.
  */
 import {
-  getOptionalBrowserStateRuntime,
+  captureBrowserSessionTabAuthority,
   isBrowserStateRuntimeCurrent,
   readCurrentBrowserState,
+  type BrowserSessionTabAuthority,
 } from "../browser-runtime-state.js";
 import {
   type CleanupKind,
@@ -28,7 +29,6 @@ import {
   readBrowserDashboardStopIntents,
   withBrowserSessionTabOperation,
   type BrowserSessionTabRecord,
-  type BrowserSessionTabAuthority,
 } from "./session-tab-store.js";
 import {
   selectStaleTrackedTabs,
@@ -37,6 +37,7 @@ import {
 import { readDurableTabs, resolveVolatile, type DurableTab } from "./session-tab-tracking.js";
 
 export {
+  filterTrackedSessionBrowserTabs,
   trackSessionBrowserTab,
   touchSessionBrowserTab,
   untrackSessionBrowserTab,
@@ -71,9 +72,13 @@ async function performVolatileCleanup(
       : undefined;
   };
   while (true) {
-    if (params.isCurrent?.() === false) {
+    if (params.prepareCurrent && !(await params.prepareCurrent())) {
       return 0;
     }
+    if (!isCleanupCurrent(params)) {
+      return 0;
+    }
+    params.authority?.assertCurrent?.();
     const current = resolveCurrent();
     if (!current) {
       return 0;
@@ -96,7 +101,7 @@ async function performVolatileCleanup(
       let closeTab = params.closeTab;
       try {
         if (!closeTab && tab.route.kind === "browser-control") {
-          const { browserCloseTabByRawTargetId } = await import("./client.js");
+          const { browserCloseTabByRawTargetId } = await import("./client-tab-close.runtime.js");
           const latest = resolveCurrent();
           if (!latest) {
             // No dispatch occurred: a lifecycle joiner may retry a touched sweep.
@@ -224,16 +229,16 @@ async function prepareTrackedTabCleanup(
   return { dashboardClosed, durable: isCleanupCurrent(params) ? durable : undefined };
 }
 
-/** Closes and untracks tabs for the supplied session keys. */
 export async function closeTrackedBrowserTabsForSessions(
   input: CloseParams & { sessionKeys: Array<string | undefined>; now?: number },
 ): Promise<number> {
+  if (input.sessionEntryCurrent && typeof input.prepareCurrent !== "function") {
+    input.onWarn?.("browser cleanup unavailable: sessionEntryCurrent requires prepareCurrent");
+    return 0;
+  }
   const params = {
     ...input,
-    authority: {
-      ...input.authority,
-      runtime: input.authority?.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
-    },
+    authority: captureBrowserSessionTabAuthority(input.authority),
   };
   const sessionKeys = new Set(
     params.sessionKeys
@@ -279,10 +284,7 @@ export async function sweepTrackedBrowserTabs(
 ): Promise<number> {
   const params = {
     ...input,
-    authority: {
-      ...input.authority,
-      runtime: input.authority?.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
-    },
+    authority: captureBrowserSessionTabAuthority(input.authority),
   };
   const volatile =
     params.ordinaryCleanup === false ? [] : Array.from(readVolatileTabs().values()).flat();

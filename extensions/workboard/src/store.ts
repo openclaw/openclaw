@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   WorkboardAttachment,
   WorkboardBoardMetadata,
@@ -19,7 +18,6 @@ import {
   cardParentIds,
   cardRunId,
   cardSessionKey,
-  closeRunningAttempts,
   computeCardDiagnostics,
   isDependencyPromotableStatus,
   latestRunningAttempt,
@@ -28,11 +26,7 @@ import {
   shouldSkipPersistedLifecycleStatusUpdate,
   shouldSyncWorkboardLifecycleStatus,
 } from "./store-card-helpers.js";
-import {
-  isWorkboardClaimReclaimable,
-  MAX_CARD_NOTIFICATIONS,
-  secondsToDurationMs,
-} from "./store-constants.js";
+import { isWorkboardClaimReclaimable, secondsToDurationMs } from "./store-constants.js";
 import type {
   WorkboardBulkInput,
   WorkboardCardPatch,
@@ -189,7 +183,7 @@ function lifecycleExecution(params: {
   };
 }
 
-// Capability layers split review boundaries only; the core still owns persistence and mutation order.
+// Capability layers share persistence handles and the runtime's mutation ordering.
 export class WorkboardStore extends WorkboardNotificationStore {
   async prepareExecutionLaunch(
     id: string,
@@ -455,6 +449,9 @@ export class WorkboardStore extends WorkboardNotificationStore {
     const boardId = typeof input === "number" ? undefined : normalizeBoardId(input.boardId);
     const assertOwnerCurrent = typeof input === "number" ? undefined : input.assertOwnerCurrent;
     return await this.enqueueMutation(async () => {
+      if (boardId) {
+        await this.assertCardsBoard(boardId);
+      }
       const promoted: WorkboardCard[] = [];
       const reclaimed: WorkboardCard[] = [];
       const blocked: WorkboardCard[] = [];
@@ -482,33 +479,20 @@ export class WorkboardStore extends WorkboardNotificationStore {
             const reason = timedOut
               ? "Run exceeded the card max runtime."
               : "Claim expired without a recent heartbeat.";
-            const execution =
-              latest.execution?.status === "running"
-                ? { ...latest.execution, status: "blocked" as const, updatedAt: now }
-                : latest.execution;
-            latest = await this.updateCard(latest.id, {
-              status: "blocked",
-              ...(execution ? { execution } : {}),
+            const finished = this.finishRun(latest, "blocked", now, reason);
+            latest = await this.updateCard(await this.requireCard(latest.id), {
+              ...finished,
               metadata: {
-                ...latest.metadata,
-                claim: undefined,
-                attempts: closeRunningAttempts(latest.metadata?.attempts, now, "blocked", reason),
-                failureCount: (latest.metadata?.failureCount ?? 0) + 1,
-                notifications: [
-                  ...(latest.metadata?.notifications ?? []),
-                  {
-                    id: randomUUID(),
-                    kind: "failed" as const,
-                    createdAt: now,
-                    sequence: this.nextNotificationSequence(now),
-                    message: reason,
-                  },
-                ].slice(-MAX_CARD_NOTIFICATIONS),
+                ...finished.metadata,
+                notifications: this.appendNotification(latest.metadata, now, {
+                  kind: "failed",
+                  message: reason,
+                }),
               },
             });
             blocked.push(latest);
           } else if (claimExpired) {
-            latest = await this.updateCard(latest.id, {
+            latest = await this.updateCard(await this.requireCard(latest.id), {
               metadata: { ...latest.metadata, claim: undefined },
             });
             reclaimed.push(latest);
@@ -518,20 +502,14 @@ export class WorkboardStore extends WorkboardNotificationStore {
             retriesExhausted &&
             isDependencyPromotableStatus(latest.status)
           ) {
-            latest = await this.updateCard(latest.id, {
+            latest = await this.updateCard(await this.requireCard(latest.id), {
               status: "blocked",
               metadata: {
                 ...latest.metadata,
-                notifications: [
-                  ...(latest.metadata?.notifications ?? []),
-                  {
-                    id: randomUUID(),
-                    kind: "failed" as const,
-                    createdAt: now,
-                    sequence: this.nextNotificationSequence(now),
-                    message: "Card exhausted its retry budget.",
-                  },
-                ].slice(-MAX_CARD_NOTIFICATIONS),
+                notifications: this.appendNotification(latest.metadata, now, {
+                  kind: "failed",
+                  message: "Card exhausted its retry budget.",
+                }),
               },
             });
             blocked.push(latest);

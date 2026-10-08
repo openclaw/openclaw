@@ -63,18 +63,9 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
   private agentsListRequest: ApplicationContext["agents"] | undefined;
 
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
-    );
+    .watchStore(() => this.context?.gateway)
+    .watchStore(() => this.context?.agents)
+    .watchStore(() => this.context?.agentSelection);
 
   private readonly planTask = new Task(this, {
     args: () => {

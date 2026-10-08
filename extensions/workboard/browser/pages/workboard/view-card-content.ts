@@ -6,11 +6,7 @@ import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 import { selectCardAlert, type CardAlert } from "../../lib/workboard/card-alerts.ts";
-import type {
-  WorkboardCard,
-  WorkboardLifecycle,
-  WorkboardTaskSummary,
-} from "../../lib/workboard/index.ts";
+import type { WorkboardCard, WorkboardLifecycle } from "../../lib/workboard/index.ts";
 import { cardAgentLabel } from "./agent-filter.ts";
 import { cardRelativeTime } from "./view-card-time.ts";
 import {
@@ -271,15 +267,11 @@ export function renderCardSession(
   props: WorkboardProps,
   card: WorkboardCard,
   lifecycle: WorkboardLifecycle,
-  task: WorkboardTaskSummary | undefined,
   status: SessionStatusPresentation,
 ) {
-  const hasSession = lifecycle.state !== "unlinked" || Boolean(task);
+  const hasSession = lifecycle.state !== "unlinked";
   const sessionName = hasSession
-    ? (lifecycle.session?.displayName ??
-      lifecycle.session?.label ??
-      task?.title ??
-      t("workboard.fieldSession"))
+    ? (lifecycle.session?.displayName ?? lifecycle.session?.label ?? t("workboard.fieldSession"))
     : cardAgentLabel(card, props.agentsList);
   return html`<div class="workboard-card__session workboard-card__session--${status.tone}">
     ${renderAgentChip(props, card)}
@@ -295,7 +287,7 @@ export function renderCardSession(
               aria-label=${status.label}
               title=${status.detail}
             >
-              ${renderLifecycleIcon(lifecycle, task)}
+              ${renderLifecycleIcon(lifecycle)}
             </span>`
           : nothing
       }

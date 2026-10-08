@@ -1,3 +1,4 @@
+/* @vitest-environment node */
 // Regression coverage for the non-isolated runner's cross-file cleanup. Keep
 // every producer/observer pair in one child run: the contract is file-to-file
 // cleanup, not five independent Vitest process boots.
@@ -8,11 +9,14 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../scripts/lib/vitest-report-capture.mts";
+import { createVitestWorkerRun } from "../scripts/lib/vitest-worker-run.mts";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
 import { agentReaderFixtureFiles } from "./non-isolated-runner.agent-reader-fixtures.ts";
 import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
+import { mcpManagerFixtureFiles } from "./non-isolated-runner.mcp-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
+import { skillsWatcherFixtureFiles } from "./non-isolated-runner.skills-watcher-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -113,7 +117,15 @@ import { expect, vi, type RunnerTestFile } from "vitest";
 const resetModules = vi.resetModules;
 export default class FixtureRunner extends Runner {
   override async onAfterRunFiles(files: RunnerTestFile[]) {
-    await super.onAfterRunFiles(files);
+    const generation = files.some(file => file.filepath.endsWith("12-a-skills-watcher-leak.test.ts"))
+      ? "?skills-watcher-generation"
+      : files.some(file => file.filepath.endsWith("99-mcp-b-retained-owner.test.ts"))
+        ? "?mcp-retirement-generation"
+        : undefined;
+    const cleanup = generation
+      ? (await import(${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))} + generation)).default.prototype.onAfterRunFiles
+      : Runner.prototype.onAfterRunFiles;
+    await cleanup.call(this, files);
     expect(vi.resetModules, "file cleanup restores the native module reset").toBe(resetModules);
   }
 }
@@ -247,7 +259,7 @@ it("retires gateway admission before the next file", async () => {
   expect(getActiveGatewayRootWorkCount()).toBe(0);
   expect(isGatewayRestartDraining()).toBe(false);
   if (!prior?.continuation) throw new Error("expected prior gateway continuation");
-  await expect(prior.pending).rejects.toThrow("Gateway is draining");
+  await expect(prior.pending).rejects.toMatchObject({ name: "GatewayDrainingError" });
   await expect(prior.continuation.run(async () => true)).rejects.toThrow("no longer active");
   const admission = tryBeginGatewayRootWorkAdmission();
   expect(admission).not.toBeNull();
@@ -258,8 +270,9 @@ it("retires gateway admission before the next file", async () => {
 import { getAgentRunContext, registerAgentRunContext } from ${sourcePath("infra/agent-run-registry.ts")};
 import { emitAgentEvent, onAgentEvent } from ${sourcePath("infra/agent-events.ts")};
 import { listActiveSessionsForShutdown, noteActiveSessionForShutdown } from ${sourcePath("gateway/active-sessions-shutdown-tracker.ts")};
+import { createReplyOperation, replyRunRegistry } from ${sourcePath("auto-reply/reply/reply-run-registry.ts")};
 import { expect, it } from "vitest";
-it("seeds process-global run contexts", () => {
+it("seeds process-global run contexts", async () => {
   expect(tryBeginGatewayRootWorkAdmission()).not.toBeNull();
   expect(getActiveGatewayRootWorkCount()).toBe(1);
   markGatewayRestartDraining();
@@ -275,14 +288,32 @@ it("seeds process-global run contexts", () => {
   expect(getAgentRunContext("unrelated-run-a")).toBeDefined();
   expect(getAgentRunContext("unrelated-run-b")).toBeDefined();
   expect(sequence).toBe(1);
+  const operation = createReplyOperation({ sessionKey: "agent:main:runner-waiter", sessionId: "runner-waiter", resetTriggered: false });
+  operation.attachBackend({ kind: "embedded", cancel() {}, isAbortable: () => false });
+  operation.setPhase("running");
+  const outcomes: boolean[] = [];
+  void replyRunRegistry.waitForIdle(operation.key, null).then(ended => outcomes.push(ended));
+  Reflect.set(globalThis, Symbol.for("fixture.replyRunWaiter"), { operation, outcomes });
+  await Promise.resolve();
+  expect(outcomes).toEqual([]);
 });
 `,
     "05-b-agent-run.test.ts": `import { getActiveGatewayRootWorkCount, tryBeginGatewayRootWorkAdmission } from ${sourcePath("process/gateway-work-admission.ts")};
 import { clearAgentRunContext, getAgentRunContext, registerAgentRunContext, sweepStaleRunContexts } from ${sourcePath("infra/agent-run-registry.ts")};
 import { emitAgentEvent, onAgentEvent } from ${sourcePath("infra/agent-events.ts")};
 import { listActiveSessionsForShutdown } from ${sourcePath("gateway/active-sessions-shutdown-tracker.ts")};
+import { replyRunRegistry } from ${sourcePath("auto-reply/reply/reply-run-registry.ts")};
 import { expect, it } from "vitest";
 it("clears agent run registry state", () => {
+  const key = Symbol.for("fixture.replyRunWaiter");
+  const prior = Reflect.get(globalThis, key);
+  try {
+    expect(prior?.outcomes).toEqual([false]);
+    expect(replyRunRegistry.isActive("agent:main:runner-waiter")).toBe(false);
+  } finally {
+    prior?.operation.complete();
+    Reflect.deleteProperty(globalThis, key);
+  }
   expect(getActiveGatewayRootWorkCount()).toBe(0);
   const admission = tryBeginGatewayRootWorkAdmission();
   expect(admission).not.toBeNull();
@@ -430,9 +461,11 @@ it("reloads the redirected mock after a real import", () => {
 });
 `,
     ...mockResolutionFixtureFiles,
+    ...mcpManagerFixtureFiles(repoRoot),
     ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
     ...agentReaderFixtureFiles(repoRoot, fixtureRoot),
+    ...skillsWatcherFixtureFiles(repoRoot, fixtureRoot),
   };
 }
 
@@ -455,12 +488,24 @@ async function assertCompletion(
   const capture: VitestReportCapture = JSON.parse(
     await fs.readFile(`${expected.reportPath}.capture.json`, "utf8"),
   );
+  const report: JsonTestResults = JSON.parse(await fs.readFile(expected.reportPath, "utf8"));
+  const childFailures = report.testResults.flatMap((file) =>
+    [file.message, ...file.assertionResults.flatMap((test) => test.failureMessages)]
+      .filter((message): message is string => typeof message === "string" && message.length > 0)
+      .map(
+        (message) =>
+          `${path.basename(file.name)}: ${message.split("\n", 2).join("\n").slice(0, 512)}`,
+      ),
+  );
   expect(expected.pid).toEqual(expect.any(Number));
-  expect(capture).toMatchObject({
+  expect(
+    capture,
+    `Child report: ${expected.reportPath}\n${childFailures.slice(0, 20).join("\n")}`,
+  ).toMatchObject({
     pid: expected.pid,
     root: expected.root,
     processTimedOut: false,
-    ended: { reason: "failed", unhandledErrors: 0, failedModules: 1, suiteErrors: 1 },
+    ended: { reason: "failed", unhandledErrors: 0, failedModules: 6, suiteErrors: 6 },
   });
   const project = {
     name: "non-isolated-runner",
@@ -475,11 +520,10 @@ async function assertCompletion(
     expect(module).toMatchObject(project);
   }
 
-  const report: JsonTestResults = JSON.parse(await fs.readFile(expected.reportPath, "utf8"));
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 53,
-    numPassedTests: 52,
+    numTotalTests: 68,
+    numPassedTests: 67,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
@@ -487,13 +531,38 @@ async function assertCompletion(
   for (const file of report.testResults) {
     const name = path.basename(file.name);
     const crashed = name === "01-a-crash.test.ts";
+    const leakedWatchers = name === "12-a-skills-watcher-leak.test.ts";
+    const uncertainMcp =
+      name === "99-mcp-a-uncertain-owner.test.ts" || name === "98-mcp-c-prior-failure.test.ts";
+    const mockedMcpDisposer = name === "98-mcp-a-direct-disposer.test.ts";
+    const failedRunCancellation = name === "97-mcp-a-cancel-failure.test.ts";
     const skipped = name === "09-f-test-api-skipped.test.ts";
     const lifecycle = ["09-d-test-api-producer.test.ts", "09-e-test-api-observer.test.ts"].includes(
       name,
     );
     const count = crashed ? 0 : lifecycle ? 2 : 1;
-    expect(file.status, name).toBe(crashed ? "failed" : "passed");
-    expect(file.message, name).toBe(crashed ? "synthetic collect failure" : "");
+    expect(file.status, name).toBe(
+      crashed || leakedWatchers || uncertainMcp || mockedMcpDisposer || failedRunCancellation
+        ? "failed"
+        : "passed",
+    );
+    if (leakedWatchers) {
+      expect(file.message, name).toMatch(
+        /^12-a-skills-watcher-leak\.test\.ts: skills watchers failed\nError: left skills watchers open /u,
+      );
+    } else if (uncertainMcp || mockedMcpDisposer) {
+      expect(file.message).toContain("MCP runtime custody failed");
+      expect(file.message).toContain(
+        uncertainMcp
+          ? "MCP test teardown could not confirm cleanup"
+          : "MCP test teardown cannot use a mocked disposer",
+      );
+    } else if (failedRunCancellation) {
+      expect(file.message).toContain("run state failed");
+      expect(file.message).toContain("Synthetic run cancellation failed");
+    } else {
+      expect(file.message, name).toBe(crashed ? "synthetic collect failure" : "");
+    }
     expect(file.assertionResults, name).toHaveLength(count);
     expect(new Set(file.assertionResults.map((test) => test.fullName)).size, name).toBe(count);
     for (const test of file.assertionResults) {
@@ -537,6 +606,7 @@ class AlphabeticalSequencer extends BaseSequencer {
 }
 export default defineConfig({
   cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
+  plugins: sharedVitestConfig.plugins,
   resolve: sharedVitestConfig.resolve,
   test: {
     name: "non-isolated-runner",
@@ -559,7 +629,9 @@ export default defineConfig({
 
     const reportPath = path.join(root, "report.json");
     let child!: ChildProcess;
-    const result = await runVitestShutdownCommand({
+    const env = childEnv();
+    const workers = createVitestWorkerRun(env);
+    const command = runVitestShutdownCommand({
       bin: resolveTestNodeExecPath(),
       args: [
         path.join(vitestPackageDir, "vitest.mjs"),
@@ -576,13 +648,20 @@ export default defineConfig({
         `--outputFile.json=${reportPath}`,
       ],
       cwd: repoRoot,
-      env: childEnv(),
+      env,
+      workerRun: workers,
       maxBytes: 16 * 1024 * 1024,
       signal,
       onReady(owned) {
         child = owned;
       },
     });
+    let result: Awaited<typeof command>;
+    try {
+      result = await command;
+    } finally {
+      await workers.dispose();
+    }
     const completion: ChildCompletion = {
       exitCode: child.exitCode,
       signalCode: child.signalCode,
@@ -600,7 +679,12 @@ export default defineConfig({
         .toSorted(),
       reportPath,
     };
-    await assertCompletion(completion, expected);
+    try {
+      await assertCompletion(completion, expected);
+    } catch (error) {
+      await fs.writeFile(path.join(root, "child-output.log"), completion.output, "utf8");
+      throw error;
+    }
 
     // Replay faults against this one completed child, not new fixture executions.
     // The same assertion path must reject incomplete proof even with a good summary.
@@ -664,6 +748,16 @@ export default defineConfig({
             { message: "other" },
           ),
       ],
+      [
+        "unattributed skills watcher leak",
+        ({ report }) =>
+          Object.assign(
+            report.testResults.find((file) =>
+              file.name.endsWith("/12-a-skills-watcher-leak.test.ts"),
+            )!,
+            { status: "passed", message: "" },
+          ),
+      ],
       ["inconsistent totals", ({ report }) => Object.assign(report, { numPassedTests: 44 })],
     ];
     for (const patch of [
@@ -681,10 +775,10 @@ export default defineConfig({
       { reason: "interrupted" },
       { reason: "passed" },
       { unhandledErrors: 1 },
-      { failedModules: 0 },
-      { failedModules: 2 },
-      { suiteErrors: 0 },
-      { suiteErrors: 2 },
+      { failedModules: 5 },
+      { failedModules: 7 },
+      { suiteErrors: 5 },
+      { suiteErrors: 7 },
     ]) {
       faults.push([
         `invalid native end: ${JSON.stringify(patch)}`,

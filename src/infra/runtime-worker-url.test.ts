@@ -5,11 +5,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
+  runtimeNeedsTypeScriptLoader,
 } from "./runtime-worker-url.js";
 
 const requireFromHere = createRequire(import.meta.url);
@@ -112,7 +114,10 @@ describe("resolveRuntimeWorkerArgv", () => {
       const url = pathToFileURL(path.resolve(`worker fixture.${extension}`));
       const tsxUrl = pathToFileURL(requireFromHere.resolve("tsx")).href;
       const loader = typescriptLoader && extension.endsWith("ts") ? ["--import", tsxUrl] : [];
-      expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([...loader, fileURLToPath(url)]);
+      expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([
+        ...(typescriptLoader ? loader : ["--no-install"]),
+        fileURLToPath(url),
+      ]);
       expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
         typescriptLoader && extension.endsWith("ts")
           ? ["--import", import.meta.resolve("tsx/esm")]
@@ -142,12 +147,14 @@ describe("resolveRuntimeWorkerArgv", () => {
         ]) {
           const needsLoader = typescriptLoader && extension.endsWith("ts");
           expect(resolveRuntimeWorkerArgv(url, selected)).toEqual([
+            ...(typescriptLoader ? [] : ["--no-install"]),
             ...(needsLoader ? ["--import", import.meta.resolve("tsx")] : []),
             fileURLToPath(url),
           ]);
           expect(resolveRuntimeWorkerThreadExecArgv(url, selected)).toEqual(
             needsLoader ? ["--import", import.meta.resolve("tsx/esm")] : [],
           );
+          expect(runtimeNeedsTypeScriptLoader(fileURLToPath(url), selected)).toBe(needsLoader);
         }
       }
     } finally {

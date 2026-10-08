@@ -1,44 +1,49 @@
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
-import {
-  deleteNativeHookRelayBridgeRecordIfOwnedInDatabase,
-  pruneNativeHookRelayBridgeRecordsInDatabase,
-  renewOrRestoreNativeHookRelayBridgeRecordInDatabase,
-  writeNativeHookRelayBridgeRecordInDatabase,
-} from "./native-hook-relay-store.kernel.js";
-import type { NativeHookRelayStoreWorkerOperations } from "./native-hook-relay-store.worker-contract.js";
+import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
+import { withOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+} from "../../state/worker-operation-registry.js";
+import * as store from "./native-hook-relay-store.kernel.js";
 
-type NativeHookRelayMutationCommand = SqliteWorkerCommand<
-  Omit<
-    NativeHookRelayStoreWorkerOperations,
-    "nativeHookRelay.read" | "nativeHookRelay.listSnapshots"
-  >
->;
-
-export function executeNativeHookRelayMutation(
-  command: NativeHookRelayMutationCommand,
-  options: OpenClawStateDatabaseOptions,
+function relayMutation<Input, Output>(
+  mutate: (database: OpenClawStateDatabase, input: Input) => Output,
+  requiresAdmission = false,
 ) {
-  return runOpenClawStateWriteTransaction((database) => {
-    switch (command.type) {
-      case "nativeHookRelay.write":
-      case "nativeHookRelay.renew":
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        return command.type === "nativeHookRelay.write"
-          ? writeNativeHookRelayBridgeRecordInDatabase(database, command.input)
-          : renewOrRestoreNativeHookRelayBridgeRecordInDatabase(database, command.input);
-      case "nativeHookRelay.deleteOwned":
-        return deleteNativeHookRelayBridgeRecordIfOwnedInDatabase(database, command.input);
-      case "nativeHookRelay.prune":
-        return pruneNativeHookRelayBridgeRecordsInDatabase(
-          database,
-          command.input.candidates,
-          command.input.nowMs,
-        );
-    }
-  }, options);
+  return (input: Input, { open, stateOptions }: WorkerOperationContext): Output =>
+    runOpenClawStateWriteTransaction(
+      (database) => {
+        if (requiresAdmission) {
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        }
+        return mutate(database, input);
+      },
+      { database: open(), ...stateOptions() },
+    );
 }
+
+export const nativeHookRelayOperations = {
+  "nativeHookRelay.read": (input: { relayId: string }, { stateOptions }) =>
+    withOpenClawStateDatabaseReadOnly(
+      (database) =>
+        store.readNativeHookRelayBridgeSnapshotFromDatabase({ database, relayId: input.relayId })
+          ?.record,
+      stateOptions(),
+    ),
+  "nativeHookRelay.listSnapshots": (_input: undefined, { open }) =>
+    store.listNativeHookRelayBridgeSnapshotsInDatabase(open()),
+  "nativeHookRelay.write": relayMutation(store.writeNativeHookRelayBridgeRecordInDatabase, true),
+  "nativeHookRelay.renew": relayMutation(
+    store.renewOrRestoreNativeHookRelayBridgeRecordInDatabase,
+    true,
+  ),
+  "nativeHookRelay.deleteOwned": relayMutation(
+    store.deleteNativeHookRelayBridgeRecordIfOwnedInDatabase,
+  ),
+  "nativeHookRelay.prune": relayMutation(
+    (database, input: { candidates: store.NativeHookRelayBridgePruneCandidate[]; nowMs: number }) =>
+      store.pruneNativeHookRelayBridgeRecordsInDatabase(database, input.candidates, input.nowMs),
+  ),
+} satisfies WorkerOperationHandlers;

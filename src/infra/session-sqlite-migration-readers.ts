@@ -35,7 +35,7 @@ import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admis
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 
@@ -244,13 +244,10 @@ type TranscriptImportPlan = {
 
 class TranscriptImportLimitError extends Error {}
 
-export type TranscriptFileFingerprint = {
-  ctimeNs: bigint;
-  dev: bigint;
-  ino: bigint;
-  mtimeNs: bigint;
-  size: bigint;
-};
+export type TranscriptFileFingerprint = Pick<
+  fs.BigIntStats,
+  "ctimeNs" | "dev" | "ino" | "mtimeNs" | "size"
+>;
 
 export function readTranscriptFingerprint(transcriptPath: string): TranscriptFileFingerprint {
   const stat = fs.statSync(transcriptPath, { bigint: true });
@@ -449,7 +446,7 @@ function readSessionDatabase<T>(
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+    database = openSqliteReadOnlyDatabase(sqlitePath, { readOnly: true });
     return { ok: true, value: read(database) };
   } catch (error) {
     return { error, ok: false };
@@ -485,7 +482,7 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+    database = openSqliteReadOnlyDatabase(sqlitePath, { readOnly: true });
     const hasTranscriptEvents = tableExists(database, "transcript_events");
     const integrityRow = database.prepare("PRAGMA quick_check").get();
     let totalRow: { row_bytes?: unknown } | undefined;

@@ -17,29 +17,25 @@ import { getOptionalDiscordRuntime } from "./runtime.js";
 const DEFAULT_COMPONENT_TTL_MS = 30 * 60 * 1000;
 const PERSISTENT_COMPONENT_NAMESPACE = "discord.components";
 const PERSISTENT_MODAL_NAMESPACE = "discord.modals";
-const PERSISTENT_COMPONENT_MAX_ENTRIES = 500;
-const PERSISTENT_MODAL_MAX_ENTRIES = 500;
+const PERSISTENT_REGISTRY_MAX_ENTRIES = 500;
 
 function formatRegistryError(error: unknown): Record<string, unknown> {
   if (!(error instanceof Error)) {
     return { error: formatRegistryErrorValue(error) };
   }
-  const details: Record<string, unknown> = {
-    error: String(error),
-    errorName: error.name,
-    errorMessage: error.message,
-  };
-  if (error.stack) {
-    details.errorStack = error.stack;
-  }
-  const cause = (error as { cause?: unknown }).cause;
-  if (cause instanceof Error) {
-    details.errorCause = String(cause);
-    details.errorCauseName = cause.name;
-    details.errorCauseMessage = cause.message;
-    if (cause.stack) {
-      details.errorCauseStack = cause.stack;
+  const details: Record<string, unknown> = {};
+  const appendError = (prefix: "error" | "errorCause", entry: Error) => {
+    details[prefix] = String(entry);
+    details[`${prefix}Name`] = entry.name;
+    details[`${prefix}Message`] = entry.message;
+    if (entry.stack) {
+      details[`${prefix}Stack`] = entry.stack;
     }
+  };
+  appendError("error", error);
+  const cause = error.cause;
+  if (cause instanceof Error) {
+    appendError("errorCause", cause);
   } else if (cause !== undefined) {
     details.errorCause = formatRegistryErrorValue(cause);
   }
@@ -66,9 +62,6 @@ function formatRegistryErrorValue(value: unknown): string {
   ) {
     return String(value);
   }
-  if (value === null) {
-    return "null";
-  }
   try {
     return JSON.stringify(value) ?? Object.prototype.toString.call(value);
   } catch {
@@ -83,73 +76,48 @@ function disablePersistentComponentRegistry(error: unknown): void {
   reportPersistentComponentRegistryError(error);
 }
 
-function getPersistentComponentStore(): DiscordRegistryStore<DiscordComponentEntry> | undefined {
+function openPersistentRegistryStore<T extends { id: string }>(
+  cached: DiscordRegistryStore<T> | undefined,
+  namespace: string,
+): DiscordRegistryStore<T> | undefined {
   if (discordComponentRegistryState.persistentRegistryDisabled) {
     return undefined;
   }
-  if (discordComponentRegistryState.persistentComponentStore) {
-    return discordComponentRegistryState.persistentComponentStore;
+  if (cached) {
+    return cached;
   }
   const runtime = getOptionalDiscordRuntime();
   if (!runtime) {
     return undefined;
   }
   try {
-    discordComponentRegistryState.persistentComponentStore = runtime.state.openKeyedStore<
-      PersistedDiscordRegistryEntry<DiscordComponentEntry>
-    >({
-      namespace: PERSISTENT_COMPONENT_NAMESPACE,
-      maxEntries: PERSISTENT_COMPONENT_MAX_ENTRIES,
+    return runtime.state.openKeyedStore<PersistedDiscordRegistryEntry<T>>({
+      namespace,
+      maxEntries: PERSISTENT_REGISTRY_MAX_ENTRIES,
       defaultTtlMs: DEFAULT_COMPONENT_TTL_MS,
     });
-    return discordComponentRegistryState.persistentComponentStore;
   } catch (error) {
     disablePersistentComponentRegistry(error);
     return undefined;
   }
 }
 
+function getPersistentComponentStore(): DiscordRegistryStore<DiscordComponentEntry> | undefined {
+  return (discordComponentRegistryState.persistentComponentStore = openPersistentRegistryStore(
+    discordComponentRegistryState.persistentComponentStore,
+    PERSISTENT_COMPONENT_NAMESPACE,
+  ));
+}
+
 function getPersistentModalStore(): DiscordRegistryStore<DiscordModalEntry> | undefined {
-  if (discordComponentRegistryState.persistentRegistryDisabled) {
-    return undefined;
-  }
-  if (discordComponentRegistryState.persistentModalStore) {
-    return discordComponentRegistryState.persistentModalStore;
-  }
-  const runtime = getOptionalDiscordRuntime();
-  if (!runtime) {
-    return undefined;
-  }
-  try {
-    discordComponentRegistryState.persistentModalStore = runtime.state.openKeyedStore<
-      PersistedDiscordRegistryEntry<DiscordModalEntry>
-    >({
-      namespace: PERSISTENT_MODAL_NAMESPACE,
-      maxEntries: PERSISTENT_MODAL_MAX_ENTRIES,
-      defaultTtlMs: DEFAULT_COMPONENT_TTL_MS,
-    });
-    return discordComponentRegistryState.persistentModalStore;
-  } catch (error) {
-    disablePersistentComponentRegistry(error);
-    return undefined;
-  }
+  return (discordComponentRegistryState.persistentModalStore = openPersistentRegistryStore(
+    discordComponentRegistryState.persistentModalStore,
+    PERSISTENT_MODAL_NAMESPACE,
+  ));
 }
 
 function isExpired(entry: { expiresAt?: number }, now: number) {
   return entry.expiresAt !== undefined && !isFutureDateTimestampMs(entry.expiresAt, { nowMs: now });
-}
-
-function normalizeEntryTimestamps<T extends { createdAt?: number; expiresAt?: number }>(
-  entry: T,
-  now: number,
-  ttlMs: number,
-): T {
-  const createdAt = resolveDateTimestampMs(entry.createdAt, now);
-  const expiresAt =
-    asDateTimestampMs(entry.expiresAt) ??
-    resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: createdAt }) ??
-    0;
-  return { ...entry, createdAt, expiresAt };
 }
 
 function pruneUndefinedRegistryValues<T>(value: T): T {
@@ -174,13 +142,14 @@ function pruneUndefinedRegistryValues<T>(value: T): T {
 function normalizeRegistryEntries<
   T extends { id: string; messageId?: string; createdAt?: number; expiresAt?: number },
 >(entries: T[], params: { now: number; ttlMs: number; messageId?: string }): T[] {
-  return entries.map((entry) =>
-    normalizeEntryTimestamps(
-      { ...entry, messageId: params.messageId ?? entry.messageId },
-      params.now,
-      params.ttlMs,
-    ),
-  );
+  return entries.map((entry) => {
+    const createdAt = resolveDateTimestampMs(entry.createdAt, params.now);
+    const expiresAt =
+      asDateTimestampMs(entry.expiresAt) ??
+      resolveExpiresAtMsFromDurationMs(params.ttlMs, { nowMs: createdAt }) ??
+      0;
+    return { ...entry, messageId: params.messageId ?? entry.messageId, createdAt, expiresAt };
+  });
 }
 
 function resolveEntry<T extends { expiresAt?: number }>(
@@ -239,25 +208,6 @@ async function registerPersistentRegistryEntries<T extends { id: string }>(param
   );
 }
 
-async function registerPersistentEntries(params: {
-  entries: DiscordComponentEntry[];
-  modals: DiscordModalEntry[];
-  ttlMs: number;
-}): Promise<void> {
-  await Promise.all([
-    registerPersistentRegistryEntries({
-      entries: params.entries,
-      ttlMs: params.ttlMs,
-      openStore: getPersistentComponentStore,
-    }),
-    registerPersistentRegistryEntries({
-      entries: params.modals,
-      ttlMs: params.ttlMs,
-      openStore: getPersistentModalStore,
-    }),
-  ]);
-}
-
 async function deletePersistentEntry<T extends { id: string }>(params: {
   id: string;
   openStore: () => DiscordRegistryStore<T> | undefined;
@@ -279,13 +229,6 @@ function resolveComponentConsumptionIds(entry: DiscordComponentEntry): string[] 
   }
   const ids = entry.consumptionGroupEntryIds?.filter((id) => typeof id === "string" && id) ?? [];
   return ids.length > 0 ? uniqueStrings(ids) : [entry.id];
-}
-
-function deleteComponentConsumptionGroup(entry: DiscordComponentEntry): void {
-  const store = discordComponentRegistryState.componentEntries;
-  for (const id of resolveComponentConsumptionIds(entry)) {
-    store.delete(id);
-  }
 }
 
 async function deletePersistentComponentConsumptionGroup(
@@ -325,16 +268,9 @@ export function registerDiscordComponentEntries(params: {
 }): Promise<void> {
   const now = Date.now();
   const ttlMs = params.ttlMs ?? DEFAULT_COMPONENT_TTL_MS;
-  const normalizedEntries = normalizeRegistryEntries(params.entries, {
-    now,
-    ttlMs,
-    messageId: params.messageId,
-  });
-  const normalizedModals = normalizeRegistryEntries(params.modals, {
-    now,
-    ttlMs,
-    messageId: params.messageId,
-  });
+  const entryOptions = { now, ttlMs, messageId: params.messageId };
+  const normalizedEntries = normalizeRegistryEntries(params.entries, entryOptions);
+  const normalizedModals = normalizeRegistryEntries(params.modals, entryOptions);
   return discordComponentRegistryState.withRegistryLock(async () => {
     for (const entry of normalizedEntries) {
       discordComponentRegistryState.componentEntries.set(entry.id, entry);
@@ -342,23 +278,19 @@ export function registerDiscordComponentEntries(params: {
     for (const entry of normalizedModals) {
       discordComponentRegistryState.modalEntries.set(entry.id, entry);
     }
-    await registerPersistentEntries({
-      entries: normalizedEntries,
-      modals: normalizedModals,
-      ttlMs,
-    });
+    await Promise.all([
+      registerPersistentRegistryEntries({
+        entries: normalizedEntries,
+        ttlMs,
+        openStore: getPersistentComponentStore,
+      }),
+      registerPersistentRegistryEntries({
+        entries: normalizedModals,
+        ttlMs,
+        openStore: getPersistentModalStore,
+      }),
+    ]);
   });
-}
-
-function resolveDiscordComponentEntry(params: {
-  id: string;
-  consume?: boolean;
-}): DiscordComponentEntry | null {
-  const entry = resolveEntry(discordComponentRegistryState.componentEntries, params);
-  if (entry && params.consume !== false) {
-    deleteComponentConsumptionGroup(entry);
-  }
-  return entry;
 }
 
 export async function resolveDiscordComponentEntryWithPersistence(params: {
@@ -368,21 +300,23 @@ export async function resolveDiscordComponentEntryWithPersistence(params: {
   // Group membership may only be known after lookup. Keep fallback reads behind
   // the winning consume until every sibling's persistent deletion has settled.
   return discordComponentRegistryState.withRegistryLock(async () => {
-    const inMemory = resolveDiscordComponentEntry(params);
-    if (inMemory) {
-      if (params.consume !== false) {
-        await deletePersistentComponentConsumptionGroup(inMemory);
+    const store = discordComponentRegistryState.componentEntries;
+    const inMemory = resolveEntry(store, params);
+    const entry =
+      inMemory ??
+      (await resolvePersistentRegistryEntry({
+        ...params,
+        openStore: getPersistentComponentStore,
+      }));
+    if (entry && params.consume !== false) {
+      if (inMemory) {
+        for (const id of resolveComponentConsumptionIds(entry)) {
+          store.delete(id);
+        }
       }
-      return inMemory;
+      await deletePersistentComponentConsumptionGroup(entry);
     }
-    const persisted = await resolvePersistentRegistryEntry({
-      ...params,
-      openStore: getPersistentComponentStore,
-    });
-    if (persisted && params.consume !== false) {
-      await deletePersistentComponentConsumptionGroup(persisted);
-    }
-    return persisted;
+    return entry;
   });
 }
 

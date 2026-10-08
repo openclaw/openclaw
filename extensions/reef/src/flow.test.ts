@@ -4,7 +4,7 @@ import {
   canonicalBytes,
   generateIdentity,
   guardInstructions,
-  open,
+  openClaimed,
   sha256Hex,
   verifyReceipt,
   type ReplayStore,
@@ -334,7 +334,7 @@ describe("ReefMessageFlow inbound", () => {
       order.push("ingress");
     });
     relay.acknowledge.mockImplementation(async () => {
-      await expect(stores.delivered.has(id)).resolves.toBe(true);
+      await expect(stores.delivered.status(id)).resolves.toBe("delivered");
       order.push("ack");
       return { result: "deleted" };
     });
@@ -349,7 +349,7 @@ describe("ReefMessageFlow inbound", () => {
 
     await flow.processEntries([entry]);
     expect(order).toEqual(["ingress", "ack"]);
-    await expect(stores.delivered.has(id)).resolves.toBe(true);
+    await expect(stores.delivered.status(id)).resolves.toBe("delivered");
 
     await flow.processEntries([{ ...entry, seq: 2 }]);
     expect(order).toEqual(["ingress", "ack", "ack"]);
@@ -484,17 +484,18 @@ describe("ReefMessageFlow outbound", () => {
 
     const id = await flow.send("bob", "hello", { thread: "01JZ0000000000000000000199" });
     expect(relay.sendEnvelope).toHaveBeenCalledOnce();
-    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<typeof open>[0]["envelope"];
+    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<
+      typeof openClaimed
+    >[0]["envelope"];
     expect(sent.id).toBe(id);
-    await expect(
-      open({
-        envelope: sent,
-        self: "bob#1",
-        recipientEncryptionSecretKey: bob.encryption.secretKey,
-        senderSigningPublicKey: alice.signing.publicKey,
-        replayStore: new MemoryReplayStore(),
-      }),
-    ).resolves.toEqual({ text: "hello", thread: "01JZ0000000000000000000199" });
+    const opened = await openClaimed({
+      envelope: sent,
+      self: "bob#1",
+      recipientEncryptionSecretKey: bob.encryption.secretKey,
+      senderSigningPublicKey: alice.signing.publicKey,
+      replayStore: new MemoryReplayStore(),
+    });
+    expect(opened.body).toEqual({ text: "hello", thread: "01JZ0000000000000000000199" });
   });
 
   it("uses a message id reserved before delivery", async () => {
@@ -515,7 +516,9 @@ describe("ReefMessageFlow outbound", () => {
       }),
     ).resolves.toBe(reservedId);
     expect(order).toEqual(["dispatch", "relay"]);
-    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<typeof open>[0]["envelope"];
+    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<
+      typeof openClaimed
+    >[0]["envelope"];
     expect(sent.id).toBe(reservedId);
   });
 
@@ -593,7 +596,7 @@ describe("ReefMessageFlow delivery-store capacity", () => {
     const bob = reefKeys();
     const id = "01JZ0000000000000000000204";
     const stores = flowStores(1);
-    await stores.delivered.add("occupied"); // delivered namespace full
+    await stores.delivered.confirm("occupied"); // delivered namespace full
     const onIngress = vi.fn(async () => {});
     const relay = transport();
     const flow = new ReefMessageFlow({

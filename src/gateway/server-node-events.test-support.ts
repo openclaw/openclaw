@@ -168,9 +168,9 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   upsertSessionEntryCore: runtimeMocks.upsertSessionEntryCore,
 }));
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
-  loadOrCreateProcessDeviceIdentity: runtimeMocks.loadOrCreateProcessDeviceIdentity,
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateProcessDeviceIdentityAsync: runtimeMocks.loadOrCreateProcessDeviceIdentity,
 }));
 
 vi.mock("../infra/device-pairing.js", async (importOriginal) => ({

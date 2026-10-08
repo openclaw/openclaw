@@ -1,5 +1,4 @@
-// Shared command-queue runtime state, split out of command-queue.ts so the
-// capacity-group policy can read lane state without importing the queue itself.
+// Capacity policy reads this state without importing the queue runtime.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
@@ -26,6 +25,7 @@ export type QueueEntry = {
   queuedAheadAtEnqueue: number;
   activeAheadAtEnqueue: number;
   taskIdentity?: CommandQueueEnqueueOptions["taskIdentity"];
+  sessionTarget?: CommandQueueEnqueueOptions["sessionTarget"];
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
   taskTimeoutSubscribe?: CommandQueueEnqueueOptions["taskTimeoutSubscribe"];
@@ -42,7 +42,6 @@ type QueueFifo = {
   length: number;
 };
 
-/** Three fixed FIFO lists, one for each supported priority. */
 type LaneQueue = {
   background: QueueFifo;
   normal: QueueFifo;

@@ -37,11 +37,8 @@ export function formatAgentHarnessUserInputPrompt(
   const formatText = options.formatText ?? ((text: string) => text);
   const lines = [options.intro ?? "Agent needs input:"];
   questions.forEach((question, index) => {
-    if (questions.length > 1) {
-      lines.push("", `${index + 1}. ${formatText(question.header)}`, formatText(question.question));
-    } else {
-      lines.push("", formatText(question.header), formatText(question.question));
-    }
+    const prefix = questions.length > 1 ? `${index + 1}. ` : "";
+    lines.push("", `${prefix}${formatText(question.header)}`, formatText(question.question));
     if (question.isSecret) {
       lines.push(
         options.secretWarning ?? "This channel may show your reply to other participants.",
@@ -119,7 +116,7 @@ function buildAgentHarnessQuestionPresentation(params: {
             action: {
               type: "question" as const,
               questionId: params.questionId,
-              optionValue: option.label,
+              optionValue: option.value ?? option.label,
             },
           })),
           ...(question.isOther
@@ -157,7 +154,7 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
   const [question] = params.questions;
   const candidateOptionValues =
     params.questions.length === 1 && question && !question.multiSelect && !question.isSecret
-      ? (question.options?.map((option) => option.label) ?? [])
+      ? (question.options?.map((option) => option.value ?? option.label) ?? [])
       : [];
   const normalizedOptionValues = candidateOptionValues.map((option) => option.trim().toLowerCase());
   const optionValues =
@@ -266,17 +263,17 @@ function normalizeAgentHarnessUserInputAnswers(
     return [declaredAnswer];
   }
   const normalized = answer
-    .split(/[,;\n]/u)
+    .split(question.answerFormat === "lines" ? /\r?\n/u : /[,;\n]/u)
     .map((part) => normalizeAgentHarnessUserInputAnswer(part, question))
     .filter((part): part is string => Boolean(part));
-  return [...new Set(normalized)];
+  return question.presentation === "form" ? normalized : [...new Set(normalized)];
 }
 
 export function normalizeAgentHarnessUserInputAnswer(
   answer: string,
   question: AgentHarnessUserInputQuestion,
 ): string | undefined {
-  const trimmed = answer.trim();
+  const trimmed = question.presentation === "form" ? answer : answer.trim();
   const declaredAnswer = normalizeAgentHarnessUserInputOption(trimmed, question);
   if (declaredAnswer) {
     return declaredAnswer;
@@ -297,10 +294,15 @@ function normalizeAgentHarnessUserInputOption(
   // Convert to zero-based only at the options-array boundary.
   const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
   const indexed = optionIndex >= 0 ? options[optionIndex] : undefined;
-  if (indexed) {
-    return indexed.label;
-  }
-  return options.find((option) => option.label.toLowerCase() === trimmed.toLowerCase())?.label;
+  const selected =
+    indexed ||
+    options.find(
+      (option) =>
+        option.value === answer ||
+        ((!question.isOther || option.value === undefined) &&
+          option.label.toLowerCase() === trimmed.toLowerCase()),
+    );
+  return selected ? (selected.value ?? selected.label) : undefined;
 }
 
 function parseKeyedAnswers(inputText: string): Map<string, string> {

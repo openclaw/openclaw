@@ -1,6 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeRunId } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+} from "../../routing/session-key.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -12,9 +18,47 @@ import type {
   RestartRecoveryTerminalDeliveryEvidenceResult,
   SessionRestartRecoveryState,
 } from "./restart-recovery-types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, RestartRecoveryRun, SessionEntry } from "./types.js";
 
 const MAX_TERMINAL_RUN_IDS = 64;
+
+/** Keeps distinct concurrent runs while transferring each run id to its newest lifecycle owner. */
+export function normalizeMainSessionRecoveryRunFences(
+  runs: Iterable<RestartRecoveryRun>,
+): RestartRecoveryRun[] {
+  return [...new Map([...runs].map((run) => [run.runId, run] as const)).values()].toSorted(
+    (left, right) => left.runId.localeCompare(right.runId),
+  );
+}
+
+export function recordLifecycleFence(
+  entry: Pick<InternalSessionEntry, "restartRecoveryRuns">,
+  run: RestartRecoveryRun,
+): void {
+  // A resumed run keeps its id across Gateway generations. Leaving its old fence
+  // behind makes terminal settlement preserve a dead owner and blocks every later turn.
+  entry.restartRecoveryRuns = normalizeMainSessionRecoveryRunFences([
+    ...(entry.restartRecoveryRuns ?? []),
+    run,
+  ]);
+}
+
+export function isMainRestartRecoveryCandidate(
+  entry: { spawnDepth?: unknown; subagentRole?: unknown },
+  sessionKey: string,
+): boolean {
+  if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
+    return false;
+  }
+  if (entry.subagentRole != null) {
+    return false;
+  }
+  return (
+    !isSubagentSessionKey(sessionKey) &&
+    !isCronSessionKey(sessionKey) &&
+    !isAcpSessionKey(sessionKey)
+  );
+}
 
 type RestartRecoveryChannelAuthority = {
   deliveryContext: DeliveryContext & { channel: string; to: string };
@@ -27,8 +71,8 @@ export function resolveRestartRecoveryChannelAuthority(
 ): RestartRecoveryChannelAuthority | undefined {
   const sourceTurnId = normalizeRunId(entry.restartRecoveryDeliverySourceRunId);
   const deliveryContext = normalizeDeliveryContext(entry.restartRecoveryDeliveryContext);
-  const channel = normalizeRunId(deliveryContext?.channel);
-  const to = normalizeRunId(deliveryContext?.to);
+  const channel = deliveryContext?.channel;
+  const to = deliveryContext?.to;
   if (
     entry.restartRecoverySourceIngress !== "channel" ||
     !sourceTurnId ||
@@ -52,25 +96,12 @@ function normalizeThreadId(value: unknown): string | undefined {
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const values = Array.from(
-    new Set(
-      value.flatMap((item) => {
-        const normalized = normalizeRunId(item);
-        return normalized ? [normalized] : [];
-      }),
-    ),
-  );
+  const values = normalizeUniqueTrimmedStringList(value);
   return values.length > 0 ? values : undefined;
 }
 
 function normalizePresentStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  return normalizeStringArray(value) ?? [];
+  return Array.isArray(value) ? normalizeUniqueTrimmedStringList(value) : undefined;
 }
 
 function normalizeHarnessCompletionRecovery(value: unknown): HarnessCompletionRecovery | undefined {
@@ -321,19 +352,16 @@ export function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[]
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const runIds: string[] = [];
+  const runIds = new Set<string>();
   for (const item of value) {
     const runId = normalizeRunId(item);
     if (!runId) {
       continue;
     }
-    const previousIndex = runIds.indexOf(runId);
-    if (previousIndex >= 0) {
-      runIds.splice(previousIndex, 1);
-    }
-    runIds.push(runId);
+    runIds.delete(runId);
+    runIds.add(runId);
   }
-  const bounded = runIds.slice(-MAX_TERMINAL_RUN_IDS);
+  const bounded = [...runIds].slice(-MAX_TERMINAL_RUN_IDS);
   return bounded.length > 0 ? bounded : undefined;
 }
 
@@ -378,14 +406,12 @@ export function normalizeRestartRecoveryEntryFields(
       ? entry.restartRecoveryDeliveryMediaUrls
       : deliveryMediaUrls,
   );
-  assign(
+  for (const key of [
     "restartRecoveryDisableMessageTool",
-    entry.restartRecoveryDisableMessageTool === true ? true : undefined,
-  );
-  assign(
     "restartRecoverySuppressTextDelivery",
-    entry.restartRecoverySuppressTextDelivery === true ? true : undefined,
-  );
+  ] as const) {
+    assign(key, entry[key] === true ? true : undefined);
+  }
   assign(
     "restartRecoveryBeforeAgentReplyState",
     entry.restartRecoveryBeforeAgentReplyState === "admitted" ||
@@ -482,7 +508,8 @@ export function mergeRestartRecoveryTerminalRunIds(
   const appendedRunIds = (normalizeRestartRecoveryTerminalRunIds(appended) ?? []).filter(
     (runId) => !currentSet.has(runId),
   );
-  return normalizeRestartRecoveryTerminalRunIds([...currentRunIds, ...appendedRunIds]);
+  const bounded = [...currentRunIds, ...appendedRunIds].slice(-MAX_TERMINAL_RUN_IDS);
+  return bounded.length > 0 ? bounded : undefined;
 }
 
 export function hasRestartRecoveryTerminalRun(
@@ -493,6 +520,36 @@ export function hasRestartRecoveryTerminalRun(
     normalizeRestartRecoveryTerminalRunIds(entry?.restartRecoveryTerminalRunIds)?.includes(
       runId,
     ) === true
+  );
+}
+
+/** An unadopted input retains same-ID retry custody until execution claims it. */
+export function isRetryableUnadoptedChatClaim(
+  entry: InternalSessionEntry | undefined,
+  clientRunId = entry?.restartRecoveryDeliveryRunId,
+): entry is InternalSessionEntry & { restartRecoveryDeliveryRequestFingerprint: string } {
+  return Boolean(
+    entry &&
+    clientRunId !== undefined &&
+    entry.abortedLastRun !== true &&
+    (entry.status === "failed" || entry.status === "killed") &&
+    entry.restartRecoveryDeliveryContext === undefined &&
+    entry.restartRecoveryDeliveryRunId === clientRunId &&
+    entry.restartRecoveryDeliverySourceRunId === clientRunId &&
+    entry.restartRecoveryDeliveryRequestFingerprint &&
+    !entry.mainRestartRecovery &&
+    !entry.pendingFinalDelivery &&
+    !entry.restartRecoveryRuns?.some((run) => !hasRestartRecoveryTerminalRun(entry, run.runId)),
+  );
+}
+
+/** Recovery custody survives process loss independently of the last run's outcome. */
+export function hasMainSessionRecoveryClaim(entry: InternalSessionEntry | undefined): boolean {
+  return Boolean(
+    entry?.mainRestartRecovery ||
+    entry?.restartRecoveryRuns?.some((run) => !hasRestartRecoveryTerminalRun(entry, run.runId)) ||
+    entry?.restartRecoveryDeliveryRunId ||
+    entry?.pendingFinalDelivery,
   );
 }
 
@@ -509,13 +566,6 @@ export function hasRestartRecoverySourceClaim(
   );
 }
 
-export function hasActiveRestartRecoverySourceClaim(
-  entry: SessionEntry | null | undefined,
-  sourceTurnId: string,
-): entry is SessionEntry {
-  return entry?.status === "running" && hasRestartRecoverySourceClaim(entry, sourceTurnId);
-}
-
 /** Clears exact active ownership and optionally records its client source as terminal. */
 export function buildRestartRecoveryClaimCleanupPatch(params: {
   entry: SessionEntry;
@@ -523,7 +573,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
   terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
   terminalRunId?: string;
   terminalSourceRunId?: string;
-}): Partial<SessionEntry> {
+}): Partial<InternalSessionEntry> {
   const sourceRunId =
     normalizeRunId(params.terminalSourceRunId) ??
     normalizeRunId(params.entry.restartRecoveryDeliverySourceRunId);
@@ -566,6 +616,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryOperatorSource: undefined,
     restartRecoveryHarnessCompletion: undefined,
     restartRecoveryRequesterAccountId: undefined,
     restartRecoveryRequesterSenderId: undefined,

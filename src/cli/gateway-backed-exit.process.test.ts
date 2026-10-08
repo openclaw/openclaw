@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import {
   readOriginDeviceTokenReadOnlyForTest,
   seedOriginDeviceToken,
@@ -22,6 +23,7 @@ import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
   prepareGatewayCliFixture,
+  prepareSharedStateReadArtifacts,
   prepareUnreachableGatewayCliFixture,
   runIsolatedGatewayCli,
   snapshotDirectoryContents,
@@ -101,7 +103,10 @@ describe("gateway-backed CLI process exit", () => {
         expect(gateway.connectionCount).toBeGreaterThan(0);
         expect(gateway.calls).toEqual(["node.pair.list", "node.list"]);
       } else {
-        expect(result.stderr).toContain("Invalid --timeout");
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: false,
+          error: { type: "cli_error", message: expect.stringContaining("Invalid --timeout") },
+        });
         expect(gateway.connectionCount).toBe(0);
         expect(gateway.calls).toEqual([]);
       }
@@ -159,6 +164,7 @@ describe("gateway-backed CLI process exit", () => {
       env: stateEnv,
     });
     closeOpenClawStateDatabaseForTest();
+    prepareSharedStateReadArtifacts(stateDir);
     const before = await snapshotDirectoryContents(stateDir);
 
     const result = await runIsolatedGatewayCli({
@@ -182,13 +188,13 @@ describe("gateway-backed CLI process exit", () => {
     ).toBe(storedToken);
   });
 
-  it("calls a reachable Gateway with explicit auth without creating shared state", async () => {
+  it("calls a reachable Gateway with a decoded literal credential without creating shared state", async () => {
     const root = tempDirs.make("openclaw-gateway-call-explicit-auth-");
-    const token = "configured-token";
+    const token = "${LITERAL_TOKEN}";
     const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
     const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
       mode: "remote",
-      remote: { url: gateway.url, token },
+      remote: { url: gateway.url, token: "$${LITERAL_TOKEN}" },
     });
     expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
 
@@ -233,6 +239,7 @@ describe("gateway-backed CLI process exit", () => {
       env: stateEnv,
     });
     closeOpenClawStateDatabaseForTest();
+    prepareSharedStateReadArtifacts(stateDir);
     const before = await snapshotSharedStateArtifacts(stateDir);
 
     const result = await runIsolatedGatewayCli({
@@ -287,6 +294,7 @@ describe("gateway-backed CLI process exit", () => {
           env: stateEnv,
         });
         closeOpenClawStateDatabaseForTest();
+        prepareSharedStateReadArtifacts(stateDir);
       }
       const before = await snapshotSharedStateArtifacts(stateDir);
       expect(Object.keys(before).includes("openclaw.sqlite")).toBe(seeded);
@@ -359,7 +367,7 @@ describe("gateway-backed CLI process exit", () => {
         stateDir,
         configPath,
         env: {
-          NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
+          ...withRuntimePreload({}, preloadPath),
           OPENCLAW_ENTRY_PID_LOG: pidLogPath,
           OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1",
           OPENCLAW_NODE_OPTIONS_READY: undefined,
@@ -493,9 +501,9 @@ describe("gateway-backed CLI process exit", () => {
       } else {
         expect(result.stdout).toBe("");
       }
-      expect(result.stderr).toContain(`Gateway not reachable at ws://127.0.0.1:${port}`);
+      expect(result.stderr).toContain("Couldn't connect to OpenClaw.");
       expect(result.stderr).toContain(
-        "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+        "Check the Control UI or run `openclaw gateway status` in your terminal.",
       );
       expect(result.stderr).not.toContain("The CLI command failed");
       expect(result.stderr).not.toContain("Could not start the CLI");
@@ -660,10 +668,10 @@ describe("gateway-backed CLI process exit", () => {
       method: "device.pair.list",
     },
     {
-      label: "skills workshop apply",
-      args: ["skills", "workshop", "apply", "proposal-missing-credentials"],
+      label: "skills workshop archive",
+      args: ["skills", "workshop", "archive", "missing-credentials-skill"],
       gatewayOwnsLock: true,
-      method: "skills.proposals.inspect",
+      method: "skills.workshop.archive",
     },
   ])(
     "renders missing $label credentials as expected guidance, not a crash",
@@ -878,7 +886,10 @@ describe("gateway-backed CLI process exit", () => {
     if (valid) {
       expect(JSON.parse(result.stdout)).toEqual({ channels: [] });
     } else {
-      expect(result.stderr).toContain("Invalid --timeout");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        error: { type: "cli_error", message: expect.stringContaining("Invalid --timeout") },
+      });
     }
   });
 });

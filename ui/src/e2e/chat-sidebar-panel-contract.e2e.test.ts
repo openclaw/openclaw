@@ -11,6 +11,7 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -44,12 +45,13 @@ type ColdOpenOutcome = {
 };
 
 const offeredSlotLabels = [
+  "Subagents",
+  "Processes",
   "Review",
   "Terminal",
   "Browser",
   "Files",
   "Side chat",
-  "Tasks",
   "Desktop",
   "Discussion",
 ] as const;
@@ -57,8 +59,6 @@ const offeredSlotLabels = [
 type OfferedSlotLabel = (typeof offeredSlotLabels)[number];
 
 const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
-  // Tasks: no background tasks, nothing to inspect.
-  "Tasks",
   // Discussion: no external URL, nothing to open.
   "Discussion",
 ]);
@@ -77,10 +77,10 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
       "sessions.companion.state",
       "sessions.diff",
       "sessions.files.list",
-      "tasks.list",
       "terminal.open",
     ],
     methodResponses: {
+      "sessions.processes.list": { sessionId: "main-session", processes: [], truncated: false },
       "browser.request": {
         cases: [
           { match: { method: "GET", path: "/tabs" }, response: { running: false, tabs: [] } },
@@ -97,7 +97,6 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
         root: "/tmp/plain-workspace",
         sessionKey: "main",
       },
-      "tasks.list": { tasks: [] },
       "terminal.open": {
         agentId: "main",
         confined: false,
@@ -116,8 +115,35 @@ function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
   const sparse = coldOpenScenario();
   return {
     ...sparse,
+    sessions: [
+      { key: "agent:main:main", kind: "direct", label: "Main", updatedAt: 1 },
+      {
+        key: "agent:main:subagent:panel-content",
+        kind: "direct",
+        label: "Check panel content",
+        spawnedBy: "agent:main:main",
+        status: "done",
+        updatedAt: 2,
+      },
+    ],
     methodResponses: {
       ...sparse.methodResponses,
+      "sessions.processes.list": {
+        sessionId: "main-session",
+        truncated: false,
+        processes: [
+          {
+            processId: "process-1",
+            instanceId: "incarnation-1",
+            name: "Build application",
+            status: "running",
+            startedAt: 1,
+            tail: "Compiling",
+            truncated: false,
+            canStop: false,
+          },
+        ],
+      },
       "browser.request": {
         cases: [
           {
@@ -205,24 +231,6 @@ function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
         gitCheckout: true,
         root: "/tmp/checkout",
         sessionKey: "main",
-      },
-      "tasks.list": {
-        tasks: [
-          {
-            agentId: "main",
-            createdAt: Date.now() - 2_000,
-            id: "task-sidebar-invariant",
-            kind: "subagent",
-            ownerKey: "main",
-            progressSummary: "Checking every offered panel",
-            runtime: "subagent",
-            startedAt: Date.now() - 1_000,
-            status: "running",
-            taskId: "task-sidebar-invariant",
-            title: "Verify cold-open behavior",
-            updatedAt: Date.now(),
-          },
-        ],
       },
       "terminal.open": {
         agentId: "main",
@@ -368,7 +376,12 @@ async function readSlotColdOpenOutcome(
     ).toEqual(offeredSlotLabels);
     const held =
       label === "Discussion"
-        ? await holdModuleResponse(page, /\/assets\/session-discussion-panel-[^/]+\.js$/u)
+        ? await holdModuleResponse(
+            page,
+            controlUiE2eBuiltModuleRequest(
+              "ui/src/pages/chat/components/session-discussion-panel.ts",
+            ),
+          )
         : null;
     try {
       await choices.filter({ hasText: label }).click();
@@ -381,6 +394,25 @@ async function readSlotColdOpenOutcome(
       }
     } finally {
       held?.release();
+    }
+    if (label === "Processes") {
+      const processes = page.locator("openclaw-chat-processes-panel");
+      await processes
+        .getByText(
+          expectedOutcome === "content"
+            ? "Build application"
+            : "No background processes in this conversation.",
+          { exact: true },
+        )
+        .waitFor();
+    }
+    if (label === "Subagents") {
+      const subagents = page.locator("openclaw-chat-subagents-panel");
+      if (expectedOutcome === "content") {
+        await subagents.getByRole("button", { name: "Check panel content", exact: true }).waitFor();
+      } else {
+        await subagents.getByText("No subagents in this conversation.", { exact: true }).waitFor();
+      }
     }
     if (expectedOutcome) {
       await expect
@@ -457,7 +489,11 @@ suite.define(() => {
 
       const initialRequests = await gateway.getRequests("browser.request");
       expect(initialRequests.map((request) => request.params)).toEqual([
-        { method: "GET", path: "/tabs" },
+        {
+          method: "GET",
+          path: "/tabs",
+          tabScope: { sessionKey: "agent:main:main", referencedTabs: [] },
+        },
       ]);
 
       await openChatSidePanelType(page, "Files");
@@ -518,6 +554,7 @@ suite.define(() => {
           body: { targetId: "blacksmith-tab", type: "png" },
           method: "POST",
           path: "/screenshot",
+          tabScope: { sessionKey: "agent:main:main" },
         });
 
       await browser.locator(".bp-shot").waitFor();

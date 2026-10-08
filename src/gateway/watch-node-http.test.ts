@@ -474,7 +474,7 @@ describe("watch node HTTP transport", () => {
       bootstrapToken: issued.token,
     });
     const connected = await readJson(connectResponse);
-    // Prepare the pending request before starting the invoke's two-second budget.
+    // Prepare the pending pairing request before dispatching the invocation.
     const paired = await getPairedDevice(identity.deviceId, baseDir);
     const repair = await requestDevicePairing(
       {
@@ -489,7 +489,9 @@ describe("watch node HTTP transport", () => {
     const invoke = nodeRegistry.invoke({
       nodeId: identity.deviceId,
       command: "device.info",
-      timeoutMs: 2_000,
+      // Pairing revocation must settle this call; an unrelated wall-clock
+      // deadline can win while the real database and HTTP operations finish.
+      timeoutMs: 0,
     });
     const pollResponse = await fetch(`${baseUrl}/poll`, {
       method: "POST",

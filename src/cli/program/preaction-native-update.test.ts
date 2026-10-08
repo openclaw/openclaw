@@ -1,6 +1,7 @@
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
+import { registerPreActionHooks } from "./preaction.js";
 
 const { ensureConfigReadyMock, ensurePluginRegistryLoadedMock, emitCliBannerMock } = vi.hoisted(
   () => ({
@@ -15,14 +16,10 @@ vi.mock("../plugin-registry.js", () => ({
 }));
 vi.mock("../banner.js", () => ({ emitCliBanner: emitCliBannerMock }));
 vi.mock("../../globals.js", () => ({ setVerbose: vi.fn() }));
-let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
 let argv: string[];
 let title: string;
 let forceStderr: boolean;
 let earlyRouting: boolean | null;
-beforeAll(async () => {
-  ({ registerPreActionHooks } = await import("./preaction.js"));
-});
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("NODE_NO_WARNINGS", undefined);
@@ -52,28 +49,20 @@ describe("native update capability startup", () => {
     ).toMatchObject({ skipConfigGuard: false, hideBanner: false });
   });
 
-  it.each(
-    ["gateway", "daemon"].flatMap((parent) =>
-      ["install", "restart", "stop"].map((action) => [parent, action]),
-    ),
-  )("keeps parsed native capability check cold for %s %s", async (parent, action) => {
+  it("keeps a parsed native capability check cold", async () => {
     const { runGatewayServiceUpdateCommand } = await import("../daemon-cli/update-executor.js");
     const parseProgram = new Command().name("openclaw");
     const operation = vi.fn();
     const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     parseProgram
-      .command(parent)
-      .command(action)
+      .command("gateway")
+      .command("install")
       .option("--update-executor <mode>")
       .action(async (opts) =>
-        runGatewayServiceUpdateCommand(
-          opts.updateExecutor,
-          action as "install" | "restart" | "stop",
-          operation,
-        ),
+        runGatewayServiceUpdateCommand(opts.updateExecutor, "install", operation),
       );
     registerPreActionHooks(parseProgram, "9.9.9-test");
-    process.argv = ["node", "openclaw", parent, action, "--update-executor", "check"];
+    process.argv = ["node", "openclaw", "gateway", "install", "--update-executor", "check"];
     await parseProgram.parseAsync(process.argv);
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
@@ -86,8 +75,6 @@ describe("native update capability startup", () => {
   });
 
   it.each([
-    ["gateway", "install", ["--update-executor", "run"]],
-    ["gateway", "install", ["--update-executor", "invalid"]],
     ["gateway", "install", ["--note", "--update-executor", "--update-executor", "run"]],
     ["gateway", "install", ["--update-executor", "check", "extra"]],
     ["other", "install", ["--update-executor", "check"]],

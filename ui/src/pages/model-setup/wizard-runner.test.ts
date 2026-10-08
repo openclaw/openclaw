@@ -14,6 +14,7 @@ function createRunner(options: Pick<RunnerOptions, "getClient"> & Partial<Runner
     requestFailedMessage: () => "failed",
     cancelledMessage: () => "cancelled",
     sessionExpiredMessage: () => "expired",
+    gatewayNotRespondingMessage: () => "not responding",
     ...options,
   });
 }
@@ -33,15 +34,7 @@ describe("ModelSetupWizardRunner", () => {
     let client = original;
     const getAgentId = vi.fn(() => "selected-agent");
     const onStart = vi.fn();
-    const runner = new ModelSetupWizardRunner({
-      getClient: () => client,
-      getAgentId,
-      onChange: () => undefined,
-      onStart,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
-    });
+    const runner = createRunner({ getClient: () => client, getAgentId, onStart });
     try {
       const start = runner.startMcpLogin("docs");
       expect(originalRequest).toHaveBeenCalledWith(
@@ -470,7 +463,7 @@ describe("ModelSetupWizardRunner", () => {
     );
     resolveDone!({ done: true, status: "done" });
     await expect(answer).resolves.toEqual({ startMethod: "openclaw.setup.auth.start" });
-    expect(runner.state).toEqual({ phase: "done", authChoice: "openai-oauth" });
+    expect(runner.state).toEqual({ phase: "done" });
   });
 
   it("cancels the gateway wizard when advancing fails", async () => {
@@ -579,7 +572,7 @@ describe("ModelSetupWizardRunner", () => {
         { timeoutMs: 30_000 },
       );
       await expect(runner.start("replacement", method)).resolves.toEqual({ startMethod: method });
-      expect(runner.state).toEqual({ phase: "done", authChoice: "replacement" });
+      expect(runner.state).toEqual({ phase: "done" });
     },
   );
 
@@ -667,10 +660,7 @@ describe("ModelSetupWizardRunner", () => {
         const timedOutStart = runner.start("original", method);
         await vi.advanceTimersByTimeAsync(30_000);
         await timedOutStart;
-        expect(runner.state).toEqual({
-          phase: "error",
-          message: `gateway request timed out after 30000ms: ${method}`,
-        });
+        expect(runner.state).toEqual({ phase: "error", message: "not responding" });
 
         resolveFirstStart();
         await vi.runAllTimersAsync();
@@ -686,7 +676,7 @@ describe("ModelSetupWizardRunner", () => {
 
         await runner.cancel();
         await expect(runner.start("replacement", method)).resolves.toEqual({ startMethod: method });
-        expect(runner.state).toEqual({ phase: "done", authChoice: "replacement" });
+        expect(runner.state).toEqual({ phase: "done" });
       } finally {
         vi.useRealTimers();
       }

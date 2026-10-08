@@ -30,14 +30,9 @@ type FeishuMessageReceiveHandlerContext = {
   isAccountActive?: () => boolean;
   trackTask?: (task: Promise<void>) => void;
   handleMessage: typeof handleFeishuMessage;
-  resolveDebounceText: (params: {
-    event: FeishuMessageEvent;
-    botOpenId?: string;
-    botName?: string;
-  }) => string;
+  resolveDebounceText: (params: { event: FeishuMessageEvent; botOpenId?: string }) => string;
   hasProcessedMessage: typeof hasProcessedFeishuMessage;
   getBotOpenId?: (accountId: string) => string | undefined;
-  getBotName?: (accountId: string) => string | undefined;
   resolveSequentialKey?: typeof getFeishuSequentialKey;
   /**
    * Optional status sink. When provided, the handler will publish `lastEventAt`
@@ -163,7 +158,6 @@ export function createFeishuMessageReceiveHandler({
   resolveDebounceText: resolveText,
   hasProcessedMessage,
   getBotOpenId = () => undefined,
-  getBotName = () => undefined,
   resolveSequentialKey = ({ accountId: accountIdLocal, event }) =>
     `feishu:${accountIdLocal}:${event.message.chat_id?.trim() || "unknown"}`,
   statusSink,
@@ -196,7 +190,6 @@ export function createFeishuMessageReceiveHandler({
       event,
       preparedContent,
       botOpenId: getBotOpenId(accountId),
-      botName: getBotName(accountId),
     });
     const task = async () => {
       if (turnAdoptionLifecycle?.abortSignal.aborted) {
@@ -209,7 +202,6 @@ export function createFeishuMessageReceiveHandler({
         event,
         preparedContent,
         botOpenId: getBotOpenId(accountId),
-        botName: getBotName(accountId),
         runtime,
         channelRuntime,
         chatHistories,
@@ -224,17 +216,10 @@ export function createFeishuMessageReceiveHandler({
     await enqueue(sequentialKey, task);
   };
 
-  const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {
-    const senderId =
-      event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim();
-    return senderId || undefined;
-  };
-
   const resolveDebounceText = (event: FeishuMessageEvent): string => {
     return resolveText({
       event,
       botOpenId: getBotOpenId(accountId),
-      botName: getBotName(accountId),
     }).trim();
   };
 
@@ -263,7 +248,8 @@ export function createFeishuMessageReceiveHandler({
       resolveDebounceMs,
       buildKey: ({ event }) => {
         const chatId = event.message.chat_id?.trim();
-        const senderId = resolveSenderDebounceId(event);
+        const senderId =
+          event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim();
         if (!chatId || !senderId) {
           return null;
         }
@@ -427,7 +413,8 @@ export function createFeishuMessageReceiveHandler({
       event.message.message_type.trim() === "post" &&
       messageDedupeKey !== messageId &&
       (await hasProcessedMessage(messageId, accountId, log)) &&
-      parsePostContent(event.message.content).attachments.length === 0
+      parsePostContent(event.message.content, { includeTopLevelFiles: false }).attachments
+        .length === 0
     ) {
       log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
       await completeSuppressedIngress();
@@ -465,12 +452,9 @@ export function createFeishuMessageReceiveHandler({
         claim.handle.release({ error: new Error("feishu-ingress-abandoned-before-flush") });
       });
     }
-    const processMessage = async () => {
-      await inboundDebouncer.enqueue(debounceEntry);
-    };
     if (turnAdoptionLifecycle) {
       try {
-        await processMessage();
+        await inboundDebouncer.enqueue(debounceEntry);
         return { kind: "deferred" };
       } catch (err) {
         if (claim.kind === "claimed") {
@@ -479,22 +463,14 @@ export function createFeishuMessageReceiveHandler({
         return { kind: "failed-retryable", error: err };
       }
     }
-    if (fireAndForget) {
-      void processMessage().catch((err: unknown) => {
-        if (claim.kind === "claimed") {
-          claim.handle.release({ error: err });
-        }
-        error(`feishu[${accountId}]: error handling message: ${String(err)}`);
-      });
-      return undefined;
-    }
-    try {
-      await processMessage();
-    } catch (err) {
+    const processing = inboundDebouncer.enqueue(debounceEntry).catch((err: unknown) => {
       if (claim.kind === "claimed") {
         claim.handle.release({ error: err });
       }
       error(`feishu[${accountId}]: error handling message: ${String(err)}`);
+    });
+    if (!fireAndForget) {
+      await processing;
     }
     return undefined;
   };

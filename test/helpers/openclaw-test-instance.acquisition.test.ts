@@ -22,6 +22,61 @@ import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 describe("createOpenClawTestInstance acquisition", () => {
+  it("closes an absent Gateway reservation while retaining its port claims", async () => {
+    const listeners = new Map<number, net.Server>();
+    const createServer = net.createServer;
+    const serverSpy = vi.spyOn(net, "createServer").mockImplementation((...args) => {
+      const server = createServer(...args);
+      server.once("listening", () => {
+        const address = server.address();
+        if (address && typeof address !== "string") {
+          listeners.set(address.port, server);
+        }
+      });
+      return server;
+    });
+    const competitor = createServer((socket) => socket.destroy());
+    const instance = await createOpenClawTestInstance({
+      name: "absent-gateway",
+      reserveIdlePort: false,
+    }).finally(() => serverSpy.mockRestore());
+    const reservation = listeners.get(instance.port);
+    await runQaGatewayFixture(
+      async () => {
+        expect(reservation).toBeDefined();
+        expect(reservation?.listening).toBe(false);
+        expect(reservation?.address()).toBeNull();
+        // Released sockets can belong to an unclaimed listener even while the
+        // fixture retains cooperative claims; observe the exact reserved socket.
+        await new Promise<void>((resolve, reject) => {
+          competitor.once("error", reject);
+          competitor.listen(instance.port, "127.0.0.1", () => {
+            competitor.off("error", reject);
+            resolve();
+          });
+        });
+        await instance.stopGateway();
+        expect(reservation?.listening).toBe(false);
+        expect(reservation?.address()).toBeNull();
+        expect(competitor.listening).toBe(true);
+        for (const port of [instance.port, instance.port + 1]) {
+          await expect(acquireTestPortBlock({ port, offsets: [0] })).rejects.toMatchObject({
+            code: "EADDRINUSE",
+          });
+        }
+      },
+      () =>
+        competitor.listening
+          ? new Promise<void>((resolve, reject) => {
+              competitor.close((error) => (error ? reject(error) : resolve()));
+            })
+          : undefined,
+      () => instance.cleanup(),
+    );
+    const released = await acquireTestPortBlock({ port: instance.port, offsets: [0, 1] });
+    await released.release();
+  });
+
   it.each([
     { platform: "win32", explicit: false, advances: true },
     { platform: "win32", explicit: true, advances: false },

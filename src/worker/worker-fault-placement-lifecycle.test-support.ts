@@ -119,27 +119,25 @@ export class WorkerFaultPlacementLifecycle {
     if (!claim || claim.runId !== runId) {
       throw new Error(`fault run ${runId} does not own the active placement`);
     }
-    const pending = this.options.placementStore
-      .listPendingWorkspaceResults()
-      .some(
-        (result) =>
-          result.sessionId === claim.sessionId &&
-          result.claimId === claim.claimId &&
-          result.runId === claim.runId,
-      );
+    const pending = (await this.options.placementStore.listPendingWorkspaceResultsAsync()).some(
+      (result) =>
+        result.sessionId === claim.sessionId &&
+        result.claimId === claim.claimId &&
+        result.runId === claim.runId,
+    );
     if (pending) {
-      this.options.placementStore.acceptWorkspaceResult(claim);
-      this.options.placementStore.completeWorkspaceResultAndReleaseTurn(claim);
+      await this.options.placementStore.acceptWorkspaceResult(claim);
+      await this.options.placementStore.completeWorkspaceResultAndReleaseTurn(claim);
       return;
     }
     await this.options.placementStore.releaseTurn(claim);
   }
 
-  reclaimPlacement(
+  async reclaimPlacement(
     placement: Extract<WorkerSessionPlacementRecord, { state: "active" }>,
     ownerEpoch: number,
-  ): void {
-    const draining = this.options.placementStore.startDrain({
+  ): Promise<void> {
+    const draining = await this.options.placementStore.startDrain({
       sessionId: placement.sessionId,
       environmentId: this.options.environmentId,
       ownerEpoch,
@@ -148,7 +146,7 @@ export class WorkerFaultPlacementLifecycle {
     if (draining.state !== "draining") {
       throw new Error("fault placement did not enter draining");
     }
-    const reconciling = this.options.placementStore.startReconcile({
+    const reconciling = await this.options.placementStore.startReconcile({
       sessionId: placement.sessionId,
       environmentId: this.options.environmentId,
       ownerEpoch,
@@ -157,7 +155,7 @@ export class WorkerFaultPlacementLifecycle {
     if (reconciling.state !== "reconciling") {
       throw new Error("fault placement did not enter reconciliation");
     }
-    const reclaimed = this.options.placementStore.transition({
+    const reclaimed = await this.options.placementStore.transition({
       sessionId: placement.sessionId,
       from: "reconciling",
       to: "reclaimed",
@@ -189,7 +187,7 @@ export class WorkerFaultPlacementLifecycle {
       { to: "active", patch: { activeOwnerEpoch: this.options.getOwnerEpoch() } },
     ] as const;
     for (const transition of transitions) {
-      placement = this.options.placementStore.transition({
+      placement = await this.options.placementStore.transition({
         sessionId: this.options.sessionId,
         from: placement.state,
         expectedGeneration: placement.generation,

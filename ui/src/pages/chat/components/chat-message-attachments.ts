@@ -1,11 +1,9 @@
 import { html, nothing } from "lit";
 import { t } from "../../../i18n/index.ts";
-import { formatBytes } from "../../../lib/agents/display.ts";
-import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
+import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
 import "./chat-audio-player.ts";
 import "./chat-svg-attachment.ts";
 import "./chat-video-player.ts";
-import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,
@@ -15,7 +13,7 @@ import {
 import {
   renderChatAttachmentAdmission,
   shouldDeferAttachmentCard,
-  type AttachmentCardAdmission,
+  type AttachmentAdmission,
 } from "./chat-message-attachment-admission.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
@@ -50,29 +48,9 @@ import {
 } from "./chat-message-media.ts";
 import { renderMessageVideoPreview } from "./chat-message-video-preview.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
-import { isSentCommentAttachment } from "./chat-sent-comments.ts";
+import { isSentCommentAttachment, renderSentCommentAttachments } from "./chat-sent-comments.ts";
 import type { AttachmentSidebarState, SidebarContent } from "./chat-sidebar-content-types.ts";
-
-type OmittedMediaItem = Extract<MessageContentItem, { type: "omitted_media" }>;
-
-export function renderOmittedMedia(items: OmittedMediaItem[]) {
-  if (items.length === 0) {
-    return nothing;
-  }
-  return html`${items.map((item) => {
-    const reason =
-      item.media.sizeBytes === undefined
-        ? t("chat.attachments.omittedFromHistory")
-        : t("chat.attachments.omittedFromHistoryWithSize", {
-            size: formatBytes(item.media.sizeBytes),
-          });
-    return renderAssistantAttachmentStatusCard({
-      label: t("chat.attachments.image"),
-      badge: t("chat.attachments.history"),
-      reason,
-    });
-  })}`;
-}
+import { videoLightboxItem } from "./chat-video-lightbox-source.ts";
 
 type ManagedAttachmentAvailability =
   | { status: "checking"; refreshAfter?: number; refreshAttempts?: number }
@@ -308,7 +286,6 @@ function retryManagedAttachmentAvailability(
   );
   resource.value = undefined;
   resource.retryAttempted = false;
-  resource.unavailableAt = undefined;
   notifyChatMediaResourceSubscribers(resource);
   onRequestUpdate?.();
 }
@@ -406,7 +383,7 @@ export function renderAssistantAttachments(
   }
   const comments = inlinePlayback ? [] : attachments.filter(isSentCommentAttachment);
   const files = attachments.filter((item) => inlinePlayback || !isSentCommentAttachment(item));
-  const sources = comments.map((item) => {
+  const resolveComment = (item: AttachmentItem) => {
     const resolved = resolveAttachmentSource(item.attachment, options);
     return {
       identity: item.attachment.url,
@@ -429,20 +406,13 @@ export function renderAssistantAttachments(
         "card",
       ),
     };
-  });
+  };
   const hasPreviewChips =
     !inlinePlayback && (comments.length > 0 || files.some(isSentPastedTextAttachment));
   return html`<div
     class="chat-assistant-attachments ${hasPreviewChips ? "chat-assistant-attachments--preview-chips" : ""}"
   >
-    ${
-      comments.length
-        ? html`<openclaw-chat-sent-comments
-            .sources=${sources}
-            .scope=${JSON.stringify([options.sessionKey, options.agentId, options.connectionEpoch, options.resourceBasePath, options.authToken, options.policyKey])}
-          ></openclaw-chat-sent-comments>`
-        : nothing
-    }
+    ${renderSentCommentAttachments(comments, options, resolveComment)}
     ${files.map((item) =>
       renderMessageAttachment(
         item,
@@ -467,7 +437,7 @@ export function renderMessageAttachment(
   onAssistantAttachmentLoaded?: () => void,
   presentation: "inline" | "card" | "preview" = "inline",
 ) {
-  const renderContent = (admission?: AttachmentCardAdmission) =>
+  const renderContent = (admission?: AttachmentAdmission) =>
     renderMessageAttachmentContent(
       item,
       options,
@@ -480,7 +450,7 @@ export function renderMessageAttachment(
     return renderContent();
   }
   return html`${renderChatAttachmentAdmission({
-    attachment: item.attachment,
+    attachments: [item.attachment],
     options,
     render: renderContent,
   })}`;
@@ -492,7 +462,7 @@ function renderMessageAttachmentContent(
   onOpenSidebar?: (content: SidebarContent) => void,
   onAssistantAttachmentLoaded?: () => void,
   presentation: "inline" | "card" | "preview" = "inline",
-  admission?: AttachmentCardAdmission,
+  admission?: AttachmentAdmission,
 ) {
   const { onRequestOpenImage, onOpenImage, resolveArtifactDownload } = options;
   if (item.type === "attachment_error") {
@@ -507,7 +477,7 @@ function renderMessageAttachmentContent(
   const { attachment } = item;
   const pastedText = presentation === "card" && isSentPastedTextAttachment(item);
   const imageAttachment = resolveAttachmentImageKind(attachment) === "svg";
-  const resolved = admission?.observeCard
+  const resolved = admission?.observeElement
     ? undefined
     : resolveAttachmentSource(attachment, options);
   if (
@@ -536,17 +506,31 @@ function renderMessageAttachmentContent(
     attachment.kind === "video" && onOpenImage && safeAttachmentUrl
       ? (src: string) => {
           const requestVersion = onRequestOpenImage?.();
+          const videoItem = (video: AttachmentItem["attachment"]) =>
+            videoLightboxItem(
+              video,
+              (onRequestUpdate) => resolveAttachmentSource(video, { ...options, onRequestUpdate }),
+              options.onRequestUpdate,
+            );
+          const membership = options.galleryVideos?.(item);
           const overlayItem = {
-            kind: "video" as const,
+            ...videoItem(attachment),
             src,
             originalSrc: safeAttachmentUrl,
-            title: attachment.label,
+            ...(membership && membership.index >= 0 && membership.items.length > 1
+              ? {
+                  gallery: {
+                    index: membership.index,
+                    items: membership.items.map(
+                      ({ attachment: video }) =>
+                        async () =>
+                          videoItem(video),
+                    ),
+                  },
+                }
+              : {}),
           };
-          if (requestVersion === undefined) {
-            onOpenImage(overlayItem);
-          } else {
-            onOpenImage(overlayItem, requestVersion);
-          }
+          onOpenImage(overlayItem, requestVersion);
         }
       : undefined;
   const hasLiveSidebarSource =
@@ -602,6 +586,7 @@ function renderMessageAttachmentContent(
       .sizeBytes=${media?.sizeBytes ?? attachment.sizeBytes}
       .scope=${JSON.stringify([attachment.url, options.sessionKey, options.agentId, options.connectionEpoch, options.resourceBasePath, options.authToken, options.policyKey])}
       .onOpen=${openAttachmentSidebar}
+      .admission=${admission}
     ></openclaw-chat-pasted-text>`;
   }
   const card = renderCompactAttachmentCard(
@@ -616,8 +601,8 @@ function renderMessageAttachmentContent(
       onExpand: openAttachmentSidebar,
       voiceNote: attachment.isVoiceNote === true,
     },
-    admission?.observeCard,
-    admission?.onFocus,
+    admission?.observeElement,
+    admission?.onAdmit,
   );
   if (admission && !media) {
     return card;

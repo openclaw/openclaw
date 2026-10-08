@@ -15,7 +15,15 @@ import {
   extractToolResultText,
 } from "./providers/tool-result-text.js";
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
-import type { Context, Model, ThinkingContent, ToolCall } from "./types.js";
+import {
+  hasRuntimeContextMarker,
+  isRuntimeContextMessage,
+  runtimeContextContentToText,
+  type Context,
+  type Model,
+  type ThinkingContent,
+  type ToolCall,
+} from "./types.js";
 import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";
 import {
   splitSystemPromptRelocatableBoundary,
@@ -23,16 +31,10 @@ import {
   stripSystemPromptRelocatableBoundary,
 } from "./utils/system-prompt-cache-boundary.js";
 
-const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 type ChatCompletionContentPartVideo = {
   type: "video_url";
   video_url: { url: string };
 };
-
-function sanitizeToolResultText(text: string, fallback: string): string {
-  const sanitized = sanitizeSurrogates(text);
-  return sanitized.trim().length > 0 ? sanitized : fallback;
-}
 
 /** Whether replayed messages require a tools marker for proxy compatibility. */
 export function hasToolCallHistory(messages: Context["messages"]): boolean {
@@ -71,8 +73,10 @@ export function convertMessages(
     return id;
   };
 
-  const transformedMessages = transformMessages(context.messages, model, (id) =>
-    normalizeToolCallId(id),
+  const transformedMessages = transformMessages(
+    context.messages,
+    model,
+    normalizeToolCallId,
   ) as ProviderMessage[];
 
   // Local chat templates can place tools after system content. Move only the
@@ -112,17 +116,19 @@ export function convertMessages(
       params.push({ role: "assistant", content: "I have processed the tool results." });
     }
 
-    if (msg.role === "user") {
-      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
+    if (isRuntimeContextMessage(msg)) {
+      params.push({
+        role: compat.supportsDeveloperRole ? "developer" : "user",
+        content: sanitizeSurrogates(runtimeContextContentToText(msg.content)),
+      });
+      options.cacheOptOutIndexes?.add(params.length - 1);
+    } else if (msg.role === "user") {
+      let userParam: ChatCompletionMessageParam;
       if (typeof msg.content === "string") {
-        const userParam: ChatCompletionMessageParam = {
+        userParam = {
           role: "user",
           content: sanitizeSurrogates(msg.content),
         };
-        if (isRuntimeContextCarrier) {
-          options.cacheOptOutIndexes?.add(params.length);
-        }
-        params.push(userParam);
       } else {
         const content: Array<ChatCompletionContentPart | ChatCompletionContentPartVideo> =
           msg.content.map((item) => {
@@ -146,12 +152,12 @@ export function convertMessages(
         if (content.length === 0) {
           continue;
         }
-        const userParam = { role: "user", content } as ChatCompletionMessageParam;
-        if (isRuntimeContextCarrier) {
-          options.cacheOptOutIndexes?.add(params.length);
-        }
-        params.push(userParam);
+        userParam = { role: "user", content } as ChatCompletionMessageParam;
       }
+      if (hasRuntimeContextMarker(msg)) {
+        options.cacheOptOutIndexes?.add(params.length);
+      }
+      params.push(userParam);
     } else if (msg.role === "assistant") {
       const assistantMsg: ChatCompletionAssistantMessageParam = {
         role: "assistant",
@@ -254,10 +260,7 @@ export function convertMessages(
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const images = toolMsg.content.filter(isImageWithMediaPayload);
-        const content = sanitizeToolResultText(
-          textResult,
-          mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT,
-        );
+        const content = textResult.trim() ? textResult : (mediaPlaceholder ?? "(no output)");
         const toolResultMsg: ChatCompletionToolMessageParam = {
           role: "tool",
           content,

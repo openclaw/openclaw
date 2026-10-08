@@ -12,7 +12,7 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 
 it("rebuilds only changed automation bindings and preserves complete unrelated rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const keys = ["agent:main:bound", "agent:main:next", "agent:main:parent", "agent:main:other"];
     for (const [index, sessionKey] of keys.entries()) {
       replaceSessionEntrySync(
@@ -85,7 +85,7 @@ it("keeps automation aliases scoped to their logical agent in a shared store", a
     const storePath = `${stateDir}/shared-sessions.json`;
     const cfg = {
       session: { store: storePath, scope: "global" as const },
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} }, defaults: { sessionStore: { agentId: "main" } } },
     };
     for (const agentId of ["main", "work"]) {
       replaceSessionEntrySync(

@@ -21,7 +21,7 @@ import type { SessionChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { ChatSplitLayout, ChatSplitColumn, ChatSplitPane } from "./split-layout-types.ts";
-import { splitRatio } from "./split-layout.ts";
+import { findPane, splitRatio } from "./split-layout.ts";
 
 type ChatPagePaneRenderOptions = {
   active: boolean;
@@ -62,6 +62,28 @@ type ChatPagePaneRenderOptions = {
   unbound: boolean;
   weight: number;
 };
+
+export function chatPagePaneOwnerKeys(
+  context: ApplicationContext | undefined,
+  layout: ChatSplitLayout,
+  retainedSessions: ReadonlyMap<string, readonly (string | undefined)[]>,
+): Set<string> {
+  const nextPaneKeys = new Set<string>();
+  for (const column of layout.columns) {
+    for (const pane of column.panes) {
+      const ownerKey = JSON.stringify([column.id, pane.id]);
+      for (const sessionKey of retainedSessions.get(pane.id) ?? []) {
+        if (
+          sessionKey !== undefined &&
+          (!context || !readDeletedSessionStartup(context, sessionKey))
+        ) {
+          nextPaneKeys.add(JSON.stringify([ownerKey, sessionKey]));
+        }
+      }
+    }
+  }
+  return nextPaneKeys;
+}
 
 export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
   const sessions = options.context?.sessions?.presentation.result?.sessions ?? [];
@@ -117,7 +139,11 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
           const presentationTitle = presentationRow
             ? resolveSessionDisplayName(resolvedKey, presentationRow)
             : undefined;
-          if (options.context && readDeletedSessionStartup(options.context, sessionKey)) {
+          if (
+            options.context &&
+            (routeData?.creation?.admitted === false ||
+              readDeletedSessionStartup(options.context, sessionKey))
+          ) {
             return keyed(
               sessionKey,
               html`<openclaw-pending-session-create
@@ -128,6 +154,9 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
                 ?inert=${!presented}
                 .context=${options.context}
                 .sessionKey=${sessionKey}
+                .narrow=${options.narrow}
+                .mergedChrome=${options.mergedChrome && active}
+                .navDrawerOpen=${options.navDrawerOpen && active}
               ></openclaw-pending-session-create>`,
             );
           }
@@ -195,14 +224,39 @@ export function renderChatPageSplitLayout(
   layout: ChatSplitLayout,
   options: {
     narrow: boolean;
+    activePaneId?: string;
     renderPane: (column: ChatSplitColumn, pane: ChatSplitPane, weight: number) => unknown;
     onResizePanes: (columnId: string, paneIndex: number, ratio: number) => void;
     onResizeColumns: (columnIndex: number, ratio: number) => void;
     onResizeEnd: () => void;
   },
 ) {
+  const hasActiveCell =
+    options.activePaneId !== undefined && findPane(layout, options.activePaneId) !== null;
+  const renderDivider = (index: number, column?: ChatSplitColumn) => html`
+    <resizable-divider
+      orientation=${column ? "horizontal" : nothing}
+      .splitRatio=${splitRatio(
+        column?.paneWeights ?? layout.columnWeights,
+        index,
+        column ? "split pane weight" : "split column weight",
+      )}
+      .minRatio=${0.15}
+      .maxRatio=${0.85}
+      .label=${t("nav.resize")}
+      @resize=${(event: CustomEvent<{ splitRatio: number }>) =>
+        column
+          ? options.onResizePanes(column.id, index, event.detail.splitRatio)
+          : options.onResizeColumns(index, event.detail.splitRatio)}
+      @resize-end=${options.onResizeEnd}
+    ></resizable-divider>
+  `;
   return html`
-    <div class="chat-split-view ${options.narrow ? "chat-split-view--narrow" : ""}">
+    <div
+      class="chat-split-view ${options.narrow ? "chat-split-view--narrow" : ""} ${
+        hasActiveCell ? "chat-split-view--active-cell" : ""
+      }"
+    >
       ${repeat(
         layout.columns,
         (column) => column.id,
@@ -226,21 +280,7 @@ export function renderChatPageSplitLayout(
                 ${options.renderPane(column, pane, expectDefined(column.paneWeights[paneIndex], "rendered split pane weight"))}
                 ${
                   !options.narrow && paneIndex < column.panes.length - 1
-                    ? html`
-                        <resizable-divider
-                          orientation="horizontal"
-                          .splitRatio=${splitRatio(
-                            column.paneWeights,
-                            paneIndex,
-                            "split pane weight",
-                          )}
-                          .minRatio=${0.15}
-                          .maxRatio=${0.85}
-                          .label=${t("nav.resize")}
-                          @resize=${(event: CustomEvent<{ splitRatio: number }>) => options.onResizePanes(column.id, paneIndex, event.detail.splitRatio)}
-                          @resize-end=${options.onResizeEnd}
-                        ></resizable-divider>
-                      `
+                    ? renderDivider(paneIndex, column)
                     : nothing
                 }
               `,
@@ -248,20 +288,7 @@ export function renderChatPageSplitLayout(
           </div>
           ${
             !options.narrow && columnIndex < layout.columns.length - 1
-              ? html`
-                  <resizable-divider
-                    .splitRatio=${splitRatio(
-                      layout.columnWeights,
-                      columnIndex,
-                      "split column weight",
-                    )}
-                    .minRatio=${0.15}
-                    .maxRatio=${0.85}
-                    .label=${t("nav.resize")}
-                    @resize=${(event: CustomEvent<{ splitRatio: number }>) => options.onResizeColumns(columnIndex, event.detail.splitRatio)}
-                    @resize-end=${options.onResizeEnd}
-                  ></resizable-divider>
-                `
+              ? renderDivider(columnIndex)
               : nothing
           }
         `,
@@ -291,18 +318,4 @@ export function renderChatPageBody(content: unknown, indicator: DropIndicator | 
         : nothing
     }
   </div>`;
-}
-
-export function renderPendingChatPage(
-  context: ApplicationContext,
-  sessionKey: string,
-  presented: boolean,
-) {
-  if (!presented) {
-    return nothing;
-  }
-  return html`<openclaw-pending-session-create
-    .context=${context}
-    .sessionKey=${sessionKey}
-  ></openclaw-pending-session-create>`;
 }

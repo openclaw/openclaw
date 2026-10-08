@@ -368,6 +368,18 @@ export function readCodexTurnCompletedNotification(
   return notification?.turn.status === "inProgress" ? undefined : notification;
 }
 
+export function assertExactSupervisionModelSelection(
+  value: { model?: string | null; modelProvider?: string | null },
+  expected: { model: string; modelProvider: string; operation: string },
+): void {
+  if (value.model !== expected.model || value.modelProvider !== expected.modelProvider) {
+    throw new Error(
+      `Codex supervision ${expected.operation} changed native model selection: ` +
+        `${value.modelProvider ?? "unknown"}/${value.model ?? "unknown"}`,
+    );
+  }
+}
+
 function assertCodexShape<T>(validate: CodexValidator<T>, value: unknown, label: string): T {
   const normalized = normalizeWithDefaults(validate.schema, value);
   if (validate.check(normalized)) {

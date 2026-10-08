@@ -1,9 +1,10 @@
-/** Agent-facing inline chat widget tool. */
 import { createHash } from "node:crypto";
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
 import { Type } from "typebox";
 import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
 import { optionalStringEnum } from "../agents/schema/string-enum.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "../agents/tools/common.js";
 import {
@@ -41,8 +42,7 @@ import { findWidgetScriptSyntaxError } from "./widget-script-syntax.js";
 import { buildWidgetDocument } from "./wrap.js";
 
 const SHOW_WIDGET_REQUIRED_CLIENT_CAPS = ["inline-widgets"];
-const WIDGET_CODE_MAX_CHARS = 262_144;
-const PINNED_WIDGET_MAX_UTF8_BYTES = 256 * 1024;
+const REGISTERED_WIDGET_CODE_MAX_CHARS = 262_144;
 const WIDGET_MAX_PER_SCOPE = 32;
 
 function currentPluginRegistry() {
@@ -161,9 +161,7 @@ type ShowWidgetToolOptions = {
   presenterContext?: WidgetPresenterContext;
 };
 
-type WidgetPresentationAttempt =
-  | { ok: true; value: WidgetPresentationSuccess }
-  | { ok: false; error: WidgetPresentationError };
+type WidgetPresentationAttempt = Result<WidgetPresentationSuccess, WidgetPresentationError>;
 
 async function presentWidget(params: {
   presenter?: WidgetPresenter;
@@ -259,11 +257,6 @@ function generatedWidgetIdentity(title: string, preferredName: string) {
   };
 }
 
-function boardWidgetTitle(title: string): string | undefined {
-  const normalized = title.trim();
-  return normalized ? truncateCodePoints(normalized, 80) : undefined;
-}
-
 function resolveRetentionScope(options: ShowWidgetToolOptions): string {
   const scope = options.sessionId
     ? `session:${options.sessionId}`
@@ -272,14 +265,13 @@ function resolveRetentionScope(options: ShowWidgetToolOptions): string {
 }
 
 function assertPinnedWidgetDocumentSize(html: string): void {
-  if (Buffer.byteLength(html, "utf8") > PINNED_WIDGET_MAX_UTF8_BYTES) {
+  if (Buffer.byteLength(html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES) {
     throw new WidgetHtmlInputError(
-      `pin exceeds effective dashboard budget (${PINNED_WIDGET_MAX_UTF8_BYTES} UTF-8 bytes after wrapping)`,
+      `pin exceeds effective dashboard budget (${WIDGET_HTML_MAX_UTF8_BYTES} UTF-8 bytes after wrapping)`,
     );
   }
 }
 
-/** Creates a self-contained widget hosted by OpenClaw core. */
 export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAgentTool {
   const gatewayCall = options.callGateway ?? callInProcessGatewayTool;
   const pinnedOnly = options.pinnedOnly === true;
@@ -321,7 +313,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
   return {
     label: "Show Widget",
     name: "show_widget",
-    description: `Visual helps? Make widget. Do not wait for ask. ${usageGuidance} Update pinned HTML by name. Use for code architecture, execution traces, performance comparisons, interactive explanations, UI mockups, and dashboards. Text clearer? Skip. Load the visualize skill when available for composition and dashboard authoring. The source kind defaults to html${advertisedRegisteredKinds.length ? ` and registered kinds are ${advertisedRegisteredKinds.join(", ")}` : ""}. Send markup directly in widget_code. Scripts, stylesheets, and fonts may load from ${WIDGET_CDN_ORIGINS.join(", ")}; pin library versions. Use direct HTTPS URLs for audio/video, or data/blob URLs for embedded/generated clips. Images must be data URLs; media playback does not grant fetch access. Inline widgets cannot fetch APIs. Pinned data access needs declared and granted capabilities.netOrigins or capabilities.tools; inline previews never inherit those grants. Keep filters and controls local; user-clicked openclaw.prompt.send(text) requests an agent follow-up in the Control UI. Data, action, state, and cron host APIs are dashboard-only. openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard initialization, otherwise null; read it at click time. Dashboard HTML links support HTTP(S) destinations only; open them with target="_blank" and rel="noopener noreferrer". Put local workspace file links in chat Markdown, not widget HTML; file:// links cannot open the Files panel. \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. Use host theme variables such as --text, --muted, --card, --border, --accent, --font-body, and --font-mono. Inline script syntax errors return line and column; fix and retry. Check library loading and rendered interactions; hosting success alone is not visual proof.${reportGuidance}${presenterPrompt}`,
+    description: `Visual helps? Make widget. Do not wait for ask. ${usageGuidance} Update pinned HTML by name. Use for code architecture, execution traces, performance comparisons, interactive explanations, UI mockups, and dashboards. Text clearer? Skip. Load the visualize skill when available for composition and dashboard authoring. The source kind defaults to html${advertisedRegisteredKinds.length ? ` and registered kinds are ${advertisedRegisteredKinds.join(", ")}` : ""}. Send markup directly in widget_code. Scripts, stylesheets, and fonts may load from ${WIDGET_CDN_ORIGINS.join(", ")}; pin library versions. Use direct HTTPS URLs for audio/video, or data/blob URLs for embedded/generated clips. Default videos to controls playsinline preload="auto" so a first frame can appear before playback; do not autoplay. Images and video posters must be data URLs; media playback does not grant fetch access. Inline widgets cannot fetch APIs. Pinned data access needs declared and granted capabilities.netOrigins or capabilities.tools; inline previews never inherit those grants. Keep filters and controls local; user-clicked openclaw.prompt.send(text) requests an agent follow-up in the Control UI. Data, action, state, and cron host APIs are dashboard-only. openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard initialization, otherwise null; read it at click time. Dashboard HTML links support HTTP(S) destinations only; open them with target="_blank" and rel="noopener noreferrer". Put local workspace file links in chat Markdown, not widget HTML; file:// links cannot open the Files panel. \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. Use host theme variables such as --text, --muted, --card, --border, --accent, --font-body, and --font-mono. Inline script syntax errors return line and column; fix and retry. Check library loading and rendered interactions; hosting success alone is not visual proof.${reportGuidance}${presenterPrompt}`,
     parameters: createShowWidgetToolSchema(
       kinds,
       explicitPresenters,
@@ -350,10 +342,11 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         if (!rawWidgetCode.trim()) {
           throw new WidgetHtmlInputError("widget_code required");
         }
-        assertWidgetHtmlSize(rawWidgetCode, WIDGET_CODE_MAX_CHARS, {
-          inputName: "widget_code",
-          unit: "characters",
-        });
+        assertWidgetHtmlSize(
+          rawWidgetCode,
+          kind === "html" ? WIDGET_HTML_MAX_UTF8_BYTES : REGISTERED_WIDGET_CODE_MAX_CHARS,
+          { inputName: "widget_code", unit: kind === "html" ? "bytes" : "characters" },
+        );
         if (kind === "html") {
           // Untrimmed so reported line/column match the widget_code the model sent.
           const scriptError = findWidgetScriptSyntaxError(rawWidgetCode);
@@ -452,6 +445,8 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
             composedWidget,
             registration ? { scriptOrigins: ["'self'"] } : {},
           );
+      const hasPresentationRoute =
+        !isReport && (inlineAvailable || wantsCurrentChannel || wantsNodePanel);
       let pinnedText = "";
       let pinnedWidgetName: string | undefined;
       let capabilityState: BoardWidgetPutResult["widgets"][number]["grantState"] | undefined;
@@ -462,19 +457,24 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         const size = readToolStringParam(params, "size");
         const frame = readToolStringParam(presentation ?? {}, "frame");
         const after = readToolStringParam(params, "after");
-        const pinnedTitle = boardWidgetTitle(title);
+        const pinnedTitle = truncateCodePoints(title, 80);
         if (!registration && !isReport) {
           assertPinnedWidgetDocumentSize(
-            buildWidgetDocument(pinnedTitle ?? name, widgetCode, {
+            buildWidgetDocument(pinnedTitle, widgetCode, {
               connectOrigins: capabilities?.netOrigins,
             }),
           );
+        }
+        if (hasPresentationRoute) {
+          assertWidgetHtmlSize(wrappedDocument, WIDGET_HTML_MAX_UTF8_BYTES, {
+            inputName: "widget document after wrapping",
+          });
         }
         const snapshot = await gatewayCall<BoardWidgetPutResult>("board.widget.put", {
           sessionKey: pinSessionKey,
           agentId: options.agentId,
           name,
-          ...(pinnedTitle ? { title: pinnedTitle } : {}),
+          title: pinnedTitle,
           // The Gateway owns the board document shell so agent-authored bytes
           // can never run before its user-activation and bridge bootstrap.
           content: report
@@ -519,9 +519,11 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         if (capabilityState === "granted") {
           pinnedText += "; capabilities granted";
         }
+      } else if (hasPresentationRoute) {
+        assertWidgetHtmlSize(wrappedDocument, WIDGET_HTML_MAX_UTF8_BYTES, {
+          inputName: "widget document after wrapping",
+        });
       }
-      const hasPresentationRoute =
-        !isReport && (inlineAvailable || wantsCurrentChannel || wantsNodePanel);
       if (!hasPresentationRoute) {
         return jsonResult({
           status:
@@ -537,9 +539,8 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       const hostDocument = async () =>
         (document ??= await createCanvasDocument(
           {
-            kind: "html_bundle",
             title,
-            entrypoint: { type: "html", value: wrappedDocument },
+            html: wrappedDocument,
             surface: "assistant_message",
             retentionScope: resolveRetentionScope(options),
             // Direct navigation must not run widget script as the Control UI origin.

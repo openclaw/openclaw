@@ -52,7 +52,7 @@ it("refreshes open palette skills without reloading unchanged models", async () 
   }
 });
 
-it("shows a failed acquisition without appending old rows to the successful response", async () => {
+it("keeps returned model rows without refresh warnings or obsolete choices", async () => {
   vi.useFakeTimers();
   const restoreDialog = installDialogPolyfill();
   const request = vi
@@ -99,9 +99,8 @@ it("shows a failed acquisition without appending old rows to the successful resp
     await palette.updateComplete;
     expect(findPaletteOption(palette, "Needle obsolete")).toBeUndefined();
     expect(palette.querySelectorAll('[role="option"]')).toHaveLength(1);
-    expect(palette.querySelector('.cmd-palette__search [role="status"]')?.textContent).toContain(
-      "Some models could not be refreshed. Open Models to try again.",
-    );
+    expect(findPaletteOption(palette, "Needle retained")).toBeDefined();
+    expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
 
     harness.emit("chat.metadata.changed");
     await vi.advanceTimersByTimeAsync(200);

@@ -8,6 +8,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         case finished
         case failed
         case blocked
+        case skipped
         case unavailable
 
         var title: LocalizedStringResource {
@@ -16,6 +17,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
             case .finished: "Finished"
             case .failed: "Failed"
             case .blocked: "Blocked"
+            case .skipped: "Skipped"
             case .unavailable: "No result"
             }
         }
@@ -42,6 +44,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         case "completed": return .finished
         case "failed": return .failed
         case "blocked": return .blocked
+        case "skipped": return .skipped
         default: return .unavailable
         }
     }
@@ -156,6 +159,7 @@ private struct ChatToolActivityRowContent: View {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let item: ChatToolActivityItem
+    private let displayCall: (name: String?, args: AnyCodable?)
     private let resolvedDiff: (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     @State private var expanded = false
     @State private var showsFullResult = false
@@ -164,7 +168,7 @@ private struct ChatToolActivityRowContent: View {
     private static let expandedLineLimit = 40
 
     private var display: ToolDisplaySummary {
-        ToolDisplayRegistry.resolve(name: self.item.name ?? "tool", args: self.item.arguments)
+        ToolDisplayRegistry.resolve(name: self.displayCall.name, args: self.displayCall.args)
     }
 
     private var detailLine: String? {
@@ -174,7 +178,7 @@ private struct ChatToolActivityRowContent: View {
 
     private var formattedResult: String {
         guard let resultText = self.item.resultText else { return "" }
-        return ToolResultTextFormatter.format(text: resultText, toolName: self.item.name)
+        return ToolResultTextFormatter.format(text: resultText, toolName: self.displayCall.name)
     }
 
     private var expandable: Bool {
@@ -214,9 +218,11 @@ private struct ChatToolActivityRowContent: View {
 
     init(item: ChatToolActivityItem) {
         self.item = item
+        let displayCall = ToolDisplayRegistry.displayCall(name: item.name, args: item.arguments)
+        self.displayCall = displayCall
         self.resolvedDiff = ChatToolDiff.resolveDiff(
-            name: item.name,
-            arguments: item.arguments,
+            name: displayCall.name,
+            arguments: displayCall.args,
             details: item.details,
             isError: item.isError)
     }
@@ -316,7 +322,7 @@ private struct ChatToolActivityRowContent: View {
             }
             .frame(width: Self.disclosureWidth, height: 12)
 
-            Image(systemName: Self.symbol(forToolName: self.item.name))
+            Image(systemName: ChatToolIcon.symbol(for: self.display.name, icon: self.display.icon))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : Color.secondary)
 
@@ -336,7 +342,8 @@ private struct ChatToolActivityRowContent: View {
 
             Spacer(minLength: 0)
 
-            if self.isDesktopLayout {
+            // The local title replaces the Gateway warning, so unknown outcomes still need a visible cue.
+            if self.isDesktopLayout || self.item.displayState == .unavailable {
                 Text(self.item.displayState.title)
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)
@@ -347,7 +354,7 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var toolTitle: some View {
-        Text(self.item.activity?.title ?? self.display.title)
+        Text(self.item.activity?.preparedTitle ?? self.display.title)
             .font(OpenClawChatTypography.footnoteSemiBold)
             .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : self.textColor)
             .lineLimit(1)
@@ -458,75 +465,6 @@ private struct ChatToolActivityRowContent: View {
         case .ctx, .file, .skip:
             .clear
         }
-    }
-
-    private static func symbol(forToolName name: String?) -> String {
-        let normalized = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        let exact: [String: String] = [
-            "agent": "rectangle.stack",
-            "bash": "terminal",
-            "browser": "safari",
-            "canvas": "photo",
-            "clock": "clock",
-            "command": "terminal",
-            "cron": "clock",
-            "create_file": "square.and.pencil",
-            "edit": "pencil.line",
-            "edit_file": "pencil.line",
-            "exec": "terminal",
-            "fetch": "globe",
-            "find": "magnifyingglass",
-            "gateway": "server.rack",
-            "glob": "magnifyingglass",
-            "grep": "magnifyingglass",
-            "view_image": "photo",
-            "list": "magnifyingglass",
-            "ls": "magnifyingglass",
-            "memory": "brain",
-            "message": "bubble.left",
-            "multi_edit": "pencil.line",
-            "multiedit": "pencil.line",
-            "notebook_edit": "pencil.line",
-            "notebookedit": "pencil.line",
-            "node": "server.rack",
-            "apply_patch": "pencil.line",
-            "applypatch": "pencil.line",
-            "patch": "pencil.line",
-            "photo": "photo",
-            "read": "doc.text",
-            "reply": "bubble.left",
-            "schedule": "clock",
-            "screenshot": "photo",
-            "search": "magnifyingglass",
-            "send": "bubble.left",
-            "session": "rectangle.stack",
-            "shell": "terminal",
-            "terminal": "terminal",
-            "web": "globe",
-            "write": "square.and.pencil",
-            "write_file": "square.and.pencil",
-            "str_replace_based_edit_tool": "pencil.line",
-            "str_replace_editor": "pencil.line",
-        ]
-        if let symbol = exact[normalized] { return symbol }
-
-        let fallbacks: [([String], String)] = [
-            (["canvas", "image", "screenshot", "photo"], "photo"),
-            (["browser"], "safari"),
-            (["message", "send", "reply"], "bubble.left"),
-            (["node", "gateway"], "server.rack"),
-            (["cron", "schedule", "clock"], "clock"),
-            (["memory"], "brain"),
-            (["session", "agent"], "rectangle.stack"),
-            (["exec", "bash", "shell", "command", "terminal"], "terminal"),
-            (["edit", "patch"], "pencil.line"),
-            (["write"], "square.and.pencil"),
-            (["grep", "glob", "find", "search", "list"], "magnifyingglass"),
-            (["read"], "doc.text"),
-            (["fetch", "web"], "globe"),
-        ]
-        return fallbacks.first { keys, _ in keys.contains(where: normalized.contains) }?.1
-            ?? "wrench.and.screwdriver"
     }
 }
 

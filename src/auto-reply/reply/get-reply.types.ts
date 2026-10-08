@@ -12,7 +12,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DashboardMessageReadAdmission } from "../../gateway/message-action-turn-capability.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
-import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
+import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
+import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -41,6 +42,8 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
+  queuedFollowupAbortSignal?: AbortSignal;
   /** Host-minted original operator authority; never restored from session metadata. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
   extractedFileImages?: ExtractedFileImage[];
@@ -49,6 +52,7 @@ type InternalReplySessionOptions = {
   getProviderLoginConfig?: () => OpenClawConfig;
   /** Invocation-owned conversation facts; never execution or sender authority. */
   replyConversation?: PreparedReplyConversation;
+  preparedTtsPreferences?: PreparedTtsPreferences;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   /** Internal delivery owner that stages reply media using current Gateway session policy. */
   mediaNormalizationOwner?: "gateway";
@@ -71,6 +75,8 @@ type InternalReplySessionOptions = {
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  /** Observes one transcript-start reader preparation; completion cannot control the run. */
+  onTranscriptStartPreparation?: () => (() => void) | undefined;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   /** Publishes each executing turn's preferences without persisting them to its session. */
   onRunVerbosityResolved?: (settings: ReplyRunVerbosity) => void;
@@ -88,8 +94,6 @@ type InternalReplySessionOptions = {
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
   replyOperation?: ReplyOperation;
   skillOverrides?: SessionToolOverrides["skills"];
-  /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
-  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
 };
 
@@ -102,11 +106,13 @@ export type InternalGetReplyOptions = GetReplyOptions &
 /** Pin the host-issued source before public options cross asynchronous preparation. */
 export function prepareInternalGetReplyOptions(
   opts: GetReplyOptions | undefined,
+  context?: MsgContext,
 ): InternalGetReplyOptions | undefined {
-  if (!opts) {
+  const channelAuthority = context && getCommandOwnerAuthority(context)?.operatorAuthority;
+  if (!opts && !channelAuthority) {
     return undefined;
   }
-  const { operatorAuthority, ...options }: InternalGetReplyOptions = opts;
+  const { operatorAuthority = channelAuthority, ...options }: InternalGetReplyOptions = opts ?? {};
   if (operatorAuthority !== undefined) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
     operatorAuthority.assertCurrent();

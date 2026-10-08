@@ -128,14 +128,11 @@ async function expectRestartedChannel(
 
 async function expectNoRestart(manager: ChannelManager) {
   const monitor = await startAndRunCheck(manager);
+  await advanceHealthCheck();
+  await advanceHealthCheck();
   expect(manager.stopChannel).not.toHaveBeenCalled();
   expect(manager.startChannel).not.toHaveBeenCalled();
-  monitor.stop();
-}
-
-async function expectNoStart(manager: ChannelManager) {
-  const monitor = await startAndRunCheck(manager);
-  expect(manager.startChannel).not.toHaveBeenCalled();
+  expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
   monitor.stop();
 }
 
@@ -278,7 +275,7 @@ describe("channel-health-monitor", () => {
     const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
     const recoverAutostartSuppression = vi.fn(async () => {
       suppressed = !allowRecovery;
-      return allowRecovery;
+      return allowRecovery ? undefined : Date.now() + 300_000;
     });
     const manager = createSnapshotManager(
       {
@@ -337,7 +334,7 @@ describe("channel-health-monitor", () => {
         },
       },
     });
-    await expectNoStart(manager);
+    await expectNoRestart(manager);
   });
 
   it("skips unconfigured channels", async () => {
@@ -346,16 +343,17 @@ describe("channel-health-monitor", () => {
         default: { running: false, enabled: true, configured: false },
       },
     });
-    await expectNoStart(manager);
+    await expectNoRestart(manager);
   });
 
-  it("does not restart a channel with terminalDisconnect set", async () => {
+  it("does not restart an unlinked channel with terminalDisconnect set across checks", async () => {
     const manager = createSnapshotManager({
       whatsapp: {
         default: {
           running: false,
           enabled: true,
           configured: true,
+          linked: false,
           terminalDisconnect: true,
         },
       },
@@ -370,6 +368,8 @@ describe("channel-health-monitor", () => {
       enabled: true,
       configured: true,
       lifecycle: "blocked",
+      linked: false,
+      ingressUnavailable: true,
       lastError: "Slack identity unavailable",
     });
     await expectNoRestart(manager);
@@ -421,7 +421,7 @@ describe("channel-health-monitor", () => {
       },
       { isManuallyStopped: vi.fn(() => true) },
     );
-    await expectNoStart(manager);
+    await expectNoRestart(manager);
   });
 
   it("skips channels with health monitor disabled globally for that account", async () => {
@@ -433,7 +433,7 @@ describe("channel-health-monitor", () => {
       },
       { isHealthMonitorEnabled: vi.fn(() => false) },
     );
-    await expectNoStart(manager);
+    await expectNoRestart(manager);
   });
 
   it("still restarts enabled accounts when another account on the same channel is disabled", async () => {

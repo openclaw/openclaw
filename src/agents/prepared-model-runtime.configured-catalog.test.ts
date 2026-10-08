@@ -11,14 +11,9 @@ import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.ty
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
 describe("configured catalog registry composition", () => {
-  it.each([
-    { manifest: true, configured: false },
-    { manifest: true, configured: true },
-    { manifest: false, configured: false },
-    { manifest: false, configured: true },
-  ])(
-    "keeps startup and refresh order consistent (manifest=$manifest, configured=$configured)",
-    async ({ manifest, configured }) => {
+  it.each([true, false])(
+    "keeps startup and refresh order consistent (manifest=%s)",
+    async (manifest) => {
       const models = ["z-strong", "m-current", "a-small"].map((id) => ({
         id,
         name: id,
@@ -33,9 +28,9 @@ describe("configured catalog registry composition", () => {
         baseUrl: "https://fixture.invalid/v1",
         models,
       };
-      const config: OpenClawConfig = configured
-        ? { models: { providers: { fixture: { ...provider, models: models.toReversed() } } } }
-        : {};
+      const config: OpenClawConfig = {
+        models: { providers: { fixture: { ...provider, models: models.toReversed() } } },
+      };
       const metadataSnapshot = createPluginMetadataSnapshotFixture({
         plugins: manifest
           ? [
@@ -68,7 +63,7 @@ describe("configured catalog registry composition", () => {
         config,
         agentDir: "captured:agent",
         authCredentials: {},
-        modelRegistry: registry,
+        models: registry.getAll(),
         metadataSnapshot,
         includeProviderPluginAugmentation: false,
       });
@@ -140,131 +135,59 @@ describe("configured catalog registry composition", () => {
 
   it.each<{
     name: string;
-    mode: "merge" | "replace";
-    capturedBaseUrl: string;
-    capturedId: string;
-    pin: boolean;
+    mode?: "merge" | "replace";
+    capturedBaseUrl?: string;
     modelApi?: ModelCatalogEntry["api"];
     modelBaseUrl?: string;
-    expectedBaseUrl: string;
-    expectedIds: string[];
+    expectedBaseUrl?: string;
+    expectedIds?: string[];
     inheritsChoices: boolean;
   }>([
     {
-      name: "captured metadata",
-      mode: "merge",
-      capturedBaseUrl: "https://fixture.invalid/v1",
-      capturedId: "selected",
-      pin: false,
-      expectedBaseUrl: "https://fixture.invalid/v1",
-      expectedIds: ["selected", "retained-only"],
-      inheritsChoices: true,
-    },
-    {
-      name: "replace exclusion",
-      mode: "replace",
-      capturedBaseUrl: "https://fixture.invalid/v1",
-      capturedId: "selected",
-      pin: false,
-      expectedBaseUrl: "https://fixture.invalid/v1",
-      expectedIds: ["selected"],
-      inheritsChoices: false,
-    },
-    {
       name: "captured endpoint",
-      mode: "merge",
       capturedBaseUrl: "http://127.0.0.1:9/v1",
-      capturedId: "selected",
-      pin: false,
       expectedBaseUrl: "http://127.0.0.1:9/v1",
-      expectedIds: ["selected", "retained-only"],
       inheritsChoices: false,
     },
     {
       name: "replace with a different captured endpoint",
       mode: "replace",
       capturedBaseUrl: "http://127.0.0.1:9/v1",
-      capturedId: "selected",
-      pin: false,
-      expectedBaseUrl: "https://fixture.invalid/v1",
       expectedIds: ["selected"],
       inheritsChoices: false,
     },
     {
       name: "model endpoint pin",
-      mode: "merge",
       capturedBaseUrl: "http://127.0.0.1:9/v1",
-      capturedId: "selected",
-      pin: true,
-      expectedBaseUrl: "https://fixture.invalid/v1",
-      expectedIds: ["selected", "retained-only"],
-      inheritsChoices: true,
-    },
-    {
-      name: "case-sensitive identity",
-      mode: "merge",
-      capturedBaseUrl: "http://127.0.0.1:9/v1",
-      capturedId: "Selected",
-      pin: false,
-      expectedBaseUrl: "https://fixture.invalid/v1",
-      expectedIds: ["selected", "Selected", "retained-only"],
-      inheritsChoices: true,
-    },
-    {
-      name: "captured route",
-      mode: "merge",
-      capturedBaseUrl: "https://fixture.invalid/v1",
-      capturedId: "selected",
-      pin: false,
-      modelApi: "openai-completions",
-      expectedBaseUrl: "https://fixture.invalid/v1",
-      expectedIds: ["selected", "retained-only"],
+      modelBaseUrl: "https://fixture.invalid/v1",
       inheritsChoices: true,
     },
     {
       name: "API override",
-      mode: "merge",
-      capturedBaseUrl: "https://fixture.invalid/v1",
-      capturedId: "selected",
-      pin: false,
       modelApi: "openai-responses",
-      expectedBaseUrl: "https://fixture.invalid/v1",
-      expectedIds: ["selected", "retained-only"],
       inheritsChoices: false,
     },
     {
       name: "endpoint override",
-      mode: "merge",
-      capturedBaseUrl: "https://fixture.invalid/v1",
-      capturedId: "selected",
-      pin: false,
       modelBaseUrl: "https://proxy.invalid/v1",
       expectedBaseUrl: "https://proxy.invalid/v1",
-      expectedIds: ["selected", "retained-only"],
       inheritsChoices: false,
     },
     {
       name: "equivalent endpoint",
-      mode: "merge",
-      capturedBaseUrl: "https://fixture.invalid/v1",
-      capturedId: "selected",
-      pin: false,
       modelBaseUrl: "https://fixture.invalid/v1/",
       expectedBaseUrl: "https://fixture.invalid/v1/",
-      expectedIds: ["selected", "retained-only"],
       inheritsChoices: true,
     },
   ])(
     "keeps configured rows and same-route choices: $name",
     ({
-      mode,
-      capturedBaseUrl,
-      capturedId,
-      pin,
+      mode = "merge",
+      capturedBaseUrl = "https://fixture.invalid/v1",
       modelApi,
       modelBaseUrl,
-      expectedBaseUrl,
-      expectedIds,
+      expectedBaseUrl = "https://fixture.invalid/v1",
+      expectedIds = ["selected", "retained-only"],
       inheritsChoices,
     }) => {
       const configured: ModelCatalogEntry = {
@@ -296,11 +219,7 @@ describe("configured catalog registry composition", () => {
                   input: ["text"],
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   ...(modelApi ? { api: modelApi } : {}),
-                  ...(modelBaseUrl
-                    ? { baseUrl: modelBaseUrl }
-                    : pin
-                      ? { baseUrl: configured.baseUrl }
-                      : {}),
+                  ...(modelBaseUrl ? { baseUrl: modelBaseUrl } : {}),
                 },
               ],
             },
@@ -318,7 +237,7 @@ describe("configured catalog registry composition", () => {
               baseUrl: capturedBaseUrl,
               models: [
                 {
-                  id: capturedId,
+                  id: "selected",
                   name: "Earlier selected",
                   contextWindow: 64_000,
                   maxTokens: 4096,

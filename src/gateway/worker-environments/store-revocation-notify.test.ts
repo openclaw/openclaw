@@ -1,90 +1,51 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { WorkerSshEndpoint } from "../../plugins/types.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { hashWorkerCredential } from "./credential.js";
+import { createEnvironmentStoreFixture } from "./placement-test-fixtures.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
-const SSH_ENDPOINT: WorkerSshEndpoint = {
-  host: "worker.example.test",
-  port: 2222,
-  fallbackPorts: [22],
-  user: "openclaw",
-  hostKey: ["ssh-ed25519", "AAAA"].join(" "),
-  keyRef: { source: "file", provider: "worker-keys", id: "/static-development-key" },
-};
 const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
 
 describe("worker environment store credential-revocation listeners", () => {
-  let root: string;
+  const tempDirs = useStateDatabaseTempDirs();
+  let database: OpenClawStateDatabase;
   let store: WorkerEnvironmentStore;
-  let nowMs: number;
+  const { seedBootstrapping, readyPatch } = createEnvironmentStoreFixture({
+    getStore: () => store,
+    getDatabase: () => database,
+    now: () => 1_000,
+  });
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-env-"));
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    nowMs = 1_000;
-    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+    const root = tempDirs.make("openclaw-worker-env-");
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
   });
 
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  async function seedReady(environmentId: string, leaseId: string, credentialHash: string) {
-    await store.createIntent({
-      environmentId,
-      providerId: "fake-provider",
-      profileId: "test-profile",
-      profileSnapshot: { settings: { region: "test" }, lifetime: { idleMinutes: 10 } },
-      provisionOperationId: `provision:${environmentId}`,
-    });
-    await store.transition({ environmentId, from: "requested", to: "provisioning" });
-    const bootstrapping = await store.transition({
-      environmentId,
-      from: "provisioning",
-      to: "bootstrapping",
-      patch: { leaseId, sshEndpoint: SSH_ENDPOINT },
-    });
+  async function seedReady(environmentId: string) {
+    await seedBootstrapping(environmentId, `lease:${environmentId}`);
+    const patch = readyPatch();
     return store.transition({
       environmentId,
-      from: bootstrapping.state,
+      from: "bootstrapping",
       to: "ready",
       patch: {
-        bootstrapReceipt: {
-          bundleHash: "a".repeat(64),
-          openclawVersion: "2026.7.1",
-          protocolFeatures: ["workspace-sync-v1", "model-proxy-v1"],
-        },
+        ...patch,
         credential: {
-          credentialHash,
-          sessionId: null,
-          rpcSetVersion: 1,
-          expiresAtMs: nowMs + 10_000,
+          ...patch.credential,
+          credentialHash: hashWorkerCredential(`${CREDENTIAL}-${environmentId}`),
         },
       },
     });
   }
 
   it("notifies credential-revocation listeners only when transfers must fence", async () => {
-    const rotating = await seedReady(
-      "worker-revoke-rotate",
-      "lease-revoke-rotate",
-      hashWorkerCredential(CREDENTIAL),
-    );
-    const permanent = await seedReady(
-      "worker-revoke-permanent",
-      "lease-revoke-permanent",
-      hashWorkerCredential([CREDENTIAL, "revoke-permanent"].join("-")),
-    );
+    const rotating = await seedReady("worker-revoke-rotate");
+    const permanent = await seedReady("worker-revoke-permanent");
     const notified: string[] = [];
     store.onCredentialRevoked((environmentId) => {
       notified.push(environmentId);

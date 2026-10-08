@@ -1,4 +1,5 @@
 import type { HeapProfiler, Runtime } from "node:inspector";
+import type { HeapSpaceInfo } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DiagnosticsHeapProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -24,8 +25,12 @@ type AllocationSummary = {
 type Metadata = {
   durationMs: number;
   samplingIntervalBytes: number;
+  includeObjectsCollectedByMajorGC: boolean;
+  includeObjectsCollectedByMinorGC: boolean;
   heapUsedBefore: number;
   heapUsedAfter: number;
+  heapSpacesBefore: HeapSpaceInfo[];
+  heapSpacesAfter: HeapSpaceInfo[];
   rssBefore: number;
   rssAfter: number;
 };
@@ -172,8 +177,17 @@ export function captureDiagnosticHeapProfile(
     hasAuthority: () => boolean;
   },
 ) {
-  const durationMs = Math.min(30_000, Math.max(1, options.durationMs ?? 5_000));
   const samplingIntervalBytes = Math.max(4_096, options.samplingIntervalBytes ?? 32_768);
+  const collectionOptions = {
+    includeObjectsCollectedByMajorGC: options.includeObjectsCollectedByMajorGC ?? false,
+    includeObjectsCollectedByMinorGC: options.includeObjectsCollectedByMinorGC ?? false,
+  };
+  const maxDurationMs =
+    collectionOptions.includeObjectsCollectedByMajorGC ||
+    collectionOptions.includeObjectsCollectedByMinorGC
+      ? 30_000
+      : 900_000;
+  const durationMs = Math.min(maxDurationMs, Math.max(1, options.durationMs ?? 5_000));
   return captureDiagnosticProfile({
     signal: options.signal,
     hasAuthority: options.hasAuthority,
@@ -182,6 +196,7 @@ export function captureDiagnosticHeapProfile(
     start: (session) =>
       session.post("HeapProfiler.startSampling", {
         samplingInterval: samplingIntervalBytes,
+        ...collectionOptions,
       }),
     stop: (session) => session.post("HeapProfiler.stopSampling"),
     disable: (session) => session.post("HeapProfiler.disable"),
@@ -189,8 +204,11 @@ export function captureDiagnosticHeapProfile(
       boundProfile(profile, packageRoot, {
         durationMs: measurement.durationMs,
         samplingIntervalBytes,
+        ...collectionOptions,
         heapUsedBefore: measurement.before.heapUsed,
         heapUsedAfter: measurement.after.heapUsed,
+        heapSpacesBefore: measurement.before.heapSpaces,
+        heapSpacesAfter: measurement.after.heapSpaces,
         rssBefore: measurement.before.rss,
         rssAfter: measurement.after.rss,
       }),

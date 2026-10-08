@@ -265,9 +265,6 @@ if pgrep -fl 'facetime-audio-capture|caffeinate -d -i -w'; then
   exit 1
 fi
 
-echo
-echo "== Final running tasks =="
-openclaw tasks list --status running
 
 echo
 echo "Acceptance log saved to $log_file"

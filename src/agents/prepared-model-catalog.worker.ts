@@ -10,9 +10,14 @@ import {
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  nativeReferenceProgress,
+  type NativeReferenceProgress,
+} from "../plugins/plugin-native-reference.js";
 import { withPluginSourceCaptureDirectory } from "../plugins/plugin-package-metadata-capture.js";
 import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
@@ -22,6 +27,7 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -34,7 +40,9 @@ import {
 } from "./agent-dir-registry.js";
 import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth-runtime.js";
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
+import { resolveAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
+import { withWorkerAuthProfileWrites } from "./auth-profiles/runtime-scope.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
@@ -50,11 +58,11 @@ import {
   fingerprintPreparedModelCatalogPluginContext,
   fingerprintPreparedModelWorkerRequest,
   type PreparedModelCatalogWorkerInput,
-  type PreparedModelCatalogWorkerData,
   type PreparedModelCatalogWorkerTask,
   type PreparedModelWorkerRequest,
   type PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.js";
+import type { PreparedModelCatalogWorkerData } from "./prepared-model-catalog-worker.pool.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   ownPreparedPluginGeneration,
@@ -183,6 +191,7 @@ async function prepareWorkerGeneration(
   );
   const pluginGeneration = Object.freeze({
     ...(previous?.pluginGeneration ?? prepareConfiguredModelFacts(value.input.config, metadata)),
+    remoteCatalog: value.remoteCatalog,
     pluginMetadataSnapshot: metadata,
     pluginRegistry,
     preparedStaticProviderCatalog: undefined,
@@ -201,6 +210,7 @@ async function runCatalogRequest(
   request: PreparedModelWorkerRequest,
   work: AsyncWorkScope,
   prepareGeneration: () => Promise<WorkerGeneration>,
+  beginDiscovery: () => Promise<void>,
 ): Promise<PreparedModelWorkerResult> {
   const directoryOwner = value.input.agentId
     ? { agentId: value.input.agentId, agentDir: value.input.agentDir, env: value.input.env }
@@ -275,6 +285,9 @@ async function runCatalogRequest(
           ...(value.input.workspaceDir ? { workspaceDir: value.input.workspaceDir } : {}),
         }),
       );
+    if (request.kind === "auth-refresh") {
+      await beginDiscovery();
+    }
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
     const authStore = refreshAuthStore({
@@ -328,7 +341,13 @@ async function runCatalogRequest(
       env: value.input.env,
       workspaceDir: value.input.workspaceDir,
       pluginMetadataSnapshot,
-      providerDiscoveryProviderIds: exactAgentFacts.providerIds,
+      providerDiscoveryProviderIds: [
+        ...new Set([
+          ...value.providerIds,
+          ...Object.keys(credentials),
+          ...exactAgentFacts.providerIds,
+        ]),
+      ],
     });
     const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])];
     const discoveryPlan = await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
@@ -354,6 +373,7 @@ async function runCatalogRequest(
       }
     }
     const staticOwner = acquiredGeneration ?? prepared;
+    await beginDiscovery();
     const staticProviderIds = new Set([
       ...staticOwner.staticProviderIds,
       ...exactAgentFacts.providerIds,
@@ -417,10 +437,7 @@ async function runCatalogRequest(
       ...credentials,
     };
     const runtimeModels = new Map<string, Model[]>();
-    // Lazy normalization must keep provider hooks on the selected catalog generation.
-    const catalogModels = withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
-      facts.templateModelRegistry.getAll(),
-    );
+    const { catalogModels } = facts;
     const hookRows = withPluginRuntimeGenerationScope(pluginGenerationScope, () => {
       const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
         pluginMetadataSnapshot,
@@ -459,6 +476,15 @@ async function runCatalogRequest(
         runtimeModels.set(provider, []);
       }
     }
+    const authLabelProviders = [
+      ...exactAgentFacts.providerIds,
+      ...Object.keys(catalogCredentials),
+      ...Object.keys(value.input.config.models?.providers ?? {}),
+      ...facts.modelCatalog.entries.map((entry) => entry.provider),
+      ...facts.modelCatalog.routeVariants.map((entry) => entry.provider),
+      ...(facts.modelCatalog.staticEntries ?? []).map((entry) => entry.provider),
+      ...Object.values(authStore.profiles).map((profile) => profile.provider),
+    ];
     const result: PreparedModelWorkerResult = {
       status: "ok",
       kind: "catalog",
@@ -469,24 +495,20 @@ async function runCatalogRequest(
       hookRows,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
-      providerAuthLabels: withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
-        prepareModelCatalogAuthLabels({
-          config: value.input.config,
-          agentDir: value.input.agentDir,
-          workspaceDir: value.input.workspaceDir,
-          env: value.input.env,
-          store: authStore,
-          providers: [
-            ...exactAgentFacts.providerIds,
-            ...Object.keys(catalogCredentials),
-            ...Object.keys(value.input.config.models?.providers ?? {}),
-            ...facts.modelCatalog.entries.map((entry) => entry.provider),
-            ...facts.modelCatalog.routeVariants.map((entry) => entry.provider),
-            ...(facts.modelCatalog.staticEntries ?? []).map((entry) => entry.provider),
-            ...Object.values(authStore.profiles).map((profile) => profile.provider),
-          ],
-        }),
-      ),
+      providerAuthLabels:
+        authLabelProviders.length === 0
+          ? new Map()
+          : withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+              prepareModelCatalogAuthLabels({
+                config: value.input.config,
+                agentDir: value.input.agentDir,
+                authStorePath: resolveAuthStorePathForDisplay(value.input.agentDir),
+                workspaceDir: value.input.workspaceDir,
+                env: value.input.env,
+                store: authStore,
+                providers: authLabelProviders,
+              }),
+            ),
       authStore,
       authModes: resolveUsableAgentCredentialModes(catalogCredentials),
     };
@@ -552,48 +574,80 @@ if (parentPort) {
     string | undefined,
     { fingerprint: string; prepared: WorkerGeneration }
   >();
-  serveWorkerTasks(async (input) => {
+  serveWorkerTasks(async (input, channel) => {
     // SAFETY: The typed catalog host is the sole producer of this private task envelope.
     const { value, request } = input as PreparedModelCatalogWorkerTask;
     if (!isRecord(value) || !isWorkerRequest(request)) {
       throw new Error("invalid prepared model catalog worker request");
     }
-    return withPluginSourceCaptureDirectory(
-      data.sourceCaptureDirectory,
-      async () => {
-        const workspaceDir = value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir;
-        let previous = contexts.get(workspaceDir);
-        const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
-        let attempted: WorkerGeneration | undefined;
-        try {
-          const work = new AsyncWorkScope();
-          const result = await withClawInstallSchemaVersionFacts(
-            request.clawInstallSchemaVersions,
-            () =>
-              work.run(() =>
-                runCatalogRequest(value, request, work, async () => {
-                  if (previous?.fingerprint === fingerprint) {
-                    return previous.prepared;
-                  }
-                  return (attempted = await prepareWorkerGeneration(value));
-                }),
+    let reportAfter = 0;
+    let reportedPlugin: string | undefined;
+    const reportProgress = (notification: unknown) => {
+      // SAFETY: The native-reference owner publishes this internal diagnostic payload.
+      const progress = notification as NativeReferenceProgress;
+      const now = performance.now();
+      if (now >= reportAfter || progress.pluginId !== reportedPlugin) {
+        reportAfter = now + 1_000;
+        reportedPlugin = progress.pluginId;
+        channel?.notify(progress);
+      }
+    };
+    nativeReferenceProgress.subscribe(reportProgress);
+    const stopProgress = () => nativeReferenceProgress.unsubscribe(reportProgress);
+    return withRemoteModelCatalogSnapshot(freezeJsonSnapshot(value.remoteCatalog), () =>
+      withPluginSourceCaptureDirectory(
+        data.sourceCaptureDirectory,
+        async () => {
+          const workspaceDir =
+            value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir;
+          let previous = contexts.get(workspaceDir);
+          const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
+          let attempted: WorkerGeneration | undefined;
+          try {
+            const work = new AsyncWorkScope();
+            const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
+              withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
+                work.run(() =>
+                  runCatalogRequest(
+                    value,
+                    request,
+                    work,
+                    async () => {
+                      if (previous?.fingerprint === fingerprint) {
+                        return previous.prepared;
+                      }
+                      return (attempted = await prepareWorkerGeneration(value));
+                    },
+                    async () => {
+                      // Admission can outlast a refresh on slow filesystems; only completed
+                      // generation preparation starts the provider-discovery deadline.
+                      stopProgress();
+                      const response = await channel?.request(null);
+                      response?.consumed();
+                      if (response && response.input !== true) {
+                        throw new Error("prepared model catalog request retired before discovery");
+                      }
+                    },
+                  ),
+                ),
               ),
-          );
-          if (attempted && result.status === "ok") {
-            contexts.set(workspaceDir, { fingerprint, prepared: attempted });
-            attempted = undefined;
-            // Acquire the replacement before releasing shared source registrations.
-            await previous?.prepared.release();
-            // Registry custody can retain this request's async context until retirement.
-            // Drop the settled predecessor instead of retaining its callbacks through that scope.
-            previous = undefined;
+            );
+            if (attempted && result.status === "ok") {
+              contexts.set(workspaceDir, { fingerprint, prepared: attempted });
+              attempted = undefined;
+              // Acquire the replacement before releasing shared source registrations.
+              await previous?.prepared.release();
+              // Registry custody can retain this request's async context until retirement.
+              // Drop the settled predecessor instead of retaining its callbacks through that scope.
+              previous = undefined;
+            }
+            return result;
+          } finally {
+            await attempted?.release();
           }
-          return result;
-        } finally {
-          await attempted?.release();
-        }
-      },
-      data.sourceCaptureManagedRoot,
-    );
+        },
+        data.sourceCaptureManagedRoot,
+      ),
+    ).finally(stopProgress);
   });
 }

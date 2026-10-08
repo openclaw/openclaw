@@ -71,12 +71,9 @@ describe("migration command resources", () => {
           } else {
             expect(outcome.error).toBeUndefined();
             expect(outcome.result?.summary.migrated).toBe(1);
-            expect(() => {
-              const read = outcome.result?.metadata?.read;
-              if (typeof read === "function") {
-                read();
-              }
-            }).toThrow("reloaded or disabled");
+            // Metadata stays opaque; managed provider callbacks own the retirement fence.
+            expect(outcome.result?.metadata).toBe(fixture.state.planned?.metadata);
+            expect(outcome.result?.metadata).toEqual({ read: expect.any(Function) });
             expect(logs).toHaveLength(1);
             expect(JSON.parse(logs[0] ?? "{}").summary.migrated).toBe(1);
           }
@@ -95,7 +92,7 @@ describe("migration command resources", () => {
     const fixture = createMigrationResourceFixture();
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(fixture.root, "state") }, async () => {
-        const active = loadAndActivateRootPluginRegistry({ config: fixture.config });
+        const active = await loadAndActivateRootPluginRegistry({ config: fixture.config });
         expect(active.migrationProviders.map(({ provider }) => provider.id)).toContain(fixture.id);
         fixture.state.resumeApply.resolve();
         const result = await migrateDefaultCommand(createNonExitingRuntime(), {

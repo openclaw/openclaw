@@ -17,6 +17,8 @@ export type CliTimeoutContext = {
   observedActivity: boolean;
   activeToolCount: number;
   backgroundTaskCount: number;
+  /** Native compaction (or similar backend maintenance) is running: silent but busy. */
+  compactionActive?: boolean;
 };
 
 export type FallbackAttemptRecord = {
@@ -167,10 +169,7 @@ export function isTimeoutError(err: unknown): boolean {
   if (hasTimeoutHint(err)) {
     return true;
   }
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  if (readErrorName(err) !== "AbortError") {
+  if (!err || typeof err !== "object" || readErrorName(err) !== "AbortError") {
     return false;
   }
   const message = getErrorMessage(err);

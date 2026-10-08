@@ -66,13 +66,11 @@ export function createToolCallLookup<Value>() {
   };
 }
 
-function isUserChatItem(item: ChatItem): item is Extract<ChatItem, { kind: "message" }> {
-  return item.kind === "message" && chatItemStartsUserTurn(item);
-}
-
 export function findCurrentTurnBounds(items: ChatItem[]): TurnInsertionBounds | null {
-  const item = items.findLast(isUserChatItem);
-  return item ? { afterKey: item.key } : null;
+  const userTurn = items.findLast(
+    (item) => item.kind === "message" && chatItemStartsUserTurn(item),
+  );
+  return userTurn ? { afterKey: userTurn.key } : null;
 }
 
 export function createRunTurnLookup(items: ChatItem[]) {
@@ -114,8 +112,7 @@ export function resolveRunInsertionBounds(
   }
   const runBounds = findRunBounds(runId);
   if (runId === currentRunId) {
-    // Active runs can span steers: the original prompt is a floor, not a ceiling.
-    return runBounds ? { afterKey: runBounds.afterKey } : currentTurnBounds;
+    return runBounds ?? currentTurnBounds;
   }
   if (runBounds || currentRunId == null) {
     return runBounds;

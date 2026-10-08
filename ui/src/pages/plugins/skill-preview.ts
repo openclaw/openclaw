@@ -30,7 +30,6 @@ export type PluginSkillPreviewState = {
 
 export class PluginPreviewController {
   state: PluginSkillPreviewState | null = null;
-  private sequence = 0;
   private toolAbort = new AbortController();
 
   constructor(
@@ -40,9 +39,8 @@ export class PluginPreviewController {
 
   async open(request: PluginsSkillsReadParams): Promise<void> {
     this.close();
-    const sequence = this.sequence;
     const connection = this.gateway.capture();
-    this.state = {
+    const state: PluginSkillPreviewState = {
       request: { ...request },
       loading: Boolean(connection),
       error: connection ? null : t("pluginsPage.connectToManage"),
@@ -51,30 +49,31 @@ export class PluginPreviewController {
       pendingPaths: new Set(),
       fileErrors: new Map(),
     };
+    this.state = state;
     this.host.requestUpdate();
     if (!connection) {
       return;
     }
-    const current = () => this.sequence === sequence && this.gateway.isCurrent(connection);
+    const current = () => this.state === state && this.gateway.isCurrent(connection);
     try {
       const result = await connection.client.request<PluginsSkillsReadResult>(
         "plugins.skills.read",
         request,
       );
-      if (current() && this.state) {
-        this.state.result = result;
-        this.state.activePath = result.entryPath;
+      if (current()) {
+        state.result = result;
+        state.activePath = result.entryPath;
         if (result.version) {
-          this.state.request = { ...this.state.request, version: result.version };
+          state.request = { ...state.request, version: result.version };
         }
       }
     } catch (error) {
-      if (current() && this.state) {
-        this.state.error = formatUiError(error);
+      if (current()) {
+        state.error = formatUiError(error);
       }
     } finally {
-      if (current() && this.state) {
-        this.state.loading = false;
+      if (current()) {
+        state.loading = false;
         this.host.requestUpdate();
       }
     }
@@ -152,7 +151,6 @@ export class PluginPreviewController {
   }
   /** Dismissal, route changes and connection changes retire outstanding reads. */
   close(): void {
-    this.sequence++;
     this.toolAbort.abort();
     this.toolAbort = new AbortController();
     this.state = null;

@@ -1,5 +1,8 @@
 import { performance } from "node:perf_hooks";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import {
   type SessionRowPreparationOptions,
@@ -136,11 +139,25 @@ export async function drainSessionEventPublications(projection: SessionRowProjec
   await publicationOwners.get(projection)?.drain();
 }
 
+export async function withPreparedEventRow(
+  projection: SessionRowProjection | undefined,
+  query: { key: string; agentId: string; storePath?: string } | undefined,
+  publish: (read?: SessionRowReadView) => void,
+) {
+  if (!projection || !query) {
+    publish();
+    return;
+  }
+  await sessionEventPublicationRows(projection).withReadyRows(() => [query], publish, {
+    includeAncestors: true,
+  });
+}
+
 export async function withPreparedSessionEventRow(
   projection: SessionRowProjection | undefined,
   sessionKey: string,
   eventAgentId: string | undefined,
-  publish: () => void,
+  publish: (read?: SessionRowReadView) => void,
 ) {
   if (!projection) {
     publish();
@@ -152,15 +169,44 @@ export async function withPreparedSessionEventRow(
     eventAgentId,
   )?.[1];
   if (routingAgentId) {
-    await sessionEventPublicationRows(projection).withReadyRows(
-      () => [{ key: sessionKey, agentId: routingAgentId }],
-      () => publish(),
-      { includeAncestors: true },
-    );
+    await withPreparedEventRow(projection, { key: sessionKey, agentId: routingAgentId }, publish);
     return;
   }
   do {
     await projection.ensureMaterialized();
   } while (projection.needsMaterialization);
   publish();
+}
+
+export function readTranscriptUpdateLifecycleOwner(
+  update: InternalSessionTranscriptUpdate,
+  projection: SessionRowProjection | undefined,
+): { sessionId: string; lifecycleRevision?: string } | undefined {
+  const marker = parseSqliteSessionFileMarker(update.sessionFile);
+  const sessionKey =
+    normalizeOptionalString(update.target?.sessionKey) ??
+    normalizeOptionalString(update.sessionKey) ??
+    (marker ? projection?.findBySessionId(marker)[0]?.key : undefined);
+  if (!sessionKey) {
+    return undefined;
+  }
+  const agentId =
+    normalizeOptionalString(update.target?.agentId) ??
+    normalizeOptionalString(update.agentId) ??
+    marker?.agentId;
+  const sessionId =
+    normalizeOptionalString(update.target?.sessionId) ??
+    normalizeOptionalString(update.sessionId) ??
+    marker?.sessionId;
+  const storePath = normalizeOptionalString(update.target?.storePath) ?? marker?.storePath;
+  const ownerAgentId =
+    agentId ?? resolveSessionEventAgentScope(getRuntimeConfig(), sessionKey)?.[1];
+  const entry = ownerAgentId
+    ? projection?.capture({ agentId: ownerAgentId, key: sessionKey, storePath })?.entry
+    : undefined;
+  if (!entry || (sessionId && entry.sessionId !== sessionId)) {
+    return undefined;
+  }
+  const lifecycleRevision = normalizeOptionalString(entry.lifecycleRevision);
+  return { sessionId: entry.sessionId, ...(lifecycleRevision ? { lifecycleRevision } : {}) };
 }

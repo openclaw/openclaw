@@ -1,11 +1,11 @@
-// API baseline helpers render public SDK exports for contract drift reports.
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
 import {
   SymbolFlags,
   type Checker,
-  type Emitter,
+  type Printer,
   type Program,
   type Symbol as CompilerSymbol,
 } from "typescript/unstable/sync";
@@ -125,6 +125,8 @@ async function createCompilerContext(
     noEmit: false,
     // Declaration diagnostics are checked explicitly; unrelated untyped external JS stays valid.
     noEmitOnError: false,
+    // Parallel emit can copy readonly flags from unrelated inferred union properties.
+    singleThreaded: true,
     removeComments: true,
     sourceMap: false,
   };
@@ -180,11 +182,12 @@ async function createCompilerContext(
       assertValid: view.assertValid,
       declarationClosure: createDeclarationClosureRenderer({
         project: declarations.project,
+        printer: declarations.api.printer,
         sourceProgram: source.project.program,
         emittedSources: new Set(emitted.declarations.keys()),
         repoRoot,
       }),
-      printer: source.project.emitter,
+      printer: source.api.printer,
       program: source.project.program,
       close() {
         declarations?.close();
@@ -299,7 +302,7 @@ function compareDeclarations(
 function buildExportSurface(params: {
   checker: Checker;
   declarationClosure: DeclarationClosureRenderer;
-  printer: Emitter;
+  printer: Printer;
   repoRoot: string;
   symbol: CompilerSymbol;
 }): RenderedPluginSdkApiExport {
@@ -359,7 +362,7 @@ function sortExports(left: RenderedPluginSdkApiExport, right: RenderedPluginSdkA
 function buildModuleSurface(params: {
   checker: Checker;
   declarationClosure: DeclarationClosureRenderer;
-  printer: Emitter;
+  printer: Printer;
   program: Program;
   repoRoot: string;
   entrypoint: string;
@@ -404,7 +407,9 @@ export async function renderPluginSdkApiBaseline(params?: {
   repoRoot?: string;
   entrypoints?: readonly string[];
 }): Promise<PluginSdkApiBaseline> {
-  const repoRoot = params?.repoRoot ?? resolveRepoRoot();
+  // Native declaration emission roots at the canonical checkout; a symlinked
+  // alias (macOS temporary directories) would place every source outside it.
+  const repoRoot = fs.realpathSync.native(params?.repoRoot ?? resolveRepoRoot());
   const entrypoints = params?.entrypoints ?? listPluginSdkApiBaselineEntrypoints();
   if (params?.entrypoints === undefined) {
     validateMetadata();

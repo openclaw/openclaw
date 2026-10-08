@@ -2,9 +2,7 @@
 // extension-browser vitest glob (extensions/browser/**/*.test.ts).
 import { describe, expect, it, vi } from "vitest";
 import {
-  buildRelayWsProtocols,
   createPairingConfigStore,
-  nearestGroupColor,
   parsePairingString,
   reconnectDelayMs,
   directLoopbackRelayPort,
@@ -23,7 +21,6 @@ describe("parsePairingString", () => {
     }
     expect(parsed.relayUrl).toBe(`ws://127.0.0.1:${port}/extension`);
     expect(parsed.token).toBe(token);
-    expect(buildRelayWsProtocols()).toEqual(["openclaw-extension-relay.v2"]);
   });
 
   it("retains and canonicalizes the profile auth binding while stripping the Gateway hint", () => {
@@ -329,19 +326,6 @@ describe("reconnectDelayMs", () => {
     expect(reconnectDelayMs(4)).toBe(16_000);
     expect(reconnectDelayMs(5)).toBe(30_000);
     expect(reconnectDelayMs(50)).toBe(30_000);
-  });
-});
-
-describe("nearestGroupColor", () => {
-  it("maps hex accents to Chrome tab-group color names", () => {
-    expect(nearestGroupColor("#FF4500")).toBe("orange");
-    expect(nearestGroupColor("#00AA00")).toBe("green");
-    expect(nearestGroupColor("#4285F4")).toBe("blue");
-  });
-
-  it("falls back to orange for invalid input", () => {
-    expect(nearestGroupColor("not-a-color")).toBe("orange");
-    expect(nearestGroupColor(undefined)).toBe("orange");
   });
 });
 

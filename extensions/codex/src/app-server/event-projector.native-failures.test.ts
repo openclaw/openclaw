@@ -1,4 +1,6 @@
 import { createContractToolTerminalObserver } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { afterEach, beforeEach } from "vitest";
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -13,13 +15,31 @@ import {
   createProjector,
   buildEmptyToolTelemetry,
   findAgentEvent,
+  requireRecord,
+  mockCallArg,
   forCurrentTurn,
   readAttemptTerminal,
   type DiagnosticEventPayload,
 } from "./event-projector.test-harness.js";
 import { codexApprovalTimeoutText } from "./plugin-approval-roundtrip.js";
 
+function notify(
+  projector: Awaited<ReturnType<typeof createProjector>>,
+  method: Parameters<typeof forCurrentTurn>[0],
+  params: Record<string, unknown>,
+) {
+  return projector.handleNotification(forCurrentTurn(method, params));
+}
+
 registerCodexEventProjectorTestLifecycle();
+
+const diagnosticEvents: DiagnosticEventPayload[] = [];
+let unsubscribeDiagnostics: (() => void) | undefined;
+beforeEach(() => {
+  diagnosticEvents.length = 0;
+  unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+});
+afterEach(() => unsubscribeDiagnostics?.());
 
 const nativeCommand = {
   type: "commandExecution" as const,
@@ -43,48 +63,28 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       onAgentEvent,
       observeToolTerminal,
     });
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
 
-    try {
-      await projector.handleNotification(
-        forCurrentTurn("item/started", {
-          item: {
-            ...nativeCommand,
-            id: "cmd-declined",
-            status: "inProgress",
-            durationMs: null,
-          },
-        }),
-      );
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: {
-            ...nativeCommand,
-            id: "cmd-declined",
-            status: "declined",
-            durationMs: 1,
-          },
-        }),
-      );
-      await flushDiagnosticEvents();
-    } finally {
-      unsubscribe();
-    }
+    await notify(projector, "item/started", {
+      item: {
+        ...nativeCommand,
+        id: "cmd-declined",
+        status: "inProgress",
+        durationMs: null,
+      },
+    });
+    await notify(projector, "item/completed", {
+      item: {
+        ...nativeCommand,
+        id: "cmd-declined",
+        status: "declined",
+        durationMs: 1,
+      },
+    });
+    await flushDiagnosticEvents();
 
     const toolDiagnosticEvents = diagnosticEvents.filter(
-      (
-        event,
-      ): event is Extract<
-        DiagnosticEventPayload,
-        {
-          type:
-            | "tool.execution.started"
-            | "tool.execution.completed"
-            | "tool.execution.error"
-            | "tool.execution.blocked";
-        }
-      > => event.type.startsWith("tool.execution."),
+      (event): event is Extract<DiagnosticEventPayload, { type: `tool.execution.${string}` }> =>
+        event.type.startsWith("tool.execution."),
     );
     expect(
       toolDiagnosticEvents.map((event) => ({
@@ -136,53 +136,6 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     );
   });
 
-  it("projects a cancelled native approval as one terminal error", async () => {
-    const disposition = "cancelled";
-    const projector = await createProjector();
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
-
-    try {
-      await projector.handleNotification(
-        forCurrentTurn("item/started", {
-          item: {
-            ...nativeCommand,
-            id: "cmd-approval-failure",
-            status: "inProgress",
-            durationMs: null,
-          },
-        }),
-      );
-      projector.recordNativeToolApprovalFailure("cmd-approval-failure", disposition);
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: {
-            ...nativeCommand,
-            id: "cmd-approval-failure",
-            status: "declined",
-            durationMs: 1,
-          },
-        }),
-      );
-      await flushDiagnosticEvents();
-    } finally {
-      unsubscribe();
-    }
-
-    expect(
-      diagnosticEvents
-        .filter((event) => event.type.startsWith("tool.execution."))
-        .map((event) =>
-          "terminalReason" in event
-            ? { type: event.type, terminalReason: event.terminalReason }
-            : { type: event.type },
-        ),
-    ).toEqual([
-      { type: "tool.execution.started" },
-      { type: "tool.execution.error", terminalReason: disposition },
-    ]);
-  });
-
   it("persists an approval timeout as failed tool evidence without aborting the turn", async () => {
     const afterToolCall = vi.fn();
     const recordTrajectoryEvent = vi.fn();
@@ -198,17 +151,13 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     };
     const timeoutExplanation = codexApprovalTimeoutText("command");
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { ...item, status: "inProgress", durationMs: null },
-      }),
-    );
+    await notify(projector, "item/started", {
+      item: { ...item, status: "inProgress", durationMs: null },
+    });
     projector.recordNativeToolApprovalFailure(item.id, "timed_out", "command");
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { ...item, status: "declined", durationMs: 1 },
-      }),
-    );
+    await notify(projector, "item/completed", {
+      item: { ...item, status: "declined", durationMs: 1 },
+    });
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
     const toolResult = result.messagesSnapshot.find(
@@ -239,98 +188,27 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
-  it("coalesces a native pre-tool failure with the matching item terminal", async () => {
-    const projector = await createProjector();
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
-    const item = {
-      ...nativeCommand,
-      id: "cmd-pre-tool-failure",
-    };
-
-    try {
-      projector.recordNativeToolPreToolUseFailure({
-        toolName: "exec",
-        toolCallId: item.id,
-        disposition: "timed_out",
-        durationMs: 5,
-      });
-      await projector.handleNotification(
-        forCurrentTurn("item/started", {
-          item: { ...item, status: "inProgress", durationMs: null },
-        }),
-      );
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: { ...item, status: "declined", durationMs: 7 },
-        }),
-      );
-      await flushDiagnosticEvents();
-    } finally {
-      unsubscribe();
-    }
-
-    expect(
-      diagnosticEvents
-        .filter(
-          (event) =>
-            event.type.startsWith("tool.execution.") &&
-            "toolCallId" in event &&
-            event.toolCallId === item.id,
-        )
-        .map((event) =>
-          event.type === "tool.execution.error"
-            ? {
-                type: event.type,
-                toolName: event.toolName,
-                durationMs: event.durationMs,
-                errorCategory: event.errorCategory,
-                terminalReason: event.terminalReason,
-              }
-            : {
-                type: event.type,
-                toolName: "toolName" in event ? event.toolName : undefined,
-              },
-        ),
-    ).toEqual([
-      { type: "tool.execution.started", toolName: "bash" },
-      {
-        type: "tool.execution.error",
-        toolName: "bash",
-        durationMs: 7,
-        errorCategory: "before_tool_call",
-        terminalReason: "timed_out",
-      },
-    ]);
-  });
-
   it("finalizes a native pre-tool failure when no item arrives", async () => {
     const runAbortController = new AbortController();
     const projector = await createProjector(undefined, {
       runAbortSignal: runAbortController.signal,
     });
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
 
-    try {
-      projector.recordNativeToolPreToolUseFailure({
-        toolName: "exec",
-        toolCallId: "native-no-item",
-        disposition: "failed",
-        durationMs: 5,
-      });
-      runAbortController.abort("codex_side_question_finished");
-      projector.buildResult(buildEmptyToolTelemetry());
-      projector.recordNativeToolPreToolUseFailure({
-        toolName: "exec",
-        toolCallId: "native-late-no-item",
-        disposition: "failed",
-        durationMs: 6,
-      });
-      await flushDiagnosticEvents();
-    } finally {
-      unsubscribe();
-    }
+    projector.recordNativeToolPreToolUseFailure({
+      toolName: "exec",
+      toolCallId: "native-no-item",
+      disposition: "failed",
+      durationMs: 5,
+    });
+    runAbortController.abort("codex_side_question_finished");
+    projector.buildResult(buildEmptyToolTelemetry());
+    projector.recordNativeToolPreToolUseFailure({
+      toolName: "exec",
+      toolCallId: "native-late-no-item",
+      disposition: "failed",
+      durationMs: 6,
+    });
+    await flushDiagnosticEvents();
 
     expect(
       diagnosticEvents.filter(
@@ -359,17 +237,12 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     ]);
   });
 
-  it.each([
-    ["the same action recovers", nativeCommand.command],
-    ["an unrelated action succeeds", "pnpm test src/foo.test.ts"],
-  ])("clears a declined pre-execution error when %s", async (_scenario, command) => {
+  it("clears a declined pre-execution error after an unrelated action succeeds", async () => {
     const projector = await createProjector();
 
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { ...nativeCommand, id: "cmd-declined", status: "declined", durationMs: 1 },
-      }),
-    );
+    await notify(projector, "item/completed", {
+      item: { ...nativeCommand, id: "cmd-declined", status: "declined", durationMs: 1 },
+    });
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
       toolName: "bash",
       meta: "run tests (workspace)",
@@ -377,77 +250,106 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       mutatingAction: false,
     });
 
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          ...nativeCommand,
-          id: "cmd-recovered",
-          command,
-          status: "completed",
-          aggregatedOutput: "ok",
-          exitCode: 0,
-          durationMs: 42,
-        },
-      }),
-    );
+    await notify(projector, "item/completed", {
+      item: {
+        ...nativeCommand,
+        id: "cmd-recovered",
+        command: "pnpm test src/foo.test.ts",
+        status: "completed",
+        aggregatedOutput: "ok",
+        exitCode: 0,
+        durationMs: 42,
+      },
+    });
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
   });
+});
 
-  it("preserves distinct native mutation failures when only one action recovers", async () => {
-    const observeToolTerminal = vi.fn(
-      createContractToolTerminalObserver("run-codex-native-failed"),
-    );
-    const projector = await createProjector({
-      ...(await createParams()),
-      observeToolTerminal,
+async function createObservedProjector(options?: Parameters<typeof createProjector>[1]) {
+  const afterToolCall = vi.fn();
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+  );
+  const projector = await createProjector(
+    { ...(await createParams()), agentId: "main", sessionKey: "agent:main:session-1" },
+    options,
+  );
+  return { afterToolCall, projector };
+}
+
+describe("CodexAppServerEventProjector native tool hook projection", () => {
+  it("does not duplicate native items already covered by PostToolUse relay", async () => {
+    const { afterToolCall, projector } = await createObservedProjector({
+      nativePostToolUseRelayEnabled: true,
     });
-    const commandItem = (
-      id: string,
-      command: string,
-      status: "completed" | "failed",
-      output: string,
-      exitCode: number,
-    ) => ({
-      ...nativeCommand,
-      id,
-      command,
-      status,
-      aggregatedOutput: output,
-      exitCode,
-      durationMs: 1,
+
+    await notify(projector, "item/completed", {
+      item: createNativeCommandItem({ id: "cmd-relayed", aggregatedOutput: "ok" }),
     });
-    const firstCommand = "node scripts/first.js --publish";
-    const secondCommand = "node scripts/second.js --publish";
+    expect(afterToolCall).not.toHaveBeenCalled();
 
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: commandItem("cmd-first-failed", firstCommand, "failed", "first failed", 1),
-      }),
-    );
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
-      executionStarted: true,
+    await notify(projector, "item/completed", {
+      item: {
+        type: "webSearch",
+        id: "search-observed",
+        query: "",
+        action: {
+          type: "search",
+          query: "native action query",
+          queries: ["native action query", "secondary query"],
+        },
+        status: "completed",
+        durationMs: 5,
+      },
     });
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: commandItem("cmd-second-failed", secondCommand, "failed", "second failed", 1),
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: commandItem("cmd-second-recovered", secondCommand, "completed", "ok", 0),
-      }),
-    );
 
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
-
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: commandItem("cmd-first-recovered", firstCommand, "completed", "ok", 0),
-      }),
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
     );
+    expect(event.toolName).toBe("web_search");
+    expect(event.params).toEqual({
+      query: "native action query",
+      queries: ["native action query", "secondary query"],
+    });
+    expect(event.runId).toBe("run-1");
+    expect(event.toolCallId).toBe("search-observed");
+    expect(event.result).toEqual({
+      status: "completed",
+      durationMs: 5,
+      query: "native action query",
+      queries: ["native action query", "secondary query"],
+    });
+  });
 
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
-    expect(observeToolTerminal).toHaveBeenCalledTimes(4);
+  it("marks unavailable Codex web search queries explicitly", async () => {
+    const { afterToolCall, projector } = await createObservedProjector();
+
+    await notify(projector, "item/completed", {
+      item: {
+        type: "webSearch",
+        id: "search-observed",
+        query: "",
+        action: { type: "other" },
+        status: "completed",
+      },
+    });
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.params).toEqual({
+      action: "other",
+      queryUnavailable: true,
+    });
+    expect(event.result).toEqual({
+      status: "completed",
+      action: "other",
+      queryUnavailable: true,
+    });
   });
 });

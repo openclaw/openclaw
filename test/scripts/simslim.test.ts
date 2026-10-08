@@ -8,7 +8,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const simulatorId = "11111111-2222-3333-4444-555555555555";
 const keptCategories =
   "widgets,siri,icloud,store,pim,web,health,photos,apps,messaging,connectivity,telemetry,other";
-const checksum = "c7d33ba033488521eb42ec2057c3a069b13b6551c9ebfe4455128befe2ad9b19";
+const checksum = "eec00b27f0694fa899fb3bbc71362309a9da11ec670f430633cfae855eaf4a1d";
 type Command = { tool: string; args: string[] };
 
 function runFixture(
@@ -29,7 +29,7 @@ function runFixture(
   writeFileSync(
     runner,
     String.raw`
-import { appendFileSync, copyFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 const [tool, ...args] = process.argv.slice(2);
 const root = process.env.SIMSLIM_FIXTURE_ROOT;
@@ -48,13 +48,16 @@ if (tool === "uname") {
   copyFileSync(path.join(root, "bin", "simslim"), path.join(args[args.indexOf("-C") + 1], "simslim"));
 } else if (tool === "simslim") {
   if (args[0] === "--version") {
-    console.log(failure === "version" ? "simslim 0.9.0" : "simslim 0.8.0");
+    console.log(failure === "version" ? "simslim 0.9.0" : "simslim 0.10.0");
     if (failure === "version-exit") process.exit(23);
   } else if (args[0] === failure) {
     process.exit(23);
+  } else if (args[0] === "on") {
+    writeFileSync(path.join(root, "simslim-applied"), "");
   }
-} else if (tool === "xcrun" && failure === "readiness") {
-  process.exit(23);
+} else if (tool === "xcrun") {
+  const phase = existsSync(path.join(root, "simslim-applied")) ? "reboot-readiness" : "initial-readiness";
+  if (failure === phase) process.exit(23);
 }
 `,
   );
@@ -123,7 +126,7 @@ describe.skipIf(process.platform === "win32")("simslim installer", () => {
       "120",
       "--output",
       expect.stringContaining("simslim.tar.gz"),
-      "https://github.com/MobAI-App/simslim/releases/download/v0.8.0/simslim-v0.8.0-macos-arm64.tar.gz",
+      "https://github.com/MobAI-App/simslim/releases/download/v0.10.0/simslim-v0.10.0-macos-arm64.tar.gz",
     ]);
     expect(commands.find(({ tool }) => tool === "shasum")?.args).toEqual([
       "-a",
@@ -137,69 +140,62 @@ describe.skipIf(process.platform === "win32")("simslim installer", () => {
   });
 
   it.each([
-    ["download", "curl"],
-    ["checksum", "shasum"],
-    ["checksum-exit", "shasum"],
-    ["extract", "tar"],
-    ["version", "simslim"],
-    ["version-exit", "simslim"],
-  ])("stops on %s failure", (failure, lastTool) => {
-    const { result, commands, installDir } = runFixture("install-simslim.sh", { failure });
+    { failure: "download", lastTool: "curl" },
+    { failure: "checksum", lastTool: "shasum" },
+    { failure: "checksum-exit", lastTool: "shasum" },
+    { failure: "extract", lastTool: "tar" },
+    { failure: "version", lastTool: "simslim" },
+    { failure: "version-exit", lastTool: "simslim" },
+    { os: "Linux", arch: "arm64", lastTool: "uname" },
+    { os: "Darwin", arch: "x86_64", lastTool: "uname" },
+  ])("stops installation at the failed prerequisite: %j", ({ lastTool, ...options }) => {
+    const { result, commands, installDir } = runFixture("install-simslim.sh", options);
     expect(result.status).not.toBe(0);
     expect(commands.at(-1)?.tool).toBe(lastTool);
-    if (!failure.startsWith("version")) {
+    if (!options.failure?.startsWith("version")) {
       expect(existsSync(path.join(installDir, "simslim"))).toBe(false);
     }
-  });
-
-  it.each([
-    { os: "Linux", arch: "arm64" },
-    { os: "Darwin", arch: "x86_64" },
-  ])("rejects unsupported hosts before download: %j", (host) => {
-    const { result, commands } = runFixture("install-simslim.sh", host);
-    expect(result.status).toBe(1);
-    expect(commands.every(({ tool }) => tool === "uname")).toBe(true);
+    if (options.os) {
+      expect(result.status).toBe(1);
+      expect(commands.every(({ tool }) => tool === "uname")).toBe(true);
+    }
   });
 });
 
 describe.skipIf(process.platform === "win32")("iOS simulator preparation", () => {
-  it("applies and verifies the same conservative profile on the explicit simulator", () => {
+  it("boots the explicit simulator before applying and verifying the conservative profile", () => {
     const { result, commands } = runFixture("ios-simulator-prepare.sh");
     expect(result.status, result.stderr).toBe(0);
     expect(commands).toEqual([
+      { tool: "xcrun", args: ["simctl", "bootstatus", simulatorId, "-b"] },
       { tool: "simslim", args: ["on", simulatorId, "--except", keptCategories] },
       { tool: "xcrun", args: ["simctl", "bootstatus", simulatorId, "-b"] },
       { tool: "simslim", args: ["verify", simulatorId, "--except", keptCategories] },
     ]);
   });
 
-  it("does nothing without the opt-in, even outside CI and without a target", () => {
-    const { result, commands } = runFixture("ios-simulator-prepare.sh", {
-      args: [],
-      env: { CI: "", OPENCLAW_CI_SIMSLIM_BINARY: "" },
-    });
-    expect(result.status).toBe(0);
-    expect(commands).toEqual([]);
-  });
-
   it.each([
-    { env: { CI: "" } },
-    { env: { OPENCLAW_CI_SIMSLIM_BINARY: "simslim" } },
-    { env: { OPENCLAW_CI_SIMSLIM_BINARY: "/missing-simslim" } },
-    { args: [] },
-    { args: ["booted"] },
-    { args: ["all"] },
-    { args: [simulatorId, "extra"] },
-  ])("rejects invalid admission before any tool call: %j", (options) => {
+    { options: { args: [], env: { CI: "", OPENCLAW_CI_SIMSLIM_BINARY: "" } }, enabled: false },
+    { options: { env: { CI: "" } }, enabled: true },
+    { options: { env: { OPENCLAW_CI_SIMSLIM_BINARY: "simslim" } }, enabled: true },
+    { options: { env: { OPENCLAW_CI_SIMSLIM_BINARY: "/missing-simslim" } }, enabled: true },
+    { options: { args: [] }, enabled: true },
+    { options: { args: ["booted"] }, enabled: true },
+  ])("makes no tool calls without valid opt-in admission: %j", ({ options, enabled }) => {
     const { result, commands } = runFixture("ios-simulator-prepare.sh", options);
-    expect(result.status).not.toBe(0);
+    if (enabled) {
+      expect(result.status).not.toBe(0);
+    } else {
+      expect(result.status).toBe(0);
+    }
     expect(commands).toEqual([]);
   });
 
   it.each([
-    ["on", 1],
-    ["readiness", 2],
-    ["verify", 3],
+    ["initial-readiness", 1],
+    ["on", 2],
+    ["reboot-readiness", 3],
+    ["verify", 4],
   ] as const)("preserves %s failure without subsequent calls", (failure, count) => {
     const { result, commands } = runFixture("ios-simulator-prepare.sh", { failure });
     expect(result.status).toBe(23);

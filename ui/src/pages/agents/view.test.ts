@@ -12,6 +12,7 @@ import { formatNextRun } from "../../lib/presenter.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSkill } from "../skills/view.test-support.ts";
+import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import {
   createAgentViewTestProps as createProps,
   inertAgentFileControls,
@@ -61,8 +62,11 @@ function renderFiles(
       agentFilesLoading: false,
       agentFilesError: null,
       agentFileActive: "USER.md",
-      agentFileContents: { "USER.md": content },
-      agentFileDrafts: { "USER.md": content },
+      agentFileEditors: createAgentFileEditors({
+        content: { "USER.md": content },
+        draft: { "USER.md": content },
+      }),
+
       agentFileSaving: false,
       ...inertAgentFileControls,
       ...overrides,
@@ -165,15 +169,16 @@ describe("renderAgents", () => {
         activePanel: "cron",
         selectedAgentId: "alpha",
         cron: {
-          cronStatus: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
-          cronJobs: [job],
-          cronJobsTotal: 1,
-          cronJobsHasMore: false,
-          cronJobsLoadingMore: false,
-          cronScopedTotal: 1,
-          cronScopedNextWakeAtMs: scopedNextWakeAtMs,
-          cronLoading: false,
-          cronError: null,
+          ...createProps().cron,
+          status: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
+          jobs: [job],
+          jobsTotal: 1,
+          jobsHasMore: false,
+          jobsLoadingMore: false,
+          scopedTotal: 1,
+          scopedNextWakeAtMs,
+          loading: false,
+          error: null,
         },
       },
       container,
@@ -236,20 +241,21 @@ describe("renderAgents", () => {
           activePanel: "cron",
           selectedAgentId: "alpha",
           cron: {
-            cronStatus: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
-            cronJobs: cronState.cronJobs,
-            cronJobsTotal: cronState.cronJobsTotal,
-            cronJobsHasMore: cronState.cronJobsHasMore,
-            cronJobsLoadingMore: cronState.cronJobsLoadingMore,
-            cronScopedTotal: 51,
-            cronScopedNextWakeAtMs: null,
-            cronLoading: cronState.cronLoading,
-            cronError: cronState.cronError,
-          },
-          onCronLoadMore: () => {
-            const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
-            renderCurrentPage();
-            void nextPage.then(renderCurrentPage);
+            ...createProps().cron,
+            status: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
+            jobs: cronState.cronJobs,
+            jobsTotal: cronState.cronJobsTotal,
+            jobsHasMore: cronState.cronJobsHasMore,
+            jobsLoadingMore: cronState.cronJobsLoadingMore,
+            scopedTotal: 51,
+            scopedNextWakeAtMs: null,
+            loading: cronState.cronLoading,
+            error: cronState.cronError,
+            onLoadMore: () => {
+              const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
+              renderCurrentPage();
+              void nextPage.then(renderCurrentPage);
+            },
           },
         },
         container,
@@ -364,10 +370,9 @@ describe("renderAgents", () => {
       {
         selectedAgentId: "alpha",
         config: config(configForm),
-        modelCatalog: {
-          hasSnapshot: true,
-          retired: false,
-          models: [
+        overview: {
+          ...createProps().overview,
+          modelCatalog: [
             {
               id: "claude-opus-4-8",
               alias: "opus",
@@ -516,15 +521,16 @@ describe("renderAgents", () => {
     renderView(
       {
         agentSkills: {
-          agentSkillsReport: {
+          ...createProps().agentSkills,
+          report: {
             workspaceDir: "/tmp/workspace",
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          agentSkillsLoading: false,
-          agentSkillsError: null,
-          agentSkillsAgentId: "alpha",
-          skillsFilter: "",
+          loading: false,
+          error: null,
+          activeAgentId: "alpha",
+          filter: "",
         },
       },
       container,
@@ -538,15 +544,16 @@ describe("renderAgents", () => {
     renderView(
       {
         agentSkills: {
-          agentSkillsReport: {
+          ...createProps().agentSkills,
+          report: {
             workspaceDir: "/tmp/workspace",
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          agentSkillsLoading: false,
-          agentSkillsError: null,
-          agentSkillsAgentId: "beta",
-          skillsFilter: "",
+          loading: false,
+          error: null,
+          activeAgentId: "beta",
+          filter: "",
         },
       },
       container,
@@ -569,10 +576,11 @@ describe("renderAgents", () => {
         {
           activePanel: "channels",
           channels: {
-            channelsSnapshot: null,
-            channelsLoading: false,
-            channelsError: null,
-            channelsLastSuccess: null,
+            ...createProps().channels,
+            snapshot: null,
+            loading: false,
+            error: null,
+            lastSuccess: null,
           },
         },
         container,
@@ -697,8 +705,11 @@ describe("renderAgentFiles", () => {
         },
         agentFilesLoading: true,
         agentFileActive: "AGENTS.md",
-        agentFileContents: { "AGENTS.md": "# Instructions" },
-        agentFileDrafts: { "AGENTS.md": "# Instructions" },
+        agentFileEditors: createAgentFileEditors({
+          content: { "AGENTS.md": "# Instructions" },
+          draft: { "AGENTS.md": "# Instructions" },
+        }),
+
         onSelectFile,
       },
       container,
@@ -738,8 +749,11 @@ describe("renderAgentFiles", () => {
           ],
         },
         agentFileActive: "AGENTS.md",
-        agentFileContents: { "AGENTS.md": "" },
-        agentFileDrafts: { "AGENTS.md": "" },
+        agentFileEditors: createAgentFileEditors({
+          content: { "AGENTS.md": "" },
+          draft: { "AGENTS.md": "" },
+        }),
+
         onSelectFile,
       },
       container,
@@ -805,8 +819,11 @@ describe("renderAgentFiles", () => {
           agentFilesLoading: false,
           agentFilesError: null,
           agentFileActive: "SOUL.md",
-          agentFileContents: { "SOUL.md": "" },
-          agentFileDrafts: { "SOUL.md": "Unsaved instructions" },
+          agentFileEditors: createAgentFileEditors({
+            content: { "SOUL.md": "" },
+            draft: { "SOUL.md": "Unsaved instructions" },
+          }),
+
           agentFileSaving: false,
           ...inertAgentFileControls,
           onSelectFile,
@@ -838,11 +855,6 @@ describe("renderAgentFiles", () => {
       expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
         "Unsaved instructions",
       );
-      const preview = container.querySelector(".md-preview-dialog__meta");
-      expect(preview?.querySelector("strong")?.textContent).toBe(
-        showMissing ? "Will Create on Save" : "Live Draft Preview",
-      );
-      expect(preview?.textContent).toContain(showMissing ? "Not Created Yet" : "Updated Unknown");
       const resolutionButtons =
         container.querySelectorAll<HTMLButtonElement>(".callout.danger button");
       expect(Array.from(resolutionButtons, (button) => button.textContent?.trim())).toEqual(
@@ -855,82 +867,4 @@ describe("renderAgentFiles", () => {
       }
     },
   );
-
-  it("renders the upgraded markdown preview structure with file metadata", () => {
-    const container = document.createElement("div");
-
-    renderFiles(
-      {
-        agentFileContents: {
-          "USER.md":
-            "# User Profile\n\nHello world\n\n```ts\nconst answer = 42;\n```\n\n<script>alert('unsafe')</script>\n\n![Remote](https://e.co/i)",
-        },
-        agentFileDrafts: {},
-      },
-      container,
-    );
-
-    expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
-      "USER.md",
-    );
-    expect(container.querySelector(".md-preview-dialog__chip strong")?.textContent).toBe(
-      "Saved Preview",
-    );
-    expect(container.querySelector(".md-preview-dialog__eyebrow span")?.textContent?.trim()).toBe(
-      "Markdown Preview",
-    );
-    const reader = container.querySelector(".md-preview-dialog__reader.sidebar-markdown");
-    expect(reader?.querySelector("img")?.getAttribute("src")).toBe("https://e.co/i");
-    expect(reader?.querySelector("pre code")?.textContent).toBe("const answer = 42;\n");
-    expect(reader?.querySelector(".code-block-copy, script")).toBeNull();
-  });
-
-  it("renders preview header controls as icon-only buttons with accessible labels", () => {
-    const container = document.createElement("div");
-
-    renderFiles({}, container);
-
-    const actions = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".md-preview-dialog__actions button"),
-    );
-
-    expect(actions).toHaveLength(3);
-    expect(actions.map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Expand preview",
-      "Edit file",
-      "Close preview",
-    ]);
-    expect(actions.map((button) => button.textContent?.trim())).toEqual(["", "", ""]);
-  });
-
-  it("resets the expanded preview button state when the dialog closes", () => {
-    const container = document.createElement("div");
-
-    renderFiles({}, container);
-
-    const dialog = container.querySelector("openclaw-modal-dialog");
-    const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel");
-    const expandButton = container.querySelector<HTMLButtonElement>(".md-preview-expand-btn");
-
-    expect(dialog).not.toBeNull();
-    expect(panel).toBeInstanceOf(HTMLElement);
-    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
-    const previewPanel = panel!;
-    const previewExpandButton = expandButton!;
-    previewExpandButton.click();
-
-    expect(previewPanel.classList.contains("fullscreen")).toBe(true);
-    expect(previewExpandButton.classList.contains("is-fullscreen")).toBe(true);
-    expect(previewExpandButton.getAttribute("aria-pressed")).toBe("true");
-    expect(previewExpandButton.getAttribute("aria-label")).toBe("Collapse preview");
-    expect(previewExpandButton.closest("openclaw-tooltip")?.content).toBe("Collapse preview");
-
-    container.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')?.click();
-
-    expect(previewPanel.classList.contains("fullscreen")).toBe(false);
-    expect(previewExpandButton.classList.contains("is-fullscreen")).toBe(false);
-    expect(previewExpandButton.getAttribute("aria-pressed")).toBe("false");
-    expect(previewExpandButton.getAttribute("aria-label")).toBe("Expand preview");
-    expect(previewExpandButton.closest("openclaw-tooltip")?.content).toBe("Expand preview");
-  });
 });

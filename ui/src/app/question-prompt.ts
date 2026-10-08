@@ -1,3 +1,4 @@
+import type { QuestionRecord } from "@openclaw/gateway-client/browser";
 import {
   asSafeIntegerInRange,
   resolveTimerTimeoutMs,
@@ -5,9 +6,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
-  Question,
   QuestionAnswers,
-  QuestionRecord,
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
@@ -36,14 +35,13 @@ export type QuestionDraft = {
 
 type QuestionPromptStatus = QuestionRecord["status"] | "unavailable";
 
-export type QuestionPrompt = {
-  id: string;
-  questions: Question[];
+export type QuestionPrompt = Pick<
+  QuestionRecord,
+  "id" | "questions" | "createdAtMs" | "expiresAtMs"
+> & {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  createdAtMs: number;
-  expiresAtMs: number;
   status: QuestionPromptStatus;
   answers?: QuestionAnswers;
   submittedAnswers?: QuestionAnswers;
@@ -250,20 +248,10 @@ function storeQuestionRecord(
     clearSecretQuestionDrafts(record.questions, drafts);
   }
   const prompt: QuestionPrompt = {
-    id: record.id,
-    questions: record.questions,
-    ...(record.agentId ? { agentId: record.agentId } : {}),
-    ...(record.sessionKey ? { sessionKey: record.sessionKey } : {}),
-    ...(record.runId ? { runId: record.runId } : {}),
-    createdAtMs: record.createdAtMs,
-    expiresAtMs: record.expiresAtMs,
-    status: record.status,
-    ...(record.status === "answered" ? { answers: record.answers } : {}),
+    ...record,
     ...(previous?.submittedAnswers ? { submittedAnswers: previous.submittedAnswers } : {}),
     answeredElsewhere:
-      record.status === "answered"
-        ? !(previous?.localResolutionConfirmed ?? false) && !(previous?.submitting ?? false)
-        : false,
+      record.status === "answered" && !previous?.localResolutionConfirmed && !previous?.submitting,
     localResolutionConfirmed: previous?.localResolutionConfirmed ?? false,
     locallyExpired: false,
     submitting:
@@ -396,7 +384,7 @@ function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPro
 async function refreshPendingQuestions(
   state: QuestionPromptState,
   client: QuestionClient,
-  isCurrentClient: () => boolean = () => state.client === client,
+  isCurrentClient: () => boolean,
 ): Promise<boolean> {
   const startedAtRevision = state.revision;
   const listResult = await requestQuestionGateway(client, "question.list", {});

@@ -6,12 +6,12 @@ import type {
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { prepareSessionEntryMutationDatabases } from "../../config/sessions/session-accessor.entry-mutation.js";
+import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { prepareGatewaySessionLifecycleTargets } from "../session-lifecycle-preparation.js";
-import { sessionToolOverridesEqual } from "../session-tool-overrides.js";
 import {
   sessionChangedError,
   assertSessionPatchCommitAllowed,
@@ -105,37 +105,6 @@ export function sessionPatchTargetIdentity(patch: SessionsPatchParams) {
       ? { expectedToolOverrides: patch.expectedToolOverrides }
       : {}),
     expectedMarkedUnreadAt: patch.expectedMarkedUnreadAt,
-  };
-}
-
-/** The retained source and target keep the existing personal-account error boundary. */
-function bindPreparedSessionPatchTarget(params: {
-  key: string;
-  originalGuard: () => ErrorShape | undefined;
-  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
-  personalModelSelection: UserModelAccountSelection | undefined;
-  preparation: { facts: { matchesCurrent: (cfg: OpenClawConfig) => boolean } } | { error: unknown };
-  getCurrentConfig: () => OpenClawConfig;
-}): () => ErrorShape | undefined {
-  return () => {
-    try {
-      assertSessionPatchCommitAllowed({
-        personalModelSelection: params.personalModelSelection,
-        guards: [params.originalGuard],
-        archiveTransitions: [],
-      });
-      params.operatorAuthority?.assertCurrent();
-      if ("error" in params.preparation) {
-        throw params.preparation.error instanceof Error
-          ? params.preparation.error
-          : new Error("Session target preparation failed", { cause: params.preparation.error });
-      }
-      return params.preparation.facts.matchesCurrent(params.getCurrentConfig())
-        ? undefined
-        : sessionChangedError(params.key);
-    } catch (error) {
-      return unexpectedPatchError(params.key, error);
-    }
   };
 }
 
@@ -236,14 +205,27 @@ export async function prepareSessionPatchTargets(params: {
         (facts) => ({ facts }),
         (error: unknown) => ({ error }),
       );
-      const guard = bindPreparedSessionPatchTarget({
-        key: target.key,
-        originalGuard: params.originalCommitGuards[target.index]!,
-        operatorAuthority,
-        personalModelSelection: params.personalModelSelection,
-        preparation: result,
-        getCurrentConfig: params.getCurrentConfig,
-      });
+      const originalGuard = params.originalCommitGuards[target.index]!;
+      const guard = () => {
+        try {
+          assertSessionPatchCommitAllowed({
+            personalModelSelection: params.personalModelSelection,
+            guards: [originalGuard],
+            archiveTransitions: [],
+          });
+          operatorAuthority?.assertCurrent();
+          if ("error" in result) {
+            throw result.error instanceof Error
+              ? result.error
+              : new Error("Session target preparation failed", { cause: result.error });
+          }
+          return result.facts.matchesCurrent(params.getCurrentConfig())
+            ? undefined
+            : sessionChangedError(target.key);
+        } catch (error) {
+          return unexpectedPatchError(target.key, error);
+        }
+      };
       params.mutationTargets[target.index]!.commitGuard = guard;
       if ("error" in result) {
         // Original caller errors retain precedence; failed preparation never reaches a fallback open.

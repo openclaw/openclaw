@@ -1,4 +1,3 @@
-// Shared helpers for subagent command actions and target resolution.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -11,11 +10,8 @@ import {
 } from "../../../agents/tools/sessions-helpers.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
 import { commandReply } from "../command-gates.js";
-import { extractSubagentMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
-
-export type { ChatMessage } from "../commands-subagents-text.js";
 
 export const RECENT_WINDOW_MINUTES = 30;
 
@@ -59,27 +55,26 @@ export function resolveSubagentEntryForToken(
     const entry = entries[0];
     return entry ? { entry } : undefined;
   };
+  const matchLabel = (prefix: boolean) => {
+    const matches = (value: string | undefined) => {
+      const label = normalizeLowercaseStringOrEmpty(value);
+      return prefix ? label.startsWith(lowered) : label === lowered;
+    };
+    const ambiguity = `Ambiguous subagent label${prefix ? " prefix" : ""}`;
+    return (
+      match(
+        numericOrder.filter((entry) => matches(entry.taskName)),
+        ambiguity,
+      ) ??
+      match(
+        latest.filter((entry) => matches(formatRunLabel(entry))),
+        ambiguity,
+      )
+    );
+  };
   return (
-    match(
-      numericOrder.filter((entry) => normalizeLowercaseStringOrEmpty(entry.taskName) === lowered),
-      "Ambiguous subagent label",
-    ) ??
-    match(
-      latest.filter((entry) => normalizeLowercaseStringOrEmpty(formatRunLabel(entry)) === lowered),
-      "Ambiguous subagent label",
-    ) ??
-    match(
-      numericOrder.filter((entry) =>
-        normalizeLowercaseStringOrEmpty(entry.taskName).startsWith(lowered),
-      ),
-      "Ambiguous subagent label prefix",
-    ) ??
-    match(
-      latest.filter((entry) =>
-        normalizeLowercaseStringOrEmpty(formatRunLabel(entry)).startsWith(lowered),
-      ),
-      "Ambiguous subagent label prefix",
-    ) ??
+    matchLabel(false) ??
+    matchLabel(true) ??
     match(
       latest.filter((entry) => entry.runId.startsWith(trimmed)),
       "Ambiguous run id prefix",
@@ -102,8 +97,8 @@ export function resolveRequesterSessionKey(
   if (!raw) {
     return undefined;
   }
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  return resolveInternalSessionKey({ key: raw, alias, mainKey });
+  const { alias } = resolveMainSessionAlias(params.cfg);
+  return resolveInternalSessionKey({ key: raw, alias });
 }
 
 export function buildSubagentsHelp() {
@@ -120,17 +115,4 @@ export function buildSubagentsHelp() {
     "",
     "Ids: use the list index (#), runId/session prefix, label, or full session key.",
   ].join("\n");
-}
-
-export function formatLogLines(messages: ChatMessage[]) {
-  const lines: string[] = [];
-  for (const msg of messages) {
-    const extracted = extractSubagentMessageText(msg);
-    if (!extracted) {
-      continue;
-    }
-    const label = extracted.role === "assistant" ? "Assistant" : "User";
-    lines.push(`${label}: ${extracted.text}`);
-  }
-  return lines;
 }

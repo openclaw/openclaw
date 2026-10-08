@@ -142,22 +142,37 @@ describe("Codex catalog resident home sharing", () => {
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
   });
 
-  it("memoizes cloned request options until runtime config identity changes", async () => {
-    let runtimeConfig = { agents: { defaults: { workspace: "/workspace/a" } } } as OpenClawConfig;
+  it("bounds fleet config snapshots across agents and homes until config identity changes", async () => {
+    let runtimeConfig: OpenClawConfig = {
+      agents: { defaults: { workspace: "/workspace/a" } },
+    };
     commandRpcMocks.codexControlRequest.mockResolvedValue({ thread: idleThread() });
-    const control = createCodexSessionCatalogControl({
+    const factory = createCodexSessionCatalogControlFactory({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       getRuntimeConfig: () => runtimeConfig,
     });
+    const home = (await factory.homesForAgent("main"))[0]!;
+    const controls = ["main", "another"].flatMap((agentId) =>
+      ["first", "second"].map((sourceHomeId) =>
+        factory.forRequest(agentId, { ...home, sourceHomeId }),
+      ),
+    );
     const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+    const initialConfig = runtimeConfig;
 
-    await control.readThread("thread-1");
-    await control.readThread("thread-1");
-    expect(cloneSpy).toHaveBeenCalledTimes(2);
+    for (const control of controls) {
+      await control.readThread("thread-1");
+      await control.readThread("thread-1");
+    }
+    expect(cloneSpy.mock.calls.filter(([value]) => value === initialConfig)).toHaveLength(1);
 
-    runtimeConfig = { agents: { defaults: { workspace: "/workspace/b" } } } as OpenClawConfig;
-    await control.readThread("thread-1");
-    expect(cloneSpy).toHaveBeenCalledTimes(4);
+    runtimeConfig = { agents: { defaults: { workspace: "/workspace/b" } } };
+    const reloadedControls = ["main", "another"].map((agentId) => factory.forRequest(agentId));
+    for (const control of reloadedControls) {
+      await control.readThread("thread-1");
+    }
+    expect(cloneSpy.mock.calls.filter(([value]) => value === runtimeConfig)).toHaveLength(1);
+    expect(cloneSpy.mock.calls.filter(([value]) => value === initialConfig)).toHaveLength(1);
   });
 
   it("reports a failed initializer and permits its immediate retry", async () => {

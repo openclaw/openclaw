@@ -43,8 +43,6 @@ describe("legacy channel webhook ports", () => {
   const httpServers: Server[] = [];
   const cleanups: Array<() => void> = [];
   const warn = vi.fn();
-  const url = (offset: number, path = "/webhook") =>
-    `http://127.0.0.1:${claim.port + offset}${path}`;
   const endpoint = (offset: number) => ({ port: claim.port + offset, host: "127.0.0.1" });
 
   beforeAll(async () => {
@@ -131,7 +129,7 @@ describe("legacy channel webhook ports", () => {
 
   const send = (
     offset: number,
-    path: string,
+    path = "/webhook",
     options: { method?: string; headers?: Record<string, string>; body?: string } = {},
   ) =>
     new Promise<{
@@ -143,6 +141,8 @@ describe("legacy channel webhook ports", () => {
       let continues = 0;
       const req = request(
         {
+          // Probe the listener with a new connection, never a pooled retired socket.
+          agent: false,
           host: "127.0.0.1",
           port: claim.port + offset,
           path,
@@ -157,7 +157,6 @@ describe("legacy channel webhook ports", () => {
           });
           res.on("error", reject);
           res.on("end", () => {
-            req.destroy();
             resolve({ status: res.statusCode, headers: res.headers, body, continues });
           });
         },
@@ -399,7 +398,7 @@ describe("legacy channel webhook ports", () => {
     });
     await listening();
     for (const offset of [0, 1]) {
-      const accepted = await fetch(url(offset), {
+      const accepted = await send(offset, "/webhook", {
         method: "POST",
         body,
         headers: {
@@ -408,22 +407,22 @@ describe("legacy channel webhook ports", () => {
         },
       });
       expect(accepted.status).toBe(200);
-      expect(await accepted.text()).toBe("accepted");
-      expect(accepted.headers.get("x-peer")).toBe("127.0.0.1");
-      expect(JSON.parse(accepted.headers.get("x-legacy-listener")!)).toEqual(
+      expect(accepted.body).toBe("accepted");
+      expect(accepted.headers["x-peer"]).toBe("127.0.0.1");
+      expect(JSON.parse(String(accepted.headers["x-legacy-listener"]))).toEqual(
         offset === 0 ? null : endpoint(1),
       );
-      expect(accepted.headers.get("x-runtime-plugin")).toBe("demo");
-      expect((await fetch(url(offset), { method: "POST", body })).status).toBe(401);
+      expect(accepted.headers["x-runtime-plugin"]).toBe("demo");
+      expect((await send(offset, "/webhook", { method: "POST", body })).status).toBe(401);
     }
-    expect((await fetch(url(0, "/other"))).status).toBe(200);
+    expect((await send(0, "/other")).status).toBe(200);
     for (const path of ["/other", "/healthz", "/tools/invoke", "/"]) {
-      expect((await fetch(url(1, path))).status, path).toBe(404);
+      expect((await send(1, path)).status, path).toBe(404);
     }
     expect(tryBeginGatewaySuspendAdmission(() => {})?.commit()).toBe(true);
     expect(
       (
-        await fetch(url(1), {
+        await send(1, "/webhook", {
           method: "POST",
           body,
           headers: { "x-webhook-secret": "synthetic-secret" },
@@ -503,29 +502,29 @@ describe("legacy channel webhook ports", () => {
             }
           : {};
         const signed = { ...headers, "x-webhook-secret": "synthetic-secret" };
-        const accepted = await fetch(url(1, path), { method: "POST", headers: signed });
+        const accepted = await send(1, path, { method: "POST", headers: signed });
         expect(accepted.status).toBe(200);
-        expect(await accepted.text()).toBe("vendor accepted");
+        expect(accepted.body).toBe("vendor accepted");
         expect(
           (
-            await fetch(url(1, path), {
+            await send(1, path, {
               method: "POST",
               headers: { ...headers, "x-webhook-secret": "wrong" },
             })
           ).status,
         ).toBe(401);
-        const primary = await fetch(url(0, path), { method: "POST", headers: signed });
+        const primary = await send(0, path, { method: "POST", headers: signed });
         expect(primary.status).toBe(forwarded ? forwardedPrimaryStatus : primaryStatus);
-        const primaryText = await primary.text();
+        const primaryText = primary.body;
         if (forwarded && forwardedPrimaryStatus === 403) {
           expect(primaryText).toContain("proxy_attribution_required");
         }
         if (primaryBody !== undefined) {
           expect(primaryText).toBe(primaryBody);
         }
-        expect(
-          (await fetch(url(1, "/tools/invoke"), { method: "POST", headers: signed })).status,
-        ).toBe(404);
+        expect((await send(1, "/tools/invoke", { method: "POST", headers: signed })).status).toBe(
+          404,
+        );
       }
       expect(gatewayOnlyHandler).not.toHaveBeenCalled();
     },
@@ -549,7 +548,7 @@ describe("legacy channel webhook ports", () => {
     const second = register({ legacyListener: endpoint(2) });
     await listening();
     for (const offset of [1, 2]) {
-      expect(await (await fetch(url(offset))).text()).toBe(String(claim.port + offset));
+      expect((await send(offset)).body).toBe(String(claim.port + offset));
     }
     const originalListeners = httpServers.slice(1);
     const handoff = createPluginHttpRouteHandoff();
@@ -558,22 +557,22 @@ describe("legacy channel webhook ports", () => {
     lease.revoke();
     const expectParkedEndpoint = async () => {
       const before = handled;
-      const response = await fetch(url(1));
+      const response = await send(1);
       expect(response.status).toBe(503);
-      expect(response.headers.get("retry-after")).toBe("1");
-      expect(await response.text()).toBe("plugin route is restarting; retry");
+      expect(response.headers["retry-after"]).toBe("1");
+      expect(response.body).toBe("plugin route is restarting; retry");
       expect(handled).toBe(before);
     };
     await expectParkedEndpoint();
-    expect(await (await fetch(url(2))).text()).toBe(String(claim.port + 2));
+    expect((await send(2)).body).toBe(String(claim.port + 2));
     const revived = register({ legacyListener: endpoint(1) });
-    expect(await (await fetch(url(1))).text()).toBe(String(claim.port + 1));
+    expect((await send(1)).body).toBe(String(claim.port + 1));
     revived();
     await expectParkedEndpoint();
     const oldPortClosed = once(originalListeners[1]!, "close");
     second();
     await oldPortClosed;
-    expect((await fetch(url(1))).status).toBe(503);
+    expect((await send(1)).status).toBe(503);
     expect(httpServers.slice(1)).toEqual([originalListeners[0]]);
     const next = createEmptyPluginRegistry();
     adoptPluginHttpRouteHandoffs(registry, next);
@@ -586,11 +585,11 @@ describe("legacy channel webhook ports", () => {
       },
     });
     first();
-    expect(await (await fetch(url(1))).text()).toBe("replacement");
+    expect((await send(1)).body).toBe("replacement");
     expect(httpServers.slice(1)).toEqual([originalListeners[0]]);
     handoff.release();
     expect(httpServers.slice(1)).toEqual([originalListeners[0]]);
-    expect(await (await fetch(url(1))).text()).toBe("replacement");
+    expect((await send(1)).body).toBe("replacement");
     const finalPortClosed = once(originalListeners[0]!, "close");
     successor();
     await finalPortClosed;
@@ -680,7 +679,7 @@ describe("legacy channel webhook ports", () => {
       const finished = createDeferred();
       const unregister = register({
         path: `/callback-${offset}`,
-        legacyListener: endpoint(offset),
+        legacyListener: { ...endpoint(offset), health: { path: "/healthz" } },
         handler: async (_req, res) => {
           entered.resolve();
           try {
@@ -704,17 +703,29 @@ describe("legacy channel webhook ports", () => {
     );
     try {
       await Promise.all(callbacks.map(({ entered }) => entered.promise));
+      for (const { offset } of callbacks) {
+        // A prior keep-alive response must not supply the retired-port probe's socket.
+        expect(
+          await send(offset, "/healthz", { headers: { Connection: "keep-alive" } }),
+        ).toMatchObject({ status: 200, body: "ok" });
+      }
       for (const { unregister } of callbacks) {
         unregister();
       }
       await Promise.resolve();
       expect(servers.map((server) => server.listening)).toEqual([false, false]);
       expect(httpServers.slice(1)).toEqual(servers);
+      const retiredRequests = vi.fn();
+      for (const server of servers) {
+        server.on("request", retiredRequests);
+      }
       for (const { offset } of callbacks) {
+        // A refused connect or a reset both close the probe; neither may dispatch a callback.
         await expect(send(offset, `/callback-${offset}`)).rejects.toMatchObject({
-          code: "ECONNREFUSED",
+          code: expect.stringMatching(/^ECONN(?:REFUSED|RESET)$/),
         });
       }
+      expect(retiredRequests).not.toHaveBeenCalled();
 
       callbacks[0]!.release.resolve();
       expect(await responses[0]).toMatchObject({ response: { status: 200, body: "accepted" } });
@@ -725,6 +736,7 @@ describe("legacy channel webhook ports", () => {
       expect(await responses[1]).toMatchObject({ error: { code: "ECONNRESET" } });
       await closed[1];
       expect(httpServers).toEqual([gatewayServer]);
+      expect(retiredRequests).not.toHaveBeenCalled();
     } finally {
       for (const { release, unregister } of callbacks) {
         release.resolve();

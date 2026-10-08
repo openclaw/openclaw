@@ -210,6 +210,11 @@ Platform-key-only.
 | `realtime.consultRouting`                | -                                           | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                              |
 | `realtime.instructions`                  | -                                           | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt.                                                                                                                                                                            |
 
+Realtime Talk reads `talk.realtime`. If an older installation inherited realtime
+settings from Voice Call, Doctor copies them into Talk while preserving explicit
+Talk settings and backing up the config. Later Voice Call edits no longer change
+realtime Talk. See [Talk realtime migration](/gateway/doctor/config-migrations#talk-realtime-inheritance).
+
 `talk.catalog` exposes canonical provider ids and registry aliases. It exposes each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags. It exposes the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally. Treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`. The current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships.
 
 ## Notes

@@ -1,9 +1,25 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useSubagentControlFixture } from "../../subagents/registry/subagent-control.test-support.js";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import { access } from "node:fs/promises";
+import path from "node:path";
+import {
+  createAssistantMessageEventStream,
+  type Context,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  appendTranscriptMessage,
+  deleteSessionEntryLifecycle,
+} from "../../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { pruneAllSessionTranscriptArchivesToHighWater } from "../../../config/sessions/session-history-archive-pruning.js";
+import { findSessionTranscriptArchiveEventReadOnly } from "../../../config/sessions/session-history.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
@@ -17,10 +33,10 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { markPendingFinalDelivery } from "../../subagent-test-fixtures.test-helpers.js";
 import { testing as announceTesting } from "../../subagents/announce/subagent-announce-output.test-support.js";
-import { markPendingFinalDelivery } from "../../subagents/registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../../subagents/registry/subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "../../subagents/registry/subagent-registry-state.js";
+import { mutateSubagentRuns } from "../../subagents/registry/subagent-registry-persistence.js";
 import {
   leasePendingAgentSteeringItems,
   prependAgentSteeringPrompt,
@@ -70,30 +86,33 @@ async function prepareSteering() {
     spawnMode: "session",
     expectsCompletionMessage: true,
   });
-  const child = subagentRuns.get(childRunId);
-  if (!child) {
-    throw new Error("Expected registered child");
-  }
   const terminalReply = buildAgentRunTerminalReplySnapshot({ visibleText: answer });
   if (terminalReply.disposition !== "visible") {
     throw new Error("Expected visible terminal reply");
   }
   expect(terminalReply.text).toHaveLength(4_096);
-  child.execution = {
-    ...child.execution,
-    status: "terminal",
-    endedAt: Date.now(),
-    outcome: { status: "ok" },
-    transcriptTarget: {
-      agentId: "main",
-      sessionId: "kept-child-session",
-      sessionKey: childSessionKey,
-      storePath,
-    },
-  };
-  child.completion = { required: true, resultText: terminalReply.text, terminalReply };
-  markPendingFinalDelivery({ entry: child });
-  persistSubagentRunsToDiskOrThrow(subagentRuns, [childRunId]);
+  const child = await mutateSubagentRuns([childRunId], (rows) => {
+    const current = rows.get(childRunId);
+    if (!current) {
+      throw new Error("Expected registered child");
+    }
+    const next = structuredClone(current);
+    next.execution = {
+      ...next.execution,
+      status: "terminal",
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
+      transcriptTarget: {
+        agentId: "main",
+        sessionId: "kept-child-session",
+        sessionKey: childSessionKey,
+        storePath,
+      },
+    };
+    next.completion = { required: true, resultText: terminalReply.text, terminalReply };
+    markPendingFinalDelivery({ entry: next });
+    return { value: next, postimages: new Map([[childRunId, next]]) };
+  });
   announceTesting.setDepsForTest({
     findTranscriptEvent: async (_target, match) => {
       const event = {
@@ -116,6 +135,20 @@ async function prepareSteering() {
   expect(leased.isCurrent()).toBe(true);
   expect(leased.prompt).toContain(escapedAnswer);
   return { child, leasedSteering: { ...leased, leaseId } };
+}
+
+async function invalidateCompletion(error: string) {
+  await mutateSubagentRuns([childRunId], (rows) => {
+    const current = rows.get(childRunId);
+    if (!current) {
+      throw new Error("Expected child completion");
+    }
+    const next = {
+      ...current,
+      execution: { ...current.execution, outcome: { status: "error" as const, error } },
+    };
+    return { value: undefined, postimages: new Map([[childRunId, next]]) };
+  });
 }
 
 function submissionInput(
@@ -163,9 +196,11 @@ it.each([false, true])(
           task: "Check the remaining finding.",
         }),
       ).toBe(true);
-      expect(subagentRuns.has(childRunId)).toBe(false);
+      expect(subagentRuns.get(childRunId)).toMatchObject({
+        execution: { status: "terminal", suppressSessionEffects: true },
+      });
       expect(subagentRuns.get(nextRunId)?.execution.status).toBe("running");
-      expect(leasedSteering.isCurrent()).toBe(false);
+      expect(leasedSteering.isCurrent()).toBe(true);
       return { content: [{ type: "text" as const, text: "Follow-up accepted." }], details: {} };
     });
     const { session } = await createTestSession({
@@ -205,8 +240,12 @@ it.each([false, true])(
 
     expect(followUp).toHaveBeenCalledOnce();
     expect(JSON.stringify(requests[0])).toContain(escapedAnswer);
-    expect(subagentRuns.has(childRunId)).toBe(false);
+    expect(subagentRuns.get(childRunId)).toMatchObject({
+      execution: { status: "terminal", suppressSessionEffects: true },
+      delivery: { status: "delivered" },
+    });
     expect(subagentRuns.get(nextRunId)).toMatchObject({
+      taskRunId: nextRunId,
       task: "Check the remaining finding.",
       execution: { status: "running" },
     });
@@ -237,10 +276,10 @@ it("rejects a changed completion source before first delivery and releases its l
   const { child, leasedSteering } = await prepareSteering();
   const { session } = await createTestSession();
   const input = submissionInput(leasedSteering);
-  child.execution.outcome = { status: "error", error: "Completion invalidated." };
+  await invalidateCompletion("Completion invalidated.");
   expect(leasedSteering.isCurrent()).toBe(false);
-  const releaseLeasedSteering = vi.fn((error?: unknown) => {
-    releasePendingAgentSteeringItems({ ...leasedSteering, error: String(error) });
+  const releaseLeasedSteering = vi.fn(async (error?: unknown) => {
+    await releasePendingAgentSteeringItems({ ...leasedSteering, error: String(error) });
   });
   const failed = submitEmbeddedAttemptPrompt({
     ...input,
@@ -273,12 +312,12 @@ it("rejects a changed completion source before first delivery and releases its l
   expect(streamMocks.streamSimple).not.toHaveBeenCalled();
   expect(releaseLeasedSteering).toHaveBeenCalledOnce();
   expect(input.onSteeringAcknowledged).not.toHaveBeenCalled();
-  expect(child.delivery?.status).toBe("pending");
-  expect(child.delivery?.steeringLeaseId).toBeUndefined();
+  expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("pending");
+  expect(subagentRuns.get(child.runId)?.delivery?.steeringLeaseId).toBeUndefined();
 });
 
 it("keeps source validation until foreground delivery after pre-prompt compaction", async () => {
-  const { child, leasedSteering } = await prepareSteering();
+  const { leasedSteering } = await prepareSteering();
   const model = { ...testModel, contextWindow: 4_096, maxTokens: 512 };
   const sessionManager = SessionManager.inMemory();
   sessionManager.appendMessage({
@@ -302,19 +341,34 @@ it("keeps source validation until foreground delivery after pre-prompt compactio
     sessionManager,
     settingsManager: createAutoCompactionSettings(),
   });
+  // The default prompt embeds absolute checkout paths, so its size would decide
+  // whether this 4k window leaves compaction any headroom.
+  session.setBaseSystemPrompt("Use the child findings.");
   const requests: Array<{ messages: Context["messages"]; compacting: boolean }> = [];
   streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
     requests.push({
       messages: structuredClone(context.messages),
       compacting: session.isCompacting,
     });
-    child.execution.outcome = {
-      status: "error",
-      error: "Completion invalidated during compaction.",
-    };
-    return createAssistantResultStream(
-      createAssistant(activeModel, [{ type: "text", text: "Earlier investigation summarized." }]),
+    const stream = createAssistantMessageEventStream();
+    void invalidateCompletion("Completion invalidated during compaction.").then(
+      () => {
+        const message = createAssistant(activeModel, [
+          { type: "text", text: "Earlier investigation summarized." },
+        ]);
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+      },
+      (error: unknown) => {
+        const message = {
+          ...createAssistant(activeModel, [], "error"),
+          errorMessage: String(error),
+        };
+        stream.push({ type: "error", reason: "error", error: message });
+        stream.end();
+      },
     );
+    return stream;
   });
   await submitEmbeddedAttemptPrompt({
     ...submissionInput(leasedSteering),
@@ -329,4 +383,190 @@ it("keeps source validation until foreground delivery after pre-prompt compactio
     stopReason: "error",
     errorMessage: "The queued child results lost authority before requester prompt submission.",
   });
+});
+
+async function publishChild(runId: string, resultText: string) {
+  const publishedSessionKey = `agent:main:subagent:${runId}`;
+  const childSessionId = `${runId}-session`;
+  const storePath = await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: publishedSessionKey,
+    defaultSessionId: childSessionId,
+  });
+  const target = {
+    agentId: "main",
+    sessionId: childSessionId,
+    sessionKey: publishedSessionKey,
+    storePath,
+  };
+  await appendTranscriptMessage(target, {
+    message: {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: resultText }],
+      __openclaw: { runId },
+    },
+  });
+  await registerSubagentRun({
+    runId,
+    childSessionKey: publishedSessionKey,
+    requesterSessionKey,
+    requesterDisplayKey: "main",
+    task: "Inspect the findings",
+    cleanup: "keep",
+    spawnMode: "session",
+    expectsCompletionMessage: true,
+  });
+  const terminalReply = buildAgentRunTerminalReplySnapshot({ visibleText: resultText });
+  if (terminalReply.disposition !== "visible") {
+    throw new Error("Expected visible terminal reply");
+  }
+  const child = await mutateSubagentRuns([runId], (rows) => {
+    const current = rows.get(runId);
+    if (!current) {
+      throw new Error("Expected registered child");
+    }
+    const next = structuredClone(current);
+    next.execution = {
+      ...next.execution,
+      status: "terminal",
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
+      transcriptTarget: target,
+    };
+    next.completion = { required: true, resultText: terminalReply.text, terminalReply };
+    markPendingFinalDelivery({ entry: next });
+    return { value: next, postimages: new Map([[runId, next]]) };
+  });
+  return { child, target, terminalReply };
+}
+
+it("submits deferred child results after canonical archive pruning without poisoning the next parent turn", async () => {
+  const archivedAnswer = `${"Archived finding. ".repeat(400)}archive answer tail`;
+  const healthyAnswer = `${"Healthy finding. ".repeat(400)}healthy answer tail`;
+  const archived = await publishChild("archived-child", archivedAnswer);
+  const healthy = await publishChild("healthy-child", healthyAnswer);
+  expect(archived.terminalReply.text.length).toBeLessThanOrEqual(4_096);
+  expect(healthy.terminalReply.text.length).toBeLessThanOrEqual(4_096);
+  expect(archived.terminalReply.text).not.toContain("archive answer tail");
+  expect(healthy.terminalReply.text).not.toContain("healthy answer tail");
+  const deleted = await deleteSessionEntryLifecycle({
+    archiveTranscript: true,
+    storePath: archived.target.storePath,
+    target: {
+      canonicalKey: archived.target.sessionKey,
+      storeKeys: [archived.target.sessionKey],
+    },
+  });
+  const archivePath = deleted.archivedTranscripts[0]?.archivedPath;
+  if (!archivePath) {
+    throw new Error("Expected published child transcript archive");
+  }
+  await expect(access(archivePath)).resolves.toBeUndefined();
+  expect(
+    await findSessionTranscriptArchiveEventReadOnly(archived.target, archived.child.runId),
+  ).toMatchObject({
+    event: { message: { content: [{ type: "text", text: archivedAnswer }] } },
+  });
+
+  const scope = resolveSqliteReadScope(archived.target);
+  const pruned = await pruneAllSessionTranscriptArchivesToHighWater({
+    archiveDirectory: path.dirname(archivePath),
+    databaseOptions: toDatabaseOptions(scope),
+    highWaterBytes: 0,
+    storePath: archived.target.storePath,
+  });
+  expect(pruned.removedFiles).toBe(1);
+  await expect(access(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(
+    await findSessionTranscriptArchiveEventReadOnly(archived.target, archived.child.runId),
+  ).toBeUndefined();
+
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: archived.target.sessionKey,
+    defaultSessionId: "replacement-session",
+  });
+  await appendTranscriptMessage(
+    { ...archived.target, sessionId: "replacement-session" },
+    {
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Unrelated replacement answer." }],
+        __openclaw: { runId: "replacement-run" },
+      },
+    },
+  );
+  const leaseId = "retained-results";
+  const leased = await leasePendingAgentSteeringItems({ requesterSessionKey, leaseId });
+  if (!leased) {
+    throw new Error("Expected both deferred child results");
+  }
+  expect(leased.runIds).toEqual([archived.child.runId, healthy.child.runId]);
+  expect(leased.isCurrent()).toBe(true);
+  const { session } = await createTestSession();
+  const requests: Context["messages"][] = [];
+  streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+    requests.push(structuredClone(context.messages));
+    return createAssistantResultStream(
+      createAssistant(model, [{ type: "text", text: "Parent answer complete." }]),
+    );
+  });
+  const onSteeringAcknowledged = vi.fn();
+  const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+  const prompt = prependAgentSteeringPrompt({
+    steeringPrompt: leased.prompt,
+    prompt: "Use the findings to finish the answer.",
+  });
+  await submitEmbeddedAttemptPrompt({
+    attempt: { sessionId, sessionKey: requesterSessionKey },
+    activeSession: session,
+    contextTokenBudget: 32_000,
+    images: [],
+    leasedSteering: { ...leased, leaseId },
+    modelPrompt: prompt,
+    transcriptPrompt: prompt,
+    onFinalPromptText: vi.fn(),
+    onSteeringAcknowledged,
+    persistToolResultProjections: vi.fn(async () => {}),
+    promptActiveSession: (text, options) => session.prompt(text, options),
+    runtimeOnly: false,
+    systemPrompt: "Use the child findings.",
+    toolResultAggregateMaxChars: 8_000,
+    toolResultMaxChars: 4_000,
+    toolResultPromptProjectionState: sessionPromptState.toolResults,
+    trajectoryRecorder: null,
+    transcriptLeafId: null,
+  });
+
+  expect(requests).toHaveLength(1);
+  const delivered = JSON.stringify(requests[0]);
+  expect(delivered).toContain("truncated-by-retention");
+  expect(delivered).toContain(archived.terminalReply.text);
+  expect(delivered).not.toContain("archive answer tail");
+  expect(delivered).toContain(healthyAnswer);
+  expect(delivered).not.toContain("Unrelated replacement answer.");
+  expect(onSteeringAcknowledged).toHaveBeenCalledOnce();
+  for (const { child } of [archived, healthy]) {
+    expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
+    expect(subagentRuns.get(child.runId)?.delivery?.steeringLeaseId).toBeUndefined();
+  }
+  expect(
+    await leasePendingAgentSteeringItems({ requesterSessionKey, leaseId: "next-turn" }),
+  ).toBeUndefined();
+  await session.prompt("Continue with the next question.");
+  expect(requests).toHaveLength(2);
+  expect(session.messages.at(-1)).toMatchObject({
+    role: "assistant",
+    stopReason: "stop",
+    content: [{ type: "text", text: "Parent answer complete." }],
+  });
+  expect(
+    session.messages.some(
+      (message) => message.role === "assistant" && message.stopReason === "error",
+    ),
+  ).toBe(false);
 });

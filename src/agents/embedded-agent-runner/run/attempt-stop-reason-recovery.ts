@@ -1,6 +1,3 @@
-/**
- * Recovers sensitive stop reasons by wrapping provider stream functions.
- */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import type { StreamFn } from "../../runtime/index.js";
@@ -14,12 +11,18 @@ function normalizeUnhandledStopReasonMessage(message: unknown): string | undefin
   if (typeof message !== "string") {
     return undefined;
   }
-  const match = message.trim().match(UNHANDLED_STOP_REASON_RE);
-  const stopReason = match?.[1]?.trim();
-  if (!stopReason) {
-    return undefined;
+  const stopReason = message.trim().match(UNHANDLED_STOP_REASON_RE)?.[1]?.trim();
+  return stopReason
+    ? `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`
+    : undefined;
+}
+
+function normalizeUnhandledStopReasonError(error: unknown): string {
+  const message = normalizeUnhandledStopReasonMessage(formatErrorMessage(error));
+  if (!message) {
+    throw error;
   }
-  return `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`;
+  return message;
 }
 
 function patchUnhandledStopReasonInAssistantMessage(message: unknown): void {
@@ -67,60 +70,52 @@ function wrapStreamHandleUnhandledStopReason(
       patchUnhandledStopReasonInAssistantMessage(message);
       return message;
     } catch (err) {
-      const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
-      if (!normalizedMessage) {
-        throw err;
-      }
       return buildStreamErrorAssistantMessage({
         model,
-        errorMessage: normalizedMessage,
+        errorMessage: normalizeUnhandledStopReasonError(err),
       });
     }
   };
 
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      let emittedSyntheticTerminal = false;
-      return createStreamIteratorWrapper({
-        iterator,
-        next: async (streamIterator) => {
-          if (emittedSyntheticTerminal) {
-            return { done: true as const, value: undefined };
-          }
+  stream[Symbol.asyncIterator] = function () {
+    const iterator = originalAsyncIterator();
+    let emittedSyntheticTerminal = false;
+    return createStreamIteratorWrapper({
+      iterator,
+      next: async (streamIterator) => {
+        if (emittedSyntheticTerminal) {
+          return { done: true as const, value: undefined };
+        }
 
-          try {
-            const result = await streamIterator.next();
-            if (!result.done && result.value && typeof result.value === "object") {
-              const event = result.value as { error?: unknown };
-              patchUnhandledStopReasonInAssistantMessage(event.error);
-            }
-            return result;
-          } catch (err) {
-            const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
-            if (!normalizedMessage) {
-              throw err;
-            }
-            // The provider stream failed before yielding a terminal event. Emit a
-            // synthetic error event once so callers still receive a normal stream
-            // shape and iterator completion.
-            emittedSyntheticTerminal = true;
-            return {
-              done: false as const,
-              value: {
-                type: "error" as const,
-                reason: "error" as const,
-                error: buildStreamErrorAssistantMessage({
-                  model,
-                  errorMessage: normalizedMessage,
-                }),
-              },
-            };
+        try {
+          const result = await streamIterator.next();
+          if (!result.done && result.value && typeof result.value === "object") {
+            const event = result.value as { error?: unknown };
+            patchUnhandledStopReasonInAssistantMessage(event.error);
           }
-        },
-      });
-    };
+          return result;
+        } catch (err) {
+          const normalizedMessage = normalizeUnhandledStopReasonError(err);
+          // The provider stream failed before yielding a terminal event. Emit a
+          // synthetic error event once so callers still receive a normal stream
+          // shape and iterator completion.
+          emittedSyntheticTerminal = true;
+          return {
+            done: false as const,
+            value: {
+              type: "error" as const,
+              reason: "error" as const,
+              error: buildStreamErrorAssistantMessage({
+                model,
+                errorMessage: normalizedMessage,
+              }),
+            },
+          };
+        }
+      },
+    });
+  };
 
   return stream;
 }
@@ -137,22 +132,13 @@ export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamF
       if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
         return Promise.resolve(maybeStream).then(
           (stream) => wrapStreamHandleUnhandledStopReason(model, stream),
-          (err: unknown) => {
-            const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
-            if (!normalizedMessage) {
-              throw err;
-            }
-            return buildUnhandledStopReasonErrorStream(model, normalizedMessage);
-          },
+          (err: unknown) =>
+            buildUnhandledStopReasonErrorStream(model, normalizeUnhandledStopReasonError(err)),
         );
       }
       return wrapStreamHandleUnhandledStopReason(model, maybeStream);
     } catch (err) {
-      const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
-      if (!normalizedMessage) {
-        throw err;
-      }
-      return buildUnhandledStopReasonErrorStream(model, normalizedMessage);
+      return buildUnhandledStopReasonErrorStream(model, normalizeUnhandledStopReasonError(err));
     }
   };
 }

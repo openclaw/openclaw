@@ -1,4 +1,3 @@
-// Resolves bundled plugin load-path aliases for package output.
 import path from "node:path";
 
 /** Alias class for current packaged paths and legacy bundled extension paths. */

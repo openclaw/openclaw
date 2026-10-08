@@ -8,17 +8,17 @@ title: "Ollama"
 ---
 
 OpenClaw talks to Ollama's native API (`/api/chat`), not the OpenAI-compatible
-`/v1` endpoint. Three modes are supported:
+`/v1` endpoint. Three setups are supported:
 
-| Mode          | What it uses                                                                     |
+| Setup         | What it uses                                                                     |
 | ------------- | -------------------------------------------------------------------------------- |
 | Cloud + Local | A reachable Ollama host, serving local models and (if signed in) `:cloud` models |
-| Cloud only    | `https://ollama.com` directly, no local daemon                                   |
 | Local only    | A reachable Ollama host, local models only                                       |
+| Ollama Cloud  | `https://ollama.com` directly through the `ollama-cloud` provider, no daemon     |
 
-For cloud-only setup with the dedicated `ollama-cloud` provider id, see
-[Ollama Cloud](/providers/ollama-cloud). Use `ollama-cloud/<model>` refs when
-you want cloud routing kept separate from a local `ollama` provider.
+Hosted-only access is its own **Ollama Cloud** setup choice; see
+[Ollama Cloud](/providers/ollama-cloud). Its `ollama-cloud/<model>` refs keep
+cloud routing separate from the local `ollama` provider.
 
 <Warning>
 Do not use the `/v1` OpenAI-compatible URL (`http://host:11434/v1`). It breaks tool calling and models can emit raw tool-call JSON as plain text. Use the native URL: `baseUrl: "http://host:11434"` (no `/v1`).
@@ -33,7 +33,7 @@ job. Open the page that matches your task.
 | Page                                                                  | Read it when                                                                                                                |
 | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | [Ollama setup](/providers/ollama/setup)                               | You are connecting an account: auth rules per host type, onboarding and manual setup, and the hybrid cloud-plus-local flow. |
-| [Ollama model discovery](/providers/ollama/model-discovery)           | You want to know how models are found: the implicit-discovery table, capability detection, and smoke-test probes.           |
+| [Ollama model discovery](/providers/ollama/model-discovery)           | You want to know how models are found: the implicit-discovery table, capability detection, and smoke-test checks.           |
 | [Ollama node-local inference](/providers/ollama/node-local-inference) | You are running models on a paired node: setup steps, model filtering, and direct verification commands.                    |
 | [Ollama vision and image description](/providers/ollama/vision)       | You are describing or understanding images through a local or hosted Ollama vision model.                                   |
 | [Ollama configuration](/providers/ollama/configuration)               | You are writing the provider entry: implicit discovery, an explicit model list, or a custom base URL.                       |

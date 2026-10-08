@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  coerceSecretRef,
+  parseSecretRef,
   normalizeSecretInputString,
   type SecretInput,
 } from "../config/types.secrets.js";
@@ -18,7 +18,7 @@ export type NodeHostCloudflareAccessConfig = {
 };
 
 function normalizeCloudflareAccessSecretInput(value: unknown, path: string): SecretInput {
-  const ref = coerceSecretRef(value);
+  const ref = parseSecretRef(value);
   if (ref) {
     return ref;
   }
@@ -105,16 +105,20 @@ export async function resolveNodeHostCloudflareAccess(params: {
   return { clientId, clientSecret };
 }
 
-export function nodeHostGatewayMatchesUrl(
-  gateway: { host?: string; port?: number; tls?: boolean },
-  target: URL,
-): boolean {
+function nodeHostGatewayOrigin(gateway: { host?: string; port?: number; tls?: boolean }): URL {
   const host = gateway.host ?? "127.0.0.1";
   const urlHost =
     host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
   const protocol = gateway.tls ? "https:" : "http:";
   const port = gateway.port ?? (gateway.tls ? 443 : 80);
-  const configured = new URL(`${protocol}//${urlHost}:${port}`);
+  return new URL(`${protocol}//${urlHost}:${port}`);
+}
+
+export function nodeHostGatewayMatchesUrl(
+  gateway: { host?: string; port?: number; tls?: boolean },
+  target: URL,
+): boolean {
+  const configured = nodeHostGatewayOrigin(gateway);
   return configured.protocol === target.protocol && configured.host === target.host;
 }
 
@@ -122,10 +126,5 @@ export function nodeHostGatewaysShareOrigin(
   left: { host?: string; port?: number; tls?: boolean },
   right: { host?: string; port?: number; tls?: boolean },
 ): boolean {
-  const host = right.host ?? "127.0.0.1";
-  const urlHost =
-    host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
-  const protocol = right.tls ? "https:" : "http:";
-  const port = right.port ?? (right.tls ? 443 : 80);
-  return nodeHostGatewayMatchesUrl(left, new URL(`${protocol}//${urlHost}:${port}`));
+  return nodeHostGatewayMatchesUrl(left, nodeHostGatewayOrigin(right));
 }

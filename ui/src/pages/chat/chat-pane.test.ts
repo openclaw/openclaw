@@ -7,7 +7,10 @@ import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
-import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import {
   installDialogPolyfill,
@@ -31,7 +34,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { openSessionWorkspacePreview } from "./components/chat-session-workspace-state.ts";
-import type { SidebarContent } from "./components/chat-sidebar.ts";
+import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
@@ -530,10 +533,16 @@ describe("chat pane initialization", () => {
     const sharedMessages: ChatMessageCache = new Map();
     pane.sessionKey = targetSessionKey;
     pane.chatMessagesBySession = sharedMessages;
-    pane.context = createInitializationContext();
+    pane.context = createInitializationContext(createTestGatewayClient(async () => ({})));
     cacheChatSessionSnapshot(
       sharedMessages,
-      { assistantAgentId: "main", agentsList: null, hello: null },
+      {
+        assistantAgentId: "main",
+        agentsList: null,
+        hello: null,
+        settings: pane.context.gateway.connection,
+        client: pane.context.gateway.snapshot.client,
+      },
       { sessionKey: targetSessionKey },
       {
         messages,
@@ -594,13 +603,25 @@ describe("chat pane initialization", () => {
     }
   });
 
-  it("starts the connected client when a route alias is already selected canonically", () => {
-    const request = vi.fn(() => new Promise<never>(() => {}));
+  it("starts the connected client when a route alias is already selected canonically", async () => {
+    const canonicalSessionKey = "agent:main:main";
+    const subscriptionRequested = createDeferred();
+    const subscriptionAdmitted = createDeferred<{ key: string }>();
+    const startupRequested = createDeferred();
+    const request = createGatewayRequestMock((method) => {
+      if (method === "sessions.messages.subscribe") {
+        subscriptionRequested.resolve();
+        return subscriptionAdmitted.promise;
+      }
+      if (method === "chat.startup") {
+        startupRequested.resolve();
+      }
+      return new Promise<never>(() => {});
+    });
     const client = createGatewayBrowserClientFixture({
       request,
     });
     const { pane, state } = createTestChatPane({ client });
-    const canonicalSessionKey = "agent:main:main";
     const hello = {
       features: { methods: ["chat.startup"] },
       snapshot: {
@@ -653,10 +674,14 @@ describe("chat pane initialization", () => {
 
     expect(navigate).toHaveBeenCalledWith("single", canonicalSessionKey, { replace: true });
     expect(pane.connectedClient).toBe(client);
+    await subscriptionRequested.promise;
+    expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(0);
+    subscriptionAdmitted.resolve({ key: canonicalSessionKey });
+    await startupRequested.promise;
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
       expect.objectContaining({ sessionKey: canonicalSessionKey }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 

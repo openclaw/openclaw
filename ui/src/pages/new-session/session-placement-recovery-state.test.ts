@@ -4,6 +4,7 @@ import {
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../../lib/sessions/session-placement-recovery.ts";
+import { buildDraftSessionCreateParams } from "./create-params.ts";
 import {
   PendingSessionPlacementRecoveryState,
   resolveSubmissionOutcomeReason,
@@ -129,6 +130,31 @@ describe("pending session placement recovery state", () => {
       readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
     ).toMatchObject({ createParams: { permissionMode: "guarded" } });
   });
+
+  it.each([undefined, "codex"])(
+    "preserves draft model and runtime %s through recovery",
+    (agentRuntime) => {
+      const pending = new PendingSessionPlacementRecoveryState();
+      const createParams = stageCreate(pending, {
+        target: { kind: "auto-device" },
+        createParams: buildDraftSessionCreateParams({
+          agentId: "cloud",
+          message: "keep the selected runtime",
+          deferInitialTurn: true,
+          model: "openai/gpt-5.6-sol",
+          agentRuntime,
+          worktree: true,
+        }),
+      });
+
+      expect(createParams).not.toBeNull();
+      expect(createParams?.model).toBe("openai/gpt-5.6-sol");
+      expect(createParams?.agentRuntime).toBe(agentRuntime);
+      expect(
+        readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
+      ).toMatchObject({ phase: "creating", createParams, message: "run remotely" });
+    },
+  );
 
   it.each([false, true])(
     "does not promote over a replacement submission (canonical key changes: %s)",

@@ -65,13 +65,7 @@ export function resolveCronPreflightCandidates(params: {
   useSubagentFallbacks?: boolean;
   inheritDefaultFallbacksForAgentStringModel?: boolean;
 }): ModelCandidate[] {
-  const fallbacksOverride = resolveCronFallbacksOverride({
-    cfg: params.cfg,
-    job: params.job,
-    agentId: params.agentId,
-    useSubagentFallbacks: params.useSubagentFallbacks,
-    inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
-  });
+  const fallbacksOverride = resolveCronFallbacksOverride(params);
   return resolveModelCandidateChain({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -88,53 +82,44 @@ export async function resolveCronPreflight(
 ) {
   const modelPreflightRuntime = await cronModelPreflightRuntimeLoader.load();
   const preflightCandidates = resolveCronPreflightCandidates(params);
-  let { provider, model } = params;
-  let selectedPreflightCandidate: ModelCandidate | undefined;
-  let selectedPreflightCandidateIndex = -1;
-  let firstUnavailablePreflight:
-    | Awaited<ReturnType<typeof modelPreflightRuntime.preflightCronModelProvider>>
-    | undefined;
+  let firstUnavailableReason: string | undefined;
   for (const [index, candidate] of preflightCandidates.entries()) {
     const candidatePreflight = await modelPreflightRuntime.preflightCronModelProvider({
       cfg: params.cfg,
       provider: candidate.provider,
       model: candidate.model,
     });
-    if (candidatePreflight.status === "available") {
-      selectedPreflightCandidate = candidate;
-      selectedPreflightCandidateIndex = index;
-      break;
+    if (candidatePreflight.status === "unavailable") {
+      firstUnavailableReason ??= candidatePreflight.reason;
+      continue;
     }
-    firstUnavailablePreflight ??= candidatePreflight;
-  }
-  if (!selectedPreflightCandidate && firstUnavailablePreflight?.status === "unavailable") {
-    return { ok: false as const, reason: firstUnavailablePreflight.reason };
-  }
-  const modelFallbacksOverride =
-    selectedPreflightCandidate &&
-    (selectedPreflightCandidate.provider !== provider || selectedPreflightCandidate.model !== model)
-      ? preflightCandidates
-          .slice(selectedPreflightCandidateIndex + 1)
-          .map((candidate) => `${candidate.provider}/${candidate.model}`)
-      : undefined;
-  // When preflight skips the first local candidate, start at the reachable provider.
-  if (selectedPreflightCandidate && modelFallbacksOverride) {
-    if (firstUnavailablePreflight?.status === "unavailable") {
+    const modelFallbacksOverride =
+      candidate.provider !== params.provider || candidate.model !== params.model
+        ? preflightCandidates
+            .slice(index + 1)
+            .map((remaining) => `${remaining.provider}/${remaining.model}`)
+        : undefined;
+    if (modelFallbacksOverride && firstUnavailableReason !== undefined) {
       logWarn(
-        `[cron:${params.job.id}] ${firstUnavailablePreflight.reason}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
+        `[cron:${params.job.id}] ${firstUnavailableReason}; continuing with fallback ${candidate.provider}/${candidate.model}.`,
       );
     }
-    provider = selectedPreflightCandidate.provider;
-    model = selectedPreflightCandidate.model;
+    return {
+      ok: true as const,
+      provider: candidate.provider,
+      model: candidate.model,
+      modelFallbacksOverride,
+      runtimePluginCandidates: preflightCandidates.slice(index),
+    };
+  }
+  if (firstUnavailableReason !== undefined) {
+    return { ok: false as const, reason: firstUnavailableReason };
   }
   return {
     ok: true as const,
-    provider,
-    model,
-    modelFallbacksOverride,
-    runtimePluginCandidates:
-      selectedPreflightCandidateIndex >= 0
-        ? preflightCandidates.slice(selectedPreflightCandidateIndex)
-        : preflightCandidates,
+    provider: params.provider,
+    model: params.model,
+    modelFallbacksOverride: undefined,
+    runtimePluginCandidates: preflightCandidates,
   };
 }

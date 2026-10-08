@@ -77,7 +77,7 @@ export async function hydrateSwarmSessionRows(params: {
 type SwarmHydrationParams = {
   sessions: Pick<SessionCapability, "list" | "inheritRow" | "observeRow" | "observeList">;
   agentId?: string;
-  readParent: () => Promise<GatewaySessionRow | null>;
+  readParent: (refresh?: boolean) => Promise<GatewaySessionRow | null>;
   parentKey: string;
   sourceEpoch: number;
   currentRows: () => readonly GatewaySessionRow[];
@@ -88,6 +88,13 @@ type SwarmRead = "parent" | "children";
 
 export class SwarmRosterHydrator {
   rows: GatewaySessionRow[] = [];
+  /** True once the child query has filled `rows`; the seed can hold only some children. */
+  hydrated = false;
+  /**
+   * True once the first child read has answered. Unlike `hydrated`, a launch's
+   * re-read keeps it, so it marks when seeded ancestry has been replaced.
+   */
+  childrenRead = false;
   private key = "";
   private generation = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -107,7 +114,10 @@ export class SwarmRosterHydrator {
   private childRows: GatewaySessionRow[] = [];
   private parentRequest: Promise<void> | null = null;
   private parentRefreshQueued = false;
+  private parentRefreshForced = false;
   private publishingParentRead = false;
+  /** Parent-named children the child query has already been asked to bring in. */
+  private readonly requestedChildren = new Set<string>();
 
   update(params: SwarmHydrationParams): void {
     const key = `${params.sourceEpoch}:${params.agentId ?? ""}:${params.parentKey}`;
@@ -175,11 +185,43 @@ export class SwarmRosterHydrator {
     );
     // Parent counts remain independent of the optional child-name page.
     void this.readParent();
-    void this.children.refresh().catch(() => {
-      if (isCurrent()) {
+    this.refreshChildren();
+  }
+
+  private refreshChildren(): void {
+    const generation = this.generation;
+    // The list keeps one more read queued behind a read already in flight.
+    void this.children?.refresh().catch(() => {
+      if (generation === this.generation) {
         this.retry("children");
       }
     });
+  }
+
+  /**
+   * A launch reaches the parent row at once, but the child query only re-reads
+   * on its paced schedule. Read it now, and report the roster incomplete until
+   * that read answers, so nothing counts children it has not seen. Each named
+   * child is asked for once: one the list never returns, such as an archived
+   * child, must not hide the count again or keep the list re-reading.
+   */
+  private refreshNewChildren(): void {
+    if (!this.childrenRead) {
+      // The first read is still loading every child.
+      return;
+    }
+    const held = new Set(this.childRows.map((row) => row.key));
+    const unasked = (this.parentRow?.childSessions ?? []).filter(
+      (key) => !held.has(key) && !this.requestedChildren.has(key),
+    );
+    if (unasked.length === 0) {
+      return;
+    }
+    for (const key of unasked) {
+      this.requestedChildren.add(key);
+    }
+    this.hydrated = false;
+    this.refreshChildren();
   }
 
   private applyParent(parent: GatewaySessionRow | null): void {
@@ -210,6 +252,7 @@ export class SwarmRosterHydrator {
         : parent;
     this.parentSummary = summary;
     this.rows = this.parentRow ? mergeSwarmSessionRows(this.childRows, [this.parentRow]) : [];
+    this.refreshNewChildren();
     this.params?.onRows(this.rows);
     if (parent && changed && this.parent && !this.publishingParentRead) {
       void this.readParent();
@@ -236,19 +279,16 @@ export class SwarmRosterHydrator {
       retry.timer = null;
       if (owner === "parent") {
         void this.readParent();
-      } else {
-        void this.children?.refresh().catch(() => {
-          if (generation === this.generation) {
-            this.retry(owner);
-          }
-        });
+      } else if (generation === this.generation) {
+        this.refreshChildren();
       }
     }, delay);
   }
 
-  private readParent(): Promise<void> {
+  private readParent(refresh = false): Promise<void> {
     if (this.parentRequest) {
       this.parentRefreshQueued = true;
+      this.parentRefreshForced ||= refresh;
       return this.parentRequest;
     }
     const params = this.params;
@@ -276,7 +316,7 @@ export class SwarmRosterHydrator {
       }
     };
     const request = Promise.resolve()
-      .then(() => params.readParent())
+      .then(() => params.readParent(refresh))
       .then((row) => {
         if (!isCurrent()) {
           return;
@@ -299,8 +339,10 @@ export class SwarmRosterHydrator {
         }
         this.parentRequest = null;
         if (this.parentRefreshQueued) {
+          const queuedRefresh = this.parentRefreshForced;
           this.parentRefreshQueued = false;
-          void this.readParent();
+          this.parentRefreshForced = false;
+          void this.readParent(queuedRefresh);
         }
       });
     this.parentRequest = request;
@@ -344,7 +386,8 @@ export class SwarmRosterHydrator {
       );
     });
     if (this.parentRow && (removedMember || missingDetail)) {
-      void this.readParent();
+      // Child membership can change without invalidating the parent's descriptor revision.
+      void this.readParent(true);
     }
     const generation = this.generation;
     const isCurrent = () => generation === this.generation && this.childResult === result;
@@ -361,7 +404,11 @@ export class SwarmRosterHydrator {
         const parent = this.parentRow;
         this.childRows = rows;
         this.rows = parent ? mergeSwarmSessionRows(this.childRows, [parent]) : [];
+        this.childrenRead = true;
+        this.hydrated = true;
         this.recovered("children");
+        // A child launched during this read is still missing from it.
+        this.refreshNewChildren();
         params.onRows(this.rows);
       })
       .catch(() => {
@@ -386,7 +433,11 @@ export class SwarmRosterHydrator {
     this.childRows = [];
     this.parentRequest = null;
     this.parentRefreshQueued = false;
+    this.parentRefreshForced = false;
+    this.childrenRead = false;
+    this.requestedChildren.clear();
     this.rows = [];
+    this.hydrated = false;
     this.key = key;
     this.generation += 1;
     this.recovered("parent");

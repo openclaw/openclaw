@@ -9,7 +9,6 @@ import {
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
 
 vi.mock("./embedded-agent-messaging.js", () => ({ isMessagingToolSendAction: () => false }));
-const config = { enabled: true };
 const markdown = "Waiting for reviewer results.";
 const makeState = (): SessionState => ({ lastActivity: 0, state: "processing", queueDepth: 0 });
 type Params = {
@@ -36,7 +35,7 @@ function createFixture() {
             }
           : null,
     });
-    recordToolCall(state, tool.name, params, toolCallId, config, { runId });
+    recordToolCall(state, tool.name, params, toolCallId, { runId });
     const result = await tool.execute(toolCallId, params);
     const record = recordToolCallOutcome(state, {
       toolName: tool.name,
@@ -53,8 +52,8 @@ function createFixture() {
 
 describe("progress-card loop outcomes", () => {
   it.each<Params>([
-    { markdown },
     {
+      markdown,
       plan: [
         { step: "Review", status: "pending" },
         { step: "Verify", status: "pending" },
@@ -68,7 +67,7 @@ describe("progress-card loop outcomes", () => {
       const hashes = new Set();
       for (let index = 0; index < 20; index++) {
         expect(
-          detectToolCallLoop(state, "progress_card", params, config, { runId: "run-1" }),
+          detectToolCallLoop(state, "progress_card", params, { runId: "run-1" }),
         ).not.toMatchObject({ level: "critical" });
         const { result, record } = await execute(params);
         expect(result.details).toMatchObject({
@@ -77,15 +76,14 @@ describe("progress-card loop outcomes", () => {
         hashes.add(record.resultHash);
       }
       expect(hashes.size).toBe(1);
-      expect(
-        detectToolCallLoop(state, "progress_card", params, config, { runId: "run-1" }),
-      ).toMatchObject({ stuck: true, level: "critical", count: 20 });
-      expect(
-        detectToolCallLoop(state, "progress_card", params, config, { runId: "run-2" }),
-      ).toEqual({ stuck: false });
-      expect(
-        detectToolCallLoop(state, "progress_card", params, { enabled: false }, { runId: "run-1" }),
-      ).toEqual({ stuck: false });
+      expect(detectToolCallLoop(state, "progress_card", params, { runId: "run-1" })).toMatchObject({
+        stuck: true,
+        level: "critical",
+        count: 20,
+      });
+      expect(detectToolCallLoop(state, "progress_card", params, { runId: "run-2" })).toEqual({
+        stuck: false,
+      });
     },
   );
   it("keeps markdown and plan changes meaningful even when counts match", async () => {
@@ -100,9 +98,9 @@ describe("progress-card loop outcomes", () => {
       {},
     ];
     for (const params of inputs) {
-      expect(
-        detectToolCallLoop(state, "progress_card", params, config, { runId: "run-1" }),
-      ).toEqual({ stuck: false });
+      expect(detectToolCallLoop(state, "progress_card", params, { runId: "run-1" })).toEqual({
+        stuck: false,
+      });
       const { record } = await execute(params);
       hashes.add([record.argsHash, record.resultHash].join(":"));
     }
@@ -123,49 +121,33 @@ describe("progress-card loop outcomes", () => {
       ).toBe(index === 2);
     }
   });
-  it.each(["read", "error"])("does not normalize a real receipt used as %s", async (kind) => {
-    const { execute } = createFixture();
-    const state = makeState();
-    for (let index = 0; index < 2; index++) {
-      const { result } = await execute({ markdown });
-      recordToolCallOutcome(state, {
-        toolName: kind === "read" ? "read" : "progress_card",
-        toolParams: { markdown },
-        result: kind === "error" ? Object.assign(result, { isError: true }) : result,
-      });
-    }
-    expect(new Set(state.toolCallHistory?.map((record) => record.resultHash)).size).toBe(2);
-  });
-  it("keeps semantic outcomes private and independent of receipt wording", async () => {
-    const { execute } = createFixture();
-    const state = makeState();
-    for (let index = 0; index < 2; index++) {
-      const { result } = await execute({ markdown });
-      expect(Object.keys(result).toSorted()).toEqual(["content", "details"]);
-      result.content = [{ type: "text", text: "New receipt wording " + index }];
-      recordToolCallOutcome(state, { toolName: "progress_card", toolParams: { markdown }, result });
-    }
-    expect(new Set(state.toolCallHistory?.map((record) => record.resultHash)).size).toBe(1);
-  });
-  it("does not erase arbitrary revisions or errors from other outcomes", () => {
-    for (const [toolName, isError] of [
-      ["read", false],
-      ["progress_card", true],
-      ["progress_card", false],
-    ] as const) {
+  it.each(["read", "error", "rewritten", "unmarked"] as const)(
+    "normalizes only private successful progress-card outcomes: %s",
+    async (kind) => {
+      const { execute } = createFixture();
       const state = makeState();
       for (let revision = 1; revision <= 2; revision++) {
+        const result =
+          kind === "unmarked"
+            ? {
+                isError: false,
+                details: { revision, steps: null },
+                content: [{ type: "text" as const, text: "Read failed at revision " + revision }],
+              }
+            : (await execute({ markdown })).result;
+        if (kind === "rewritten") {
+          expect(Object.keys(result).toSorted()).toEqual(["content", "details"]);
+          result.content = [{ type: "text", text: "New receipt wording " + revision }];
+        }
         recordToolCallOutcome(state, {
-          toolName,
+          toolName: kind === "read" ? "read" : "progress_card",
           toolParams: { markdown },
-          result: {
-            isError,
-            details: { revision, steps: null },
-            content: [{ type: "text", text: "Read failed at revision " + revision }],
-          },
+          result: kind === "error" ? Object.assign(result, { isError: true }) : result,
         });
       }
-      expect(new Set(state.toolCallHistory?.map((record) => record.resultHash)).size).toBe(2);
-    }
-  });
+      expect(new Set(state.toolCallHistory?.map((record) => record.resultHash)).size).toBe(
+        kind === "rewritten" ? 1 : 2,
+      );
+    },
+  );
 });

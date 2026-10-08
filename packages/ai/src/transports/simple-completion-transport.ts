@@ -1,8 +1,3 @@
-/**
- * Simple completion transport preparation.
- *
- * Registers provider-specific stream functions and rewrites models that need OpenClaw-managed transport semantics.
- */
 import { randomUUID } from "node:crypto";
 import type { Api, Model, StreamFn, StreamOptions } from "@openclaw/llm-core";
 import type { ApiRegistry } from "../api-registry.js";
@@ -54,48 +49,41 @@ function resolveAnthropicVertexSimpleApi(baseUrl?: string): Api {
 
 export function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): string {
   const normalized = baseUrl?.trim() || "https://chatgpt.com/backend-api";
-  try {
-    const parsed = new URL(normalized);
-    const pathname = parsed.pathname.replace(/\/+$/u, "");
-    const path = pathname.toLowerCase();
-    if (
-      parsed.hostname.toLowerCase() === "chatgpt.com" &&
-      [
-        "/backend-api",
-        "/backend-api/v1",
-        "/backend-api/codex",
-        "/backend-api/codex/v1",
-        "/backend-api/codex/responses",
-      ].includes(path)
-    ) {
-      parsed.pathname = "/backend-api/codex";
-      parsed.search = "";
-      parsed.hash = "";
-      return parsed.toString().replace(/\/$/u, "");
-    }
-    if (normalized.includes("?") || normalized.includes("#")) {
-      throw new Error(INVALID_CODEX_BASE_URL_MESSAGE);
-    }
+  const parsed = URL.parse(normalized);
+  const pathname = parsed?.pathname.replace(/\/+$/u, "") ?? "";
+  const path = pathname.toLowerCase();
+  if (
+    parsed?.hostname.toLowerCase() === "chatgpt.com" &&
+    [
+      "/backend-api",
+      "/backend-api/v1",
+      "/backend-api/codex",
+      "/backend-api/codex/v1",
+      "/backend-api/codex/responses",
+    ].includes(path)
+  ) {
+    parsed.pathname = "/backend-api/codex";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/u, "");
+  }
+  if (normalized.includes("?") || normalized.includes("#")) {
+    throw new Error(INVALID_CODEX_BASE_URL_MESSAGE);
+  }
+  if (parsed) {
     parsed.pathname = path.endsWith("/codex/responses")
       ? pathname.slice(0, -"/responses".length)
       : path.endsWith("/codex")
         ? pathname
         : `${pathname}/codex`;
     return parsed.toString();
-  } catch (error) {
-    if (error instanceof Error && error.message === INVALID_CODEX_BASE_URL_MESSAGE) {
-      throw error;
-    }
-    // Keep non-URL custom values on the same suffix contract transport callers accept.
   }
-  if (normalized.includes("?") || normalized.includes("#")) {
-    throw new Error(INVALID_CODEX_BASE_URL_MESSAGE);
+  // Keep non-URL custom values on the same suffix contract transport callers accept.
+  const customPath = normalized.replace(/\/+$/u, "");
+  if (customPath.endsWith("/codex/responses")) {
+    return customPath.slice(0, -"/responses".length);
   }
-  const path = normalized.replace(/\/+$/u, "");
-  if (path.endsWith("/codex/responses")) {
-    return path.slice(0, -"/responses".length);
-  }
-  return path.endsWith("/codex") ? path : `${path}/codex`;
+  return customPath.endsWith("/codex") ? customPath : `${customPath}/codex`;
 }
 
 function resolveProviderSimpleCompletionApi(
@@ -125,8 +113,8 @@ function resolveProviderStreamApi(model: Model): Api {
 function applyProviderSimpleCompletionWrapper(
   registry: ApiRegistry,
   model: Model,
-  cfg?: unknown,
-  hookSourceApi: Api = model.api,
+  cfg: unknown,
+  hookSourceApi: Api,
   auth?: AiProviderStreamHookContext["auth"],
   agentId?: string,
 ): Model {
@@ -282,42 +270,23 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   agentId?: string;
 }): Model {
   const { apiRegistry, model, cfg, auth, agentId } = params;
+  const wrap = (prepared: Model) =>
+    applyProviderSimpleCompletionWrapper(apiRegistry, prepared, cfg, model.api, auth, agentId);
   const providerStreamModel = prepareProviderStreamModel({ model, cfg, apiRegistry });
   if (providerStreamModel) {
-    return applyProviderSimpleCompletionWrapper(
-      apiRegistry,
-      providerStreamModel,
-      cfg,
-      model.api,
-      auth,
-      agentId,
-    );
+    return wrap(providerStreamModel);
   }
 
   const codexTransportModel = prepareCodexSimpleTransportModel(apiRegistry, model, cfg);
   if (codexTransportModel) {
-    return applyProviderSimpleCompletionWrapper(
-      apiRegistry,
-      codexTransportModel,
-      cfg,
-      model.api,
-      auth,
-      agentId,
-    );
+    return wrap(codexTransportModel);
   }
 
   const transportAwareModel = prepareTransportAwareSimpleModel(model, { cfg });
   if (transportAwareModel !== model) {
     const streamFn = buildTransportAwareSimpleStreamFn(model, { cfg });
     if (streamFn && registerCustomApi(apiRegistry, transportAwareModel.api, streamFn)) {
-      return applyProviderSimpleCompletionWrapper(
-        apiRegistry,
-        transportAwareModel,
-        cfg,
-        model.api,
-        auth,
-        agentId,
-      );
+      return wrap(transportAwareModel);
     }
   }
 
@@ -326,17 +295,9 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
     const host = getAiTransportHost();
     const streamFn = host.plugin.createAnthropicVertexStream(model);
     if (registerCustomApi(apiRegistry, api, streamFn)) {
-      const transportModel = projectModel(model, { api });
-      return applyProviderSimpleCompletionWrapper(
-        apiRegistry,
-        transportModel,
-        cfg,
-        model.api,
-        auth,
-        agentId,
-      );
+      return wrap(projectModel(model, { api }));
     }
   }
 
-  return applyProviderSimpleCompletionWrapper(apiRegistry, model, cfg, model.api, auth, agentId);
+  return wrap(model);
 }

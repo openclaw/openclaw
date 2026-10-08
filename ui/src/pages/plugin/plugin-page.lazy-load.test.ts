@@ -56,6 +56,12 @@ function createPage(loads: Promise<TestBundledView>[], includeExternal = false) 
   page.tabId = "logbook";
   (page as unknown as { context: ApplicationContext }).context = {
     gateway: { snapshot, subscribe: () => () => undefined },
+    plugins: {
+      errors: [],
+      registrations: () => [],
+      isLoading: () => false,
+      subscribe: () => () => undefined,
+    },
   } as unknown as ApplicationContext;
   return page;
 }

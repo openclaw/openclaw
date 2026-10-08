@@ -1,5 +1,4 @@
-// System-agent prompts drive the OpenClaw conversation with typed-command output.
-import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
+import { extractBalancedJsonPrefix, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SystemAgentGreetingFacts } from "./greeting.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -67,7 +66,6 @@ export function buildSystemAgentGreetingUserPrompt(params: {
   });
 }
 
-/** System prompt: persona plus the closed command vocabulary. */
 export const SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT = [
   "You are OpenClaw, the system agent: a small, tidy hermit crab that lives in the config shell.",
   "Personality: warm, competent, concise. Dry humor in small doses. Never corporate. You configure things so the user does not have to.",
@@ -170,7 +168,6 @@ const SYSTEM_AGENT_SYSTEM_PROMPT = [
   "Keep replies under 120 words. Ask one question at a time. Never claim something was done unless the tool result confirms it.",
 ].join("\n");
 
-/** One prior conversation turn supplied to the assistant. */
 export type SystemAgentAssistantTurn = {
   role: "user" | "assistant";
   text: string;
@@ -204,7 +201,6 @@ function formatHistory(history: SystemAgentAssistantTurn[] | undefined): string[
   ];
 }
 
-/** Build the overview-grounded user prompt supplied to assistant planners. */
 export function buildSystemAgentAssistantUserPrompt(params: {
   input: string;
   overview: SystemAgentOverview;
@@ -264,19 +260,10 @@ export function parseSystemAgentAssistantPlanText(
   }
   // Model output may wrap JSON in prose; extraction stays narrow and validation happens after.
   const jsonText = extractBalancedJsonPrefix(text, { openers: ["{"] })?.json;
-  if (!jsonText) {
+  const record = jsonText ? safeParseJsonRecord(jsonText) : undefined;
+  if (!record) {
     return null;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object") {
-    return null;
-  }
-  const record = parsed as Record<string, unknown>;
   const command = typeof record.command === "string" ? record.command.trim() : "";
   const reply = typeof record.reply === "string" ? record.reply.trim() : "";
   // Pure-chat replies are valid; a plan needs at least one of reply/command.

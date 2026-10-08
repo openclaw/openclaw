@@ -5,7 +5,10 @@ import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import type { ProgressNarrationInput } from "./progress-narrator-model.js";
+import {
+  generateNarrationWithUtilityModel,
+  type ProgressNarrationInput,
+} from "./progress-narrator-model.js";
 
 const narratorWarnSpy = vi.hoisted(() => vi.fn());
 const narrationModelMocks = vi.hoisted(() => ({
@@ -128,6 +131,7 @@ function createNarratorHarness(params?: {
 }
 
 beforeEach(() => {
+  vi.mocked(generateNarrationWithUtilityModel).mockClear();
   narrationModelMocks.prepare.mockResolvedValue(narrationModelMocks.prepared);
 });
 
@@ -304,6 +308,73 @@ describe("progress narration through reply options", () => {
       expect(onUpdate).toHaveBeenCalledOnce();
     },
   );
+
+  it.each(["borrowed", "failed"] as const)(
+    "re-prepares a %s route for queued narration and then reuses the native route",
+    async (initialRoute) => {
+      narrationModelMocks.prepare.mockResolvedValueOnce(
+        initialRoute === "borrowed"
+          ? { ...narrationModelMocks.prepared, agentHarnessRuntimeOverride: "claude-cli" }
+          : null,
+      );
+      const { narrator, onUpdate } = createNarratorHarness();
+
+      narrator.noteToolStart({ name: "exec", phase: "start" });
+      await flushNarrations();
+      for (let turn = 0; turn < 2; turn += 1) {
+        narrator.stopTurn();
+        narrator.beginTurn();
+        narrator.noteToolStart({ name: "read", phase: "start" });
+        await flushNarrations();
+      }
+
+      expect(narrationModelMocks.prepare).toHaveBeenCalledTimes(2);
+      expect(
+        vi
+          .mocked(generateNarrationWithUtilityModel)
+          .mock.calls.map(([{ prepared }]) => prepared.agentHarnessRuntimeOverride ?? "http"),
+      ).toEqual(initialRoute === "borrowed" ? ["claude-cli", "http", "http"] : ["http", "http"]);
+      expect(onUpdate).toHaveBeenCalledTimes(initialRoute === "borrowed" ? 3 : 2);
+    },
+  );
+
+  it("does not let a stale borrowed completion evict a queued turn's native preparation", async () => {
+    const staleGeneration = createDeferred<string>();
+    narrationModelMocks.prepare.mockResolvedValueOnce({
+      ...narrationModelMocks.prepared,
+      agentHarnessRuntimeOverride: "claude-cli",
+    });
+    let generationCount = 0;
+    const { narrator, onUpdate } = createNarratorHarness({
+      generate: async () =>
+        ++generationCount === 1 ? await staleGeneration.promise : "Current queued work.",
+    });
+
+    narrator.noteToolStart({ name: "exec", phase: "start" });
+    await flushNarrations();
+    narrator.stopTurn();
+    narrator.beginTurn();
+    narrator.noteToolStart({ name: "read", phase: "start" });
+    await flushNarrations();
+
+    staleGeneration.resolve("Stale primary work.");
+    await flushNarrations();
+    narrator.stopTurn();
+    narrator.beginTurn();
+    narrator.noteToolStart({ name: "read", phase: "start" });
+    await flushNarrations();
+
+    expect(narrationModelMocks.prepare).toHaveBeenCalledTimes(2);
+    expect(
+      vi
+        .mocked(generateNarrationWithUtilityModel)
+        .mock.calls.map(([{ prepared }]) => prepared.agentHarnessRuntimeOverride ?? "http"),
+    ).toEqual(["claude-cli", "http", "http"]);
+    expect(onUpdate.mock.calls).toEqual([
+      [{ text: "Current queued work." }],
+      [{ text: "Current queued work." }],
+    ]);
+  });
 
   it("cancels active narration at final without aborting its caller", async () => {
     const outer = new AbortController();

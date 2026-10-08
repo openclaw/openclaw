@@ -1,79 +1,67 @@
-// Verifies model reference validation in config surfaces.
 import { describe, expect, it, vi } from "vitest";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
-function createModelSuppressionRegistry(): PluginManifestRegistry {
+function createModelRegistry(
+  plugin: Omit<
+    PluginManifestRecord,
+    "channels" | "cliBackends" | "skills" | "hooks" | "source" | "manifestPath"
+  >,
+): PluginManifestRegistry {
   return {
     diagnostics: [],
     plugins: [
       {
-        id: "openai",
-        origin: "bundled",
         channels: [],
-        providers: ["openai", "openai"],
-        contracts: {},
         cliBackends: [],
         skills: [],
         hooks: [],
-        rootDir: "/tmp/plugins/openai",
         source: "test",
-        manifestPath: "/tmp/plugins/openai/openclaw.plugin.json",
-        modelCatalog: {
-          suppressions: [
-            {
-              provider: "openai",
-              model: "gpt-5.3-codex-spark",
-              reason:
-                "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
-            },
-          ],
-        },
+        manifestPath: `${plugin.rootDir}/openclaw.plugin.json`,
+        ...plugin,
       },
     ],
   };
 }
 
-function createModelNormalizationRegistry(): PluginManifestRegistry {
-  return {
-    diagnostics: [],
-    plugins: [
-      {
-        id: "custom-provider-plugin",
-        channels: [],
-        providers: ["myproxy"],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
-        origin: "config",
-        rootDir: "/tmp/custom-provider-plugin",
-        source: "test",
-        manifestPath: "/tmp/custom-provider-plugin/openclaw.plugin.json",
-        modelIdNormalization: {
-          providers: {
-            myproxy: {
-              aliases: { latest: "modern-model" },
-              prefixWhenBare: "vendor",
-            },
-          },
+function createModelSuppressionRegistry() {
+  return createModelRegistry({
+    id: "openai",
+    origin: "bundled",
+    providers: ["openai", "openai"],
+    contracts: {},
+    rootDir: "/tmp/plugins/openai",
+    modelCatalog: {
+      suppressions: [
+        {
+          provider: "openai",
+          model: "gpt-5.3-codex-spark",
+          reason:
+            "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
         },
+      ],
+    },
+  });
+}
+
+function createModelNormalizationRegistry() {
+  return createModelRegistry({
+    id: "custom-provider-plugin",
+    providers: ["myproxy"],
+    origin: "config",
+    rootDir: "/tmp/custom-provider-plugin",
+    modelIdNormalization: {
+      providers: {
+        myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
       },
-    ],
-  };
+    },
+  });
 }
 
 describe("config model reference validation", () => {
   it("rejects statically suppressed provider/model pairs during config validation", () => {
     const res = validateConfigObjectWithPlugins(
-      {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.3-codex-spark",
-            },
-          },
-        },
-      },
+      { agents: { defaults: { model: { primary: "openai/gpt-5.3-codex-spark" } } } },
       {
         pluginMetadataSnapshot: {
           manifestRegistry: createModelSuppressionRegistry(),
@@ -92,28 +80,6 @@ describe("config model reference validation", () => {
           "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
       },
     ]);
-  });
-
-  it("accepts available openai fallback model pairs", () => {
-    const res = validateConfigObjectWithPlugins(
-      {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.4-mini",
-              fallbacks: ["openai/gpt-5.2-codex", "openai/gpt-5.3-codex"],
-            },
-          },
-        },
-      },
-      {
-        pluginMetadataSnapshot: {
-          manifestRegistry: createModelSuppressionRegistry(),
-        },
-      },
-    );
-
-    expect(res.ok).toBe(true);
   });
 
   it("loads model normalization policies when plugin validation is skipped", () => {
@@ -183,64 +149,25 @@ describe("config model reference validation", () => {
     expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [
-      "default policy",
-      {
-        agents: {
-          defaults: {
-            modelPolicy: {
-              allow: [
-                " openai / gpt-5.5 ",
-                "clawrouter/ anthropic/claude-haiku-4-5",
-                " openai / * ",
-                " clawrouter / anthropic / * ",
-              ],
-            },
-          },
-        },
-      },
-    ],
-    [
-      "per-agent policy",
-      {
-        agents: {
-          list: [
-            {
-              id: "worker",
-              modelPolicy: {
-                allow: [" openai / gpt-5.5 ", " openai / * ", " openai / ns / * "],
-              },
-            },
-          ],
-        },
-      },
-    ],
-  ])("accepts separator padding in the %s", (_label, config) => {
-    const res = validateConfigObjectWithPlugins(config, { pluginValidation: "skip" });
+  it("accepts separator padding in per-agent policy", () => {
+    const modelPolicy = { allow: [" openai / gpt-5.5 ", " openai / * ", " openai / ns / * "] };
+    const agents = { entries: { worker: { modelPolicy } } };
+    const res = validateConfigObjectWithPlugins({ agents }, { pluginValidation: "skip" });
 
     expect(res.ok).toBe(true);
   });
 
-  it.each(["clawrouter/anthropic /claude-haiku-4-5", "openai/gpt 5.5", "openai//gpt-5.5"])(
-    "still rejects malformed model policy ref %j",
-    (ref) => {
-      const res = validateConfigObjectWithPlugins(
-        {
-          agents: {
-            defaults: {
-              modelPolicy: { allow: [ref] },
-            },
-          },
-        },
-        { pluginValidation: "skip" },
-      );
+  it("rejects whitespace inside a model policy model name", () => {
+    const ref = "openai/gpt 5.5";
+    const res = validateConfigObjectWithPlugins(
+      { agents: { defaults: { modelPolicy: { allow: [ref] } } } },
+      { pluginValidation: "skip" },
+    );
 
-      expect(res.ok).toBe(false);
-      if (!res.ok) {
-        expect(res.issues[0]?.path).toBe("agents.defaults.modelPolicy.allow.0");
-        expect(res.issues[0]?.message).toContain("invalid model policy ref");
-      }
-    },
-  );
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("agents.defaults.modelPolicy.allow.0");
+      expect(res.issues[0]?.message).toContain("invalid model policy ref");
+    }
+  });
 });

@@ -32,31 +32,19 @@ import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { parseMergeForwardContent } from "./message-content.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
-import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 
+const emptyDeliveryCounts = {
+  delivered: 0,
+  deliveredNotVisible: 0,
+  cancelled: 0,
+  failedBeforeSend: 0,
+  failedAfterSend: 0,
+};
 const failedFinalReceipt = {
   counts: {
-    tool: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-    block: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-    final: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 1,
-      failedAfterSend: 0,
-    },
+    tool: { ...emptyDeliveryCounts },
+    block: { ...emptyDeliveryCounts },
+    final: { ...emptyDeliveryCounts, failedBeforeSend: 1 },
   },
   anyVisibleDelivered: false,
 } as const;
@@ -79,6 +67,22 @@ type DeepPartial<T> = {
 
 let currentRuntimeConfig = {} as ClawdbotConfig;
 
+function sentMessage(
+  messageId: string,
+  chatId: string,
+): Awaited<ReturnType<typeof import("./send.js").sendMessageFeishu>> {
+  return {
+    messageId,
+    chatId,
+    receipt: {
+      primaryPlatformMessageId: messageId,
+      platformMessageIds: [messageId],
+      parts: [{ platformMessageId: messageId, kind: "text", index: 0 }],
+      sentAt: 1,
+    },
+  };
+}
+
 function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   const runtime = {
     config: {
@@ -86,23 +90,12 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
     },
     channel: {
       routing: {
-        resolveAgentRoute: resolveAgentRouteMock,
+        resolveAgentRoute: mockResolveAgentRoute,
       },
       session: {
-        readSessionUpdatedAt: readSessionUpdatedAtMock,
-        resolveStorePath: resolveStorePathMock,
+        readSessionUpdatedAtAsync: async (params: unknown) => mockReadSessionUpdatedAt(params),
+        resolveStorePath: mockResolveStorePath,
         recordInboundSession: vi.fn(async () => undefined),
-      },
-      reply: {
-        resolveEnvelopeFormatOptions:
-          resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
-        formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-        finalizeInboundContext: finalizeInboundContextMock as never,
-        dispatchReplyFromConfig: vi.fn().mockResolvedValue({
-          queuedFinal: false,
-          counts: { final: 1 },
-        }),
-        withReplyDispatcher: withReplyDispatcherMock as never,
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => false),
@@ -167,18 +160,6 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
   return runtime;
 }
 
-const resolveAgentRouteMock: PluginRuntime["channel"]["routing"]["resolveAgentRoute"] = (params) =>
-  mockResolveAgentRoute(params);
-const readSessionUpdatedAtMock: PluginRuntime["channel"]["session"]["readSessionUpdatedAt"] = (
-  params,
-) => mockReadSessionUpdatedAt(params);
-const resolveStorePathMock: PluginRuntime["channel"]["session"]["resolveStorePath"] = (params) =>
-  mockResolveStorePath(params);
-const resolveEnvelopeFormatOptionsMock = () => ({});
-const withReplyDispatcherMock = async ({
-  run,
-}: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => await run();
-
 function mockCallArg<T>(
   mock: { mock: { calls: unknown[][] } },
   callIndex: number,
@@ -190,14 +171,6 @@ function mockCallArg<T>(
     throw new Error(`Expected mock call at index ${callIndex}`);
   }
   return call[argIndex] as T;
-}
-
-function lastMockCallArg<T>(
-  mock: { mock: { calls: unknown[][] } },
-  argIndex = 0,
-  _type?: (value: unknown) => value is T,
-): T | undefined {
-  return mock.mock.calls.at(-1)?.[argIndex] as T | undefined;
 }
 
 type FeishuRoutePeer = { id: string; kind: "direct" | "group" };
@@ -239,23 +212,33 @@ const {
   mockDispatchInboundMessage,
   mockResolveFeishuBotName,
 } = vi.hoisted(() => ({
-  mockCreateFeishuReplyDispatcher: vi.fn(() => ({
-    dispatcherOptions: {},
-    delivery: { deliver: vi.fn(async () => undefined) },
-    replyOptions: {},
-    ensureNoVisibleReplyFallback: vi.fn(),
-  })),
-  mockSendMessageFeishu: vi.fn().mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
-  mockGetMessageFeishu: vi.fn().mockResolvedValue(null),
+  mockCreateFeishuReplyDispatcher: vi.fn(
+    (
+      _params: Parameters<typeof import("./reply-dispatcher.js").createFeishuReplyDispatcher>[0],
+    ) => ({
+      dispatcherOptions: {},
+      delivery: { deliver: vi.fn(async () => undefined) },
+      replyOptions: {},
+      ensureNoVisibleReplyFallback: vi.fn(),
+    }),
+  ),
+  mockSendMessageFeishu: vi
+    .fn<typeof import("./send.js").sendMessageFeishu>()
+    .mockResolvedValue(sentMessage("pairing-msg", "oc-dm")),
+  mockGetMessageFeishu: vi
+    .fn<typeof import("./send.js").getMessageFeishu>()
+    .mockResolvedValue(null),
   mockListFeishuThreadMessages: vi.fn().mockResolvedValue([]),
-  mockDownloadMessageResourceFeishu: vi.fn().mockResolvedValue({
-    saved: {
-      id: "inbound-clip.mp4",
-      path: "/tmp/inbound-clip.mp4",
-      size: Buffer.byteLength("video"),
-      contentType: "video/mp4",
-    },
-  }),
+  mockDownloadMessageResourceFeishu: vi
+    .fn<typeof import("./media.js").saveMessageResourceFeishu>()
+    .mockResolvedValue({
+      saved: {
+        id: "inbound-clip.mp4",
+        path: "/tmp/inbound-clip.mp4",
+        size: Buffer.byteLength("video"),
+        contentType: "video/mp4",
+      },
+    }),
   mockCreateFeishuClient: vi.fn(),
   mockResolveAgentRoute: vi.fn((_params?: unknown) => createFeishuTestRoute()),
   mockReadSessionUpdatedAt: vi.fn((_params?: unknown): number | undefined => undefined),
@@ -276,9 +259,10 @@ const {
   mockResolveBoundConversation: vi.fn((_ref?: unknown) => null as BoundConversation),
   mockTouchBinding: vi.fn(),
   mockResolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
-  mockTranscribeFirstAudio: vi.fn(),
+  mockTranscribeFirstAudio:
+    vi.fn<typeof import("openclaw/plugin-sdk/media-runtime").transcribeFirstAudio>(),
   mockMaybeCreateDynamicAgent: vi.fn(),
-  mockBuildChannelInboundEventContext: vi.fn(),
+  mockBuildChannelInboundEventContext: vi.fn<(ctx: BuiltChannelInboundEventContext) => void>(),
   mockFormatAgentEnvelope: vi.fn(({ body }: { body: string }) => body),
   mockDispatchInboundMessage: vi
     .fn()
@@ -286,10 +270,8 @@ const {
   mockResolveFeishuBotName: vi.fn().mockResolvedValue("Peer Bot"),
 }));
 
-const finalizeInboundContextMock = mockBuildChannelInboundEventContext;
-
 function inboundContext(): BuiltChannelInboundEventContext {
-  return mockCallArg<BuiltChannelInboundEventContext>(mockBuildChannelInboundEventContext, 0, 0);
+  return mockBuildChannelInboundEventContext.mock.calls[0]![0];
 }
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
@@ -302,14 +284,14 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
     resolveEnvelopeFormatOptions: () => ({}),
     buildChannelInboundEventContext: (
       params: Parameters<typeof actual.buildChannelInboundEventContext>[0],
-    ) =>
-      actual.buildChannelInboundEventContext({
+    ) => {
+      const context = actual.buildChannelInboundEventContext({
         ...params,
-        finalize: (ctx) => {
-          mockBuildChannelInboundEventContext(ctx);
-          return ctx as never;
-        },
-      }),
+        finalize: (ctx) => ctx,
+      });
+      mockBuildChannelInboundEventContext(context);
+      return context;
+    },
   };
 });
 
@@ -408,7 +390,6 @@ async function dispatchMessage(params: {
   event: FeishuMessageEvent;
   channelRuntime?: PluginRuntime["channel"];
   botOpenId?: string;
-  directPreDispatchTarget?: string;
 }) {
   const runtime = createRuntimeEnv();
   const feishuConfig = params.cfg.channels?.feishu;
@@ -426,9 +407,6 @@ async function dispatchMessage(params: {
         } as ClawdbotConfig)
       : params.cfg;
   currentRuntimeConfig = params.currentCfg ?? cfg;
-  if (params.directPreDispatchTarget) {
-    setFeishuSyntheticDirectPreDispatchTarget(params.event, params.directPreDispatchTarget);
-  }
   await handleFeishuMessage({
     cfg,
     event: params.event,
@@ -439,23 +417,78 @@ async function dispatchMessage(params: {
   return runtime;
 }
 
+function receive(
+  event: Parameters<typeof createFeishuTestEvent>[0],
+  feishu: Parameters<typeof createFeishuTestConfig>[0] = { dmPolicy: "open" },
+  base?: Parameters<typeof createFeishuTestConfig>[1],
+) {
+  return dispatchMessage({
+    cfg: createFeishuTestConfig(feishu, base),
+    event: createFeishuTestEvent(event),
+  });
+}
+
+function resetConfiguredBindings() {
+  mockResolveConfiguredBindingRoute
+    .mockReset()
+    .mockImplementation(
+      ({
+        route,
+      }: {
+        route: NonNullable<ConfiguredBindingRoute>["route"];
+      }): ConfiguredBindingRoute => ({
+        bindingResolution: null,
+        route,
+      }),
+    );
+  mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
+  mockResolveBoundConversation.mockReset().mockReturnValue(null);
+}
+
+function rejectSenderPermission(msg: string) {
+  mockCreateFeishuClient.mockReturnValue({
+    contact: {
+      user: { get: vi.fn().mockRejectedValue({ response: { data: { code: 99991672, msg } } }) },
+    },
+  });
+}
+function historyMessage(
+  messageId: string,
+  senderId: string,
+  senderType: string,
+  content: string,
+  createTime: number,
+) {
+  return { messageId, senderId, senderType, content, contentType: "text", createTime };
+}
+
+function receiveAcp(
+  event: Parameters<typeof createFeishuTestEvent>[0],
+  feishu: Parameters<typeof createFeishuTestConfig>[0] = {
+    enabled: true,
+    allowFrom: ["ou_sender_1"],
+    dmPolicy: "open",
+  },
+) {
+  return receive(event, feishu, { session: { mainKey: "main", scope: "per-sender" } });
+}
+function receiveGroup(
+  event: Parameters<typeof createFeishuTestEvent>[0],
+  group: NonNullable<Parameters<typeof createFeishuTestConfig>[0]["groups"]>[string] = {},
+  feishu: Parameters<typeof createFeishuTestConfig>[0] = {},
+  base?: Parameters<typeof createFeishuTestConfig>[1],
+) {
+  return receive(
+    { chatId: "oc-group", chatType: "group", ...event },
+    { ...feishu, groups: { "oc-group": { requireMention: false, ...group } } },
+    base,
+  );
+}
+
 describe("handleFeishuMessage ACP routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockResolveConfiguredBindingRoute
-      .mockReset()
-      .mockImplementation(
-        ({
-          route,
-        }: {
-          route: NonNullable<ConfiguredBindingRoute>["route"];
-        }): ConfiguredBindingRoute => ({
-          bindingResolution: null,
-          route,
-        }),
-      );
-    mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
-    mockResolveBoundConversation.mockReset().mockReturnValue(null);
+    resetConfiguredBindings();
     mockTouchBinding.mockReset();
     mockResolveFeishuReasoningPreviewEnabled.mockReset().mockReturnValue(false);
     mockTranscribeFirstAudio.mockReset().mockResolvedValue(undefined);
@@ -468,9 +501,7 @@ describe("handleFeishuMessage ACP routing", () => {
       ...createFeishuTestRoute(),
       sessionKey: "agent:main:feishu:direct:ou_sender_1",
     });
-    mockSendMessageFeishu
-      .mockReset()
-      .mockResolvedValue({ messageId: "reply-msg", chatId: "oc_dm" });
+    mockSendMessageFeishu.mockReset().mockResolvedValue(sentMessage("reply-msg", "oc_dm"));
     mockCreateFeishuReplyDispatcher.mockReset().mockReturnValue({
       dispatcherOptions: {},
       delivery: { deliver: vi.fn(async () => undefined) },
@@ -481,106 +512,56 @@ describe("handleFeishuMessage ACP routing", () => {
     setFeishuRuntime(createFeishuBotRuntime());
   });
 
-  it("ensures configured ACP routes for Feishu DMs", async () => {
-    mockResolveConfiguredBindingRoute.mockReturnValue(createConfiguredFeishuRoute());
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig(
-        { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" },
-        { session: { mainKey: "main", scope: "per-sender" } },
-      ),
-      event: createFeishuTestEvent({
-        messageId: "msg-1",
-        senderOpenId: "ou_sender_1",
-        chatId: "oc_dm",
-      }),
-    });
-
-    expect(mockResolveConfiguredBindingRoute).toHaveBeenCalledTimes(1);
-    expect(mockEnsureConfiguredBindingRouteReady).toHaveBeenCalledTimes(1);
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({ ConversationRoutePeerId: "ou_sender_1" }),
-    );
-  });
-
-  it("surfaces configured ACP initialization failures to the Feishu conversation", async () => {
-    mockResolveConfiguredBindingRoute.mockReturnValue(createConfiguredFeishuRoute());
-    mockEnsureConfiguredBindingRouteReady.mockResolvedValue(
-      createConfiguredBindingReadiness(false, "runtime unavailable"),
-    );
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig(
-        { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" },
-        { session: { mainKey: "main", scope: "per-sender" } },
-      ),
-      event: createFeishuTestEvent({
-        messageId: "msg-2",
-        senderOpenId: "ou_sender_1",
-        chatId: "oc_dm",
-      }),
-    });
-
-    const message = mockCallArg<{ text?: string; to?: string }>(mockSendMessageFeishu, 0, 0);
-    expect(message.to).toBe("chat:oc_dm");
-    expect(message.text).toContain("runtime unavailable");
-  });
-
-  it("surfaces configured ACP initialization failures inside P2P direct-message threads", async () => {
-    mockResolveConfiguredBindingRoute.mockReturnValue(createConfiguredFeishuRoute());
-    mockEnsureConfiguredBindingRouteReady.mockResolvedValue(
-      createConfiguredBindingReadiness(false, "runtime unavailable"),
-    );
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig(
-        { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" },
-        { session: { mainKey: "main", scope: "per-sender" } },
-      ),
-      event: createFeishuTestEvent({
-        messageId: "msg-thread-child",
-        senderOpenId: "ou_sender_1",
-        chatId: "oc_dm",
-        message: { root_id: "msg-thread-root", thread_id: "omt-acp-dm-thread" },
-      }),
-    });
-
-    expect(mockSendMessageFeishu).toHaveBeenCalledWith(
-      expect.objectContaining({
+  it.each([
+    {
+      messageId: "msg-2",
+      message: undefined,
+      expected: { text: expect.stringContaining("runtime unavailable") },
+    },
+    {
+      messageId: "msg-thread-child",
+      message: { root_id: "msg-thread-root", thread_id: "omt-acp-dm-thread" },
+      expected: { replyToMessageId: "msg-thread-root", replyInThread: true },
+    },
+  ])(
+    "surfaces configured ACP initialization failure for $messageId",
+    async ({ messageId, message, expected }) => {
+      mockResolveConfiguredBindingRoute.mockReturnValue(createConfiguredFeishuRoute());
+      mockEnsureConfiguredBindingRouteReady.mockResolvedValue(
+        createConfiguredBindingReadiness(false, "runtime unavailable"),
+      );
+      await receiveAcp({ messageId, senderOpenId: "ou_sender_1", chatId: "oc_dm", message });
+      expect(mockSendMessageFeishu.mock.calls[0]![0]).toMatchObject({
         to: "chat:oc_dm",
-        replyToMessageId: "msg-thread-root",
-        replyInThread: true,
-      }),
-    );
-  });
+        ...expected,
+      });
+    },
+  );
 
   it("routes Feishu topic messages through active bound conversations", async () => {
     mockResolveBoundConversation.mockReturnValue(createBoundConversation());
 
-    await dispatchMessage({
-      cfg: createFeishuTestConfig(
-        {
-          enabled: true,
-          allowFrom: ["ou_sender_1"],
-          groups: {
-            oc_group_chat: {
-              allow: true,
-              requireMention: false,
-              groupSessionScope: "group_topic",
-            },
-          },
-        },
-        { session: { mainKey: "main", scope: "per-sender" } },
-      ),
-      event: createFeishuTestEvent({
+    await receiveAcp(
+      {
         messageId: "msg-3",
         senderOpenId: "ou_sender_1",
         chatId: "oc_group_chat",
         chatType: "group",
         text: "hello topic",
         message: { root_id: "om_topic_root" },
-      }),
-    });
+      },
+      {
+        enabled: true,
+        allowFrom: ["ou_sender_1"],
+        groups: {
+          oc_group_chat: {
+            allow: true,
+            requireMention: false,
+            groupSessionScope: "group_topic",
+          },
+        },
+      },
+    );
 
     const conversationRef = mockCallArg<{ channel?: string; conversationId?: string }>(
       mockResolveBoundConversation,
@@ -590,7 +571,7 @@ describe("handleFeishuMessage ACP routing", () => {
     expect(conversationRef.channel).toBe("feishu");
     expect(conversationRef.conversationId).toBe("oc_group_chat:topic:om_topic_root");
     expect(mockTouchBinding).toHaveBeenCalledWith("default:oc_group_chat:topic:om_topic_root");
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+    expect(mockBuildChannelInboundEventContext).toHaveBeenCalledWith(
       expect.objectContaining({
         ConversationRoutePeerId: "oc_group_chat:topic:om_topic_root",
         ThreadParentId: "oc_group_chat",
@@ -598,294 +579,43 @@ describe("handleFeishuMessage ACP routing", () => {
     );
   });
 
-  it("records Feishu DM last-route updates on the resolved session", async () => {
-    const runtime = createFeishuBotRuntime();
-    const recordInboundSession = vi.fn(async () => undefined);
-    runtime.channel.session.recordInboundSession = recordInboundSession;
-    mockResolveAgentRoute.mockReturnValue(
-      createFeishuTestRoute({ sessionKey: "agent:main:main", lastRoutePolicy: "main" }),
-    );
-    setFeishuRuntime(runtime);
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig(
-        { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" },
-        { session: { mainKey: "main", scope: "per-sender" } },
-      ),
-      event: createFeishuTestEvent({
-        messageId: "msg-dm-last-route",
-        senderOpenId: "ou_sender_1",
-        chatId: "oc_dm",
-      }),
-    });
-
-    const recordParams = lastMockCallArg<RecordedSession>(recordInboundSession);
-    expect(recordParams?.sessionKey).toBe("agent:main:main");
-    expect(recordParams?.updateLastRoute).toMatchObject({
-      sessionKey: "agent:main:main",
-      channel: "feishu",
-      to: "user:ou_sender_1",
-      accountId: "default",
-    });
-    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatId: "oc_dm",
-        sendTarget: "chat:oc_dm",
-      }),
-    );
-  });
-
-  it("keeps synthetic Feishu DM reply targets sender-scoped", async () => {
-    setFeishuRuntime(createFeishuBotRuntime());
-
-    await dispatchMessage({
-      cfg: {
-        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
-      },
-      event: {
-        sender: { sender_id: { open_id: "ou_sender_1" } },
-        message: {
-          message_id: "msg-dm-synthetic-target",
-          chat_id: "p2p:ou_sender_1",
-          chat_type: "p2p",
-          message_type: "text",
-          content: JSON.stringify({ text: "hello" }),
-        },
-      },
-    });
-
-    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatId: "p2p:ou_sender_1",
-        sendTarget: "user:ou_sender_1",
-      }),
-    );
-  });
-
-  it("pins shared Feishu DM last-route updates to the configured owner", async () => {
-    const runtime = createFeishuBotRuntime();
-    const recordInboundSession = vi.fn(async () => undefined);
-    runtime.channel.session.recordInboundSession = recordInboundSession;
-    runtime.channel.pairing.readAllowFromStore = vi.fn().mockResolvedValue(["ou_sender_2"]);
-    mockResolveAgentRoute.mockReturnValue(
-      createFeishuTestRoute({ sessionKey: "agent:main:main", lastRoutePolicy: "main" }),
-    );
-    setFeishuRuntime(runtime);
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig(
-        { enabled: true, allowFrom: ["ou_owner"], dmPolicy: "pairing" },
-        { session: { mainKey: "main", scope: "per-sender" } },
-      ),
-      event: createFeishuTestEvent({
-        messageId: "msg-dm-last-route-secondary",
-        senderOpenId: "ou_sender_2",
-        chatId: "oc_dm",
-      }),
-    });
-
-    const recordParams = lastMockCallArg<RecordedSession>(recordInboundSession);
-    expect(recordParams?.updateLastRoute?.mainDmOwnerPin).toMatchObject({
-      ownerRecipient: "user:ou_owner",
-      senderRecipient: "user:ou_sender_2",
-    });
-    expect(typeof recordParams?.updateLastRoute?.mainDmOwnerPin?.onSkip).toBe("function");
-  });
-
-  it("matches Feishu DM owner pins against user_id allowlist entries", async () => {
-    const runtime = createFeishuBotRuntime();
-    const recordInboundSession = vi.fn(async () => undefined);
-    runtime.channel.session.recordInboundSession = recordInboundSession;
-    mockResolveAgentRoute.mockReturnValue(
-      createFeishuTestRoute({ sessionKey: "agent:main:main", lastRoutePolicy: "main" }),
-    );
-    setFeishuRuntime(runtime);
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig(
-        { enabled: true, allowFrom: ["user_123"], dmPolicy: "allowlist" },
-        { session: { mainKey: "main", scope: "per-sender" } },
-      ),
-      event: createFeishuTestEvent({
-        messageId: "msg-dm-last-route-user-id-owner",
-        senderOpenId: "ou_owner",
-        senderUserId: "user_123",
-        chatId: "oc_dm",
-      }),
-    });
-
-    const recordParams = lastMockCallArg<RecordedSession>(recordInboundSession);
-    expect(recordParams?.updateLastRoute?.mainDmOwnerPin).toMatchObject({
-      ownerRecipient: "user:user_123",
-      senderRecipient: "user:user_123",
-    });
-  });
-
-  it("records Feishu group last-route updates on the resolved session", async () => {
-    const runtime = createFeishuBotRuntime();
-    const recordInboundSession = vi.fn(async () => undefined);
-    runtime.channel.session.recordInboundSession = recordInboundSession;
-    mockResolveAgentRoute.mockReturnValue(
-      createFeishuTestRoute({
-        agentId: "agent-B",
-        sessionKey: "agent:agent-B:feishu:group:oc_group_chat",
-        mainSessionKey: "agent:agent-B:main",
-      }),
-    );
-    setFeishuRuntime(runtime);
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig(
-        {
-          enabled: true,
-          allowFrom: ["ou_sender_1"],
-          groups: { oc_group_chat: { allow: true, requireMention: false } },
-        },
-        { session: { mainKey: "main", scope: "per-sender" } },
-      ),
-      event: createFeishuTestEvent({
-        messageId: "msg-group-last-route",
-        senderOpenId: "ou_sender_1",
-        chatId: "oc_group_chat",
-        chatType: "group",
-        text: "hello group",
-      }),
-    });
-
-    const recordParams = lastMockCallArg<RecordedSession>(recordInboundSession);
-    expect(recordParams?.sessionKey).toBe("agent:agent-B:feishu:group:oc_group_chat");
-    expect(recordParams?.updateLastRoute).toMatchObject({
-      sessionKey: "agent:agent-B:feishu:group:oc_group_chat",
-      channel: "feishu",
-      to: "chat:oc_group_chat",
-      accountId: "default",
-    });
-  });
-
-  it("records configured Feishu thread replies with the dispatcher fallback target", async () => {
-    const runtime = createFeishuBotRuntime();
-    const recordInboundSession = vi.fn(async () => undefined);
-    runtime.channel.session.recordInboundSession = recordInboundSession;
-    mockResolveAgentRoute.mockReturnValue(
-      createFeishuTestRoute({
-        agentId: "agent-B",
-        sessionKey: "agent:agent-B:feishu:group:oc_group_chat",
-        mainSessionKey: "agent:agent-B:main",
-      }),
-    );
-    setFeishuRuntime(runtime);
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig(
-        {
-          enabled: true,
-          allowFrom: ["ou_sender_1"],
-          groups: {
-            oc_group_chat: { allow: true, requireMention: false, replyInThread: "enabled" },
-          },
-        },
-        { session: { mainKey: "main", scope: "per-sender" } },
-      ),
-      event: createFeishuTestEvent({
-        messageId: "msg-group-thread-fallback",
-        senderOpenId: "ou_sender_1",
-        chatId: "oc_group_chat",
-        chatType: "group",
-        text: "start a thread",
-      }),
-    });
-
-    const recordParams = lastMockCallArg<RecordedSession>(recordInboundSession);
-    expect(recordParams?.updateLastRoute).toMatchObject({
-      to: "chat:oc_group_chat",
-      threadId: "msg-group-thread-fallback",
-    });
-  });
-
-  it("records auto-threaded Feishu group replies with the dispatcher target", async () => {
-    const runtime = createFeishuBotRuntime();
-    const recordInboundSession = vi.fn(async () => undefined);
-    runtime.channel.session.recordInboundSession = recordInboundSession;
-    mockResolveAgentRoute.mockReturnValue(
-      createFeishuTestRoute({
-        agentId: "agent-B",
-        sessionKey: "agent:agent-B:feishu:group:oc_group_chat",
-        mainSessionKey: "agent:agent-B:main",
-      }),
-    );
-    setFeishuRuntime(runtime);
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig(
-        {
-          enabled: true,
-          allowFrom: ["ou_sender_1"],
-          groups: { oc_group_chat: { allow: true, requireMention: false } },
-        },
-        { session: { mainKey: "main", scope: "per-sender" } },
-      ),
-      event: createFeishuTestEvent({
-        messageId: "msg-group-auto-thread",
-        senderOpenId: "ou_sender_1",
-        chatId: "oc_group_chat",
-        chatType: "group",
-        text: "continue the thread",
-        message: { root_id: "om_thread_root" },
-      }),
-    });
-
-    const recordParams = lastMockCallArg<RecordedSession>(recordInboundSession);
-    expect(recordParams?.updateLastRoute).toMatchObject({
-      to: "chat:oc_group_chat",
-      threadId: "msg-group-auto-thread",
-    });
-  });
-
-  it("passes reasoning preview permission from session state into the dispatcher", async () => {
-    mockResolveFeishuReasoningPreviewEnabled.mockReturnValue(true);
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig(
-        { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" },
-        { session: { mainKey: "main", scope: "per-sender" } },
-      ),
-      event: createFeishuTestEvent({
-        messageId: "msg-reasoning",
-        senderOpenId: "ou_sender_1",
-        chatId: "oc_dm",
-      }),
-    });
-
-    const dispatcherOptions = mockCallArg<{ allowReasoningPreview?: boolean }>(
-      mockCreateFeishuReplyDispatcher,
-      0,
-      0,
-    );
-    expect(dispatcherOptions.allowReasoningPreview).toBe(true);
-  });
+  it.each<
+    [
+      policy: "pairing" | "allowlist",
+      sender: string,
+      userId: string | undefined,
+      allowed: string,
+      ownerRecipient: string,
+      senderRecipient: string,
+    ]
+  >([["pairing", "ou_sender_2", undefined, "ou_owner", "user:ou_owner", "user:ou_sender_2"]])(
+    "pins shared Feishu DM last-route updates for %s identities",
+    async (dmPolicy, senderOpenId, senderUserId, allowFrom, ownerRecipient, senderRecipient) => {
+      const runtime = createFeishuBotRuntime();
+      const recordInboundSession = vi.fn(async (_params: RecordedSession) => undefined);
+      runtime.channel.session.recordInboundSession = recordInboundSession;
+      if (dmPolicy === "pairing") {
+        runtime.channel.pairing.readAllowFromStore = vi.fn().mockResolvedValue([senderOpenId]);
+      }
+      mockResolveAgentRoute.mockReturnValue(
+        createFeishuTestRoute({ sessionKey: "agent:main:main", lastRoutePolicy: "main" }),
+      );
+      setFeishuRuntime(runtime);
+      await receiveAcp(
+        { messageId: `msg-dm-last-route-${dmPolicy}`, senderOpenId, senderUserId, chatId: "oc_dm" },
+        { enabled: true, allowFrom: [allowFrom], dmPolicy },
+      );
+      const pin = recordInboundSession.mock.calls.at(-1)?.[0].updateLastRoute?.mainDmOwnerPin;
+      expect(pin).toMatchObject({ ownerRecipient, senderRecipient });
+      expect(typeof pin?.onSkip).toBe("function");
+    },
+  );
 });
 
 describe("handleFeishuMessage command authorization", () => {
+  let botRuntime: PluginRuntime;
   const mockFinalizeInboundContext = mockBuildChannelInboundEventContext;
   const mockDispatchReplyFromConfig = mockDispatchInboundMessage;
-  const mockWithReplyDispatcher = vi.fn(
-    async ({
-      dispatcher,
-      run,
-      onSettled,
-    }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => {
-      try {
-        return await run();
-      } finally {
-        dispatcher.markComplete();
-        try {
-          await dispatcher.waitForIdle();
-        } finally {
-          await onSettled?.();
-        }
-      }
-    },
-  );
   const mockResolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
   const mockShouldComputeCommandAuthorized = vi.fn<
     PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"]
@@ -905,20 +635,7 @@ describe("handleFeishuMessage command authorization", () => {
     mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
     mockReadSessionUpdatedAt.mockReturnValue(undefined);
     mockResolveStorePath.mockReturnValue("/tmp/feishu-sessions.json");
-    mockResolveConfiguredBindingRoute
-      .mockReset()
-      .mockImplementation(
-        ({
-          route,
-        }: {
-          route: NonNullable<ConfiguredBindingRoute>["route"];
-        }): ConfiguredBindingRoute => ({
-          bindingResolution: null,
-          route,
-        }),
-      );
-    mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
-    mockResolveBoundConversation.mockReset().mockReturnValue(null);
+    resetConfiguredBindings();
     mockTouchBinding.mockReset();
     mockTranscribeFirstAudio.mockReset().mockResolvedValue(undefined);
     mockMaybeCreateDynamicAgent.mockReset().mockImplementation(async ({ cfg }) => ({
@@ -934,174 +651,62 @@ describe("handleFeishuMessage command authorization", () => {
       },
     });
     mockEnqueueSystemEvent.mockReset();
-    setFeishuRuntime(
-      createFeishuBotRuntime({
-        system: {
-          enqueueSystemEvent: mockEnqueueSystemEvent,
-        },
-        channel: {
-          reply: {
-            resolveEnvelopeFormatOptions:
-              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
-            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-            finalizeInboundContext: mockFinalizeInboundContext as never,
-            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-            withReplyDispatcher: mockWithReplyDispatcher as never,
-          },
-          commands: {
-            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-            resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
-          },
-          pairing: {
-            readAllowFromStore: mockReadAllowFromStore,
-            upsertPairingRequest: mockUpsertPairingRequest,
-            buildPairingReply: mockBuildPairingReply,
-          },
-        },
-      }),
-    );
-  });
-
-  it("routes /compact through the standard reply dispatch path (#90185)", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(true);
-
-    const cfg = createFeishuTestConfig({ dmPolicy: "open" });
-
-    await dispatchMessage({
-      cfg,
-      event: createFeishuTestEvent({
-        messageId: "msg-compact-command",
-        senderOpenId: "ou-command-user",
-        text: "/compact",
-      }),
-    });
-
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const dispatchParams = mockCallArg<{
-      ctx: {
-        CommandAuthorized?: boolean;
-        CommandBody?: string;
-        BodyForCommands?: string;
-        RawBody?: string;
-        MessageSid?: string;
-      };
-    }>(mockDispatchReplyFromConfig, 0, 0);
-    expect(dispatchParams.ctx).toMatchObject({
-      CommandAuthorized: true,
-      CommandBody: "/compact",
-      BodyForCommands: "/compact",
-      RawBody: "/compact",
-      MessageSid: "msg-compact-command",
-    });
-  });
-
-  it("does not enqueue inbound preview text as system events", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig({ dmPolicy: "open" });
-    const event = createFeishuTestEvent({
-      messageId: "msg-no-system-preview",
-      text: "hi there",
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
-  it("does not send no-visible fallback when send policy denied delivery", async () => {
-    mockDispatchReplyFromConfig.mockResolvedValueOnce({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-      sendPolicyDenied: true,
-      noVisibleReplyFallbackEligible: true,
-    });
-    const ensureNoVisibleReplyFallback = vi.fn();
-    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
-      replyOptions: {},
-      ensureNoVisibleReplyFallback,
-    });
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      event: createFeishuTestEvent({
-        messageId: "msg-send-policy-deny",
-        senderOpenId: "ou-sender",
-      }),
-    });
-
-    expect(ensureNoVisibleReplyFallback).not.toHaveBeenCalled();
-  });
-
-  it("sends no-visible fallback when queued final delivery fails", async () => {
-    mockDispatchReplyFromConfig.mockResolvedValueOnce({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-      settledReceipt: failedFinalReceipt,
-    });
-    const ensureNoVisibleReplyFallback = vi.fn();
-    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
-      replyOptions: {},
-      ensureNoVisibleReplyFallback,
-    });
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      event: createFeishuTestEvent({
-        messageId: "msg-final-delivery-failed",
-        senderOpenId: "ou-sender",
-      }),
-    });
-
-    expect(ensureNoVisibleReplyFallback).toHaveBeenCalledWith("dispatch-complete-no-visible-reply");
-  });
-
-  it("uses refreshed config for dynamic agent dispatch", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig({
-      dmPolicy: "open",
-      allowFrom: ["*"],
-      configWrites: false,
-      dynamicAgentCreation: { enabled: true },
-    });
-    const refreshedCfg = {
-      ...cfg,
-      agents: {
-        list: [
-          {
-            id: "feishu-ou-attacker",
-            workspace: "/tmp/feishu-ou-attacker",
-            agentDir: "/tmp/feishu-ou-attacker/agent",
-          },
-        ],
+    botRuntime = createFeishuBotRuntime({
+      system: {
+        enqueueSystemEvent: mockEnqueueSystemEvent,
       },
-    } as ClawdbotConfig;
-    mockMaybeCreateDynamicAgent.mockResolvedValueOnce({
-      created: false,
-      updatedCfg: refreshedCfg,
+      channel: {
+        commands: {
+          shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+          resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+        },
+        pairing: {
+          readAllowFromStore: mockReadAllowFromStore,
+          upsertPairingRequest: mockUpsertPairingRequest,
+          buildPairingReply: mockBuildPairingReply,
+        },
+      },
     });
+    setFeishuRuntime(botRuntime);
+  });
 
-    const event = createFeishuTestEvent({ messageId: "msg-dynamic-config-writes-disabled" });
-
-    await dispatchMessage({ cfg, event });
-
-    const dynamicAgentRequest = mockCallArg<{
-      accountId?: string;
-      senderOpenId?: string;
-    }>(mockMaybeCreateDynamicAgent, 0, 0);
-    expect(dynamicAgentRequest.senderOpenId).toBe("ou-attacker");
-    expect(dynamicAgentRequest.accountId).toBe("default");
-    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: refreshedCfg }),
-    );
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: refreshedCfg }),
-    );
+  it.each([
+    {
+      name: "send policy denied delivery",
+      result: {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+        sendPolicyDenied: true,
+        noVisibleReplyFallbackEligible: true,
+      },
+      fallback: false,
+    },
+    {
+      name: "queued final delivery failed",
+      result: {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+        settledReceipt: failedFinalReceipt,
+      },
+      fallback: true,
+    },
+  ])("handles no-visible fallback when $name", async ({ name, result, fallback }) => {
+    mockDispatchReplyFromConfig.mockResolvedValueOnce(result);
+    const ensureNoVisibleReplyFallback = vi.fn();
+    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
+      dispatcherOptions: {},
+      delivery: { deliver: vi.fn(async () => undefined) },
+      replyOptions: {},
+      ensureNoVisibleReplyFallback,
+    });
+    await receive({ messageId: `msg-fallback-${name}`, senderOpenId: "ou-sender" });
+    if (fallback) {
+      expect(ensureNoVisibleReplyFallback).toHaveBeenCalledWith(
+        "dispatch-complete-no-visible-reply",
+      );
+    } else {
+      expect(ensureNoVisibleReplyFallback).not.toHaveBeenCalled();
+    }
   });
 
   it("routes Feishu groups with exact bindings from the live runtime config", async () => {
@@ -1115,7 +720,7 @@ describe("handleFeishuMessage command authorization", () => {
         groups: { oc_target: { allow: true, requireMention: false } },
       },
       {
-        agents: { list: [{ id: "main" }, { id: "oc1" }] },
+        agents: { entries: { main: {}, oc1: {} } },
         bindings: [
           {
             agentId: "oc1",
@@ -1160,31 +765,6 @@ describe("handleFeishuMessage command authorization", () => {
         sessionKey: "agent:main:feishu:group:oc_target",
       }),
     );
-  });
-
-  it("drops a DM denied by refreshed dynamic-agent policy", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig({
-      dmPolicy: "open",
-      allowFrom: ["*"],
-      dynamicAgentCreation: { enabled: true },
-    });
-    const refreshedCfg = createFeishuTestConfig({
-      dmPolicy: "allowlist",
-      allowFrom: ["ou-admin"],
-      dynamicAgentCreation: { enabled: true },
-    });
-    await dispatchMessage({
-      cfg,
-      currentCfg: refreshedCfg,
-      event: createFeishuTestEvent({ messageId: "msg-refreshed-policy-deny" }),
-    });
-
-    expect(mockMaybeCreateDynamicAgent).not.toHaveBeenCalled();
-    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
-    expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
-    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
   it("drops a bound DM revoked while sender lookup is pending", async () => {
@@ -1256,8 +836,20 @@ describe("handleFeishuMessage command authorization", () => {
     });
 
     expect(mockMaybeCreateDynamicAgent).not.toHaveBeenCalled();
-    expect(mockUpsertPairingRequest).toHaveBeenCalledTimes(1);
+    expect(mockUpsertPairingRequest).toHaveBeenCalledWith({
+      channel: "feishu",
+      accountId: "default",
+      id: "ou-attacker",
+      meta: { name: undefined },
+    });
     expect(mockSendMessageFeishu).toHaveBeenCalledTimes(1);
+    expect(mockSendMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc-dm",
+        accountId: "default",
+        text: expect.stringContaining("ABCDEFGH"),
+      }),
+    );
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
@@ -1283,272 +875,101 @@ describe("handleFeishuMessage command authorization", () => {
       cfg,
       event: createFeishuTestEvent({
         messageId: "msg-refreshed-command-auth",
-        text: "/status",
+        text: "/compact",
       }),
     });
 
-    expect(mockShouldComputeCommandAuthorized).toHaveBeenCalledWith("/status", refreshedCfg);
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: refreshedCfg }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: refreshedCfg }),
+    );
+    expect(mockShouldComputeCommandAuthorized).toHaveBeenCalledWith("/compact", refreshedCfg);
     const context = inboundContext();
-    expect(context.CommandAuthorized).toBe(true);
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(context).toMatchObject({
+      CommandAuthorized: true,
+      CommandBody: "/compact",
+      BodyForCommands: "/compact",
+      RawBody: "/compact",
+      MessageSid: "msg-refreshed-command-auth",
+    });
   });
 
   it("blocks open DMs when a restrictive allowlist does not match", async () => {
-    const cfg = createFeishuTestConfig(
+    await receive(
+      {
+        messageId: "msg-auth-bypass-regression",
+        text: "/status",
+      },
       { dmPolicy: "open", allowFrom: ["ou-admin"] },
       { commands: { useAccessGroups: true } },
     );
-    const event = createFeishuTestEvent({
-      messageId: "msg-auth-bypass-regression",
-      text: "/status",
-    });
-
-    await dispatchMessage({ cfg, event });
 
     expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
     expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
   });
 
-  it("reads pairing allow store for non-command DMs when dmPolicy is pairing", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockReadAllowFromStore.mockResolvedValue(["ou-attacker"]);
-
-    const cfg = createFeishuTestConfig(
-      { dmPolicy: "pairing", allowFrom: [] },
-      { commands: { useAccessGroups: true } },
-    );
-    const event = createFeishuTestEvent({
-      messageId: "msg-read-store-non-command",
-      text: "hello there",
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockReadAllowFromStore).toHaveBeenCalledWith({
-      channel: "feishu",
-      accountId: "default",
-    });
-    expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
-    expect(mockFinalizeInboundContext).toHaveBeenCalledTimes(1);
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips sender-name lookup when resolveSenderNames is false", async () => {
-    const cfg = createFeishuTestConfig({
-      dmPolicy: "open",
-      allowFrom: ["*"],
-      resolveSenderNames: false,
-    });
-    const event = createFeishuTestEvent({ messageId: "msg-skip-sender-lookup" });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockCreateFeishuClient).not.toHaveBeenCalled();
-  });
-
-  it("propagates parent/root message ids into inbound context for reply reconstruction", async () => {
-    mockGetMessageFeishu.mockResolvedValueOnce({
-      messageId: "om_parent_001",
-      chatId: "oc-group",
-      content: "quoted content",
-      contentType: "text",
-    });
-
-    const cfg = createFeishuTestConfig({ enabled: true, dmPolicy: "open" });
-    const event = createFeishuTestEvent({
-      messageId: "om_reply_001",
-      senderOpenId: "ou-replier",
-      text: "reply text",
-      message: { root_id: "om_root_001", parent_id: "om_parent_001" },
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    const context = inboundContext();
-    expect(context.ReplyToId).toBe("om_parent_001");
-    expect(context.RootMessageId).toBe("om_root_001");
-    expect(context.SupplementalContext?.quote?.body).toBe("quoted content");
-  });
-
-  it("uses message create_time for the inbound context and model envelope", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+  it("sends pairing challenges to the chat for user-id-only senders", async () => {
+    mockReadAllowFromStore.mockResolvedValue([]);
+    mockUpsertPairingRequest.mockResolvedValue({ code: "ABCDEFGH", created: true });
     await dispatchMessage({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
+      cfg: createFeishuTestConfig({ dmPolicy: "pairing" }),
       event: createFeishuTestEvent({
-        messageId: "msg-create-time",
-        text: "delete this",
-        message: { create_time: "1700000000000" },
+        messageId: "msg-pairing-chat-reply",
+        sender: { sender_id: { user_id: "u_mobile_only" } },
+        chatId: "oc_dm_chat_1",
       }),
     });
-
-    const context = inboundContext();
-    expect(context.Timestamp).toBe(1700000000000);
-    const envelope = mockCallArg<{ timestamp?: number | Date }>(mockFormatAgentEnvelope, 0, 0);
-    expect(envelope.timestamp).toBe(1700000000000);
+    expect(mockSendMessageFeishu.mock.calls[0]![0].to).toBe("chat:oc_dm_chat_1");
   });
 
   it.each([
-    {
-      name: "falls back to Date.now() when create_time is malformed",
-      messageId: "msg-malformed-create-time",
-      createTime: "1700000000000ms",
-    },
-  ])("$name", async ({ messageId, createTime }) => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    const before = Date.now();
-    await dispatchMessage({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      event: createFeishuTestEvent({
-        messageId,
-        message: createTime ? { create_time: createTime } : {},
-      }),
-    });
-    const after = Date.now();
-
-    const call = mockFinalizeInboundContext.mock.calls.at(0)?.[0] as { Timestamp: number };
-    expect(call.Timestamp).toBeGreaterThanOrEqual(before);
-    expect(call.Timestamp).toBeLessThanOrEqual(after);
-  });
-
-  it("replies pairing challenge to DM chat_id instead of user:sender id", async () => {
-    const cfg = createFeishuTestConfig({ dmPolicy: "pairing" });
-    const event = createFeishuTestEvent({
-      messageId: "msg-pairing-chat-reply",
-      sender: { sender_id: { user_id: "u_mobile_only" } },
-      chatId: "oc_dm_chat_1",
-    });
-
-    mockReadAllowFromStore.mockResolvedValue([]);
-    mockUpsertPairingRequest.mockResolvedValue({ code: "ABCDEFGH", created: true });
-
-    await dispatchMessage({ cfg, event });
-
-    const message = mockCallArg<{ to?: string }>(mockSendMessageFeishu, 0, 0);
-    expect(message.to).toBe("chat:oc_dm_chat_1");
-  });
-
-  it("replies to the explicit pre-dispatch target for synthetic DMs", async () => {
-    const cfg = createFeishuTestConfig({ dmPolicy: "pairing" });
-    const event = createFeishuTestEvent({
-      messageId: "synthetic-invite",
-      senderOpenId: "ou_synthetic_inviter",
-      chatId: "ou_synthetic_inviter",
-      text: "join the meeting",
-    });
-    mockReadAllowFromStore.mockResolvedValue([]);
-    mockUpsertPairingRequest.mockResolvedValue({ code: "ABCDEFGH", created: true });
-
-    await dispatchMessage({
-      cfg,
-      event,
-      directPreDispatchTarget: "user:ou_synthetic_inviter",
-    });
-
-    const message = mockCallArg<{ to?: string }>(mockSendMessageFeishu, 0, 0);
-    expect(message.to).toBe("user:ou_synthetic_inviter");
-  });
-  it("creates pairing request and drops unauthorized DMs in pairing mode", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockReadAllowFromStore.mockResolvedValue([]);
-    mockUpsertPairingRequest.mockResolvedValue({ code: "ABCDEFGH", created: true });
-
-    const cfg = createFeishuTestConfig({ dmPolicy: "pairing", allowFrom: [] });
-    const event = createFeishuTestEvent({
-      messageId: "msg-pairing-flow",
-      senderOpenId: "ou-unapproved",
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockUpsertPairingRequest).toHaveBeenCalledWith({
-      channel: "feishu",
-      accountId: "default",
-      id: "ou-unapproved",
-      meta: { name: undefined },
-    });
-    expect(mockSendMessageFeishu).toHaveBeenCalledTimes(1);
-    const pairingMessage = mockCallArg<{ accountId?: string; text?: string; to?: string }>(
-      mockSendMessageFeishu,
-      0,
-      0,
-    );
-    expect(pairingMessage.to).toBe("chat:oc-dm");
-    expect(pairingMessage.text).toContain("Your Feishu user id: ou-unapproved");
-    expect(pairingMessage.text).toContain("Pairing code:");
-    expect(pairingMessage.text).toContain("ABCDEFGH");
-    expect(pairingMessage.accountId).toBe("default");
-    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
-    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
-  });
-
-  it("computes group command authorization from group allowFrom", async () => {
+    ["ou-attacker", false],
+    ["ou-admin", true],
+  ] as const)("computes group command authorization for %s", async (senderOpenId, authorized) => {
+    const allowFrom = authorized ? [senderOpenId] : undefined;
+    const mentions = authorized
+      ? undefined
+      : [{ key: "@_user_1", id: { open_id: "ou-bot" }, name: "Bot" }];
+    const text = authorized ? "/status" : "@_user_1/status";
     mockShouldComputeCommandAuthorized.mockReturnValue(true);
-    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig(
-      { groups: { "oc-group": { requireMention: false } } },
-      { commands: { useAccessGroups: true } },
-    );
-    const event = createFeishuTestEvent({
-      messageId: "msg-group-command-auth",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "/status",
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
-    const context = inboundContext();
-    expect(context.ChatType).toBe("group");
-    expect(context.CommandAuthorized).toBe(false);
-    expect(context.SenderId).toBe("ou-attacker");
-    expect(context.GroupRequireMention).toBe(false);
-  });
-
-  it("normalizes group mention-prefixed slash commands before command-auth probing", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(true);
-
-    const cfg = createFeishuTestConfig({
-      groups: { "oc-group": { requireMention: false } },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "msg-group-mention-command-probe",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "@_user_1/model",
-      message: {
-        mentions: [{ key: "@_user_1", id: { open_id: "ou-bot" }, name: "Bot", tenant_key: "" }],
+    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(authorized);
+    await receiveGroup(
+      {
+        messageId: `msg-group-command-${senderOpenId}`,
+        senderOpenId,
+        text,
+        message: { mentions },
       },
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockShouldComputeCommandAuthorized).toHaveBeenCalledWith("/model", cfg);
-  });
-
-  it("falls back to top-level allowFrom for group command authorization", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(true);
-    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
-
-    const cfg = createFeishuTestConfig(
-      { allowFrom: ["ou-admin"], groups: { "oc-group": { requireMention: false } } },
+      {},
+      { allowFrom },
       { commands: { useAccessGroups: true } },
     );
-    const event = createFeishuTestEvent({
-      messageId: "msg-group-command-fallback",
-      senderOpenId: "ou-admin",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "/status",
-    });
-
-    await dispatchMessage({ cfg, event });
-
     expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
     const context = inboundContext();
     expect(context.ChatType).toBe("group");
-    expect(context.CommandAuthorized).toBe(true);
-    expect(context.SenderId).toBe("ou-admin");
+    expect(mockShouldComputeCommandAuthorized).toHaveBeenCalledWith(
+      "/status",
+      currentRuntimeConfig,
+    );
+    expect(context.CommandAuthorized).toBe(authorized);
+    expect(context.SenderId).toBe(senderOpenId);
+    expect(context.GroupRequireMention).toBe(false);
+    expect(context).toMatchObject({
+      From: `feishu:${senderOpenId}`,
+      To: "chat:oc-group",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "chat:oc-group",
+      NativeChannelId: "oc-group",
+    });
+    expect(resolveGroupSessionKey(context as never)).toMatchObject({
+      channel: "feishu",
+      id: "oc-group",
+      key: "feishu:group:oc-group",
+    });
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   it("verifies app-scoped bot mention ids before admitting bot-authored events", async () => {
@@ -1649,21 +1070,21 @@ describe("handleFeishuMessage command authorization", () => {
   });
 
   it("fails closed for bot ingress when the local bot identity is unavailable", async () => {
-    const cfg = createFeishuTestConfig({
-      allowBots: true,
-      groupPolicy: "open",
-      groups: { "oc-bot-group": { requireMention: true } },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "msg-bot-no-local-id",
-      senderOpenId: "ou-peer-bot",
-      senderType: "bot",
-      chatId: "oc-bot-group",
-      chatType: "group",
-      text: "@_openclaw ping",
-    });
-
-    await dispatchMessage({ cfg, event });
+    await receive(
+      {
+        messageId: "msg-bot-no-local-id",
+        senderOpenId: "ou-peer-bot",
+        senderType: "bot",
+        chatId: "oc-bot-group",
+        chatType: "group",
+        text: "@_openclaw ping",
+      },
+      {
+        allowBots: true,
+        groupPolicy: "open",
+        groups: { "oc-bot-group": { requireMention: true } },
+      },
+    );
 
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
@@ -1707,71 +1128,17 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps Feishu group policy bound to the chat while preserving speaker identity", async () => {
+  it("prefers per-group allowFrom over global groupSenderAllowFrom", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig({
-      groupPolicy: "open",
-      groupSenderAllowFrom: ["ou-allowed"],
-      groups: { "oc-group": { requireMention: false } },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "msg-group-context-79457",
-      senderOpenId: "ou-allowed",
-      chatId: "oc-group",
-      chatType: "group",
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    const finalized = inboundContext();
-    expect(finalized.ChatType).toBe("group");
-    expect(finalized.From).toBe("feishu:ou-allowed");
-    expect(finalized.To).toBe("chat:oc-group");
-    expect(finalized.OriginatingChannel).toBe("feishu");
-    expect(finalized.OriginatingTo).toBe("chat:oc-group");
-    expect(finalized.NativeChannelId).toBe("oc-group");
-    expect(finalized.SenderId).toBe("ou-allowed");
-    const groupSessionKey = resolveGroupSessionKey(finalized as never);
-    if (!groupSessionKey) {
-      throw new Error("Expected group session key");
-    }
-    expect(groupSessionKey.channel).toBe("feishu");
-    expect(groupSessionKey.id).toBe("oc-group");
-    expect(groupSessionKey.key).toBe("feishu:group:oc-group");
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    {
-      name: "blocks group sender when global groupSenderAllowFrom excludes sender",
-      cfg: createFeishuTestConfig({
-        groupPolicy: "open",
-        groupSenderAllowFrom: ["ou-allowed"],
-        groups: { "oc-group": { requireMention: false } },
-      }),
-      messageId: "msg-global-group-sender-block",
-      senderOpenId: "ou-blocked",
-    },
-    {
-      name: "prefers per-group allowFrom over global groupSenderAllowFrom",
+    await dispatchMessage({
       cfg: createFeishuTestConfig({
         groupPolicy: "open",
         groupSenderAllowFrom: ["ou-global"],
-        groups: {
-          "oc-group": { allowFrom: ["ou-group-only"], requireMention: false },
-        },
+        groups: { "oc-group": { allowFrom: ["ou-group-only"], requireMention: false } },
       }),
-      messageId: "msg-per-group-precedence",
-      senderOpenId: "ou-global",
-    },
-  ])("$name", async ({ cfg, messageId, senderOpenId }) => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    await dispatchMessage({
-      cfg,
       event: createFeishuTestEvent({
-        messageId,
-        senderOpenId,
+        messageId: "msg-per-group-precedence",
+        senderOpenId: "ou-global",
         chatId: "oc-group",
         chatType: "group",
       }),
@@ -1790,14 +1157,6 @@ describe("handleFeishuMessage command authorization", () => {
       contextVisibility: "allowlist" as const,
       expectedBody: undefined,
     },
-    {
-      name: "keeps quoted group context from non-allowlisted senders in default all mode",
-      parentId: "om_parent_visible",
-      messageId: "msg-group-quoted-visible",
-      quotedBody: "visible quoted content",
-      contextVisibility: undefined,
-      expectedBody: "visible quoted content",
-    },
   ])("$name", async ({ parentId, messageId, quotedBody, contextVisibility, expectedBody }) => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockGetMessageFeishu.mockResolvedValueOnce({
@@ -1809,345 +1168,161 @@ describe("handleFeishuMessage command authorization", () => {
       contentType: "text",
     });
 
-    const cfg = createFeishuTestConfig({
-      groupPolicy: "open",
-      groupSenderAllowFrom: ["ou-allowed"],
-      ...(contextVisibility ? { contextVisibility } : {}),
-      groups: { "oc-group": { requireMention: false } },
-    });
-    const event = createFeishuTestEvent({
-      messageId,
-      senderOpenId: "ou-allowed",
-      chatId: "oc-group",
-      chatType: "group",
-      message: { parent_id: parentId },
-    });
-
-    await dispatchMessage({ cfg, event });
+    await receiveGroup(
+      { messageId, senderOpenId: "ou-allowed", message: { parent_id: parentId } },
+      {},
+      {
+        groupPolicy: "open",
+        groupSenderAllowFrom: ["ou-allowed"],
+        ...(contextVisibility ? { contextVisibility } : {}),
+      },
+    );
 
     const context = inboundContext();
     expect(context.ReplyToId).toBe(parentId);
     expect(context.SupplementalContext?.quote?.body).toBe(expectedBody);
   });
 
-  it("dispatches group image message when groupPolicy is open (requireMention defaults to false)", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    // requireMention is not set, so open policy defaults it to false.
-    const cfg = createFeishuTestConfig({ groupPolicy: "open" });
-    const event = createFeishuTestEvent({
-      messageId: "msg-group-image-open",
-      senderOpenId: "ou-sender",
-      chatId: "oc-group-open",
-      chatType: "group",
-      messageType: "image",
-      content: JSON.stringify({ image_key: "img_v3_test" }),
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-  });
-
-  it("replaces a failed image download placeholder with an unavailable notice", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("expired image key"));
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      event: createFeishuTestEvent({
-        messageId: "msg-image-failed",
-        senderOpenId: "ou-sender",
-        messageType: "image",
-        content: JSON.stringify({ image_key: "expired-image" }),
-      }),
-    });
-
-    const context = inboundContext();
-    expect(context.RawBody).toBe("");
-    expect(context.CommandBody).toBe("");
-    expect(context.BodyForAgent).toContain("[feishu attachment unavailable]");
-    expect(context.BodyForAgent).not.toContain("<media:image>");
-    expect(context.MediaPath).toBeUndefined();
-    expect(context.MediaTypes).toEqual(["image"]);
-  });
-
-  it("preserves an audio transcript when the media download fails", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("expired audio key"));
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      event: createFeishuTestEvent({
-        messageId: "msg-audio-failed",
-        senderOpenId: "ou-sender",
-        messageType: "audio",
-        content: JSON.stringify({ file_key: "expired-audio", speech_to_text: "spoken words" }),
-      }),
-    });
-
-    const context = inboundContext();
-    expect(context.RawBody).toBe("spoken words");
-    expect(context.CommandBody).toBe("spoken words");
-    expect(context.BodyForAgent).toContain("spoken words\n\n[feishu attachment unavailable]");
-    expect(context.MediaPath).toBeUndefined();
-  });
-
-  it("drops the unstable filename annotation when a file download fails", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("expired file key"));
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      event: createFeishuTestEvent({
-        messageId: "msg-file-failed",
-        senderOpenId: "ou-sender",
-        messageType: "file",
-        content: JSON.stringify({ file_key: "expired-file", file_name: "q1.pdf" }),
-      }),
-    });
-
-    const context = inboundContext();
-    expect(context.RawBody).toBe("");
-    expect(context.CommandBody).toBe("");
-    expect(context.BodyForAgent).toContain("[feishu attachment unavailable]");
-    expect(context.BodyForAgent).not.toContain("q1.pdf");
-    expect(context.BodyForAgent).not.toContain("<media:document>");
-    expect(context.MediaPath).toBeUndefined();
-    expect(context.MediaTypes).toEqual(["document"]);
-  });
-
   it.each([
     {
-      name: "drops group image message when groupPolicy is open but requireMention is explicitly true",
-      cfg: createFeishuTestConfig({ groupPolicy: "open", requireMention: true }),
-      messageId: "msg-group-image-open-explicit-mention",
-      chatId: "oc-group-open",
+      type: "audio",
+      content: { file_key: "expired-audio", speech_to_text: "spoken words" },
+      rawBody: "spoken words",
+      body: "spoken words\n\n[feishu attachment unavailable]",
+      excluded: [],
+      mediaTypes: undefined,
     },
     {
-      name: "drops group image message when groupPolicy is allowlist and requireMention is not set (defaults to true)",
-      cfg: createFeishuTestConfig({
-        groupPolicy: "allowlist",
-        groups: { "oc-allowlist-group": { allow: true } },
-      }),
-      messageId: "msg-group-image-allowlist",
-      chatId: "oc-allowlist-group",
+      type: "file",
+      content: { file_key: "expired-file", file_name: "q1.pdf" },
+      rawBody: "",
+      body: "[feishu attachment unavailable]",
+      excluded: ["q1.pdf", "<media:document>"],
+      mediaTypes: ["document"],
     },
-  ])("$name", async ({ cfg, messageId, chatId }) => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    await dispatchMessage({
-      cfg,
-      event: createFeishuTestEvent({
-        messageId,
+  ])(
+    "preserves useful $type content when downloading media fails",
+    async ({ type, content, rawBody, body, excluded, mediaTypes }) => {
+      mockShouldComputeCommandAuthorized.mockReturnValue(false);
+      mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error(`expired ${type} key`));
+      await receive({
+        messageId: `msg-${type}-failed`,
         senderOpenId: "ou-sender",
-        chatId,
-        chatType: "group",
-        messageType: "image",
-        content: JSON.stringify({ image_key: "img_v3_test" }),
-      }),
-    });
+        messageType: type,
+        content: JSON.stringify(content),
+      });
+      const context = inboundContext();
+      expect(context.RawBody).toBe(rawBody);
+      expect(context.CommandBody).toBe(rawBody);
+      expect(context.BodyForAgent).toContain(body);
+      for (const marker of excluded) {
+        expect(context.BodyForAgent).not.toContain(marker);
+      }
+      expect(context.MediaPath).toBeUndefined();
+      if (mediaTypes) {
+        expect(context.MediaTypes).toEqual(mediaTypes);
+      }
+    },
+  );
 
-    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
-    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
-  });
-
-  it("admits group when chat_id is explicitly configured under groups, even with empty groupAllowFrom (#67687)", async () => {
-    // Regression for #67687: a group that only sets `groups.<chat_id>.requireMention=false`
-    // (and leaves `groupAllowFrom` empty) should still be admitted under the schema-default
-    // `groupPolicy="allowlist"`. The group's explicit presence in `channels.feishu.groups`
-    // is the operator's allowlist signal, and the per-group `requireMention` override should
-    // then control mention gating for inbound text events.
+  it.each<
+    [
+      name: string,
+      config: Parameters<typeof createFeishuTestConfig>[0],
+      type: string,
+      admitted: boolean,
+    ]
+  >([
+    [
+      "default mention",
+      { groupPolicy: "allowlist", groups: { "oc-group": { allow: true } } },
+      "image",
+      false,
+    ],
+    [
+      "explicit group (#67687)",
+      { groupPolicy: "allowlist", groups: { "oc-group": { requireMention: false } } },
+      "text",
+      true,
+    ],
+    [
+      "wildcard defaults",
+      { groupPolicy: "allowlist", groups: { "*": { requireMention: false } } },
+      "text",
+      false,
+    ],
+    ["disabled group", { groups: { "oc-group": { enabled: false } } }, "text", false],
+  ])("enforces group admission: %s", async (name, config, messageType, admitted) => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig({
-      groupPolicy: "allowlist",
-      // groupAllowFrom intentionally omitted -> empty []
-      groups: { "oc-explicit-group": { requireMention: false } },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "msg-explicit-group-67687",
-      senderOpenId: "ou-sender",
-      chatId: "oc-explicit-group",
-      chatType: "group",
-      text: "hello bot",
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    // Group must be admitted: the inbound finalize/dispatch path runs.
-    expect(mockFinalizeInboundContext).toHaveBeenCalled();
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "does not let explicit group config override disabled group policy",
-      cfg: createFeishuTestConfig({
-        groupPolicy: "disabled",
-        groups: { "oc-disabled-policy-group": { requireMention: false } },
-      }),
-      messageId: "msg-disabled-policy-group",
-      chatId: "oc-disabled-policy-group",
-      text: "hello bot",
-    },
-    {
-      name: "does not treat wildcard group defaults as allowlist admission",
-      cfg: createFeishuTestConfig({
-        groupPolicy: "allowlist",
-        groups: { "*": { requireMention: false } },
-      }),
-      messageId: "msg-wildcard-group-default",
-      chatId: "oc-wildcard-only",
-      text: "hello bot",
-    },
-    {
-      name: "drops message when groupConfig.enabled is false",
-      cfg: createFeishuTestConfig({ groups: { "oc-disabled-group": { enabled: false } } }),
-      messageId: "msg-disabled-group",
-      chatId: "oc-disabled-group",
-      text: "hello",
-    },
-  ])("$name", async ({ cfg, messageId, chatId, text }) => {
-    await dispatchMessage({
-      cfg,
-      event: createFeishuTestEvent({
-        messageId,
+    await receive(
+      {
+        messageId: `msg-group-${name}`,
         senderOpenId: "ou-sender",
-        chatId,
+        chatId: "oc-group",
         chatType: "group",
-        text,
-      }),
-    });
-
-    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
-    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+        messageType,
+        content: JSON.stringify(
+          messageType === "image" ? { image_key: "img_v3_test" } : { text: "hello bot" },
+        ),
+      },
+      config,
+    );
+    if (admitted) {
+      expect(mockFinalizeInboundContext).toHaveBeenCalled();
+      expect(mockDispatchReplyFromConfig).toHaveBeenCalled();
+    } else {
+      expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+      expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+    }
   });
 
-  it("marks server-transcribed audio at the reply boundary without local transcription", async () => {
+  it("marks server-transcribed audio before dispatch", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    const path = "/tmp/server-voice.ogg";
     mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
-      saved: { path: "/tmp/server-voice.ogg", contentType: "audio/ogg" },
+      saved: { id: "server-voice.ogg", path, size: 12, contentType: "audio/ogg" },
     });
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      event: createFeishuTestEvent({
-        messageId: "msg-audio-server-transcript",
-        senderOpenId: "ou-voice",
-        messageType: "audio",
-        content: JSON.stringify({
-          file_key: "file_audio_payload",
-          duration: 1200,
-          speech_to_text: " supplied transcript ",
-        }),
+    await receive({
+      messageId: "msg-audio-server-transcript",
+      senderOpenId: "ou-voice",
+      messageType: "audio",
+      content: JSON.stringify({
+        file_key: "file_audio_payload",
+        duration: 1200,
+        speech_to_text: " supplied transcript ",
       }),
     });
-
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     expect(mockTranscribeFirstAudio).not.toHaveBeenCalled();
+    expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
     const { ctx } = mockCallArg<{
       ctx: { RawBody: string; media: Array<{ kind: string; transcribed: boolean }> };
     }>(mockDispatchReplyFromConfig, 0, 0);
     expect(ctx.RawBody).toBe("supplied transcript");
     expect(ctx.media).toEqual([
-      expect.objectContaining({ path: "/tmp/server-voice.ogg", kind: "audio", transcribed: true }),
+      expect.objectContaining({ path, kind: "audio", transcribed: true }),
     ]);
   });
 
-  it("transcribes inbound audio before building the agent turn", async () => {
+  it("uses media file_key instead of thumbnail image_key for mobile video download", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
-      saved: {
-        id: "inbound-voice.ogg",
-        path: "/tmp/inbound-voice.ogg",
-        size: Buffer.byteLength("voice"),
-        contentType: "audio/ogg",
-      },
-    });
-    mockTranscribeFirstAudio.mockResolvedValueOnce("voice transcript");
-
-    const cfg = createFeishuTestConfig({ dmPolicy: "open" });
-    const event = createFeishuTestEvent({
-      messageId: "msg-audio-inbound",
-      senderOpenId: "ou-voice",
-      messageType: "audio",
-      content: JSON.stringify({ file_key: "file_audio_payload", duration: 1200 }),
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    const downloadRequest = mockCallArg<{ fileKey?: string; messageId?: string; type?: string }>(
-      mockDownloadMessageResourceFeishu,
-      0,
-      0,
-    );
-    expect(downloadRequest.messageId).toBe("msg-audio-inbound");
-    expect(downloadRequest.fileKey).toBe("file_audio_payload");
-    expect(downloadRequest.type).toBe("file");
-    const transcribeRequest = mockCallArg<{
-      cfg?: { channels?: { feishu?: { dmPolicy?: string } } };
-      ctx?: {
-        ChatType?: string;
-        media?: Array<{ path?: string; contentType?: string; kind?: string }>;
-      };
-    }>(mockTranscribeFirstAudio, 0, 0);
-    expect(transcribeRequest.ctx?.media).toEqual([
-      { path: "/tmp/inbound-voice.ogg", contentType: "audio/ogg", kind: "audio" },
-    ]);
-    expect(transcribeRequest.ctx?.ChatType).toBe("direct");
-    expect(transcribeRequest.cfg?.channels?.feishu?.dmPolicy).toBe("open");
-    const finalized = inboundContext();
-    expect(finalized.BodyForAgent).toBe(
-      "[message_id: msg-audio-inbound]\nou-voice: voice transcript",
-    );
-    expect(finalized.RawBody).toBe("voice transcript");
-    expect(finalized.CommandBody).toBe("voice transcript");
-    expect(finalized.Transcript).toBe("voice transcript");
-    expect(finalized.MediaPaths).toEqual(["/tmp/inbound-voice.ogg"]);
-    expect(finalized.MediaTypes).toEqual(["audio/ogg"]);
-    expect(finalized.MediaTranscribedIndexes).toEqual([0]);
-    expect(finalized.BodyForAgent).not.toContain("file_audio_payload");
-  });
-
-  it.each([
-    {
-      name: "uses video file_key (not thumbnail image_key) for inbound video download",
-      messageId: "msg-video-inbound",
-      messageType: "video" as const,
-      fileKey: "file_video_payload",
-      imageKey: "img_thumb_payload",
-      fileName: "clip.mp4",
-    },
-    {
-      name: "uses media message_type file_key (not thumbnail image_key) for inbound mobile video download",
+    await receive({
       messageId: "msg-media-inbound",
-      messageType: "media" as const,
-      fileKey: "file_media_payload",
-      imageKey: "img_media_thumb",
-      fileName: "mobile.mp4",
-    },
-  ])("$name", async ({ messageId, messageType, fileKey, imageKey, fileName }) => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    await dispatchMessage({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      event: createFeishuTestEvent({
-        messageId,
-        senderOpenId: "ou-sender",
-        messageType,
-        content: JSON.stringify({ file_key: fileKey, image_key: imageKey, file_name: fileName }),
+      senderOpenId: "ou-sender",
+      messageType: "media",
+      content: JSON.stringify({
+        file_key: "file_media_payload",
+        image_key: "img_media_thumb",
+        file_name: "mobile.mp4",
       }),
     });
 
-    const downloadRequest = mockCallArg<{
-      fileKey?: string;
-      messageId?: string;
-      type?: string;
-    }>(mockDownloadMessageResourceFeishu, 0, 0);
-    expect(downloadRequest.messageId).toBe(messageId);
-    expect(downloadRequest.fileKey).toBe(fileKey);
+    const downloadRequest = mockDownloadMessageResourceFeishu.mock.calls[0]![0];
+    expect(downloadRequest.messageId).toBe("msg-media-inbound");
+    expect(downloadRequest.fileKey).toBe("file_media_payload");
     expect(downloadRequest.type).toBe("file");
     expect(downloadRequest).toMatchObject({
-      originalFilename: fileName,
+      originalFilename: "mobile.mp4",
       maxBytes: expect.any(Number),
     });
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
@@ -2157,6 +1332,45 @@ describe("handleFeishuMessage command authorization", () => {
       }),
     );
   });
+
+  it.each([{ caption: "Compare the attached report", files: ["report.csv", "notes.csv"] }])(
+    "delivers post files with caption '$caption' to agent context",
+    async ({ caption, files }) => {
+      mockShouldComputeCommandAuthorized.mockReturnValue(false);
+      mockDownloadMessageResourceFeishu.mockImplementation(
+        async (params: { fileKey: string; originalFilename?: string }) => ({
+          saved: {
+            id: params.fileKey,
+            path: `/tmp/${params.originalFilename}`,
+            size: 20,
+            contentType: "text/csv",
+          },
+        }),
+      );
+      await dispatchMessage({
+        cfg: createFeishuTestConfig({ dmPolicy: "open" }),
+        event: createFeishuTestEvent({
+          messageId: `msg-post-files-${files.length}`,
+          senderOpenId: "ou-sender",
+          messageType: "post",
+          content: JSON.stringify({
+            content: [[{ tag: "text", text: caption }]],
+            files: files.map((fileName, index) => ({
+              file_key: `file_report_${index}`,
+              file_name: fileName,
+            })),
+          }),
+        }),
+      });
+
+      const context = inboundContext();
+      if (caption) {
+        expect(context.BodyForAgent).toContain(caption);
+      }
+      expect(context.MediaPaths).toEqual(files.map((fileName) => `/tmp/${fileName}`));
+      expect(context.MediaTypes).toEqual(files.map(() => "text/csv"));
+    },
+  );
 
   it("delivers unique rich-post attachments in their original mixed-media order", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
@@ -2171,35 +1385,32 @@ describe("handleFeishuMessage command authorization", () => {
       }),
     );
 
-    await dispatchMessage({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      event: createFeishuTestEvent({
-        messageId: "msg-post-mixed-attachments",
-        senderOpenId: "ou-sender",
-        messageType: "post",
-        content: JSON.stringify({
-          title: "Rich text",
-          content: [
-            [
-              { tag: "media", file_key: "file_first", file_name: "first.mov" },
-              { tag: "img", image_key: "img_shared" },
-              { tag: "media", file_key: "file_last", file_name: "last.mov" },
-              { tag: "img", image_key: "img_shared" },
-              { tag: "media", file_key: "file_first", file_name: "first.mov" },
-              { tag: "img", image_key: "file_first" },
-            ],
+    await receive({
+      messageId: "msg-post-mixed-attachments",
+      senderOpenId: "ou-sender",
+      messageType: "post",
+      content: JSON.stringify({
+        title: "Rich text",
+        content: [
+          [
+            { tag: "text", text: "Urgent", style: ["bold"] },
+            { tag: "a", text: "Docs", href: "https://example.com", style: ["italic"] },
+            { tag: "text", text: " " },
+            { tag: "at", user_name: "Bob", user_id: "ou_bob", style: ["underline"] },
+            { tag: "media", file_key: "file_first", file_name: "first.mov" },
+            { tag: "img", image_key: "img_shared" },
+            { tag: "media", file_key: "file_last", file_name: "last.mov" },
+            { tag: "img", image_key: "img_shared" },
+            { tag: "media", file_key: "file_first", file_name: "first.mov" },
+            { tag: "img", image_key: "file_first" },
           ],
-        }),
+        ],
       }),
     });
 
     expect(
       mockDownloadMessageResourceFeishu.mock.calls.map((_call, index) => {
-        const request = mockCallArg<{ fileKey: string; originalFilename?: string; type: string }>(
-          mockDownloadMessageResourceFeishu,
-          index,
-          0,
-        );
+        const request = mockDownloadMessageResourceFeishu.mock.calls[index]![0];
         return {
           fileKey: request.fileKey,
           ...(request.originalFilename ? { fileName: request.originalFilename } : {}),
@@ -2221,38 +1432,7 @@ describe("handleFeishuMessage command authorization", () => {
       "/tmp/file_first.png",
     ]);
     expect(context.MediaTypes).toEqual(["video/mp4", "image/png", "video/mp4", "image/png"]);
-  });
-
-  it("removes failed rich-post media markers while preserving post text", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("expired image key"));
-
-    await dispatchMessage({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      event: createFeishuTestEvent({
-        messageId: "msg-post-image-failed",
-        senderOpenId: "ou-sender",
-        messageType: "post",
-        content: JSON.stringify({
-          title: "Rich text",
-          content: [
-            [
-              { tag: "text", text: "Before " },
-              { tag: "img", image_key: "expired-image" },
-              { tag: "text", text: " after" },
-            ],
-          ],
-        }),
-      }),
-    });
-
-    const context = inboundContext();
-    expect(context.RawBody).toBe("Rich text\n\nBefore  after");
-    expect(context.BodyForAgent).toContain(
-      "Rich text\n\nBefore  after\n\n[feishu attachment unavailable]",
-    );
-    expect(context.BodyForAgent).not.toContain("![image]");
-    expect(context.MediaPath).toBeUndefined();
+    expect(context.BodyForAgent).toContain("**Urgent***[Docs](https://example.com)* <u>@Bob</u>");
   });
 
   it("parses direct interactive webhook content through the canonical card parser", () => {
@@ -2277,74 +1457,39 @@ describe("handleFeishuMessage command authorization", () => {
     expect(parseFeishuMessageEvent(event).content).toBe("Direct task\nStatus\nOpen");
   });
 
-  it("preserves native post inline styles in the agent body", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    const event = createFeishuTestEvent({
-      messageId: "msg-post-styles",
-      senderOpenId: "ou-styles",
-      messageType: "post",
-      content: JSON.stringify({
-        content: [
-          [
-            { tag: "text", text: "Urgent", style: ["bold"] },
-            { tag: "text", text: " " },
-            { tag: "a", text: "Docs", href: "https://example.com", style: ["italic"] },
-            { tag: "text", text: " " },
-            { tag: "at", user_name: "Bob", user_id: "ou_bob", style: ["underline"] },
-          ],
-        ],
-      }),
-    });
-
-    await dispatchMessage({ cfg: createFeishuTestConfig({ dmPolicy: "open" }), event });
-
-    const context = inboundContext();
-    expect(context.BodyForAgent).toContain(
-      "ou-styles: **Urgent** *[Docs](https://example.com)* <u>@Bob</u>",
-    );
-  });
-
-  it("expands merge_forward content from API sub-messages", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockGetMessageFeishu.mockResolvedValueOnce({
+  it.each([
+    {
       messageId: "msg-merge-forward",
-      chatId: "oc_group_1",
-      contentType: "merge_forward",
       content:
-        "[Merged and Forwarded Messages]\n" +
-        "- alpha\n" +
-        "- Task summary\n" +
-        "Task | Owner\n" +
-        "Investigate | Alice\n" +
-        "- [File: report.pdf]",
-    });
-
-    const cfg = createFeishuTestConfig({ dmPolicy: "open" });
-    const event = createFeishuTestEvent({
-      messageId: "msg-merge-forward",
-      senderOpenId: "ou-merge",
-      messageType: "merge_forward",
-      text: "Merged and Forwarded Message",
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockGetMessageFeishu).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      accountId: "default",
-      messageId: "msg-merge-forward",
-    });
-    const context = inboundContext();
-    expect(context.BodyForAgent).toContain(
-      "[Merged and Forwarded Messages]\n" +
-        "- alpha\n" +
-        "- Task summary\n" +
-        "Task | Owner\n" +
-        "Investigate | Alice\n" +
-        "- [File: report.pdf]",
-    );
-    expect(context.BodyForAgent).not.toContain("[interactive]");
-  });
+        "[Merged and Forwarded Messages]\n- alpha\n- Task summary\nTask | Owner\nInvestigate | Alice\n- [File: report.pdf]",
+    },
+    { messageId: "msg-merge-empty", content: null },
+  ])(
+    "expands merged-forward content or reports a missing message: $messageId",
+    async ({ messageId, content }) => {
+      mockShouldComputeCommandAuthorized.mockReturnValue(false);
+      mockGetMessageFeishu.mockResolvedValueOnce(
+        content === null
+          ? null
+          : { messageId, chatId: "oc_group_1", contentType: "merge_forward", content },
+      );
+      await receive({
+        messageId,
+        senderOpenId: "ou-merge",
+        messageType: "merge_forward",
+        text: "Merged and Forwarded Message",
+      });
+      expect(mockGetMessageFeishu).toHaveBeenCalledWith({
+        cfg: expect.any(Object),
+        accountId: "default",
+        messageId,
+      });
+      expect(inboundContext().BodyForAgent).toContain(
+        content ?? "[Merged and Forwarded Message - could not fetch]",
+      );
+      expect(inboundContext().BodyForAgent).not.toContain("[interactive]");
+    },
+  );
 
   it("does not partially parse malformed merge_forward create_time values", () => {
     const items = [
@@ -2396,162 +1541,34 @@ describe("handleFeishuMessage command authorization", () => {
     expect(parsed).not.toMatch(/[\uD800-\uDFFF]/u);
   });
 
-  it("falls back when shared merge_forward retrieval returns no message", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockGetMessageFeishu.mockResolvedValueOnce(null);
-
-    const cfg = createFeishuTestConfig({ dmPolicy: "open" });
-    const event = createFeishuTestEvent({
-      messageId: "msg-merge-empty",
-      senderOpenId: "ou-merge-empty",
-      messageType: "merge_forward",
-      text: "Merged and Forwarded Message",
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockGetMessageFeishu).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      accountId: "default",
-      messageId: "msg-merge-empty",
-    });
-    const context = inboundContext();
-    expect(context.BodyForAgent).toContain("[Merged and Forwarded Message - could not fetch]");
-  });
-
-  it("dispatches once and appends permission notice to the main agent body", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockCreateFeishuClient.mockReturnValue({
-      contact: {
-        user: {
-          get: vi.fn().mockRejectedValue({
-            response: {
-              data: {
-                code: 99991672,
-                msg: "permission denied https://open.feishu.cn/app/cli_test",
-              },
-            },
-          }),
-        },
-      },
-    });
-
-    const cfg = createFeishuTestConfig({
-      appId: "cli_test",
-      appSecret: "sec_test", // pragma: allowlist secret
-      groups: { "oc-group": { requireMention: false } },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "msg-perm-1",
-      senderOpenId: "ou-perm",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "hello group",
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const context = inboundContext();
-    expect(context.BodyForAgent).toContain(
-      "Permission grant URL: https://open.feishu.cn/app/cli_test",
-    );
-    expect(context.BodyForAgent).toContain("ou-perm: hello group");
-  });
-
-  it("ignores stale non-existent contact scope permission errors", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockCreateFeishuClient.mockReturnValue({
-      contact: {
-        user: {
-          get: vi.fn().mockRejectedValue({
-            response: {
-              data: {
-                code: 99991672,
-                msg: "permission denied: contact:contact.base:readonly https://open.feishu.cn/app/cli_scope_bug",
-              },
-            },
-          }),
-        },
-      },
-    });
-
-    const cfg = createFeishuTestConfig({
-      appId: "cli_scope_bug",
-      appSecret: "sec_scope_bug", // pragma: allowlist secret
-      groups: { "oc-group": { requireMention: false } },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "msg-perm-scope-1",
-      senderOpenId: "ou-perm-scope",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "hello group",
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const context = inboundContext();
-    expect(context.BodyForAgent).not.toContain("Permission grant URL");
-    expect(context.BodyForAgent).toContain("ou-perm-scope: hello group");
-  });
+  it.each([
+    ["cli_test", "ou-perm", true],
+    ["cli_scope_bug", "ou-perm-scope", false],
+  ] as const)(
+    "dispatches once and filters permission notice for %s",
+    async (appId, senderOpenId, visible) => {
+      const permission = `permission denied${visible ? "" : ": contact:contact.base:readonly"} https://open.feishu.cn/app/${appId}`;
+      mockShouldComputeCommandAuthorized.mockReturnValue(false);
+      rejectSenderPermission(permission);
+      await receiveGroup(
+        { messageId: `msg-perm-${appId}`, senderOpenId, text: "hello group" },
+        {},
+        { appId, appSecret: "sec_test" }, // pragma: allowlist secret
+      );
+      expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+      const context = inboundContext();
+      if (visible) {
+        expect(context.BodyForAgent).toContain(
+          "Permission grant URL: https://open.feishu.cn/app/cli_test",
+        );
+      } else {
+        expect(context.BodyForAgent).not.toContain("Permission grant URL");
+      }
+      expect(context.BodyForAgent).toContain(`${senderOpenId}: hello group`);
+    },
+  );
 
   it.each([
-    {
-      name: "routes group sessions by sender when groupSessionScope=group_sender",
-      groupConfig: { groupSessionScope: "group_sender" as const },
-      messageId: "msg-scope-group-sender",
-      senderOpenId: "ou-scope-user",
-      message: {},
-      expectedPeer: { kind: "group" as const, id: "oc-group:sender:ou-scope-user" },
-      expectedParentPeer: null,
-    },
-    {
-      name: "routes topic sessions and parentPeer when groupSessionScope=group_topic_sender",
-      groupConfig: { groupSessionScope: "group_topic_sender" as const },
-      messageId: "msg-scope-topic-sender",
-      senderOpenId: "ou-topic-user",
-      message: { root_id: "om_root_topic" },
-      expectedPeer: {
-        kind: "group" as const,
-        id: "oc-group:topic:om_root_topic:sender:ou-topic-user",
-      },
-      expectedParentPeer: { kind: "group" as const, id: "oc-group" },
-    },
-    {
-      name: "keeps root_id as topic key when root_id and thread_id both exist",
-      groupConfig: { groupSessionScope: "group_topic_sender" as const },
-      messageId: "msg-scope-topic-thread-id",
-      senderOpenId: "ou-topic-user",
-      message: { root_id: "om_root_topic", thread_id: "omt_topic_1" },
-      expectedPeer: {
-        kind: "group" as const,
-        id: "oc-group:topic:om_root_topic:sender:ou-topic-user",
-      },
-      expectedParentPeer: { kind: "group" as const, id: "oc-group" },
-    },
-    {
-      name: "uses thread_id as topic key when root_id is missing",
-      groupConfig: { groupSessionScope: "group_topic_sender" as const },
-      messageId: "msg-scope-topic-thread-only",
-      senderOpenId: "ou-topic-user",
-      message: { thread_id: "omt_topic_1" },
-      expectedPeer: {
-        kind: "group" as const,
-        id: "oc-group:topic:omt_topic_1:sender:ou-topic-user",
-      },
-      expectedParentPeer: { kind: "group" as const, id: "oc-group" },
-    },
-    {
-      name: "maps legacy topicSessionMode=enabled to group_topic routing",
-      accountConfig: { topicSessionMode: "enabled" as const },
-      messageId: "msg-legacy-topic-mode",
-      senderOpenId: "ou-legacy",
-      message: { root_id: "om_root_legacy" },
-      expectedPeer: { kind: "group" as const, id: "oc-group:topic:om_root_legacy" },
-      expectedParentPeer: { kind: "group" as const, id: "oc-group" },
-    },
     {
       name: "maps legacy topicSessionMode=enabled to root_id when both root_id and thread_id exist",
       accountConfig: { topicSessionMode: "enabled" as const },
@@ -2561,18 +1578,7 @@ describe("handleFeishuMessage command authorization", () => {
       expectedPeer: { kind: "group" as const, id: "oc-group:topic:om_root_legacy" },
       expectedParentPeer: { kind: "group" as const, id: "oc-group" },
     },
-    {
-      name: "uses message_id as topic root when group_topic + replyInThread and no root_id",
-      groupConfig: {
-        groupSessionScope: "group_topic" as const,
-        replyInThread: "enabled" as const,
-      },
-      messageId: "msg-new-topic-root",
-      senderOpenId: "ou-topic-init",
-      message: {},
-      expectedPeer: { kind: "group" as const, id: "oc-group:topic:msg-new-topic-root" },
-      expectedParentPeer: { kind: "group" as const, id: "oc-group" },
-    },
+
     {
       name: "prefers explicit group scope over explicit account scope",
       accountConfig: { groupSessionScope: "group_topic_sender" as const },
@@ -2581,26 +1587,6 @@ describe("handleFeishuMessage command authorization", () => {
       senderOpenId: "ou-scope-user",
       message: { root_id: "om_root_scope" },
       expectedPeer: { kind: "group" as const, id: "oc-group:sender:ou-scope-user" },
-      expectedParentPeer: null,
-    },
-    {
-      name: "prefers explicit account scope over legacy group topic mode",
-      accountConfig: { groupSessionScope: "group_sender" as const },
-      groupConfig: { topicSessionMode: "enabled" as const },
-      messageId: "msg-account-scope-precedence",
-      senderOpenId: "ou-scope-user",
-      message: { root_id: "om_root_scope" },
-      expectedPeer: { kind: "group" as const, id: "oc-group:sender:ou-scope-user" },
-      expectedParentPeer: null,
-    },
-    {
-      name: "prefers disabled legacy group topic mode over enabled account topic mode",
-      accountConfig: { topicSessionMode: "enabled" as const },
-      groupConfig: { topicSessionMode: "disabled" as const },
-      messageId: "msg-legacy-scope-precedence",
-      senderOpenId: "ou-scope-user",
-      message: { root_id: "om_root_scope" },
-      expectedPeer: { kind: "group" as const, id: "oc-group" },
       expectedParentPeer: null,
     },
   ])(
@@ -2615,212 +1601,144 @@ describe("handleFeishuMessage command authorization", () => {
       expectedParentPeer,
     }) => {
       mockShouldComputeCommandAuthorized.mockReturnValue(false);
-      await dispatchMessage({
-        cfg: createFeishuTestConfig({
-          ...accountConfig,
-          groups: { "oc-group": { requireMention: false, ...groupConfig } },
-        }),
-        event: createFeishuTestEvent({
-          messageId,
-          senderOpenId,
-          chatId: "oc-group",
-          chatType: "group",
-          text: "session scope",
-          message,
-        }),
-      });
+      await receiveGroup(
+        { messageId, senderOpenId, text: "session scope", message },
+        { ...groupConfig },
+        { ...accountConfig },
+      );
 
       expectResolvedRouteCall(0, expectedPeer, expectedParentPeer);
+      expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+        expect.objectContaining({ replyInThread: true, threadReply: true }),
+      );
     },
   );
 
-  it("uses thread_id as the canonical topic key in Feishu topic groups", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig({
-      groups: {
-        "oc-group": { requireMention: false, groupSessionScope: "group_topic" },
-      },
-    });
-    const topicStarter = createFeishuTestEvent({
-      messageId: "om_topic_starter_message",
-      senderOpenId: "ou-topic-user",
-      chatId: "oc-group",
-      chatType: "topic_group",
-      text: "topic starter",
-      message: { root_id: "omt_topic_1" },
-    });
-    const topicReply = createFeishuTestEvent({
-      messageId: "om_topic_reply_message",
-      senderOpenId: "ou-topic-user",
-      chatId: "oc-group",
-      chatType: "topic_group",
-      text: "topic reply",
-      message: { root_id: "om_topic_starter_message", thread_id: "omt_topic_1" },
-    });
-
-    await dispatchMessage({ cfg, event: topicStarter });
-    await dispatchMessage({ cfg, event: topicReply });
-
-    const expectedPeer = { kind: "group" as const, id: "oc-group:topic:omt_topic_1" };
-    const expectedParentPeer = { kind: "group" as const, id: "oc-group" };
-    expectResolvedRouteCall(0, expectedPeer, expectedParentPeer);
-    expectResolvedRouteCall(1, expectedPeer, expectedParentPeer);
-  });
-
-  it("keeps topic session key stable after first turn creates a thread", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig({
-      groups: {
-        "oc-group": {
-          requireMention: false,
-          groupSessionScope: "group_topic",
-          replyInThread: "enabled",
-        },
-      },
-    });
-    const firstTurn = createFeishuTestEvent({
-      messageId: "msg-topic-first",
-      senderOpenId: "ou-topic-init",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "create topic",
-    });
-    const secondTurn = createFeishuTestEvent({
-      messageId: "msg-topic-second",
-      senderOpenId: "ou-topic-init",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "follow up in same topic",
-      message: { root_id: "msg-topic-first", thread_id: "omt_topic_created" },
-    });
-
-    await dispatchMessage({ cfg, event: firstTurn });
-    await dispatchMessage({ cfg, event: secondTurn });
-
-    expectResolvedRouteCall(0, { kind: "group", id: "oc-group:topic:msg-topic-first" });
-    expectResolvedRouteCall(1, { kind: "group", id: "oc-group:topic:msg-topic-first" });
-  });
-
-  it("hydrates missing native topic thread_id before routing starter events", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockGetMessageFeishu.mockResolvedValueOnce({
-      messageId: "msg-native-topic-first",
-      chatId: "oc-group",
-      chatType: "topic_group",
-      content: "topic starter",
-      contentType: "text",
-      threadId: "omt_native_topic",
-    });
-
-    const cfg = createFeishuTestConfig({
-      groups: {
-        "oc-group": {
-          requireMention: false,
-          groupSessionScope: "group_topic",
-          replyInThread: "enabled",
-        },
-      },
-    });
-    const firstTurn = createFeishuTestEvent({
-      messageId: "msg-native-topic-first",
-      senderOpenId: "ou-topic-init",
-      chatId: "oc-group",
-      chatType: "topic_group",
-      text: "create native topic",
-    });
-    const secondTurn = createFeishuTestEvent({
-      messageId: "msg-native-topic-second",
-      senderOpenId: "ou-topic-init",
-      chatId: "oc-group",
-      chatType: "topic_group",
-      text: "follow up in same native topic",
-      message: { thread_id: "omt_native_topic" },
-    });
-
-    await dispatchMessage({ cfg, event: firstTurn });
-    await dispatchMessage({ cfg, event: secondTurn });
-
-    const getMessageRequest = mockCallArg<{ messageId?: string }>(mockGetMessageFeishu, 0, 0);
-    expect(getMessageRequest.messageId).toBe("msg-native-topic-first");
-    expectResolvedRouteCall(0, { kind: "group", id: "oc-group:topic:omt_native_topic" });
-    expectResolvedRouteCall(1, { kind: "group", id: "oc-group:topic:omt_native_topic" });
-  });
-
   it.each([
     {
-      action: "created",
-      scope: "group_topic",
-      expectedPeerId: "oc-group:topic:omt_native_reaction",
+      chatType: "topic_group" as const,
+      senderOpenId: "ou-topic-user",
+      replyInThread: undefined,
+      first: {
+        messageId: "om_topic_starter_message",
+        text: "topic starter",
+        message: { root_id: "omt_topic_1" },
+      },
+      second: {
+        messageId: "om_topic_reply_message",
+        text: "topic reply",
+        message: { root_id: "om_topic_starter_message", thread_id: "omt_topic_1" },
+      },
+      topicId: "omt_topic_1",
     },
     {
-      action: "deleted",
-      scope: "group_topic_sender",
-      expectedPeerId: "oc-group:topic:omt_native_reaction:sender:ou-reaction-actor",
+      chatType: "group" as const,
+      senderOpenId: "ou-topic-init",
+      replyInThread: "enabled" as const,
+      first: { messageId: "msg-topic-first", text: "create topic", message: undefined },
+      second: {
+        messageId: "msg-topic-second",
+        text: "follow up in same topic",
+        message: { root_id: "msg-topic-first", thread_id: "omt_topic_created" },
+      },
+      topicId: "msg-topic-first",
     },
-  ] as const)(
-    "hydrates topic threads from the real message ID for synthetic $action reactions in $scope sessions",
-    async ({ action, scope, expectedPeerId }) => {
+  ])(
+    "keeps the $chatType session key stable across topic creation",
+    async ({ chatType, senderOpenId, replyInThread, first, second, topicId }) => {
       mockShouldComputeCommandAuthorized.mockReturnValue(false);
-      const reactedMessageId = `om_reacted_${action}_${scope}`;
+      const cfg = createFeishuTestConfig({
+        groups: {
+          "oc-group": { requireMention: false, groupSessionScope: "group_topic", replyInThread },
+        },
+      });
+      for (const turn of [first, second]) {
+        await dispatchMessage({
+          cfg,
+          event: createFeishuTestEvent({ ...turn, senderOpenId, chatId: "oc-group", chatType }),
+        });
+      }
+      const peer = { kind: "group" as const, id: `oc-group:topic:${topicId}` };
+      expectResolvedRouteCall(0, peer, { kind: "group", id: "oc-group" });
+      expectResolvedRouteCall(1, peer, { kind: "group", id: "oc-group" });
+      if (chatType === "group") {
+        expect(mockCreateFeishuReplyDispatcher).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({
+            replyToMessageId: "msg-topic-first",
+            rootId: "msg-topic-first",
+            typingTargetMessageId: "msg-topic-second",
+          }),
+        );
+      }
+    },
+  );
+
+  it.each([
+    [false, "msg-native-topic-first", "ou-topic-init", "omt_native_topic", "group_topic"],
+    [
+      true,
+      "om_reacted_deleted_group_topic_sender",
+      "ou-reaction-actor",
+      "omt_native_reaction",
+      "group_topic_sender",
+    ],
+  ] as const)(
+    "hydrates native topic IDs before routing (synthetic=%s)",
+    async (synthetic, messageId, senderOpenId, threadId, groupSessionScope) => {
+      mockShouldComputeCommandAuthorized.mockReturnValue(false);
       mockGetMessageFeishu.mockResolvedValueOnce({
-        messageId: reactedMessageId,
+        messageId,
         chatId: "oc-group",
         chatType: "topic_group",
-        content: "reacted message",
+        content: "topic starter",
         contentType: "text",
-        threadId: "omt_native_reaction",
+        threadId,
       });
-
+      const cfg = createFeishuTestConfig({
+        groups: {
+          "oc-group": { requireMention: false, groupSessionScope, replyInThread: "enabled" },
+        },
+      });
       await dispatchMessage({
-        cfg: createFeishuTestConfig({
-          groups: {
-            "oc-group": {
-              requireMention: false,
-              groupSessionScope: scope,
-              replyInThread: "enabled",
-            },
-          },
-        }),
+        cfg,
         event: createFeishuTestEvent({
-          messageId: `${reactedMessageId}:reaction:THUMBSUP:synthetic`,
-          senderOpenId: "ou-reaction-actor",
+          messageId: synthetic ? `${messageId}:reaction:THUMBSUP:synthetic` : messageId,
+          senderOpenId,
           chatId: "oc-group",
           chatType: "topic_group",
-          text:
-            action === "deleted"
-              ? `[removed reaction THUMBSUP from message ${reactedMessageId}]`
-              : `[reacted with THUMBSUP to message ${reactedMessageId}]`,
-          message: {
-            reply_target_message_id: reactedMessageId,
-            typing_target_message_id: reactedMessageId,
-          },
+          text: synthetic
+            ? `[removed reaction THUMBSUP from message ${messageId}]`
+            : "create native topic",
+          message: synthetic
+            ? { reply_target_message_id: messageId, typing_target_message_id: messageId }
+            : undefined,
         }),
       });
-
-      const getMessageRequest = mockCallArg<{ messageId?: string }>(mockGetMessageFeishu, 0, 0);
-      expect(getMessageRequest.messageId).toBe(reactedMessageId);
-      expectResolvedRouteCall(0, { kind: "group", id: expectedPeerId });
+      expect(mockGetMessageFeishu.mock.calls[0]![0].messageId).toBe(messageId);
+      const peer = {
+        kind: "group" as const,
+        id: `oc-group:topic:${threadId}${synthetic ? `:sender:${senderOpenId}` : ""}`,
+      };
+      expectResolvedRouteCall(0, peer);
+      if (!synthetic) {
+        await dispatchMessage({
+          cfg,
+          event: createFeishuTestEvent({
+            messageId: "msg-native-topic-second",
+            senderOpenId,
+            chatId: "oc-group",
+            chatType: "topic_group",
+            text: "follow up in same native topic",
+            message: { thread_id: threadId },
+          }),
+        });
+        expectResolvedRouteCall(1, peer);
+      }
     },
   );
 
   it.each([
-    {
-      name: "replies to the topic root when handling a message inside an existing topic",
-      cfg: createFeishuTestConfig({
-        groups: { "oc-group": { requireMention: false, replyInThread: "enabled" } },
-      }),
-      messageId: "om_child_message",
-      senderOpenId: "ou-topic-user",
-      rootId: "om_root_topic",
-      text: "reply inside topic",
-      expected: {
-        replyToMessageId: "om_root_topic",
-        rootId: "om_root_topic",
-        typingTargetMessageId: "om_child_message",
-      },
-    },
     {
       name: "replies to triggering message in normal group even when root_id is present (#32980)",
       cfg: createFeishuTestConfig({
@@ -2833,40 +1751,6 @@ describe("handleFeishuMessage command authorization", () => {
       rootId: "om_original_msg",
       text: "hello in normal group",
       expected: { replyToMessageId: "om_quote_reply", rootId: "om_original_msg" },
-    },
-    {
-      name: "replies to topic root in topic-mode group with root_id",
-      cfg: createFeishuTestConfig({
-        groups: {
-          "oc-group": { requireMention: false, groupSessionScope: "group_topic" },
-        },
-      }),
-      messageId: "om_topic_reply",
-      senderOpenId: "ou-topic-user",
-      rootId: "om_topic_root",
-      text: "hello in topic group",
-      expected: {
-        replyToMessageId: "om_topic_root",
-        rootId: "om_topic_root",
-        typingTargetMessageId: "om_topic_reply",
-      },
-    },
-    {
-      name: "replies to topic root in topic-sender group with root_id",
-      cfg: createFeishuTestConfig({
-        groups: {
-          "oc-group": { requireMention: false, groupSessionScope: "group_topic_sender" },
-        },
-      }),
-      messageId: "om_topic_sender_reply",
-      senderOpenId: "ou-topic-sender-user",
-      rootId: "om_topic_sender_root",
-      text: "hello in topic sender group",
-      expected: {
-        replyToMessageId: "om_topic_sender_root",
-        rootId: "om_topic_sender_root",
-        typingTargetMessageId: "om_topic_sender_reply",
-      },
     },
   ])("$name", async ({ cfg, messageId, senderOpenId, rootId, text, expected }) => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
@@ -2882,35 +1766,40 @@ describe("handleFeishuMessage command authorization", () => {
       }),
     });
 
-    const dispatcherOptions = mockCallArg<{
-      replyToMessageId?: string;
-      rootId?: string;
-      typingTargetMessageId?: string;
-    }>(mockCreateFeishuReplyDispatcher, 0, 0);
+    const dispatcherOptions = mockCreateFeishuReplyDispatcher.mock.calls[0]![0];
     expect(dispatcherOptions).toMatchObject(expected);
+    expect(
+      vi.mocked(botRuntime.channel.session.recordInboundSession).mock.calls.at(-1)?.[0]
+        .updateLastRoute,
+    ).toMatchObject({
+      to: "chat:oc-group",
+      threadId: expected.replyToMessageId,
+    });
   });
 
   it("uses explicit synthetic typing targets without changing reply routing", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
-    const cfg = createFeishuTestConfig({ dmPolicy: "open" });
-    const event = createFeishuTestEvent({
-      messageId: "synthetic-reaction-turn",
-      senderOpenId: "ou-synthetic",
-      chatId: "oc-synthetic-dm",
-      text: "[reacted with THUMBSUP to message om_reply_anchor]",
-      message: {
-        typing_target_message_id: "om_reacted_message",
-        reply_target_message_id: "om_reply_anchor",
+    await receive(
+      {
+        messageId: "synthetic-reaction-turn",
+        senderOpenId: "ou_sender_1",
+        chatId: "p2p:ou_sender_1",
+        text: "[reacted with THUMBSUP to message om_reply_anchor]",
+        message: {
+          typing_target_message_id: "om_reacted_message",
+          reply_target_message_id: "om_reply_anchor",
+        },
       },
-    });
-
-    await dispatchMessage({ cfg, event });
+      { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" },
+    );
 
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_reply_anchor",
         typingTargetMessageId: "om_reacted_message",
+        chatId: "p2p:ou_sender_1",
+        sendTarget: "user:ou_sender_1",
       }),
     );
   });
@@ -2950,400 +1839,284 @@ describe("handleFeishuMessage command authorization", () => {
     },
   ])("$name", async ({ messageId, senderOpenId, chatId, rootId, threadId, text, expected }) => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    await dispatchMessage({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      event: createFeishuTestEvent({
-        messageId,
-        senderOpenId,
-        chatId,
-        text,
-        message: {
-          root_id: rootId,
-          ...(threadId ? { thread_id: threadId } : {}),
-        },
-      }),
+    await receive({
+      messageId,
+      senderOpenId,
+      chatId,
+      text,
+      message: {
+        root_id: rootId,
+        create_time: "1700000000000",
+        ...(threadId ? { thread_id: threadId } : {}),
+      },
     });
 
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(expect.objectContaining(expected));
-  });
-
-  it("forces thread replies when inbound message contains thread_id", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig({
-      groups: {
-        "oc-group": {
-          requireMention: false,
-          groupSessionScope: "group",
-          replyInThread: "disabled",
-        },
-      },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "msg-thread-reply",
-      senderOpenId: "ou-thread-reply",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "thread content",
-      message: { thread_id: "omt_topic_thread_reply" },
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    const dispatcherOptions = mockCallArg<{ replyInThread?: boolean; threadReply?: boolean }>(
-      mockCreateFeishuReplyDispatcher,
-      0,
-      0,
+    expect(inboundContext().Timestamp).toBe(1700000000000);
+    expect(mockFormatAgentEnvelope).toHaveBeenCalledWith(
+      expect.objectContaining({ timestamp: 1700000000000 }),
     );
-    expect(dispatcherOptions.replyInThread).toBe(true);
-    expect(dispatcherOptions.threadReply).toBe(true);
   });
 
-  it("bootstraps topic thread context only for a new thread session", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockGetMessageFeishu.mockResolvedValue({
-      messageId: "om_topic_root",
-      chatId: "oc-group",
-      content: "root starter",
-      contentType: "text",
-      threadId: "omt_topic_1",
-    });
-    mockListFeishuThreadMessages.mockResolvedValue([
-      {
-        messageId: "om_bot_reply",
-        senderId: "app_1",
-        senderType: "app",
-        content: "assistant reply",
-        contentType: "text",
-        createTime: 1710000000000,
-      },
-      {
-        messageId: "om_follow_up",
-        senderId: "ou-topic-user",
-        senderType: "user",
-        content: "follow-up question",
-        contentType: "text",
-        createTime: 1710000001000,
-      },
-    ]);
-
-    const cfg = createFeishuTestConfig({
-      groups: { "oc-group": { requireMention: false, groupSessionScope: "group_topic" } },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "om_topic_followup_existing_session",
+  it.each([
+    {
+      mode: "existing",
       senderOpenId: "ou-topic-user",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "current turn",
-      message: { root_id: "om_topic_root" },
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockReadSessionUpdatedAt).toHaveBeenCalledWith({
-      storePath: "/tmp/feishu-sessions.json",
-      sessionKey: "agent:main:feishu:dm:ou-attacker",
-    });
-    const listRequest = mockCallArg<{ rootMessageId?: string }>(mockListFeishuThreadMessages, 0, 0);
-    expect(listRequest.rootMessageId).toBe("om_topic_root");
-    const context = inboundContext();
-    expect(context.SupplementalContext?.thread?.starterBody).toBe("root starter");
-    expect(context.SupplementalContext?.thread?.historyBody).toBe(
-      "assistant reply\n\nfollow-up question",
-    );
-    expect(context.SupplementalContext?.thread?.label).toBe("Feishu thread in oc-group");
-    expect(context.MessageThreadId).toBe("om_topic_root");
-  });
-
-  it("skips topic thread bootstrap when the thread session already exists", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockReadSessionUpdatedAt.mockReturnValue(1710000000000);
-
-    const cfg = createFeishuTestConfig({
-      groups: { "oc-group": { requireMention: false, groupSessionScope: "group_topic" } },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "om_topic_followup",
-      senderOpenId: "ou-topic-user",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "current turn",
-      message: { root_id: "om_topic_root" },
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    expect(mockGetMessageFeishu).not.toHaveBeenCalled();
-    expect(mockListFeishuThreadMessages).not.toHaveBeenCalled();
-    const context = inboundContext();
-    expect(context.SupplementalContext?.thread?.starterBody).toBeUndefined();
-    expect(context.SupplementalContext?.thread?.historyBody).toBeUndefined();
-    expect(context.SupplementalContext?.thread?.label).toBe("Feishu thread in oc-group");
-    expect(context.MessageThreadId).toBe("om_topic_root");
-  });
-
-  it("keeps sender-scoped thread history when the inbound event and thread history use different sender ids", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockGetMessageFeishu.mockResolvedValue({
-      messageId: "om_topic_root",
-      chatId: "oc-group",
-      content: "root starter",
-      contentType: "text",
-      threadId: "omt_topic_1",
-    });
-    mockListFeishuThreadMessages.mockResolvedValue([
-      {
-        messageId: "om_bot_reply",
-        senderId: "app_1",
-        senderType: "app",
-        content: "assistant reply",
-        contentType: "text",
-        createTime: 1710000000000,
-      },
-      {
-        messageId: "om_follow_up",
-        senderId: "user_topic_1",
-        senderType: "user",
-        content: "follow-up question",
-        contentType: "text",
-        createTime: 1710000001000,
-      },
-    ]);
-
-    const cfg = createFeishuTestConfig({
-      groups: {
-        "oc-group": { requireMention: false, groupSessionScope: "group_topic_sender" },
-      },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "om_topic_followup_mixed_ids",
+      senderUserId: undefined,
+      scope: "group_topic" as const,
+      threadId: undefined,
+      starter: undefined,
+      history: undefined,
+    },
+    {
+      mode: "sender",
       senderOpenId: "ou-topic-user",
       senderUserId: "user_topic_1",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "current turn",
-      message: { root_id: "om_topic_root" },
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    const context = inboundContext();
-    expect(context.SupplementalContext?.thread?.starterBody).toBe("root starter");
-    expect(context.SupplementalContext?.thread?.historyBody).toBe(
-      "assistant reply\n\nfollow-up question",
-    );
-    expect(context.SupplementalContext?.thread?.label).toBe("Feishu thread in oc-group");
-    expect(context.MessageThreadId).toBe("om_topic_root");
-  });
-
-  it("filters topic bootstrap context to allowlisted group senders", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockGetMessageFeishu.mockResolvedValue({
-      messageId: "om_topic_root",
-      chatId: "oc-group",
-      senderId: "ou-blocked",
-      senderType: "user",
-      content: "blocked root starter",
-      contentType: "text",
-      threadId: "omt_topic_1",
-    });
-    mockListFeishuThreadMessages.mockResolvedValue([
-      {
-        messageId: "om_blocked_reply",
-        senderId: "ou-blocked",
-        senderType: "user",
-        content: "blocked follow-up",
-        contentType: "text",
-        createTime: 1710000000000,
-      },
-      {
-        messageId: "om_bot_reply",
-        senderId: "app_1",
-        senderType: "app",
-        content: "assistant reply",
-        contentType: "text",
-        createTime: 1710000001000,
-      },
-      {
-        messageId: "om_allowed_reply",
-        senderId: "ou-allowed",
-        senderType: "user",
-        content: "allowed follow-up",
-        contentType: "text",
-        createTime: 1710000002000,
-      },
-    ]);
-
-    const cfg = createFeishuTestConfig({
-      groupPolicy: "open",
-      groupSenderAllowFrom: ["ou-allowed"],
-      contextVisibility: "allowlist",
-      groups: { "oc-group": { requireMention: false, groupSessionScope: "group_topic" } },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "om_topic_followup_allowlisted",
+      scope: "group_topic_sender" as const,
+      threadId: undefined,
+      starter: "root starter",
+      history: "assistant reply\n\nfollow-up question",
+    },
+    {
+      mode: "allowlist",
       senderOpenId: "ou-allowed",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "current turn",
-      message: { root_id: "om_topic_root", thread_id: "omt_topic_1" },
-    });
+      senderUserId: undefined,
+      scope: "group_topic" as const,
+      threadId: "omt_topic_1",
+      starter: "assistant reply",
+      history: "assistant reply\n\nallowed follow-up",
+    },
+  ])(
+    "bootstraps topic history using $mode session policy",
+    async ({ mode, senderOpenId, senderUserId, scope, threadId, starter, history }) => {
+      mockShouldComputeCommandAuthorized.mockReturnValue(false);
+      if (mode === "existing") {
+        mockReadSessionUpdatedAt.mockReturnValue(1710000000000);
+      } else {
+        mockGetMessageFeishu.mockResolvedValue({
+          messageId: "om_topic_root",
+          chatId: "oc-group",
+          contentType: "text",
+          threadId: "omt_topic_1",
+          content: mode === "allowlist" ? "blocked root starter" : "root starter",
+          ...(mode === "allowlist" ? { senderId: "ou-blocked", senderType: "user" } : {}),
+        });
+        mockListFeishuThreadMessages.mockResolvedValue(
+          mode === "allowlist"
+            ? [
+                historyMessage(
+                  "om_blocked_reply",
+                  "ou-blocked",
+                  "user",
+                  "blocked follow-up",
+                  1710000000000,
+                ),
+                historyMessage("om_bot_reply", "app_1", "app", "assistant reply", 1710000001000),
+                historyMessage(
+                  "om_allowed_reply",
+                  "ou-allowed",
+                  "user",
+                  "allowed follow-up",
+                  1710000002000,
+                ),
+              ]
+            : [
+                historyMessage("om_bot_reply", "app_1", "app", "assistant reply", 1710000000000),
+                historyMessage(
+                  "om_follow_up",
+                  "user_topic_1",
+                  "user",
+                  "follow-up question",
+                  1710000001000,
+                ),
+              ],
+        );
+      }
+      await receiveGroup(
+        {
+          messageId: `om_topic_followup_${mode}`,
+          senderOpenId,
+          senderUserId,
+          text: "current turn",
+          message: { root_id: "om_topic_root", thread_id: threadId },
+        },
+        { groupSessionScope: scope },
+        mode === "allowlist"
+          ? {
+              groupPolicy: "open",
+              groupSenderAllowFrom: ["ou-allowed"],
+              contextVisibility: "allowlist",
+            }
+          : {},
+      );
+      if (mode === "existing") {
+        expect(mockGetMessageFeishu).not.toHaveBeenCalled();
+        expect(mockListFeishuThreadMessages).not.toHaveBeenCalled();
+      }
+      const context = inboundContext();
+      expect(context.SupplementalContext?.thread?.starterBody).toBe(starter);
+      expect(context.SupplementalContext?.thread?.historyBody).toBe(history);
+      expect(context.SupplementalContext?.thread?.label).toBe("Feishu thread in oc-group");
+      expect(context.MessageThreadId).toBe("om_topic_root");
+    },
+  );
 
-    await dispatchMessage({ cfg, event });
-
-    const context = inboundContext();
-    expect(context.SupplementalContext?.thread?.starterBody).toBe("assistant reply");
-    expect(context.SupplementalContext?.thread?.historyBody).toBe(
-      "assistant reply\n\nallowed follow-up",
-    );
-  });
-
-  it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig({ dmPolicy: "open" });
-    const event = createFeishuTestEvent({
-      messageId: "msg-image-dedup",
-      senderOpenId: "ou-image-dedup",
-      messageType: "image",
-      content: JSON.stringify({ image_key: "img_dedup_payload" }),
-    });
-
-    await Promise.all([dispatchMessage({ cfg, event }), dispatchMessage({ cfg, event })]);
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-  });
-
-  it("dedupes Feishu media by message_id plus file_key", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig({ dmPolicy: "open" });
-    const createAudioEvent = (fileKey: string): FeishuMessageEvent =>
-      createFeishuTestEvent({
-        messageId: "msg-audio-reused-id",
-        senderOpenId: "ou-audio-dedup",
-        messageType: "audio",
-        content: JSON.stringify({ file_key: fileKey, duration: 1200 }),
-      });
-
-    await dispatchMessage({ cfg, event: createAudioEvent("file_audio_first") });
-    await dispatchMessage({ cfg, event: createAudioEvent("file_audio_second") });
-    await dispatchMessage({ cfg, event: createAudioEvent("file_audio_first") });
-
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(2);
-    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledTimes(2);
-    const firstDownloadRequest = mockCallArg<{
-      fileKey?: string;
-      messageId?: string;
-      type?: string;
-    }>(mockDownloadMessageResourceFeishu, 0, 0);
-    expect(firstDownloadRequest.messageId).toBe("msg-audio-reused-id");
-    expect(firstDownloadRequest.fileKey).toBe("file_audio_first");
-    expect(firstDownloadRequest.type).toBe("file");
-    const secondDownloadRequest = mockCallArg<{
-      fileKey?: string;
-      messageId?: string;
-      type?: string;
-    }>(mockDownloadMessageResourceFeishu, 1, 0);
-    expect(secondDownloadRequest.messageId).toBe("msg-audio-reused-id");
-    expect(secondDownloadRequest.fileKey).toBe("file_audio_second");
-    expect(secondDownloadRequest.type).toBe("file");
-  });
+  it.each([
+    {
+      type: "image",
+      concurrent: true,
+      keys: ["img_dedup_payload", "img_dedup_payload"],
+      dispatches: 1,
+    },
+    {
+      type: "audio",
+      concurrent: false,
+      keys: ["file_audio_first", "file_audio_second", "file_audio_first"],
+      dispatches: 2,
+    },
+  ])(
+    "dedupes $type messages by ID and media key (concurrent=$concurrent)",
+    async ({ type, concurrent, keys, dispatches }) => {
+      mockShouldComputeCommandAuthorized.mockReturnValue(false);
+      const messageId = `msg-${type}-dedup`;
+      if (type === "audio") {
+        mockDownloadMessageResourceFeishu.mockResolvedValue({
+          saved: {
+            id: "inbound-voice.ogg",
+            path: "/tmp/inbound-voice.ogg",
+            size: 5,
+            contentType: "audio/ogg",
+          },
+        });
+        mockTranscribeFirstAudio.mockResolvedValue("voice transcript");
+      }
+      const cfg = createFeishuTestConfig({ dmPolicy: "open" });
+      const dispatch = (key: string) =>
+        dispatchMessage({
+          cfg,
+          event: createFeishuTestEvent({
+            messageId,
+            senderOpenId: `ou-${type}-dedup`,
+            messageType: type,
+            content: JSON.stringify(
+              type === "image" ? { image_key: key } : { file_key: key, duration: 1200 },
+            ),
+          }),
+        });
+      if (concurrent) {
+        await Promise.all(keys.map(dispatch));
+      } else {
+        for (const key of keys) {
+          await dispatch(key);
+        }
+      }
+      expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(dispatches);
+      if (!concurrent) {
+        const transcribeRequest = mockTranscribeFirstAudio.mock.calls[0]![0];
+        expect(transcribeRequest.ctx?.media).toEqual([
+          { path: "/tmp/inbound-voice.ogg", contentType: "audio/ogg", kind: "audio" },
+        ]);
+        expect(transcribeRequest.ctx?.ChatType).toBe("direct");
+        expect(transcribeRequest.cfg?.channels?.feishu?.dmPolicy).toBe("open");
+        const context = inboundContext();
+        expect(context).toMatchObject({
+          BodyForAgent: `[message_id: ${messageId}]\nou-audio-dedup: voice transcript`,
+          RawBody: "voice transcript",
+          CommandBody: "voice transcript",
+          Transcript: "voice transcript",
+          MediaPaths: ["/tmp/inbound-voice.ogg"],
+          MediaTypes: ["audio/ogg"],
+          MediaTranscribedIndexes: [0],
+        });
+        expect(context.BodyForAgent).not.toContain("file_audio_first");
+        expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledTimes(2);
+        expect(mockDownloadMessageResourceFeishu.mock.calls[0]![0]).toMatchObject({
+          messageId,
+          fileKey: "file_audio_first",
+          type: "file",
+        });
+        expect(mockDownloadMessageResourceFeishu.mock.calls[1]![0]).toMatchObject({
+          messageId,
+          fileKey: "file_audio_second",
+          type: "file",
+        });
+      }
+    },
+  );
 
   it("skips empty-text messages with no media to prevent blank user turns in session (#74634)", async () => {
-    // Feishu can deliver { "text": "" } events (empty-text or media-stripped
-    // messages). Writing blank user content to the session causes downstream
-    // LLM providers such as MiniMax to reject requests with "messages must not
-    // be empty". The handler should drop such events before queuing a reply.
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
-    const cfg = createFeishuTestConfig({ dmPolicy: "open", allowFrom: ["*"] });
-    const event = createFeishuTestEvent({
-      messageId: "msg-empty-text-74634",
-      senderOpenId: "ou-empty-text-sender",
-      text: "",
-    });
-
-    await dispatchMessage({ cfg, event });
-
-    // No reply should be dispatched: empty message is silently skipped
-    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
-  });
-
-  it("dispatches mention-only group reply with quoted content in requireMention:true group (#90177)", async () => {
-    // #90177 is specifically about group chats. The empty-message drop happens
-    // after the group admission/mention gate, so the fix must also work when
-    // the sender mentions the bot in a requireMention:true group and quotes a
-    // parent message with meaningful content — the reply should dispatch with
-    // the quoted text in the body.
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockGetMessageFeishu.mockResolvedValueOnce({
-      messageId: "om_group_quoted_001",
-      chatId: "oc-group-90177",
-      content: "parent message with context",
-      contentType: "text",
-    });
-
-    const cfg = createFeishuTestConfig({
-      groupPolicy: "open",
-      groups: { "oc-group-90177": { requireMention: true } },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "msg-group-empty-with-quote",
-      senderOpenId: "ou-group-sender",
-      chatId: "oc-group-90177",
-      chatType: "group",
-      text: "",
-      message: {
-        parent_id: "om_group_quoted_001",
-        mentions: [
-          { key: "@_bot_1", id: { open_id: "ou-bot-90177" }, name: "Bot", tenant_key: "" },
-        ],
+    await receive(
+      {
+        messageId: "msg-empty-text-74634",
+        senderOpenId: "ou-empty-text-sender",
+        text: "",
       },
-    });
+      { dmPolicy: "open", allowFrom: ["*"] },
+    );
 
-    await dispatchMessage({ cfg, event, botOpenId: "ou-bot-90177" });
-
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const context = inboundContext();
-    expect(context.Body).toContain("[Replying to:");
-    expect(context.Body).toContain("parent message with context");
-  });
-
-  it("does not over-fetch quoted message for unmentioned empty reply in requireMention:true group (#90177)", async () => {
-    // An empty-text reply that quotes a parent but does NOT mention the bot
-    // in a requireMention:true group should be rejected at the mention gate
-    // before the quoted message is fetched, so getMessageFeishu is never
-    // called and nothing is dispatched.
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig({
-      groupPolicy: "open",
-      groups: { "oc-group-90177-neg": { requireMention: true } },
-    });
-    const event = createFeishuTestEvent({
-      messageId: "msg-group-unmentioned-empty-quote",
-      senderOpenId: "ou-group-sender-neg",
-      chatId: "oc-group-90177-neg",
-      chatType: "group",
-      text: "",
-      message: { parent_id: "om_group_quoted_neg" },
-    });
-
-    await dispatchMessage({ cfg, event, botOpenId: "ou-bot-90177-neg" });
-
-    expect(mockGetMessageFeishu).not.toHaveBeenCalled();
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "fetches quoted context only for admitted mention-only replies (mentioned=%s)",
+    async (mentioned) => {
+      mockShouldComputeCommandAuthorized.mockReturnValue(false);
+      if (mentioned) {
+        mockGetMessageFeishu.mockResolvedValueOnce({
+          messageId: "om_group_quoted_001",
+          chatId: "oc-group-90177",
+          content: "parent message with context",
+          contentType: "text",
+        });
+      }
+      await dispatchMessage({
+        cfg: createFeishuTestConfig({
+          groupPolicy: "open",
+          groups: { "oc-group-90177": { requireMention: true } },
+        }),
+        event: createFeishuTestEvent({
+          messageId: `msg-group-empty-with-quote-${mentioned}`,
+          senderOpenId: "ou-group-sender",
+          chatId: "oc-group-90177",
+          chatType: "group",
+          text: "",
+          message: {
+            parent_id: "om_group_quoted_001",
+            mentions: mentioned
+              ? [{ key: "@_bot_1", id: { open_id: "ou-bot-90177" }, name: "Bot", tenant_key: "" }]
+              : undefined,
+          },
+        }),
+        botOpenId: "ou-bot-90177",
+      });
+      if (mentioned) {
+        expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+        expect(inboundContext().Body).toContain("[Replying to:");
+        expect(inboundContext().Body).toContain("parent message with context");
+      } else {
+        expect(mockGetMessageFeishu).not.toHaveBeenCalled();
+        expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
 
 describe("createFeishuMessageReceiveHandler media dedupe", () => {
-  it("preserves the original dispatch dedupe key when debounce merges text content", async () => {
-    const handleMessage = vi.fn(async () => undefined);
+  type ReceiveOptions = Parameters<typeof createFeishuMessageReceiveHandler>[0];
+  function receiver(
+    batchSize: 1 | 2,
+    accountId: string,
+    resolveDebounceText: ReceiveOptions["resolveDebounceText"],
+  ) {
+    const handleMessage = vi
+      .fn<NonNullable<ReceiveOptions["handleMessage"]>>()
+      .mockResolvedValue(undefined);
     const core = {
       channel: {
         debounce: {
-          resolveInboundDebounceMs: vi.fn(() => 10),
+          resolveInboundDebounceMs: vi.fn(() => (batchSize === 2 ? 10 : 0)),
           createInboundDebouncer: vi.fn(
             (options: {
               onFlush: (
@@ -3354,9 +2127,13 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
               const entries: FeishuMessageEvent[] = [];
               return {
                 enqueue: async (event: FeishuMessageEvent) => {
-                  entries.push(event);
-                  if (entries.length === 2) {
-                    await options.onFlush(entries, createTestInboundDebounceFlush).completion;
+                  if (batchSize === 1) {
+                    await options.onFlush([event], createTestInboundDebounceFlush).completion;
+                  } else {
+                    entries.push(event);
+                    if (entries.length === batchSize) {
+                      await options.onFlush(entries, createTestInboundDebounceFlush).completion;
+                    }
                   }
                 },
                 flushKey: async () => {},
@@ -3366,107 +2143,67 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
             },
           ),
         },
-        commands: {
-          isControlCommandMessage: vi.fn(() => false),
-        },
+        ...(batchSize === 2
+          ? { commands: { isControlCommandMessage: vi.fn(() => false) } }
+          : { text: { hasControlCommand: vi.fn(() => false) } }),
       },
     } as unknown as PluginRuntime;
-    const createTextEvent = (messageId: string, createTime: string, text: string) =>
+    return {
+      handleMessage,
+      handler: createFeishuMessageReceiveHandler({
+        cfg: createFeishuTestConfig({ dmPolicy: "open" }),
+        channelRuntime: core.channel,
+        accountId,
+        chatHistories: new Map(),
+        handleMessage,
+        resolveDebounceText,
+        hasProcessedMessage: vi.fn(async () => false),
+      }),
+    };
+  }
+
+  it("preserves the original dispatch dedupe key when debounce merges text content", async () => {
+    const { handler, handleMessage } = receiver(
+      2,
+      "receive-text-debounce",
+      ({ event }) => (JSON.parse(event.message.content) as { text: string }).text,
+    );
+    const textEvent = (messageId: string, createTime: string, text: string) =>
       createFeishuTestEvent({
         messageId,
         senderOpenId: "ou-text-debounce",
         text,
         message: { create_time: createTime },
       });
-    const last = createTextEvent("msg-text-last", "1710000001000", "second");
-    const handler = createFeishuMessageReceiveHandler({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      channelRuntime: core.channel,
-      accountId: "receive-text-debounce",
-      chatHistories: new Map(),
-      handleMessage,
-      resolveDebounceText: ({ event }) =>
-        (JSON.parse(event.message.content) as { text: string }).text,
-      hasProcessedMessage: vi.fn(async () => false),
-    });
-
-    await handler(createTextEvent("msg-text-first", "1710000000000", "first"));
+    const last = textEvent("msg-text-last", "1710000001000", "second");
+    await handler(textEvent("msg-text-first", "1710000000000", "first"));
     await handler(last);
-
-    const call = mockCallArg<{
-      event?: FeishuMessageEvent;
-      preparedContent?: string;
-      messageDedupeKey?: string;
-    }>(handleMessage, 0, 0);
-    expect(call.event?.message.content).toBe(last.message.content);
+    const call = handleMessage.mock.calls[0]![0];
+    expect(call.event.message.content).toBe(last.message.content);
     expect(call.preparedContent).toBe("first\nsecond");
     expect(call.messageDedupeKey).toBe(resolveFeishuMessageDedupeKey(last));
-    expect(resolveFeishuMessageDedupeKey(call.event as FeishuMessageEvent)).toBe(
-      call.messageDedupeKey,
-    );
+    expect(resolveFeishuMessageDedupeKey(call.event)).toBe(call.messageDedupeKey);
   });
 
   it("keeps same-id media variants distinct at receive time", async () => {
-    const handleMessage = vi.fn(async () => undefined);
-    const core = {
-      channel: {
-        debounce: {
-          resolveInboundDebounceMs: vi.fn(() => 0),
-          createInboundDebouncer: vi.fn(
-            (options: {
-              onFlush: (
-                entries: FeishuMessageEvent[],
-                createFlush: typeof createTestInboundDebounceFlush,
-              ) => { completion: Promise<void> };
-            }) => ({
-              enqueue: async (event: FeishuMessageEvent) => {
-                await options.onFlush([event], createTestInboundDebounceFlush).completion;
-              },
-              flushKey: async () => {},
-              cancelKey: () => false,
-              drain: async () => {},
-            }),
-          ),
-        },
-        text: {
-          hasControlCommand: vi.fn(() => false),
-        },
-      },
-    } as unknown as PluginRuntime;
-    const createAudioEvent = (fileKey: string): FeishuMessageEvent =>
+    const { handler, handleMessage } = receiver(1, "receive-media-dedupe", () => "");
+    const audioEvent = (fileKey: string) =>
       createFeishuTestEvent({
         messageId: "msg-audio-receive-reused-id",
         senderOpenId: "ou-audio-receive-dedup",
         messageType: "audio",
         content: JSON.stringify({ file_key: fileKey, duration: 1200 }),
       });
-    const handler = createFeishuMessageReceiveHandler({
-      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-      channelRuntime: core.channel,
-      accountId: "receive-media-dedupe",
-      chatHistories: new Map(),
-      handleMessage,
-      resolveDebounceText: () => "",
-      hasProcessedMessage: vi.fn(async () => false),
-    });
-
-    const firstEvent = createAudioEvent("file_audio_receive_first");
-    const secondEvent = createAudioEvent("file_audio_receive_second");
+    const firstEvent = audioEvent("file_audio_receive_first");
+    const secondEvent = audioEvent("file_audio_receive_second");
     await handler(firstEvent);
     await handler(secondEvent);
-    await handler(createAudioEvent("file_audio_receive_first"));
-
+    await handler(audioEvent("file_audio_receive_first"));
     expect(handleMessage).toHaveBeenCalledTimes(2);
-    const firstCall = mockCallArg<{
-      event?: FeishuMessageEvent;
-      processingClaim?: { commit: () => Promise<boolean> };
-    }>(handleMessage, 0, 0);
+    const firstCall = handleMessage.mock.calls[0]![0];
+    const secondCall = handleMessage.mock.calls[1]![0];
     expect(firstCall.event).toEqual(firstEvent);
     expect(firstCall.processingClaim?.commit).toBeTypeOf("function");
-    const secondCall = mockCallArg<{
-      event?: FeishuMessageEvent;
-      processingClaim?: { commit: () => Promise<boolean> };
-    }>(handleMessage, 1, 0);
     expect(secondCall.event).toEqual(secondEvent);
     expect(secondCall.processingClaim?.commit).toBeTypeOf("function");
   });

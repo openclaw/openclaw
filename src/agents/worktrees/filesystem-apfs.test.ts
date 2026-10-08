@@ -81,12 +81,6 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
     expect(await fs.readFile(cloned, "utf8")).toBe("independent edit");
   });
 
-  it("does not select APFS for another filesystem", async () => {
-    const root = tempDirs.make("openclaw-apfs-detection-");
-    vi.spyOn(nativeWorktreeFilesystem, "probe").mockResolvedValue(undefined);
-    expect(await detectWorktreeFilesystemBackend(root, options)).toBeNull();
-  });
-
   it.each(["abort", "authority"])(
     "joins an admitted clone before reporting %s loss",
     async (reason) => {

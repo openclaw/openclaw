@@ -1,8 +1,3 @@
-/**
- * Shared media generation list/status actions.
- *
- * Builds provider list output, active-task status, and duplicate-guard responses for image/video/music tools.
- */
 import {
   listMediaGenerationProviderModels,
   synthesizeMediaGenerationCatalogEntries,
@@ -11,12 +6,56 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { isCapabilityProviderConfigured } from "./media-tool-shared.js";
+import type { AnyAgentTool } from "./common.js";
+import { isCapabilityProviderConfigured, resolveGenerateAction } from "./media-tool-shared.js";
+import { prepareToolAuthProfileStoreSource } from "./model-config.helpers.js";
 
-type MediaGenerateActionResult = {
+export type MediaGenerateActionResult = {
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown>;
 };
+
+type MediaGenerateProviderAuth = {
+  workspaceDir?: string;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
+};
+
+export function createMediaGenerateExecute(params: {
+  options?: Parameters<typeof prepareToolAuthProfileStoreSource>[0] & {
+    workspaceDir?: string;
+    agentSessionKey?: string;
+    requesterAgentId?: string;
+  };
+  list: (
+    auth: MediaGenerateProviderAuth,
+  ) => MediaGenerateActionResult | Promise<MediaGenerateActionResult>;
+  status: (sessionKey?: string, agentId?: string) => Promise<MediaGenerateActionResult>;
+  generate: (
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) => Promise<MediaGenerateActionResult>;
+}): AnyAgentTool["execute"] {
+  return async (_toolCallId, rawArgs: Record<string, unknown>, signal) => {
+    const args = rawArgs;
+    const action = resolveGenerateAction(args);
+    const options = params.options;
+    if (action === "list") {
+      const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+      signal?.throwIfAborted();
+      return params.list({
+        workspaceDir: options?.workspaceDir,
+        agentDir: options?.agentDir,
+        authStore: options?.authProfileStore,
+        authProfileStoreSource,
+      });
+    }
+    return action === "status"
+      ? params.status(options?.agentSessionKey, options?.requesterAgentId)
+      : params.generate(args, signal);
+  };
+}
 
 type TaskStatusTextBuilder<Task> = (task: Task, params?: { duplicateGuard?: boolean }) => string;
 type MediaGenerateTaskStatusParams<Task> = {
@@ -36,27 +75,26 @@ type MediaGenerateProvider = {
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
-type MediaGenerateListProviderDetails<TProvider extends MediaGenerateProvider> = {
-  id: string;
-  label?: string;
-  defaultModel?: string;
-  models: string[];
-  modes: string[];
-  configured: boolean;
-  authEnvVars: string[];
-  capabilities: TProvider["capabilities"];
-  catalog: ReturnType<typeof synthesizeMediaGenerationCatalogEntries<TProvider["capabilities"]>>;
-};
-
 type MediaGenerateCapabilitySummaryOptions = {
   modes?: readonly string[];
   includeModes?: boolean;
 };
 
-/** Common tool result shape for media generation list/status actions. */
-export type { MediaGenerateActionResult };
+export function createMediaGenerateProviderListAction<T extends MediaGenerateProvider>(
+  params: Pick<
+    Parameters<typeof createMediaGenerateProviderListActionResult<T>>[0],
+    "kind" | "emptyText" | "listModes" | "summarizeCapabilities"
+  > & { listProviders: (params: { config?: OpenClawConfig }) => T[] },
+) {
+  return (config?: OpenClawConfig, options?: MediaGenerateProviderAuth) =>
+    createMediaGenerateProviderListActionResult({
+      ...params,
+      ...options,
+      cfg: config,
+      providers: params.listProviders({ config }),
+    });
+}
 
-/** Builds a provider list result with config/auth status and synthetic catalog entries. */
 export function createMediaGenerateProviderListActionResult<
   TProvider extends MediaGenerateProvider,
 >(params: {
@@ -67,6 +105,7 @@ export function createMediaGenerateProviderListActionResult<
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   listModes: (provider: TProvider) => string[];
   summarizeCapabilities: (
     provider: TProvider,
@@ -81,42 +120,38 @@ export function createMediaGenerateProviderListActionResult<
     };
   }
 
-  const providerDetails: Array<MediaGenerateListProviderDetails<TProvider>> = params.providers.map(
-    (provider) => {
-      const modes = params.listModes(provider);
-      const models = listMediaGenerationProviderModels(provider);
-      return {
-        id: provider.id,
-        ...(provider.label ? { label: provider.label } : {}),
-        ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
-        models,
+  const providerDetails = params.providers.map((provider) => {
+    const modes = params.listModes(provider);
+    const models = listMediaGenerationProviderModels(provider);
+    return {
+      id: provider.id,
+      ...(provider.label ? { label: provider.label } : {}),
+      ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
+      models,
+      modes,
+      configured: isCapabilityProviderConfigured({
+        providers: params.providers,
+        provider,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+        authProfileStoreSource: params.authProfileStoreSource,
+      }),
+      authEnvVars: getProviderEnvVarsCore(provider.id),
+      capabilities: provider.capabilities,
+      // Catalog entries are generated for model browser/search without invoking provider code.
+      catalog: synthesizeMediaGenerationCatalogEntries({
+        kind: params.kind,
+        provider,
         modes,
-        configured: isCapabilityProviderConfigured({
-          providers: params.providers,
-          provider,
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-        }),
-        authEnvVars: getProviderEnvVarsCore(provider.id),
-        capabilities: provider.capabilities,
-        // Catalog entries are generated for model browser/search without invoking provider code.
-        catalog: synthesizeMediaGenerationCatalogEntries({
-          kind: params.kind,
-          provider,
-          modes,
-        }),
-      };
-    },
-  );
+      }),
+    };
+  });
 
   const lines = providerDetails.flatMap((details, index) => {
-    const provider = params.providers.at(index);
-    if (!provider) {
-      return [];
-    }
-    const authHints = getProviderEnvVarsCore(provider.id);
+    const provider = params.providers[index]!;
+    const authHints = details.authEnvVars;
     const capabilities = params.summarizeCapabilities(provider);
     const modelLine = details.models.length > 0 ? details.models.join(", ") : "unknown";
     const authHint =
@@ -129,7 +164,7 @@ export function createMediaGenerateProviderListActionResult<
       const modelProvider = {
         ...provider,
         capabilities: entry.capabilities ?? provider.capabilities,
-      } as TProvider;
+      };
       const modelCapabilities = params.summarizeCapabilities(modelProvider, {
         modes: entry.modes,
         includeModes: false,
@@ -158,7 +193,6 @@ export function createMediaGenerateProviderListActionResult<
   };
 }
 
-/** Formats a selected task without reading its store again. */
 export function createMediaGenerateTaskStatusResult<Task>(
   params: Omit<MediaGenerateTaskStatusParams<Task>, "findActiveTask"> & { activeTask?: Task },
 ): MediaGenerateActionResult {
@@ -174,7 +208,6 @@ export function createMediaGenerateTaskStatusResult<Task>(
       };
 }
 
-/** Creates status and duplicate-guard actions from one media-task owner. */
 export function createMediaGenerateTaskActions<Task>(
   params: MediaGenerateTaskStatusParams<Task> & {
     findDuplicateTask: (
@@ -200,7 +233,6 @@ export function createMediaGenerateTaskActions<Task>(
   };
 }
 
-/** Builds duplicate-guard status output for a media generation task type. */
 export async function createMediaGenerateDuplicateGuardResult<Task>(params: {
   sessionKey?: string;
   prompt?: string;

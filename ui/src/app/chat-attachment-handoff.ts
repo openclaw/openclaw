@@ -234,7 +234,7 @@ export function createChatAttachmentHandoff(
         reviewPrivateDraft,
         isConnectionCurrent: capturePlacementStartupConnection(gateway, {
           gatewayUrl: gateway.connection.gatewayUrl,
-          recoveryScope: owner.recoveryScope ?? "",
+          recoveryScope: owner.recoveryScope || undefined,
         }),
         preparedAt: Date.now(),
         paneId,
@@ -267,7 +267,7 @@ export function createChatAttachmentHandoff(
       const match = take(entryKey(paneId, scopeKey));
       // A Gateway mismatch is terminal for this exact presentation. Other
       // retained session scopes under the same logical pane remain independent.
-      if (match?.owner === owner) {
+      if (match?.owner === owner && match.isConnectionCurrent()) {
         return {
           attachments: match.attachments,
           fallbacks: match.fallbacks,
@@ -284,22 +284,19 @@ export function createChatAttachmentHandoff(
     },
     retainedAttachmentIds: (attachments) => {
       const requested = new Set(attachments.map((attachment) => attachment.id));
-      const retained = new Set<string>();
-      for (const handoff of pending.values()) {
-        for (const attachment of handoffAttachments(handoff)) {
-          if (requested.has(attachment.id)) {
-            retained.add(attachment.id);
-          }
-        }
-      }
-      return retained;
+      return new Set([...retainedPayloadIds()].filter((id) => requested.has(id)));
     },
     retireScope: (scopeKey, beforeRevision) => {
       // Optimistic navigation may unmount the pane before deletion confirms.
       // Retire that package without touching a later edit or another session.
       for (const [key, handoff] of pending) {
-        if (handoff.scopeKey === scopeKey && handoff.preparedAt < beforeRevision) {
-          releaseHandoff(take(key));
+        if (
+          handoff.owner === gateway.snapshot.client &&
+          handoff.isConnectionCurrent() &&
+          handoff.scopeKey === scopeKey &&
+          handoff.preparedAt < beforeRevision
+        ) {
+          releaseHandoff(take(key), retainedPayloadIds());
         }
       }
     },

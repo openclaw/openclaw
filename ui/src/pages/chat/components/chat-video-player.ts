@@ -13,7 +13,7 @@ import {
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { ChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { chatMediaSourceChanged, ChatMediaSourceController } from "./chat-media-source.ts";
 
 class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   @property() src = "";
@@ -62,22 +62,14 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
     }
     if (
       this.sourceController.readiness === "unavailable" &&
-      (changedProperties.has("src") ||
-        changedProperties.has("sourceIdentity") ||
-        changedProperties.has("playback") ||
-        changedProperties.has("authToken"))
+      chatMediaSourceChanged(changedProperties)
     ) {
       this.sourceController.cancel();
     }
   }
 
   override updated(changedProperties: PropertyValues<this>): void {
-    if (
-      changedProperties.has("src") ||
-      changedProperties.has("sourceIdentity") ||
-      changedProperties.has("playback") ||
-      changedProperties.has("authToken")
-    ) {
+    if (chatMediaSourceChanged(changedProperties)) {
       this.syncSource();
     }
   }
@@ -122,6 +114,11 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       return;
     }
     this.media?.pause();
+    // Touch activation need not focus a button. Give the modal a stable return
+    // target even when expansion came from the non-focusable card surface.
+    this.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.focus({
+      preventScroll: true,
+    });
     this.onExpand?.(source);
   };
 
@@ -148,7 +145,9 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           : {};
     return html`
       <div
-        class="chat-assistant-attachment-card chat-assistant-attachment-card--video"
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--video ${
+          loading ? "chat-assistant-attachment-card--loading" : ""
+        }"
         aria-busy=${loading ? "true" : nothing}
         ${ref(this.viewport.setElement)}
         ?data-openable=${Boolean(onExpand)}

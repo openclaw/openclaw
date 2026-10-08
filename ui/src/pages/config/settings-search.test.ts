@@ -482,6 +482,9 @@ describe("findSettingsSearchBlocks", () => {
 
   it.each([
     ["language", "Language", "#settings-language"],
+    ["favicon", "Browser tab icon", "#settings-appearance-tab-icon"],
+    ["browser tab icon", "Browser tab icon", "#settings-appearance-tab-icon"],
+    ["agent avatar", "Browser tab icon", "#settings-appearance-tab-icon"],
     ["typography", "Typography", "#settings-appearance-typography"],
     ["font", "Typography", "#settings-appearance-typography"],
     ["typeface", "Typography", "#settings-appearance-typography"],
@@ -489,6 +492,7 @@ describe("findSettingsSearchBlocks", () => {
     ["chat prose", "Typography", "#settings-appearance-typography"],
     ["sidebar", "Sidebar", "#settings-appearance-sidebar"],
     ["camera", "Chat", "#settings-appearance-chat"],
+    ["links outside OpenClaw", "Chat", "#settings-appearance-chat"],
     ["show task progress cards", "Chat", "#settings-appearance-chat"],
   ])("finds the appearance control for %s", (query, label, hash) => {
     const matches = findSettingsSearchBlocks({
@@ -545,7 +549,7 @@ describe("findSettingsSearchBlocks", () => {
         value: null,
         uiHints: {},
         identityAvailable,
-      });
+      }).filter((entry) => entry.hash === "#settings-profile-identity");
 
     expect(search(false)).toEqual([]);
     expect(search(true)).toEqual([

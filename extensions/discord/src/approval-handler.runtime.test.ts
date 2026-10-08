@@ -6,8 +6,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { parseExecApprovalData } from "./approval-custom-id.js";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
-import { parseCustomId } from "./internal/discord.js";
-import { DiscordUiContainer } from "./ui.js";
+import { Container, parseCustomId } from "./internal/discord.js";
 
 async function buildExecApprovalPayloadText(commandText: string): Promise<string> {
   const pending = await discordApprovalNativeRuntime.presentation.buildPendingPayload({
@@ -307,10 +306,7 @@ describe("discordApprovalNativeRuntime", () => {
       if (result.kind !== "update") {
         return;
       }
-      expect(result.payload).toBeInstanceOf(DiscordUiContainer);
-      if (!(result.payload instanceof DiscordUiContainer)) {
-        return;
-      }
+      assert(result.payload instanceof Container);
       const container = result.payload.serialize();
       expect(container).toMatchObject({
         accent_color: scenario.accentColor,

@@ -5,7 +5,6 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
-  ensureMemoryIndexSchema,
   loadSqliteVecExtension,
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_STATE_TABLE,
@@ -22,7 +21,7 @@ import {
   memoryDatabaseTableExists as tableExists,
   readMemoryDatabaseRevision,
 } from "./manager-db-kernel.js";
-import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
+import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
 const MEMORY_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -81,7 +80,7 @@ export async function resetMemoryDatabase(params: {
   const lock = await waitForMemoryReindexLock(params.dbPath);
   try {
     return await withMemoryWorkspaceLock(params.workspaceDir, async () =>
-      withMemoryIndexPublishGeneration(params.dbPath, async () => {
+      withMemoryIndexGeneration(params.dbPath, "write", async () => {
         if (tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE) && !hasSqliteVecExtension(db)) {
           const loaded = await loadSqliteVecExtension({
             db,
@@ -151,10 +150,8 @@ export async function removeMemoryDatabaseFiles(dbPath: string): Promise<void> {
 }
 
 /** Remove crash-left shadows while the caller owns the reindex lease. */
-export async function cleanupAgedMemoryReindexTempFiles(
-  dbPath: string,
-  nowMs = Date.now(),
-): Promise<void> {
+export async function cleanupAgedMemoryReindexTempFiles(dbPath: string): Promise<void> {
+  const nowMs = Date.now();
   if (!(await isRegularFile(dbPath))) {
     return;
   }
@@ -233,9 +230,8 @@ export function openMemoryDatabaseAtPath(
 function openUninitializedMemoryDatabase(allowExtension: boolean) {
   const database = openNodeSqliteDatabase(":memory:", { allowExtension });
   try {
-    ensureMemoryIndexSchema({ cacheEnabled: true, db: database, ftsEnabled: true });
     database.exec("PRAGMA query_only = ON");
-    return { db: database, release: () => database.close() };
+    return { db: database, release: () => database.close(), hasIndex: false };
   } catch (error) {
     database.close();
     throw error;
@@ -260,7 +256,7 @@ export function openMemoryDatabaseReadOnlyAtPath(
     database.close();
     return openUninitializedMemoryDatabase(allowExtension);
   }
-  return { db: database.db, release: database.close };
+  return { db: database.db, release: database.close, hasIndex: true };
 }
 
 export function closeMemoryDatabase(db: DatabaseSync): void {

@@ -81,7 +81,6 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     return { type: trimmed === CALLBACK_PREFIX.providers ? "providers" : "back" };
   }
 
-  // mdl_list_{provider}_{page}
   const listMatch = trimmed.match(/^mdl_list_([a-z0-9_.-]+)_(\d+)$/i);
   if (listMatch) {
     const [, provider, pageStr] = listMatch;
@@ -91,13 +90,11 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
-  // mdl_sel/{model} (legacy providerless input)
   const compactModel = trimmed.match(/^mdl_sel\/(.+)$/)?.[1];
   if (compactModel) {
     return { type: "select", model: compactModel };
   }
 
-  // mdl_sel_{provider/model}
   const [, provider, model] = trimmed.match(/^mdl_sel_([^/]+)\/(.+)$/) ?? [];
   return provider && model ? { type: "select", provider, model } : null;
 }
@@ -169,20 +166,6 @@ export function resolveModelListCallback(params: {
     : undefined;
 }
 
-function isCurrentModelSelection(params: {
-  currentModel?: string;
-  provider: string;
-  model: string;
-}): boolean {
-  const currentModel = params.currentModel?.trim();
-  if (!currentModel) {
-    return false;
-  }
-  return currentModel.includes("/")
-    ? currentModel === `${params.provider}/${params.model}`
-    : currentModel === params.model;
-}
-
 export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   const rows: ButtonRow[] = [];
   for (const [index, provider] of providers.entries()) {
@@ -194,8 +177,23 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   return rows;
 }
 
+export function buildPaginationRow(
+  currentPage: number,
+  totalPages: number,
+  callbackData: (page: number | null) => string,
+): ButtonRow {
+  return [
+    { page: currentPage - 1, text: "◀ Prev", show: currentPage > 1 },
+    { page: null, text: `${currentPage}/${totalPages}`, show: true },
+    { page: currentPage + 1, text: "Next ▶", show: currentPage < totalPages },
+  ]
+    .filter(({ show }) => show)
+    .map(({ page, text }) => ({ text, callback_data: callbackData(page) }));
+}
+
 export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const { provider, models, currentModel, currentPage, totalPages, modelNames } = params;
+  const currentSelection = currentModel?.trim() ?? "";
   const pageSize = params.pageSize ?? MODELS_PAGE_SIZE;
 
   if (models.length === 0) {
@@ -210,7 +208,9 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
 
   for (const model of pageModels) {
     const callbackData = buildModelSelectionCallbackData({ provider, model });
-    const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
+    const isCurrentModel =
+      currentSelection.length > 0 &&
+      currentSelection === (currentSelection.includes("/") ? `${provider}/${model}` : model);
     const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
     const displayLabel = modelNames?.get(`${provider}/${model}`) ?? fallbackLabel;
     const displayText = truncateModelLabel(displayLabel, MODEL_BUTTON_LABEL_MAX_LENGTH);
@@ -225,28 +225,11 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   }
 
   if (totalPages > 1) {
-    const paginationRow: ButtonRow = [];
-
-    if (currentPage > 1) {
-      paginationRow.push({
-        text: "◀ Prev",
-        callback_data: buildProviderListCallbackData(provider, currentPage - 1),
-      });
-    }
-
-    paginationRow.push({
-      text: `${currentPage}/${totalPages}`,
-      callback_data: buildProviderListCallbackData(provider, currentPage), // noop
-    });
-
-    if (currentPage < totalPages) {
-      paginationRow.push({
-        text: "Next ▶",
-        callback_data: buildProviderListCallbackData(provider, currentPage + 1),
-      });
-    }
-
-    rows.push(paginationRow);
+    rows.push(
+      buildPaginationRow(currentPage, totalPages, (page) =>
+        buildProviderListCallbackData(provider, page ?? currentPage),
+      ),
+    );
   }
 
   rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.back }]);

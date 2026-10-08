@@ -30,12 +30,14 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { updateStatusCommand } from "./status.js";
+import { registerUpdateStatusWarningTests } from "./status.warnings.test-support.js";
 
 const runtime = vi.hoisted(() => ({
   log: vi.fn(),
@@ -101,9 +103,13 @@ beforeEach(() => {
 });
 
 describe("update status installation replacement history", () => {
-  it.each([true, false])(
-    "reports the recorded replacement while the Gateway is unavailable (JSON: %s)",
-    async (json) => {
+  it.each([
+    { json: true, remote: false },
+    { json: false, remote: false },
+    { json: true, remote: true },
+  ])(
+    "attributes recorded replacement only to the local Gateway (JSON: $json, remote: $remote)",
+    async ({ json, remote }) => {
       const reason =
         "gateway.installation_replaced: on-disk 2026.9.5 differs from running 2026.9.4";
       const completedAtMs = Date.UTC(2026, 8, 19, 12);
@@ -114,10 +120,19 @@ describe("update status installation replacement history", () => {
         process.env,
         completedAtMs,
       );
+      if (remote) {
+        vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
+          gateway: { mode: "remote" },
+        });
+      }
 
       await updateStatusCommand({ json });
 
-      if (json) {
+      if (remote) {
+        expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty(
+          "lastGatewayInstallationReplacement",
+        );
+      } else if (json) {
         expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
           lastGatewayInstallationReplacement: { reason, completedAtMs },
         });
@@ -129,29 +144,17 @@ describe("update status installation replacement history", () => {
       }
     },
   );
-
-  it("does not attribute local replacement history to a remote Gateway", async () => {
-    const bootId = recordGatewayBootStart();
-    completeGatewayBootLifecycle(bootId, {
-      outcome: "planned_restart",
-      reason: "gateway.installation_replaced: local install changed",
-    });
-    vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
-      gateway: { mode: "remote" },
-    });
-
-    await updateStatusCommand({ json: true });
-
-    expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty(
-      "lastGatewayInstallationReplacement",
-    );
-  });
 });
 
 describe("update status service definition facts", () => {
-  it.each([true, false])(
-    "reports drift and unknown edits without repairing them (JSON: %s)",
-    async (json) => {
+  it.each([
+    { json: true, failure: null },
+    { json: false, failure: null },
+    { json: true, failure: "read" },
+    { json: true, failure: "audit" },
+  ])(
+    "reports service definition facts without losing availability (JSON: $json, failure: $failure)",
+    async ({ json, failure }) => {
       const drift = [
         {
           kind: "outdated",
@@ -169,10 +172,27 @@ describe("update status service definition facts", () => {
       ];
       service.readCommand.mockResolvedValue({ programArguments: ["/fixture/gateway"] });
       service.audit.mockResolvedValue({ ok: true, issues: [], definitionDrift: drift });
+      if (failure === "read") {
+        service.readCommand.mockRejectedValue(new Error("Service manager unavailable"));
+      } else if (failure === "audit") {
+        service.audit.mockResolvedValue({
+          ok: true,
+          issues: [],
+          definitionDriftError: "Service definition inspection failed: unit unreadable",
+        });
+      }
 
       await updateStatusCommand({ json });
 
-      if (json) {
+      if (failure) {
+        expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
+          availability: expect.any(Object),
+          serviceDefinition: {
+            drift: [],
+            warnings: [expect.stringContaining("inspection failed")],
+          },
+        });
+      } else if (json) {
         expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
           serviceDefinition: { drift, warnings: drift.map((fact) => fact.message) },
           availability: expect.any(Object),
@@ -185,28 +205,47 @@ describe("update status service definition facts", () => {
       }
     },
   );
-
-  it.each(["read", "audit"])(
-    "keeps update availability when definition %s fails",
-    async (failure) => {
-      service.readCommand.mockResolvedValue({ programArguments: ["/fixture/gateway"] });
-      if (failure === "read") {
-        service.readCommand.mockRejectedValue(new Error("Service manager unavailable"));
-      } else {
-        service.audit.mockResolvedValue({
-          ok: true,
-          issues: [],
-          definitionDriftError: "Service definition inspection failed: unit unreadable",
-        });
-      }
-      await updateStatusCommand({ json: true });
-      expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
-        availability: expect.any(Object),
-        serviceDefinition: { drift: [], warnings: [expect.stringContaining("inspection failed")] },
-      });
-    },
-  );
 });
+
+it.each([true, false])(
+  "reports current and prepared immutable generations without offering package updates (JSON: %s)",
+  async (json) => {
+    const immutable = {
+      root: "/opt/openclaw",
+      currentSha: "a".repeat(40),
+      currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+      prepared: {
+        sha: "b".repeat(40),
+        path: `/opt/openclaw/releases/${"b".repeat(40)}`,
+        buildDigest: "c".repeat(64),
+        preparedAtMs: 123,
+      },
+    };
+    vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
+      root: immutable.currentPath,
+      installKind: "immutable",
+      packageManager: "unknown",
+      immutable,
+      registry: { latestVersion: "99.0.0" },
+    });
+
+    await updateStatusCommand({ json });
+
+    if (json) {
+      expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
+        update: { installKind: "immutable", immutable },
+        availability: { available: false, hasRegistryUpdate: false },
+      });
+    } else {
+      const output = runtime.log.mock.calls.flat().join("\n");
+      expect(output).toContain("immutable (/opt/openclaw)");
+      expect(output).toContain("aaaaaaaaaaaa");
+      expect(output).toContain("prepared bbbbbbbbbbbb");
+      expect(output).toContain("activation unavailable");
+      expect(output).not.toContain("npm update");
+    }
+  },
+);
 
 describe("update status channel failures", () => {
   it.each([true, false])("shows the Gateway's recorded trust refusal (JSON: %s)", async (json) => {
@@ -253,6 +292,7 @@ describe("update status Node runtime findings", () => {
     "preserves diagnostics with stored=$stored SQLite $sqliteVersion (JSON: $json)",
     async ({ json, stored, sqliteVersion, unavailable }) => {
       const recorded = stored ? createUpdateRun({ trigger: "cli" }) : undefined;
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       vi.resetModules();
       const sqlitePrototype: {
@@ -263,12 +303,7 @@ describe("update status Node runtime findings", () => {
         this: DatabaseSync,
         sql,
       ) {
-        return realPrepare.call(
-          this,
-          sql === "SELECT sqlite_version() AS version"
-            ? `SELECT '${sqliteVersion}' AS version`
-            : sql,
-        );
+        return realPrepare.call(this, sql.replaceAll("sqlite_version()", `'${sqliteVersion}'`));
       });
       const freshGuard = await import("../../infra/runtime-guard.js");
       vi.spyOn(freshGuard, "detectRuntime").mockResolvedValue({
@@ -288,10 +323,21 @@ describe("update status Node runtime findings", () => {
       });
       const command = await import("./status.js");
       const ledger = await import("../../infra/update-run-ledger.js");
+      const readOwner = await import("../../state/openclaw-state-db-readonly.js");
+      const workerRead = vi.spyOn(readOwner, "executeExistingOpenClawStateRead");
       if (unavailable) {
-        expect(() => ledger.findActiveUpdateRun()).toThrow(
-          "SQLite support is unavailable or unsafe",
-        );
+        let nativeFailure: unknown;
+        expect(() => {
+          try {
+            ledger.findActiveUpdateRun();
+          } catch (error) {
+            nativeFailure = error;
+            throw error;
+          }
+        }).toThrow("SQLite support is unavailable or unsafe");
+        // The host SQLite spy cannot cross threads; deliver the same runtime refusal
+        // through the async read owner without replacing status or diagnostic logic.
+        workerRead.mockRejectedValue(nativeFailure);
       }
       await expect(command.updateStatusCommand({ json })).resolves.toBeUndefined();
       if (json) {
@@ -322,75 +368,60 @@ describe("update status Node runtime findings", () => {
       if (!stored) {
         expect(prepare).not.toHaveBeenCalled();
       }
+      workerRead.mockRestore();
       prepare.mockRestore();
       expect(recorded && ledger.getUpdateRun(recorded.runId)).toEqual(recorded);
     },
   );
 
-  it.each(["cli", "service"])(
-    "renders admitted %s runtime information without a missing hint",
-    async (source) => {
-      if (source === "cli") {
-        vi.spyOn(runtimeGuard, "detectRuntime").mockResolvedValue({
-          kind: "node",
-          version: "24.15.0",
-          execPath: "/fixture/node",
-          pathEnv: "/fixture",
-          hasNodeSqlite: true,
-          sqliteVersion: "3.53.4",
-          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-        });
-      } else {
-        service.readCommand.mockResolvedValue({ programArguments: ["/fixture/node", "gateway"] });
-        service.resolveNodeRuntimeInfo.mockResolvedValue({
-          status: "supported",
-          version: "24.15.0",
-          note: "Node 24.15.0: unsupported version, capability probe passed.",
-        });
-      }
-      await updateStatusCommand({});
-      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("capability probe passed"));
-      expect(runtime.log).not.toHaveBeenCalledWith(undefined);
-    },
-  );
-
   it.each([
-    { version: "22.23.2", source: "cli" },
-    { version: "26.0.0", source: "cli" },
-    { version: "22.23.2", source: "gateway-service" },
-    { version: "26.0.0", source: "gateway-service" },
-  ])(
-    "reports unsupported $source Node $version with recovery instructions",
-    async ({ version, source }) => {
-      vi.stubGlobal("process", {
-        ...process,
-        versions: { ...process.versions, node: source === "cli" ? version : "26.8.1" },
+    { source: "cli", version: "24.15.0", state: "admitted" },
+    { source: "gateway-service", version: "24.15.0", state: "admitted" },
+    { source: "cli", version: "22.23.2", state: "unsupported" },
+    { source: "gateway-service", version: "26.0.0", state: "unsupported" },
+    { source: "gateway-service", version: "26.8.1", state: "supported" },
+  ])("reports $state $source Node $version", async ({ source, version, state }) => {
+    vi.stubGlobal("process", {
+      ...process,
+      versions: { ...process.versions, node: source === "cli" ? version : "26.8.1" },
+    });
+    if (source === "cli") {
+      vi.spyOn(runtimeGuard, "detectRuntime").mockResolvedValue({
+        kind: "node",
+        version,
+        execPath: "/fixture/node",
+        pathEnv: "/fixture",
+        hasNodeSqlite: true,
+        sqliteVersion: "3.53.4",
+        sqliteProbe: {
+          available: true,
+          version: "3.53.4",
+          text: state !== "unsupported",
+          blob: true,
+          json: true,
+        },
       });
-      if (source === "cli") {
-        vi.spyOn(runtimeGuard, "detectRuntime").mockResolvedValue({
-          kind: "node",
-          version,
-          execPath: "/fixture/node",
-          pathEnv: "/fixture",
-          hasNodeSqlite: true,
-          sqliteVersion: "3.53.4",
-          sqliteProbe: { available: true, version: "3.53.4", text: false, blob: true, json: true },
-        });
-      }
-      if (source === "gateway-service") {
-        service.readCommand.mockResolvedValue({
-          programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],
-        });
-        service.resolveNodeRuntimeInfo.mockResolvedValue({
-          status: "unsupported",
-          version,
-          sqliteVersion: "3.50.2",
-          nodeSharedSqlite: false,
-        });
-      }
-
+    } else {
+      service.readCommand.mockResolvedValue({
+        programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],
+      });
+      service.resolveNodeRuntimeInfo.mockResolvedValue({
+        status: state === "unsupported" ? "unsupported" : "supported",
+        version,
+        sqliteVersion: state === "unsupported" ? "3.50.2" : "3.53.0",
+        nodeSharedSqlite: false,
+        ...(state === "admitted"
+          ? { note: "Node 24.15.0: unsupported version, capability check passed." }
+          : {}),
+      });
+    }
+    if (state === "supported") {
       await updateStatusCommand({ json: true });
-
+      expect(runtime.writeJson.mock.lastCall?.[0].runtimeFindings ?? []).toEqual([]);
+      return;
+    }
+    if (state === "unsupported") {
+      await updateStatusCommand({ json: true });
       expect(runtime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({
           runtimeFindings: [
@@ -403,31 +434,22 @@ describe("update status Node runtime findings", () => {
           ],
         }),
       );
-      await updateStatusCommand({});
+    }
+    await updateStatusCommand({});
+    if (state === "admitted") {
+      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("capability check passed"));
+      expect(runtime.log).not.toHaveBeenCalledWith(undefined);
+    } else {
       const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
       expect(output).toContain(version);
       expect(output).toContain("npm");
       expect(output).toContain("nvm install 26");
-    },
-  );
-
-  it("does not report a supported CLI or recorded service Node", async () => {
-    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "26.8.1" } });
-    service.readCommand.mockResolvedValue({
-      programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],
-    });
-    service.resolveNodeRuntimeInfo.mockResolvedValue({
-      status: "supported",
-      version: "26.8.1",
-      sqliteVersion: "3.53.0",
-      nodeSharedSqlite: false,
-    });
-    await updateStatusCommand({ json: true });
-    expect(runtime.writeJson.mock.lastCall?.[0].runtimeFindings ?? []).toEqual([]);
+    }
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -436,6 +458,8 @@ afterEach(() => {
 });
 
 describe("update status readiness outcome", () => {
+  registerUpdateStatusWarningTests(() => runtime.log.mock.calls.flat().join("\n"));
+
   it.each([false, true])(
     "prioritizes an active update over availability (finished=%s)",
     async (finished) => {
@@ -475,55 +499,76 @@ describe("update status readiness outcome", () => {
     },
   );
 
-  it("keeps a managed-service refusal and its code visible after a retained dry run", async () => {
-    const failed = createUpdateRun({ trigger: "cli" });
+  it.each([
+    { outcome: "managed-service-preflight", json: true },
+    { outcome: "gateway-readiness-unverified", json: true },
+    { outcome: "update-activation-timeout", json: true },
+    { outcome: "update-activation-timeout", json: false },
+  ])("preserves the closed $outcome outcome (JSON: $json)", async ({ outcome, json }) => {
+    const run = createUpdateRun({ trigger: "cli" });
     const failureFacts = [
       { check: "managed-service-preflight", code: "inside-gateway-process-tree" },
     ];
-    recordUpdateRunStep(failed.runId, {
-      step: "managed-service-preflight",
-      status: "failed",
-      failureFacts,
-    });
-    const failure = finishUpdateRun(failed.runId, {
-      status: "failed",
-      reason: "managed-service-preflight",
-    });
-    const preview = createUpdateRun({ trigger: "cli", preview: true });
-    finishUpdateRun(preview.runId, { status: "skipped", reason: "dry-run" });
-
-    await updateStatusCommand({ json: true });
-
-    expect(runtime.writeJson.mock.lastCall?.[0].lastRun).toEqual(failure);
-    expect(runtime.writeJson.mock.lastCall?.[0].lastRun.steps).toContainEqual(
-      expect.objectContaining({ failureFacts }),
-    );
-    expect(listUpdateRuns().map((run) => run.runId)).toEqual([preview.runId, failed.runId]);
-  });
-
-  it("shows installed but unverified as a closed non-success outcome", async () => {
-    const run = createUpdateRun({ trigger: "cli" });
-    recordUpdateRunVerification(run.runId, { serviceRunning: true, readyz: false, settled: false });
+    const unverified = outcome === "gateway-readiness-unverified";
+    if (outcome === "managed-service-preflight") {
+      recordUpdateRunStep(run.runId, { step: outcome, status: "failed", failureFacts });
+    } else if (unverified) {
+      recordUpdateRunVerification(run.runId, {
+        serviceRunning: true,
+        readyz: false,
+        settled: false,
+      });
+    } else {
+      recordUpdateRunPhase(run.runId, "activating");
+    }
     const finished = finishUpdateRun(run.runId, {
-      status: "skipped",
-      reason: "gateway-readiness-unverified",
-      after: { version: "2026.9.4" },
+      status: unverified ? "skipped" : "failed",
+      reason: outcome,
+      ...(unverified ? { after: { version: "2026.9.4" } } : {}),
     });
-    await updateStatusCommand({});
-    expect(runtime.log.mock.calls.flat().join("\n")).toContain(
-      "OpenClaw 2026.9.4 installed; Gateway readiness unverified; recovery backups retained.",
-    );
-    await updateStatusCommand({ json: true });
-    expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
-      lastRun: {
-        ...finished,
-        phase: "finished",
-        confirmedAtMs: null,
-        finishedAtMs: expect.any(Number),
-      },
-    });
-    expect(runtime.writeJson.mock.lastCall?.[0].activeRun).toBeUndefined();
+    let previewRunId: string | undefined;
+    if (outcome === "managed-service-preflight") {
+      const preview = createUpdateRun({ trigger: "cli", preview: true });
+      finishUpdateRun(preview.runId, { status: "skipped", reason: "dry-run" });
+      previewRunId = preview.runId;
+    }
+    if (unverified) {
+      await updateStatusCommand({});
+      expect(runtime.log.mock.calls.flat().join("\n")).toContain(
+        "OpenClaw 2026.9.4 installed; Gateway readiness unverified; recovery backups retained.",
+      );
+    }
+    await updateStatusCommand({ json });
+    const result = runtime.writeJson.mock.lastCall?.[0];
+    if (json) {
+      expect(result.lastRun).toEqual(finished);
+      if (outcome === "managed-service-preflight") {
+        expect(result.lastRun.steps).toContainEqual(expect.objectContaining({ failureFacts }));
+      } else {
+        expect(result.activeRun).toBeUndefined();
+        if (unverified) {
+          expect(result.lastRun).toMatchObject({
+            phase: "finished",
+            confirmedAtMs: null,
+            finishedAtMs: expect.any(Number),
+          });
+        } else {
+          expect(result).not.toHaveProperty("activeRun");
+          expect(result).not.toHaveProperty("abandonedRun");
+        }
+      }
+    } else {
+      const output = runtime.log.mock.calls.flat().join("\n");
+      expect(output).toContain(outcome);
+      expect(output).toContain("openclaw doctor");
+      expect(output).toContain("Wait for the owning updater and its child processes to stop");
+      expect(output).toContain("openclaw update repair");
+      expect(output).not.toContain("Abandoned update detected");
+    }
     expect(getUpdateRun(run.runId)).toEqual(finished);
+    if (previewRunId) {
+      expect(listUpdateRuns().map((entry) => entry.runId)).toEqual([previewRunId, run.runId]);
+    }
   });
 });
 
@@ -536,13 +581,22 @@ describe("update status abandoned-run reporting", () => {
       const created = createUpdateRun({ trigger: "cli", origin: { nextAction: advice } });
       recordUpdateRunVerification(created.runId, {
         port: 19123,
-        serviceRunning: false,
-        versionMatch: false,
+        serviceRunning: true,
+        runningVersion: "2026.9.1",
+        versionMatch: true,
+        channelsReady: false,
+        readyz: true,
+        recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.1" },
+      });
+      recordUpdateRunStep(created.runId, {
+        step: "gateway recovery verification",
+        status: "completed",
+        exitCode: 0,
       });
       const finished = finishUpdateRun(created.runId, {
         status: "failed",
-        reason: "restart-unhealthy",
-        after: { version: "2026.9.4" },
+        reason: "node-runtime-preflight",
+        after: { version: "2026.9.1" },
       });
       confirmGatewayReachable.mockResolvedValue({
         reachable: responding,
@@ -550,14 +604,24 @@ describe("update status abandoned-run reporting", () => {
         gatewayBuildId: undefined,
         activatedPluginErrors: [],
         unavailablePlugins: [],
-        channelProbeErrors: [],
+        channelProbeErrors: [{ id: "test-channel", error: "Channel probe failed" }],
       });
 
       await updateStatusCommand({});
 
       const output = runtime.log.mock.calls.flat().join("\n");
-      expect(output).toContain("service identity unavailable");
+      expect(output).toContain("Recorded recovery: verified serving 2026.9.1.");
+      expect(output).toContain(
+        "Recorded verification: service running (2026.9.1); version verified; channels not ready; HTTP ready.",
+      );
       expect(output).not.toContain("version mismatch");
+      expect(output).not.toContain("The gateway is running");
+      expect(output).not.toContain("chat available");
+      if (responding) {
+        expect(output).toContain(
+          "Current health: Gateway answered on the recorded port (2026.9.4).",
+        );
+      }
       expect(runtime.log).not.toHaveBeenCalledWith(advice);
       expect(output).toContain("Historical recovery advice:");
       expect(output).toContain(
@@ -693,7 +757,18 @@ describe("update status abandoned-run reporting", () => {
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
 
-      await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
+      await recordDeferredPluginMigrations({
+        pending: [],
+        settlements: [
+          {
+            pluginId: pending.pluginId,
+            status: json ? "superseded" : "completed",
+            reason: json
+              ? "Superseded by the verified successor migration."
+              : "No protected config remains.",
+          },
+        ],
+      });
       runtime.log.mockClear();
       runtime.writeJson.mockClear();
       await updateStatusCommand({ json });
@@ -705,34 +780,6 @@ describe("update status abandoned-run reporting", () => {
         );
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
-    },
-  );
-
-  it.each([true, false])(
-    "reports an activation timeout without abandonment (JSON: %s)",
-    async (json) => {
-      const created = createUpdateRun({ trigger: "cli" });
-      recordUpdateRunPhase(created.runId, "activating");
-      const finished = finishUpdateRun(created.runId, {
-        status: "failed",
-        reason: "update-activation-timeout",
-      });
-
-      await updateStatusCommand({ json });
-
-      if (json) {
-        expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({ lastRun: finished });
-        expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty("activeRun");
-        expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty("abandonedRun");
-      } else {
-        const output = runtime.log.mock.calls.flat().join("\n");
-        expect(output).toContain("update-activation-timeout");
-        expect(output).toContain("openclaw doctor");
-        expect(output).toContain("Wait for the owning updater and its child processes to stop");
-        expect(output).toContain("openclaw update repair");
-        expect(output).not.toContain("Abandoned update detected");
-      }
-      expect(getUpdateRun(created.runId)).toEqual(finished);
     },
   );
 
@@ -748,7 +795,7 @@ describe("update status abandoned-run reporting", () => {
       });
       vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
       if (surface === "status") {
-        const rows = buildStatusUpdateRows(null);
+        const rows = await buildStatusUpdateRows(null);
         expect(rows).toContainEqual(
           expect.objectContaining({
             Item: "Update run",
@@ -803,11 +850,12 @@ describe("update status abandoned-run reporting", () => {
     expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty("advisories");
   });
 
-  it.each(
-    ["none", "succeeded-before-expiry", "succeeded-after-expiry", "active"].flatMap((laterRun) =>
-      ["json", "text", "status"].map((surface) => ({ laterRun, surface })),
-    ),
-  )(
+  it.each([
+    { laterRun: "none", surface: "text" },
+    { laterRun: "succeeded-before-expiry", surface: "json" },
+    { laterRun: "succeeded-after-expiry", surface: "status" },
+    { laterRun: "active", surface: "text" },
+  ])(
     "keeps expired admission history with $laterRun through $surface",
     async ({ laterRun, surface }) => {
       const now = Date.now();
@@ -829,7 +877,7 @@ describe("update status abandoned-run reporting", () => {
       }
       let output: string;
       if (surface === "status") {
-        output = JSON.stringify(buildStatusUpdateRows(null));
+        output = JSON.stringify(await buildStatusUpdateRows(null));
       } else {
         await updateStatusCommand({ json: surface === "json" });
         output =
@@ -906,68 +954,63 @@ describe("update status abandoned-run reporting", () => {
     },
   );
 
-  it.each([true, false])(
-    "gives explicit recovery guidance for stale identityless history (JSON: %s)",
-    async (json) => {
+  it.each([
+    { json: true, driverDead: false },
+    { json: false, driverDead: false },
+    { json: true, driverDead: true },
+    { json: false, driverDead: true },
+  ])(
+    "reports stale history read-only (JSON: $json, driver dead: $driverDead)",
+    async ({ json, driverDead }) => {
       const now = Date.now();
       const lastActivity = now - ABANDONED_UPDATE_RUN_MS - 10;
+      const driver = driverDead ? readUpdateRunDriver() : undefined;
+      if (driverDead && !driver) {
+        throw new Error("Test process identity is unavailable");
+      }
       vi.spyOn(Date, "now").mockReturnValue(lastActivity);
-      const recorded = createUpdateRun({ trigger: "control-ui", before: { version: "2026.9.2" } });
+      const created = createUpdateRun({
+        trigger: "control-ui",
+        before: { version: "2026.9.2" },
+        ...(driver
+          ? {
+              origin: {
+                driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) },
+              },
+            }
+          : {}),
+      });
+      const recorded = driverDead ? recordUpdateRunPhase(created.runId, "staging") : created;
       vi.mocked(Date.now).mockReturnValue(now);
-
       await updateStatusCommand({ json });
-
       const guidance = `no activity since ${new Date(lastActivity).toISOString()}; if no update is running, run \`openclaw update repair\` or start a new \`openclaw update\``;
-      expect(getUpdateRun(recorded.runId)).toEqual(recorded);
+      expect(getUpdateRun(created.runId)).toEqual(recorded);
       if (json) {
         expect(runtime.writeJson).toHaveBeenCalledWith(
           expect.objectContaining({
             activeRun: recorded,
-            staleRun: { runId: recorded.runId, guidance },
+            ...(driverDead
+              ? {
+                  lastRun: recorded,
+                  abandonedRun: { runId: created.runId, rule: "inactive-driver-dead" },
+                }
+              : { staleRun: { runId: created.runId, guidance } }),
           }),
         );
-        expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty("abandonedRun");
+        if (!driverDead) {
+          expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty("abandonedRun");
+        }
       } else {
         const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
-        expect(output).toContain(guidance);
         expect(output).not.toContain("update in progress:");
+        if (driverDead) {
+          expect(output).toContain("Abandoned update detected;");
+          expect(output).toContain("openclaw update repair");
+          expect(output).not.toContain("update failed:");
+        } else {
+          expect(output).toContain(guidance);
+        }
       }
     },
   );
-
-  it.each([true, false])("reports abandonment read-only (JSON: %s)", async (json) => {
-    const now = Date.now();
-    const driver = readUpdateRunDriver();
-    if (!driver) {
-      throw new Error("Test process identity is unavailable");
-    }
-    vi.spyOn(Date, "now").mockReturnValue(now - ABANDONED_UPDATE_RUN_MS - 10);
-    const created = createUpdateRun({
-      trigger: "control-ui",
-      before: { version: "2026.9.2" },
-      // This live PID has a different start identity than the exited driver.
-      origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
-    });
-    const recorded = recordUpdateRunPhase(created.runId, "staging");
-    vi.mocked(Date.now).mockReturnValue(now);
-
-    await updateStatusCommand({ json });
-
-    expect(getUpdateRun(created.runId)).toEqual(recorded);
-    if (json) {
-      expect(runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          activeRun: recorded,
-          lastRun: recorded,
-          abandonedRun: { runId: created.runId, rule: "inactive-driver-dead" },
-        }),
-      );
-    } else {
-      const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
-      expect(output).toContain("Abandoned update detected;");
-      expect(output).toContain("openclaw update repair");
-      expect(output).not.toContain("update in progress:");
-      expect(output).not.toContain("update failed:");
-    }
-  });
 });

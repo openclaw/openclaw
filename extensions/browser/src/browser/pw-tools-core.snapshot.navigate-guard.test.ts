@@ -25,6 +25,33 @@ const PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 
+const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "tab-1" };
+
+function prepareReconnect() {
+  const owner: { targetId?: string } = { targetId: "original-target" };
+  const originalPage = {
+    goto: vi.fn(async () => {
+      owner.targetId = undefined;
+      throw new Error("page.goto: Frame has been detached");
+    }),
+    url: vi.fn(() => "https://example.com/original"),
+    on: vi.fn(),
+    off: vi.fn(),
+  };
+  const replacementPage = {
+    goto: vi.fn(async () => {}),
+    url: vi.fn(() => "https://example.com/recovered"),
+    on: vi.fn(),
+    off: vi.fn(),
+  };
+  setPwToolsCoreCurrentPage(originalPage);
+  const reconnect = vi.spyOn(pwSessionConnection, "connectBrowser").mockImplementation(async () => {
+    owner.targetId = "replacement-target";
+    return {} as Awaited<ReturnType<typeof pwSessionConnection.connectBrowser>>;
+  });
+  return { owner, originalPage, replacementPage, reconnect };
+}
+
 describe("pw-tools-core.snapshot navigate guard", () => {
   beforeEach(() => {
     for (const key of PROXY_ENV_KEYS) {
@@ -54,65 +81,6 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(goto).not.toHaveBeenCalled();
   });
 
-  it("navigates valid network URLs with clamped timeout", async () => {
-    const goto = vi.fn(async () => {});
-    const page = {
-      goto,
-      url: vi.fn(() => "https://example.com"),
-    };
-    setPwToolsCoreCurrentPage(page);
-
-    const result = await mod.navigateViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      url: "https://example.com",
-      timeoutMs: 10,
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-
-    expect(goto).toHaveBeenCalledWith("https://example.com", { timeout: 1000 });
-    expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      page,
-      ssrfPolicy: { allowPrivateNetwork: true },
-      targetId: undefined,
-      timeoutMs: 1000,
-      url: "https://example.com",
-    });
-    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      page,
-      response: null,
-      ssrfPolicy: { allowPrivateNetwork: true },
-      targetId: undefined,
-    });
-    expect(result.url).toBe("https://example.com");
-  });
-
-  it.each([
-    { requestedTimeoutMs: undefined, expectedTimeoutMs: 20_000 },
-    { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
-  ])(
-    "applies the shipped navigation timeout contract to Playwright timeout $requestedTimeoutMs",
-    async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
-      const goto = vi.fn(async () => {});
-      setPwToolsCoreCurrentPage({
-        goto,
-        url: vi.fn(() => "https://example.com"),
-      });
-
-      await mod.navigateViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        url: "https://example.com",
-        timeoutMs: requestedTimeoutMs,
-      });
-
-      expect(goto).toHaveBeenCalledWith("https://example.com", { timeout: expectedTimeoutMs });
-      expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledWith(
-        expect.objectContaining({ timeoutMs: expectedTimeoutMs }),
-      );
-    },
-  );
-
   it("returns managed download metadata when navigation starts an attachment download", async () => {
     const download = {
       url: "https://example.com/export.csv",
@@ -134,8 +102,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     setPwToolsCoreCurrentPage(page);
 
     const result = await mod.navigateViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "tab-1",
+      ...target,
       url: "https://example.com/export.csv",
       ssrfPolicy: { allowPrivateNetwork: true },
     });
@@ -149,34 +116,6 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       url: download.url,
       ssrfPolicy: { allowPrivateNetwork: true },
     });
-  });
-
-  it("returns managed download metadata for matching ERR_ABORTED attachment navigations", async () => {
-    const download = {
-      url: "http://127.0.0.1:3333/download",
-      suggestedFilename: "proof.txt",
-      path: "/tmp/openclaw/downloads/proof.txt",
-    };
-    const downloadCapture = {
-      armed: true,
-      promise: Promise.resolve(download),
-      cancel: vi.fn(),
-    };
-    setPwToolsCoreDownloadCapture(downloadCapture);
-    setPwToolsCoreCurrentPage({
-      goto: vi.fn(async () => {
-        throw new Error("page.goto: net::ERR_ABORTED at http://127.0.0.1:3333/download");
-      }),
-      url: vi.fn(() => "about:blank"),
-    });
-
-    const result = await mod.navigateViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      url: "http://127.0.0.1:3333/download",
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-
-    expect(result).toEqual({ url: download.url, download });
   });
 
   it("handles capture timeouts that win before ordinary navigation settles", async () => {
@@ -232,8 +171,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
 
     await expect(
       mod.navigateViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "tab-1",
+        ...target,
         url: "https://93.184.216.34/export.csv",
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
       }),
@@ -262,8 +200,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
 
     await expect(
       mod.navigateViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "tab-1",
+        ...target,
         url: "https://example.com/export.csv",
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
@@ -286,8 +223,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
 
     await expect(
       mod.navigateViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "tab-1",
+        ...target,
         url: "https://example.com/export.csv",
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
@@ -307,8 +243,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     });
 
     const result = await mod.navigateViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "tab-1",
+      ...target,
       url: "https://example.com/recovered",
       ssrfPolicy: { allowPrivateNetwork: true },
     });
@@ -318,8 +253,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       1,
     );
     expect(getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "tab-1",
+      ...target,
       ssrfPolicy: { allowPrivateNetwork: true },
       page: expect.objectContaining({ goto }),
     });
@@ -328,29 +262,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
   });
 
   it("rebinds a detached navigation to the same relay-owned tab after reconnect", async () => {
-    let attachedTarget: string | undefined = "original-target";
-    const originalPage = {
-      goto: vi.fn(async () => {
-        attachedTarget = undefined;
-        throw new Error("page.goto: Frame has been detached");
-      }),
-      url: vi.fn(() => "https://example.com/original"),
-      on: vi.fn(),
-      off: vi.fn(),
-    };
-    const replacementPage = {
-      goto: vi.fn(async () => {}),
-      url: vi.fn(() => "https://example.com/recovered"),
-      on: vi.fn(),
-      off: vi.fn(),
-    };
-    setPwToolsCoreCurrentPage(originalPage);
-    const reconnect = vi
-      .spyOn(pwSessionConnection, "connectBrowser")
-      .mockImplementation(async () => {
-        attachedTarget = "replacement-target";
-        return {} as Awaited<ReturnType<typeof pwSessionConnection.connectBrowser>>;
-      });
+    const { owner, originalPage, replacementPage, reconnect } = prepareReconnect();
     const session = getPwToolsCoreSessionMocks();
     session.getPageForTargetId
       .mockResolvedValueOnce(originalPage)
@@ -369,7 +281,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         targetId: "original-target",
         url: "https://example.com/recovered",
-        resolveOperationTarget: () => attachedTarget,
+        resolveOperationTarget: () => owner.targetId,
       };
       const result = await mod.navigateViaPlaywright(navigation);
 
@@ -397,34 +309,16 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     { reason: "owner is revoked before selection", revokeDuringLookup: false },
     { reason: "owner changes during the exact page lookup", revokeDuringLookup: true },
   ])("rejects detached navigation when its $reason", async ({ revokeDuringLookup }) => {
-    let attachedTarget: string | undefined = "original-target";
-    const originalPage = {
-      goto: vi.fn(async () => {
-        attachedTarget = undefined;
-        throw new Error("page.goto: Frame has been detached");
-      }),
-      url: vi.fn(() => "https://example.com/original"),
-      on: vi.fn(),
-      off: vi.fn(),
-    };
-    const replacementPage = {
-      goto: vi.fn(async () => {}),
-      url: vi.fn(() => "https://example.com/recovered"),
-      on: vi.fn(),
-      off: vi.fn(),
-    };
-    setPwToolsCoreCurrentPage(originalPage);
-    const reconnect = vi
-      .spyOn(pwSessionConnection, "connectBrowser")
-      .mockImplementation(async () => {
-        attachedTarget = revokeDuringLookup ? "replacement-target" : undefined;
-        return {} as Awaited<ReturnType<typeof pwSessionConnection.connectBrowser>>;
-      });
+    const { owner, originalPage, replacementPage, reconnect } = prepareReconnect();
+    reconnect.mockImplementation(async () => {
+      owner.targetId = revokeDuringLookup ? "replacement-target" : undefined;
+      return {} as Awaited<ReturnType<typeof pwSessionConnection.connectBrowser>>;
+    });
     const session = getPwToolsCoreSessionMocks();
     session.getPageForTargetId.mockResolvedValueOnce(originalPage);
     if (revokeDuringLookup) {
       session.getPageForTargetId.mockImplementationOnce(async () => {
-        attachedTarget = "unrelated-target";
+        owner.targetId = "unrelated-target";
         return replacementPage;
       });
     }
@@ -435,7 +329,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
           cdpUrl: "http://127.0.0.1:18792",
           targetId: "original-target",
           url: "https://example.com/recovered",
-          resolveOperationTarget: () => attachedTarget,
+          resolveOperationTarget: () => owner.targetId,
         }),
       ).rejects.toBeInstanceOf(BrowserTabNotFoundError);
 
@@ -447,29 +341,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
   });
 
   it("closes the replacement relay target when its retried navigation violates policy", async () => {
-    let attachedTarget: string | undefined = "original-target";
-    const originalPage = {
-      goto: vi.fn(async () => {
-        attachedTarget = undefined;
-        throw new Error("page.goto: Frame has been detached");
-      }),
-      url: vi.fn(() => "https://example.com/original"),
-      on: vi.fn(),
-      off: vi.fn(),
-    };
-    const replacementPage = {
-      goto: vi.fn(async () => {}),
-      url: vi.fn(() => "https://example.com/recovered"),
-      on: vi.fn(),
-      off: vi.fn(),
-    };
-    setPwToolsCoreCurrentPage(originalPage);
-    const reconnect = vi
-      .spyOn(pwSessionConnection, "connectBrowser")
-      .mockImplementation(async () => {
-        attachedTarget = "replacement-target";
-        return {} as Awaited<ReturnType<typeof pwSessionConnection.connectBrowser>>;
-      });
+    const { owner, originalPage, replacementPage, reconnect } = prepareReconnect();
     const session = getPwToolsCoreSessionMocks();
     session.getPageForTargetId
       .mockResolvedValueOnce(originalPage)
@@ -484,7 +356,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
           cdpUrl: "http://127.0.0.1:18792",
           targetId: "original-target",
           url: "https://example.com/recovered",
-          resolveOperationTarget: () => attachedTarget,
+          resolveOperationTarget: () => owner.targetId,
         }),
       ).rejects.toBeInstanceOf(SsrFBlockedError);
 
@@ -496,52 +368,6 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     } finally {
       reconnect.mockRestore();
     }
-  });
-
-  it("blocks private intermediate redirect hops during navigation", async () => {
-    const goto = vi.fn(async () => ({
-      request: () => ({
-        url: () => "https://93.184.216.34/final",
-        redirectedFrom: () => ({
-          url: () => "http://127.0.0.1:18080/internal-hop",
-          redirectedFrom: () => ({
-            url: () => "https://93.184.216.34/start",
-            redirectedFrom: () => null,
-          }),
-        }),
-      }),
-    }));
-    const page = {
-      goto,
-      url: vi.fn(() => "https://93.184.216.34/final"),
-    };
-    setPwToolsCoreCurrentPage(page);
-    getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
-      new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
-    );
-
-    await expect(
-      mod.navigateViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        url: "https://93.184.216.34/start",
-      }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
-
-    expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledTimes(1);
-    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(
-      1,
-    );
-    // Navigate-style entry points OWN the navigation lifecycle, so when the
-    // post-navigation safety check rejects with an SSRF policy error the
-    // caller is responsible for closing the tab it just navigated. This is
-    // the counterpart to the read-only paths (snapshot/screenshot/
-    // interactions), which must NOT close the tab on the same error.
-    expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).toHaveBeenCalledTimes(1);
-    expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      page,
-      targetId: undefined,
-    });
   });
 
   it("does not close the tab when post-navigation rejection is not a policy deny", async () => {

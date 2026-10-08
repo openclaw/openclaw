@@ -55,10 +55,6 @@ function countOccurrences(haystack: string, needle: string): number {
   }
 }
 
-function createCounts(needles: SessionLogNeedles): Record<string, number> {
-  return Object.fromEntries(Object.keys(needles).map((key) => [key, 0]));
-}
-
 function recordRole(record: unknown): string | undefined {
   if (!record || typeof record !== "object") {
     return undefined;
@@ -133,12 +129,7 @@ export async function countSessionLogMentions(params: {
   sessionsDir: string;
 }): Promise<Record<string, number>> {
   const limits = params.limits ?? readSessionLogMentionLimits();
-  const counts = createCounts(params.needles);
-  const addCounts = (nextCounts: Record<string, number>) => {
-    for (const [key, count] of Object.entries(nextCounts)) {
-      counts[key] = (counts[key] ?? 0) + count;
-    }
-  };
+  const counts = Object.fromEntries(Object.keys(params.needles).map((key) => [key, 0]));
   let files: string[];
   try {
     files = await fs.readdir(params.sessionsDir);
@@ -184,40 +175,14 @@ export async function countSessionLogMentions(params: {
       }
     }
   }
-  addCounts(
-    await countSqliteTranscriptMentions({
-      limits,
-      needles: params.needles,
-      sessionsDir: params.sessionsDir,
-      startingBytes: totalBytes,
-    }),
-  );
-  return counts;
-}
-
-function resolveAgentSqlitePathFromSessionsDir(sessionsDir: string): string | null {
-  if (path.basename(sessionsDir) !== "sessions") {
-    return null;
-  }
-  return path.join(path.dirname(sessionsDir), "agent", "openclaw-agent.sqlite");
-}
-
-async function countSqliteTranscriptMentions(params: {
-  limits: SessionLogMentionLimits;
-  needles: SessionLogNeedles;
-  sessionsDir: string;
-  startingBytes: number;
-}): Promise<Record<string, number>> {
-  const counts = createCounts(params.needles);
-  const sqlitePath = resolveAgentSqlitePathFromSessionsDir(params.sessionsDir);
-  if (!sqlitePath) {
+  if (path.basename(params.sessionsDir) !== "sessions") {
     return counts;
   }
+  const sqlitePath = path.join(path.dirname(params.sessionsDir), "agent", "openclaw-agent.sqlite");
   const stat = await fs.stat(sqlitePath).catch(() => null);
   if (!stat?.isFile()) {
     return counts;
   }
-  let totalBytes = params.startingBytes;
   let db: DatabaseSync | null = null;
   try {
     db = new DatabaseSync(sqlitePath, { readOnly: true });
@@ -237,13 +202,13 @@ async function countSqliteTranscriptMentions(params: {
         byteCount,
         filePath: sqlitePath,
         label: "per-file",
-        limit: params.limits.fileMaxBytes,
+        limit: limits.fileMaxBytes,
       });
       totalBytes += byteCount;
       assertWithinLimit({
         byteCount: totalBytes,
         label: "total",
-        limit: params.limits.totalMaxBytes,
+        limit: limits.totalMaxBytes,
       });
       const scanText = sessionLogScanText(eventJson);
       if (scanText === null) {

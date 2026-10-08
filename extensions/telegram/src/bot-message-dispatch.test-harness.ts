@@ -99,13 +99,7 @@ const generateTopicLabelHoisted = vi.hoisted(() => vi.fn());
 const describeStickerImageHoisted = vi.hoisted(() =>
   vi.fn(async (): Promise<string | null> => null),
 );
-const loadModelCatalogHoisted = vi.hoisted(() => vi.fn(async () => ({})));
-const findModelInCatalogHoisted = vi.hoisted(() => vi.fn(() => null));
-const modelSupportsVisionHoisted = vi.hoisted(() => vi.fn(() => false));
 const resolveAgentDirHoisted = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
-const resolveDefaultModelForAgentHoisted = vi.hoisted(() =>
-  vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
-);
 const resolveHumanDelayConfigHoisted = vi.hoisted(() => vi.fn());
 const getAgentScopedMediaLocalRootsHoisted = vi.hoisted(() =>
   vi.fn((_cfg: unknown, agentId: string) => [`/tmp/.openclaw/workspace-${agentId}`]),
@@ -139,11 +133,7 @@ export const readLatestAssistantTextByIdentity = readLatestAssistantTextByIdenti
 const resolveStorePath = resolveStorePathHoisted;
 const generateTopicLabel = generateTopicLabelHoisted;
 const describeStickerImage = describeStickerImageHoisted;
-const loadModelCatalog = loadModelCatalogHoisted;
-const findModelInCatalog = findModelInCatalogHoisted;
-const modelSupportsVision = modelSupportsVisionHoisted;
 const resolveAgentDir = resolveAgentDirHoisted;
-const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
 const resolveHumanDelayConfig = resolveHumanDelayConfigHoisted;
 const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
 const resolveChunkMode = resolveChunkModeHoisted;
@@ -293,12 +283,12 @@ vi.mock("./bot-message-dispatch.runtime.js", () => ({
 }));
 
 vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
-  findModelInCatalog: findModelInCatalogHoisted,
-  loadPreparedModelCatalog: loadModelCatalogHoisted,
-  modelSupportsVision: modelSupportsVisionHoisted,
   resolveAgentDir: resolveAgentDirHoisted,
-  resolveDefaultModelForAgent: resolveDefaultModelForAgentHoisted,
   resolveHumanDelayConfig: resolveHumanDelayConfigHoisted,
+}));
+
+vi.mock("./sticker-vision.runtime.js", () => ({
+  resolveStickerVisionSupportRuntime: vi.fn(async () => false),
 }));
 
 vi.mock("./sticker-cache.js", () => ({
@@ -360,7 +350,6 @@ async function resetTelegramDispatchTestState() {
   getSessionEntry.mockReset();
   getAgentScopedMediaLocalRoots.mockClear();
   resolveChunkMode.mockClear();
-  resolveDefaultModelForAgent.mockReset();
   loadConfig.mockReturnValue({});
   dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
     queuedFinal: false,
@@ -412,14 +401,7 @@ async function resetTelegramDispatchTestState() {
   );
   generateTopicLabel.mockReset().mockResolvedValue("Topic label");
   describeStickerImage.mockReset().mockResolvedValue(null);
-  loadModelCatalog.mockReset().mockResolvedValue({});
-  findModelInCatalog.mockReset().mockReturnValue(null);
-  modelSupportsVision.mockReset().mockReturnValue(false);
   resolveAgentDir.mockReset().mockReturnValue("/tmp/agent");
-  resolveDefaultModelForAgent.mockReturnValue({
-    provider: "openai",
-    model: "gpt-test",
-  });
   resolveHumanDelayConfig.mockReset().mockReturnValue(undefined);
   getGlobalHookRunner.mockReset().mockReturnValue(null);
 }
@@ -516,7 +498,6 @@ export function createContext(overrides?: Partial<TelegramMessageContext>): Tele
     sendRecordVoice: vi.fn(),
     sendChatActionHandler: { sendChatAction: vi.fn(async () => undefined) },
     ackReactionPromise: null,
-    reactionApi: null,
   } as unknown as TelegramMessageContext;
   base.turn = {
     // Prepared turns also read pending-delivery state before entering the mocked producer.

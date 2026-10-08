@@ -1,7 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveRealtimeVoiceAgentContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
+import * as realtimeBootstrapSdk from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import { buildRealtimeVoiceAgentConsultPolicyInstructions } from "openclaw/plugin-sdk/realtime-voice";
 import type { VoiceCallConfig } from "./config.js";
+
+const contextSdk: Partial<
+  Pick<typeof realtimeBootstrapSdk, "resolveRealtimeVoiceAgentContextInstructions">
+> = realtimeBootstrapSdk;
 
 /** Build final realtime instructions from base instructions, consult policy, and agent context. */
 export async function buildRealtimeVoiceInstructions(params: {
@@ -13,19 +17,32 @@ export async function buildRealtimeVoiceInstructions(params: {
 }): Promise<string> {
   const { config } = params;
   const contextConfig = config.realtime.agentContext;
-  return [
+  const sections = [
     params.baseInstructions,
     buildRealtimeVoiceAgentConsultPolicyInstructions(config.realtime),
-    await resolveRealtimeVoiceAgentContextInstructions({
-      config: params.coreConfig,
-      agentId: params.agentId,
-      files:
-        contextConfig.enabled && contextConfig.includeWorkspaceFiles ? contextConfig.files : [],
-      includeIdentity: contextConfig.enabled && contextConfig.includeIdentity,
-      maxChars: contextConfig.maxChars,
-      warn: params.warn,
-    }),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  ];
+  if (contextSdk.resolveRealtimeVoiceAgentContextInstructions) {
+    sections.push(
+      await contextSdk.resolveRealtimeVoiceAgentContextInstructions({
+        config: params.coreConfig,
+        agentId: params.agentId,
+        files:
+          contextConfig.enabled && contextConfig.includeWorkspaceFiles ? contextConfig.files : [],
+        includeIdentity: contextConfig.enabled && contextConfig.includeIdentity,
+        maxChars: contextConfig.maxChars,
+        warn: params.warn,
+      }),
+    );
+  } else {
+    const { buildLegacyRealtimeVoiceAgentContext } =
+      await import("./realtime-agent-context.legacy.js");
+    sections.push(
+      await buildLegacyRealtimeVoiceAgentContext({
+        config: contextConfig,
+        coreConfig: params.coreConfig,
+        agentId: params.agentId,
+      }),
+    );
+  }
+  return sections.filter(Boolean).join("\n\n");
 }

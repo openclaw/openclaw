@@ -21,6 +21,7 @@ type RevocationState = {
   role: string | undefined;
   references: number;
   revoked: boolean;
+  sourceAccepted: boolean;
   listeners?: Set<() => void>;
 };
 
@@ -34,6 +35,7 @@ type CapturedRevocation = {
   state: RevocationState;
   isCurrent: CurrentCaller;
   isSourceCurrent: CurrentCaller;
+  hasSourceAuthority: boolean;
   isRevocationCurrent: CurrentCaller;
   sourceIdentity: object;
   releaseSourceIdentity?: () => void;
@@ -138,6 +140,7 @@ export function captureGatewayDeviceRevocation(
     role: identity.role,
     references: 1,
     revoked: false,
+    sourceAccepted: false,
   };
   if (state.deviceId && !owner.closed) {
     let bucket = owner.devices.get(state.deviceId);
@@ -152,8 +155,12 @@ export function captureGatewayDeviceRevocation(
   const isRevocationCurrent = () =>
     !owner.closed &&
     !state.revoked &&
-    (state.references > 0 || connectionSignal?.aborted === false);
-  const isCurrent = () => isRevocationCurrent() && hasCurrentClientAuthority();
+    (state.references > 0 || (!state.sourceAccepted && connectionSignal?.aborted === false));
+  const isCurrent = () =>
+    isRevocationCurrent() &&
+    (state.sourceAccepted && sourceAuthority
+      ? sourceAuthority.isCurrent()
+      : hasCurrentClientAuthority());
   // The request callback also fences tentative transport generations. Accepted
   // work follows the subscribed source owner's committed revocations instead.
   const isSourceCurrent = sourceAuthority
@@ -164,6 +171,7 @@ export function captureGatewayDeviceRevocation(
     state,
     isCurrent,
     isSourceCurrent,
+    hasSourceAuthority: sourceAuthority !== undefined,
     isRevocationCurrent,
     sourceIdentity: Object.freeze({}),
   };
@@ -201,6 +209,39 @@ export function readGatewayDeviceSourceAuthority(
   guard: (() => unknown) | undefined,
 ): CurrentCaller | undefined {
   return guard ? captures.get(guard)?.isSourceCurrent : undefined;
+}
+
+/** A committed request may finish its accepted input under the retained source grant. */
+export function acceptGatewayDeviceSourceAuthority(guard: (() => unknown) | undefined): boolean {
+  const capture = guard ? captures.get(guard) : undefined;
+  if (
+    !capture?.hasSourceAuthority ||
+    capture.state.references === 0 ||
+    !capture.isSourceCurrent()
+  ) {
+    return false;
+  }
+  capture.state.sourceAccepted = true;
+  return true;
+}
+
+export function readAcceptedGatewayDeviceSourceAuthority(
+  guard: (() => unknown) | undefined,
+): CurrentCaller | undefined {
+  const capture = guard ? captures.get(guard) : undefined;
+  return capture?.state.sourceAccepted ? capture.isSourceCurrent : undefined;
+}
+
+/** Prepared grants consume owned facts; opaque transport callbacks keep their native fence. */
+export function hasPreparedGatewayDeviceAuthority(
+  client: { invalidated?: boolean } | null | undefined,
+  guard: (() => unknown) | undefined,
+): boolean {
+  const accepted = readAcceptedGatewayDeviceSourceAuthority(guard);
+  return (
+    (accepted ? accepted() : !client?.invalidated) &&
+    readGatewayDeviceRevocationGuard(guard)?.() !== false
+  );
 }
 
 /** Only a producer-proven dependency cohort can share queued-input custody. */
@@ -256,8 +297,5 @@ export function invalidateGatewayDeviceRevocation(
 export function closeGatewayDeviceRevocation(context: object): void {
   const owner = getOwner(context);
   owner.closed = true;
-  for (const bucket of owner.devices.values()) {
-    bucket.clear();
-  }
   owner.devices.clear();
 }

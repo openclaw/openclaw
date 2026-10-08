@@ -1,7 +1,7 @@
 # OpenAI
 
 Connect OpenAI models to OpenClaw. The plugin also provides embeddings, media
-understanding, image and video generation, speech output, realtime transcription,
+understanding, image generation, speech output, realtime transcription,
 and realtime voice.
 
 ## Get started
