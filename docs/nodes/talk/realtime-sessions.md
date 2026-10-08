@@ -183,9 +183,13 @@ model or deployment with `talk.realtime.providers.openai.inputTranscriptionModel
 ```
 
 This value configures transcription only; it does not change the Realtime
-conversation model. Leave it unset to use the provider-specific default. For
-Azure, use the transcription deployment name supported by the resource and
-Realtime API version you have deployed.
+conversation model. For Azure, the bridge sends a GA Realtime `session.update`
+with `type: "realtime"`, audio input transcription and turn detection, and the
+configured realtime deployment in the WebSocket URL. Azure input transcription
+uses the `inputTranscriptionModel` deployment when set, or `whisper-1` when
+unset. The transcription deployment must be available on the Azure resource.
+Azure authentication uses the resource key in the `api-key` header; it does not
+use an OpenAI Platform key.
 
 If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore

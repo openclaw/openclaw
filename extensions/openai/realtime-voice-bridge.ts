@@ -422,13 +422,14 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       const defaultHeaders: Record<string, string> = { "api-key": apiKey };
       return {
         url,
-        headers: this.runtime.resolveProviderRequestHeaders({
-          provider: "openai",
-          baseUrl: url,
-          capability: "audio",
-          transport: "websocket",
-          defaultHeaders,
-        }) ?? defaultHeaders,
+        headers:
+          this.runtime.resolveProviderRequestHeaders({
+            provider: "openai",
+            baseUrl: url,
+            capability: "audio",
+            transport: "websocket",
+            defaultHeaders,
+          }) ?? defaultHeaders,
       };
     }
 
