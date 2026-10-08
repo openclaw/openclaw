@@ -49,9 +49,9 @@ it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as 
       expect(signal.aborted).toBe(false);
       chunkSignal = signal;
       if (finish === "worker-failure") {
-        await new Promise<void>((resolve) =>
-          signal.addEventListener("abort", () => resolve(), { once: true }),
-        );
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
       } else {
         await consumed.promise;
       }

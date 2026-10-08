@@ -227,7 +227,7 @@ it("rejects detached fixed reads after their existing-schema scope ends", async 
 
 it("validates existing runtime shape before a fresh native read callback", async () => {
   const { options } = await fixture();
-  await withExistingOpenClawStateSchema(options, () => {
+  withExistingOpenClawStateSchema(options, () => {
     const { DatabaseSync } = requireNodeSqlite();
     const external = new DatabaseSync(options.path);
     try {
