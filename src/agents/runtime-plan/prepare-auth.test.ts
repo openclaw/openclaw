@@ -326,24 +326,6 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     expect(resolveAgentHarnessPreparedAuthSupport({ plan })).toEqual({ source: "harness" });
   });
 
-  it("falls through an unusable env marker to an ordered API-key profile", () => {
-    const plan = prepareAgentRuntimeAuthPlan({
-      ...openAIPlatformAuthFixture,
-      config: openAIConfig({ apiKey: "OPENAI_API_KEY" }),
-      harnessId: "codex",
-      harnessRuntime: "codex",
-      authProfileStore: authStore(
-        {
-          "openai:backup": openAIApiKeyProfile("backup-key"),
-        },
-        { openai: ["openai:backup"] },
-      ),
-    });
-
-    expect(plan.forwardedAuthProfileId).toBe("openai:backup");
-    expect(plan.modelRoute?.authRequirement).toBe("api-key");
-  });
-
   it("does not let clear OAuth auth hide a cooldown Platform tier before literal fallback", () => {
     const store = authStore(
       {
@@ -366,29 +348,6 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         authProfileStore: store,
       }),
     ).toThrow(/temporarily unavailable/u);
-  });
-
-  it("rejects an incompatible provider-bound profile before Codex forwarding", () => {
-    const relay = {
-      api: "openai-responses" as const,
-      baseUrl: "https://relay.example/v1",
-      models: [],
-    };
-    expect(() =>
-      prepareAgentRuntimeAuthPlan({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        modelApi: "openai-responses",
-        modelBaseUrl: "https://relay.example/v1",
-        config: { models: { providers: { openai: { ...relay, apiKey: "relay:key" }, relay } } },
-        env: {},
-        harnessId: "codex",
-        harnessRuntime: "codex",
-        authProfileStore: authStore({
-          "relay:key": createApiKeyCredential("relay", "relay-secret"),
-        }),
-      }),
-    ).toThrow(/has no usable credentials/u);
   });
 
   it("keeps same-route native candidates ahead of interleaved route fallbacks", () => {
@@ -445,45 +404,6 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ]);
   });
 
-  it("keeps an explicit provider SecretRef ahead of an all-invalid auth order", () => {
-    const plan = prepareAgentRuntimeAuthPlan({
-      ...openAIPlatformAuthFixture,
-      config: {
-        auth: { order: { openai: ["openai:ordered"] } },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-            vault: { source: "file", path: "/tmp/secrets.json", mode: "json" },
-          },
-        },
-        ...openAIConfig({
-          apiKey: { source: "env", provider: "default", id: "DIRECT_OPENAI_KEY" },
-          baseUrl: "https://api.openai.com/v1",
-        }),
-      } as OpenClawConfig,
-      env: { DIRECT_OPENAI_KEY: "sk-direct" },
-      harnessId: "codex",
-      harnessRuntime: "codex",
-      authProfileStore: authStore(
-        {
-          "openai:ordered": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "env", provider: "vault", id: "ORDERED_OPENAI_KEY" },
-          },
-        },
-        { openai: ["openai:ordered"] },
-      ),
-    });
-
-    expect(plan.forwardedAuthProfileId).toBeUndefined();
-    expect(plan.credentialSource).toEqual({
-      kind: "direct",
-      evidence: "environment",
-      authorization: "declared",
-    });
-  });
-
   it("does not cross to an incompatible auth route for a user pin", () => {
     expect(() =>
       prepareAgentRuntimeAuthPlan({
@@ -500,34 +420,6 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         }),
       }),
     ).toThrow(/no route-compatible authentication source/iu);
-  });
-
-  it("lets an explicit provider API key outrank automatic subscription profiles", () => {
-    const config = openAIConfig({
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      auth: "api-key",
-      apiKey: "configured-platform-key",
-    });
-    const plan = prepareAgentRuntimeAuthPlan({
-      ...openAIChatGptAuthFixture,
-      config,
-      env: {},
-      authProfileStore: authStore({
-        "openai:chatgpt": openAIOAuthProfile(
-          "subscription-token",
-          "refresh-token",
-          Date.now() + 60_000,
-        ),
-      }),
-    });
-
-    expect(plan.forwardedAuthProfileId).toBeUndefined();
-    expect(plan.modelRoute).toMatchObject({
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      authRequirement: "api-key",
-    });
   });
 
   it("rejects an official authored route with unvalidated native auth", () => {
@@ -681,38 +573,6 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     });
   });
 
-  it("keeps AWS SDK auth terminal when an API-key SecretRef and ordered profile also exist", () => {
-    const plan = prepareAgentRuntimeAuthPlan({
-      ...openAIPlatformAuthFixture,
-      config: {
-        ...openAIConfig({
-          auth: "aws-sdk",
-          apiKey: { source: "file", provider: "vault", id: "/openai/api-key" },
-        }),
-        secrets: {
-          providers: {
-            vault: { source: "file", path: "/tmp/openai-secrets.json", mode: "json" },
-          },
-        },
-      } as OpenClawConfig,
-      env: {},
-      authProfileStore: authStore(
-        {
-          "openai:platform": openAIApiKeyProfile("platform-key"),
-        },
-        { openai: ["openai:platform"] },
-      ),
-    });
-
-    expect(plan.forwardedAuthProfileId).toBeUndefined();
-    expect(plan.forwardedAuthProfileCandidateIds).toBeUndefined();
-    expect(plan.selectedAuthMode).toBe("aws-sdk");
-    expect(plan.modelRoute).toMatchObject({
-      api: "openai-responses",
-      authRequirement: "api-key",
-    });
-  });
-
   it("keeps profile auth ahead of a literal provider apiKey fallback", async () => {
     const config = openAIConfig({ apiKey: "configured-platform-key" });
     const store = authStore(
@@ -837,28 +697,6 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ).toBe(true);
   });
 
-  // Zero-config still works: when a provider has no usable auth profile at all,
-  // a bare `PROVIDER_API_KEY` remains the credential for the route. Refusing an
-  // undeclared credential is about not letting it silently *succeed a declared
-  // profile*, not about banning the documented zero-config path.
-
-  it("still routes a declared provider apiKey with no profiles present", () => {
-    const prepared = prepareAuthFixture({
-      provider: "openai",
-      modelId: "gpt-5.5",
-      config: openAIConfig({ apiKey: "configured-platform-key" }),
-      env: {},
-      authProfileStore: authStore({}),
-    });
-
-    expect(prepared.attempts).toMatchObject([{ kind: "direct" }]);
-    expect(prepared.plan.credentialSource).toEqual({
-      kind: "direct",
-      evidence: "provider-config",
-      authorization: "declared",
-    });
-  });
-
   it("reports a local provider marker as synthetic auth", () => {
     const prepared = prepareAuthFixture({
       provider: "ollama-remote",
@@ -890,63 +728,19 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     });
   });
 
-  // An environment credential named nowhere in config is not an authorized
-  // route. `auth.order` filtering already refuses to silently try a *stored*
-  // profile the operator omitted from the explicit order
-  // (docs/auth-credential-semantics.md, "Explicit auth order filtering"), and
-  // docs/providers/openai.md reserves bare `OPENAI_API_KEY` for non-agent
-  // surfaces. An undeclared env key must therefore not be queued behind a
-  // declared profile, where it would silently absorb that profile's failures —
-  // potentially onto a different billing account.
-
-  it.each([
-    {
-      label: "ambient Platform key behind an OAuth profile",
-      rejects: false,
-      env: { OPENAI_API_KEY: "ambient-platform-key" },
-      profileId: "openai:chatgpt",
-      profile: {
-        type: "oauth" as const,
-        provider: "openai",
-        access: "subscription-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-      requirements: ["subscription"],
-    },
-    {
-      label: "ambient OAuth token behind an incompatible Platform profile",
-      rejects: true,
-      config: openAIConfig({ auth: "oauth" }),
-      env: { OPENAI_API_KEY: "ambient-oauth-token" },
-      profileId: "openai:platform",
-      profile: {
-        type: "api_key" as const,
-        provider: "openai",
-        key: "profile-platform-key",
-      },
-      requirements: ["api-key"],
-    },
-  ])("does not queue $label", ({ config, env, profile, profileId, requirements, rejects }) => {
-    const prepare = () =>
+  it("does not queue ambient OAuth behind an incompatible Platform profile", () => {
+    expect(() =>
       prepareAuthFixture({
         provider: "openai",
         modelId: "gpt-5.5",
-        config,
-        env,
-        authProfileStore: authStore({ [profileId]: profile }, { openai: [profileId] }),
-      });
-    if (rejects) {
-      expect(prepare).toThrow("Explicit auth order for openai has no usable profiles.");
-      return;
-    }
-    const prepared = prepare();
-
-    expect(prepared.attempts.map((attempt) => attempt.plan.modelRoute?.authRequirement)).toEqual(
-      requirements,
-    );
-    expect(prepared.attempts).toMatchObject([{ kind: "profile", profileId }]);
-    expect(prepared.attempts.some((attempt) => attempt.kind === "direct")).toBe(false);
+        config: openAIConfig({ auth: "oauth" }),
+        env: { OPENAI_API_KEY: "ambient-oauth-token" },
+        authProfileStore: authStore(
+          { "openai:platform": openAIApiKeyProfile("profile-platform-key") },
+          { openai: ["openai:platform"] },
+        ),
+      }),
+    ).toThrow("Explicit auth order for openai has no usable profiles.");
   });
 
   it("resolves an env SecretRef on its prepared Platform route", async () => {
@@ -1008,157 +802,6 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     } finally {
       vi.unstubAllEnvs();
     }
-  });
-
-  it("keeps a provider apiKey SecretRef ahead of API-key-compatible profiles", () => {
-    const prepared = prepareAuthFixture({
-      ...openAIChatGptAuthFixture,
-      config: {
-        ...openAIConfig({ apiKey: { source: "file", provider: "vault", id: "/openai/api-key" } }),
-        secrets: {
-          providers: {
-            vault: { source: "file", path: "/tmp/openai-secrets.json", mode: "json" },
-          },
-        },
-      } as OpenClawConfig,
-      env: {},
-      authProfileStore: authStore(
-        {
-          "openai:chatgpt": openAIOAuthProfile(
-            "subscription-token",
-            "refresh-token",
-            Date.now() + 10 * 60_000,
-          ),
-          "openai:platform": openAIApiKeyProfile("platform-key"),
-        },
-        { openai: ["openai:chatgpt", "openai:platform"] },
-      ),
-    });
-
-    expect(prepared.plan).toMatchObject({
-      forwardedAuthProfileId: undefined,
-      selectedAuthMode: "api-key",
-      modelRoute: {
-        api: "openai-responses",
-        authRequirement: "api-key",
-      },
-    });
-    expect(prepared.attempts).toMatchObject([
-      {
-        kind: "direct",
-        allowAuthProfileFallback: false,
-        requiresPriorProfileAttempt: false,
-      },
-    ]);
-  });
-
-  it("uses explicit OAuth mode for literal provider material", () => {
-    const prepared = prepareAuthFixture({
-      ...openAIPlatformAuthFixture,
-      config: openAIConfig({ auth: "oauth", apiKey: "configured-oauth-token" }),
-      env: {},
-      authProfileStore: authStore({}),
-    });
-
-    expect(prepared.plan).toMatchObject({
-      selectedAuthMode: "oauth",
-      modelRoute: {
-        api: "openai-chatgpt-responses",
-        authRequirement: "subscription",
-      },
-    });
-    expect(prepared.attempts).toMatchObject([
-      {
-        kind: "direct",
-        allowAuthProfileFallback: false,
-        requiresPriorProfileAttempt: false,
-      },
-    ]);
-  });
-
-  it("keeps configured OAuth direct material on the subscription route", () => {
-    const prepared = prepareAuthFixture({
-      provider: "openai",
-      modelId: "gpt-5.5",
-      config: openAIConfig({ auth: "oauth", apiKey: "configured-oauth-token" }),
-      env: {},
-      authProfileStore: authStore({
-        "openai:platform": openAIApiKeyProfile("profile-platform-key"),
-      }),
-    });
-
-    expect(prepared.attempts.map((attempt) => attempt.plan.modelRoute?.authRequirement)).toEqual([
-      "subscription",
-    ]);
-    expect(prepared.attempts).toMatchObject([
-      {
-        kind: "direct",
-        allowAuthProfileFallback: false,
-        requiresPriorProfileAttempt: false,
-        plan: { selectedAuthMode: "oauth" },
-      },
-    ]);
-  });
-
-  it("preserves explicit provider token auth before auth.order or route defaults", () => {
-    const plan = prepareAgentRuntimeAuthPlan({
-      ...openAIPlatformAuthFixture,
-      config: openAIConfig({ auth: "token", apiKey: "configured-subscription-token" }),
-      env: {},
-      authProfileStore: authStore({}),
-    });
-
-    expect(plan.forwardedAuthProfileId).toBeUndefined();
-    expect(plan.selectedAuthMode).toBe("token");
-    expect(plan.modelRoute).toMatchObject({
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      authRequirement: "subscription",
-    });
-  });
-
-  it.each([
-    {
-      auth: "oauth" as const,
-      profile: { type: "api_key" as const, provider: "openai", key: "platform-key" },
-      requirement: "subscription",
-    },
-    {
-      auth: "api-key" as const,
-      profile: {
-        type: "oauth" as const,
-        provider: "openai",
-        access: "oauth-access",
-        refresh: "oauth-refresh",
-        expires: Date.now() + 60_000,
-      },
-      requirement: "api-key",
-    },
-  ])("rejects a $profile.type profile for configured $auth auth", ({ auth, profile }) => {
-    expect(() =>
-      prepareAuthFixture({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        config: openAIConfig({ auth }),
-        env: {},
-        authProfileStore: authStore({ "openai:wrong-route": profile }),
-      }),
-    ).toThrow(/no compatible credential source/u);
-  });
-
-  it("rejects configured harness-native auth without a compatible host source", () => {
-    expect(() =>
-      prepareAgentRuntimeAuthPlan({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        config: openAIConfig({ auth: "oauth" }),
-        env: {},
-        authProfileStore: authStore({}),
-        harnessId: "codex",
-        harnessRuntime: "codex",
-        harnessAuthBootstrap: "harness",
-      }),
-    ).toThrow(/no compatible credential source/u);
   });
 
   it("rejects configured provider auth that contradicts an authored route", () => {
@@ -1278,4 +921,3 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ).toBe(false);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

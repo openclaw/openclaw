@@ -119,8 +119,8 @@ the model-facing action schema.
 A waiting reply can carry the optional host-owned
 `info.adoptProgressDraft(draft)` capability in its reply-dispatch context. An
 editable-progress adapter uses it to keep an already visible card live while the
-children the turn waits on run, not to send a replacement card or credit
-final-answer delivery.
+children or detached media generation runs the turn waits on run, not to send a
+replacement card or credit final-answer delivery.
 
 Drain and flush the existing draft, recheck `assertPlatformSendAuthorized`, and
 confirm the platform accepted the card. Staged content or an ambiguous send does

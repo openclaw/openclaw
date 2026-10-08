@@ -187,14 +187,11 @@ function withDiagnosticRequestContext(
       return undefined;
     }
     const result = originalOnPayload(payload, model);
-    if (isPromiseLike(result)) {
-      return result.then((replacement) => {
-        observer.assignRequestPayloadBytes(replacement ?? payload);
-        return replacement;
-      });
-    }
-    observer.assignRequestPayloadBytes(result ?? payload);
-    return result;
+    const observeReplacement = (replacement: unknown) => {
+      observer.assignRequestPayloadBytes(replacement ?? payload);
+      return replacement;
+    };
+    return isPromiseLike(result) ? result.then(observeReplacement) : observeReplacement(result);
   };
   const onResponse: NonNullable<ModelCallStreamOptions>["onResponse"] = (response, model) => {
     // Retrying providers can expose several responses; the terminal request status

@@ -81,10 +81,9 @@ export async function activateLibrarySelection(
   if (authorization.error) {
     throw new SessionMutationAuthorizationChangedError(authorization.error);
   }
-  const target = resolveSessionSharingTarget({
-    cfg: context.getRuntimeConfig(),
-    sessionKey: params.sessionKey,
-  });
+  const resolveTarget = () =>
+    resolveSessionSharingTarget({ cfg: context.getRuntimeConfig(), sessionKey: params.sessionKey });
+  const target = resolveTarget();
   if (!target) {
     throw new SkillLibraryError("NOT_FOUND", "Session not found.");
   }
@@ -96,10 +95,7 @@ export async function activateLibrarySelection(
     authority.assertCurrent();
     authorization.authorization?.assertCurrent();
     assertPreparedSkillLibrarySelection(plannedSelections);
-    const current = resolveSessionSharingTarget({
-      cfg: context.getRuntimeConfig(),
-      sessionKey: params.sessionKey,
-    });
+    const current = resolveTarget();
     if (
       !current ||
       current.entry.sessionId !== target.entry.sessionId ||

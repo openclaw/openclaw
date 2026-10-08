@@ -1,10 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
-import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
+import type {
+  WorkerOperationHandlers,
+  WorkerWriteOperationContext,
+} from "../state/worker-operation-registry.js";
 import { applyExecAuthorizationCommit } from "./exec-approvals-authorization.kernel.js";
 import { resolveExecApprovalsDisplayPath } from "./exec-approvals-config.js";
 import type {
@@ -13,6 +11,7 @@ import type {
 } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
+import { execPolicyMutationOperations } from "./exec-approvals-mutation.worker.js";
 import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
 import {
   snapshotFromExecApprovalsDatabase,
@@ -22,6 +21,7 @@ import {
   snapshotFromExecApprovalsRow,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
+import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 function applyAuthorizationBatch(
   db: DatabaseSync,
@@ -58,21 +58,28 @@ function applyAuthorizationBatch(
 
 export function commitExecAuthorizationsInWorker(
   input: { items: ExecAuthorizationCommitInput[] },
-  options: OpenClawStateDatabaseOptions,
+  context: WorkerWriteOperationContext,
 ): ExecAuthorizationCommitOutcome[] {
+  const options = context.stateOptions();
   assertNoPendingLegacyExecApprovals({ env: options.env });
-  const database = openOpenClawStateDatabase(options);
-  const read = () =>
-    snapshotFromExecApprovalsDatabase(database.db, resolveExecApprovalsDisplayPath(options.env));
-  const initial = read();
-  const prepared = applyAuthorizationBatch(database.db, initial, input.items);
-  if (prepared.snapshot.raw === initial.raw) {
-    return prepared.outcomes;
+  const displayPath = resolveExecApprovalsDisplayPath(options.env);
+  const mayWrite = input.items.some(
+    (item) =>
+      item.matches.length > 0 ||
+      (item.allowAlwaysDecision !== undefined && item.allowAlwaysDecision.kind !== "one-shot"),
+  );
+  if (!mayWrite) {
+    const { db } = context.open();
+    return applyAuthorizationBatch(
+      db,
+      snapshotFromExecApprovalsDatabase(db, displayPath),
+      input.items,
+    ).outcomes;
   }
-  return runOpenClawStateWriteTransaction(
+  return context.write(
     ({ db }) => {
-      // Policy may change while admission waits; only this authoritative pass commits.
-      const current = read();
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const current = snapshotFromExecApprovalsDatabase(db, displayPath);
       const committed = applyAuthorizationBatch(db, current, input.items);
       if (committed.snapshot.raw !== current.raw) {
         writeExecApprovalsConfigRow({
@@ -81,16 +88,14 @@ export function commitExecAuthorizationsInWorker(
           raw: committed.snapshot.raw ?? undefined,
         });
       }
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return committed.outcomes;
     },
-    { ...options, database },
     { operationLabel: "exec-approvals.commit-authorizations" },
   );
 }
 
 export const execAuthorizationOperations = {
-  "execApprovals.commitAuthorizations": (
-    input: { items: ExecAuthorizationCommitInput[] },
-    { open, stateOptions },
-  ) => commitExecAuthorizationsInWorker(input, { ...stateOptions(), database: open() }),
-} satisfies WorkerOperationHandlers;
+  ...execPolicyMutationOperations,
+  "execApprovals.commitAuthorizations": commitExecAuthorizationsInWorker,
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

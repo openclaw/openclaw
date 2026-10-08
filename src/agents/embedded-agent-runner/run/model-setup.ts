@@ -345,13 +345,15 @@ export async function resolveEmbeddedRunModelSetup(params: {
   let nativeCatalogFailure: { error: unknown } | undefined;
   const ownsSelectedNativeModel = (entry: ModelCatalogEntry) =>
     entry.provider === provider && entry.id === modelId && entry.nativeRuntime === agentHarness.id;
+  const hasSelectedNativeModel = () =>
+    catalog?.entries.some(ownsSelectedNativeModel) === true ||
+    catalog?.routeVariants.some(ownsSelectedNativeModel) === true;
   if (
     !nativeSessionRuntime &&
     pluginHarnessOwnsTransport &&
     agentHarness.loadModelCatalog &&
     params.preparedModelRuntime?.loadNativeModelCatalog &&
-    !catalog?.entries.some(ownsSelectedNativeModel) &&
-    !catalog?.routeVariants.some(ownsSelectedNativeModel)
+    !hasSelectedNativeModel()
   ) {
     try {
       catalog = await params.preparedModelRuntime.loadNativeModelCatalog({
@@ -369,10 +371,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     );
   }
   const nativeModelOwned =
-    nativeSessionRuntime !== undefined ||
-    (pluginHarnessOwnsTransport &&
-      (catalog?.entries.some(ownsSelectedNativeModel) === true ||
-        catalog?.routeVariants.some(ownsSelectedNativeModel) === true));
+    nativeSessionRuntime !== undefined || (pluginHarnessOwnsTransport && hasSelectedNativeModel());
   const modelConfigProvider = provider;
   let modelResolution;
   if (nativeModelOwned) {

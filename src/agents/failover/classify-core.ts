@@ -67,22 +67,20 @@ function isHtmlErrorResponse(raw: string): boolean {
   return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
 }
 
-// These provider phrases take precedence over the generic message tables.
-const PROVIDER_SPECIFIC_PATTERNS = [
-  {
-    test: /\bworkers_ai\b.*\bquota limit exceeded\b/i,
-    reason: "rate_limit",
-  },
-  {
-    test: /\bmodelnotreadyexception\b/i,
-    reason: "overloaded",
-  },
+// Ordered exceptions precede the generic message tables.
+const PRIORITY_MESSAGE_CLASSIFIERS: ReadonlyArray<
+  readonly [(raw: string, provider?: string) => boolean, FailoverReason]
+> = [
+  [isUnsupportedImageInputErrorMessage, "format"],
+  [isClaudeCliAuthError, "auth"],
+  [isSessionTranscriptValidationErrorMessage, "format"],
+  [isCliSessionExpiredErrorMessage, "session_expired"],
+  [isModelNotFoundErrorMessage, "model_not_found"],
+  [(raw) => /\bworkers_ai\b.*\bquota limit exceeded\b/i.test(raw), "rate_limit"],
+  [(raw) => /\bmodelnotreadyexception\b/i.test(raw), "overloaded"],
   // Groq does not currently ship a bundled provider hook.
-  {
-    test: /model(?:_is)?_deactivated|model has been deactivated/i,
-    reason: "model_not_found",
-  },
-] as const;
+  [(raw) => /model(?:_is)?_deactivated|model has been deactivated/i.test(raw), "model_not_found"],
+];
 function isTransportHtmlErrorStatus(status: number | undefined): boolean {
   return (
     status === 408 ||
@@ -98,26 +96,11 @@ function classifyFailoverClassificationFromMessage(
   if (isImageDimensionErrorMessage(raw) || isImageSizeError(raw)) {
     return null;
   }
-  if (isUnsupportedImageInputErrorMessage(raw)) {
-    return toReasonClassification("format");
-  }
-  if (isClaudeCliAuthError(raw, provider)) {
-    return toReasonClassification("auth");
-  }
-  if (isSessionTranscriptValidationErrorMessage(raw)) {
-    return toReasonClassification("format");
-  }
-  if (isCliSessionExpiredErrorMessage(raw)) {
-    return toReasonClassification("session_expired");
-  }
-  if (isModelNotFoundErrorMessage(raw)) {
-    return toReasonClassification("model_not_found");
-  }
-  const legacyProviderReason = PROVIDER_SPECIFIC_PATTERNS.find(({ test }) =>
-    test.test(raw),
-  )?.reason;
-  if (legacyProviderReason) {
-    return toReasonClassification(legacyProviderReason);
+  const priorityReason = PRIORITY_MESSAGE_CLASSIFIERS.find(([matches]) =>
+    matches(raw, provider),
+  )?.[1];
+  if (priorityReason) {
+    return toReasonClassification(priorityReason);
   }
   if (isContextOverflowErrorFromTables(raw)) {
     return { kind: "context_overflow" };

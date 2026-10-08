@@ -171,9 +171,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     const cleanups = generationCleanups.splice(0);
     const settled = Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(reason))).then(
       (results) => {
-        if (results.some((result) => result.status === "rejected")) {
-          retiredCleanupFailed = true;
-        }
+        retiredCleanupFailed ||= results.some((result) => result.status === "rejected");
       },
     );
     retiringGenerations.add(settled);
@@ -324,13 +322,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         githubPublicationAvailable: attempt.githubPublicationAvailable,
         abortSignal,
         skillWorkshop: {
-          env: attempt.skillWorkshopProposalEnv,
-          proposalOnly: attempt.skillWorkshopProposalOnly,
-          ...(attempt.skillWorkshopUpdateProposals ? { updateProposals: true } : {}),
-          ...(attempt.skillWorkshopAutonomousCapture ? { autonomousCapture: true } : {}),
-          origin: attempt.skillWorkshopOrigin,
-          proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
-          proposalRevision: attempt.skillWorkshopProposalRevision,
+          ...(attempt.skillWorkshopReviewOf ? { reviewOf: attempt.skillWorkshopReviewOf } : {}),
           libraryAuthoring: attempt.skillLibraryAuthoring,
         },
         modelCompat: extractModelCompat(attempt.model),

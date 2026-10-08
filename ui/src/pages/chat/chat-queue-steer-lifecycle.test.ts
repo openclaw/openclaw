@@ -191,9 +191,12 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
       const delivered = [original.content, "Already visible output.", queued.text];
       expect.soft(snapshot(), "request dispatch").toEqual({ thread: delivered, queue: [] });
       let continued = false;
+      let prefixPersisted = false;
       const continueOutput = () => {
         continued = true;
-        history.inFlightRun!.text = "Already visible output. Later output.";
+        history.inFlightRun!.text = prefixPersisted
+          ? "Later output."
+          : "Already visible output. Later output.";
         handleChatGatewayEvent(host, {
           sessionKey,
           runId: "active-run",
@@ -202,7 +205,13 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
         });
       };
       const expected = () => ({
-        thread: [...delivered, ...(continued ? ["Later output."] : [])],
+        thread: [
+          original.content,
+          ...(prefixPersisted
+            ? ["Already visible output.", ...(continued ? ["Later output."] : [])]
+            : [continued ? "Already visible output. Later output." : "Already visible output."]),
+          queued.text,
+        ],
         queue: [],
       });
       if (ackMode === "retry") {
@@ -219,7 +228,7 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
         transport = createDeferred();
         retry!.click();
         await retryRequested.promise;
-        expect.soft(snapshot(), "retry retains original boundary").toEqual(expected());
+        expect.soft(snapshot(), "retry retains original run ownership").toEqual(expected());
       }
       (ackMode === "retry" ? retryAck : ack).resolve({
         runId: queued.sendRunId,
@@ -259,6 +268,8 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
             __openclaw: { id: "pre-steer", seq: 2, runId: "active-run" },
           },
         ];
+        prefixPersisted = true;
+        history.inFlightRun!.text = "";
         await loadChatHistory(host);
         const cached = readChatSessionSnapshot(host.chatMessagesBySession!, host, { sessionKey });
         expect(cached).not.toBeNull();
@@ -292,10 +303,7 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
       if (!continued) {
         continueOutput();
       }
-      expect.soft(snapshot(), "continued output").toEqual({
-        thread: [...delivered, "Later output."],
-        queue: [],
-      });
+      expect.soft(snapshot(), "continued output").toEqual(expected());
       const steer = {
         role: "user",
         content: queued.text,
@@ -313,12 +321,11 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
       });
       history.messages = [...history.messages!, steer];
       history.pendingInputs = { items: [], total: 0, queuedCount: 0 };
-      history.inFlightRun!.text = "Already visible output. Later output.";
+      history.inFlightRun!.text = prefixPersisted
+        ? "Later output."
+        : "Already visible output. Later output.";
       await loadChatHistory(host);
-      expect.soft(snapshot(), "persisted copy replaces optimistic").toEqual({
-        thread: [...delivered, "Later output."],
-        queue: [],
-      });
+      expect.soft(snapshot(), "persisted copy replaces optimistic").toEqual(expected());
       history.messages = [
         original,
         {
@@ -345,7 +352,7 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
       };
       await loadChatHistory(host);
       expect.soft(snapshot(), "finished history").toEqual({
-        thread: [...delivered, "Later output."],
+        thread: [original.content, "Already visible output.", "Later output.", queued.text],
         queue: [],
       });
     } finally {

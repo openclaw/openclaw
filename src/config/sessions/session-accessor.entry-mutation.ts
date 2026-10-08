@@ -19,6 +19,8 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
   prepareSqliteScope,
+  resolveSqliteWriteAdmissionScope,
+  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -385,8 +387,27 @@ export async function createSessionEntryWithTranscript<TError = string>(
   const agentId = captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey);
   const target = { ...captured, agentId, storePath };
   const incognito = captureIncognitoSessionBinding(target);
+  // A sibling's cold registration must not invalidate discovery of this same store.
+  // Release admission before creation callbacks acquire their own commit custody.
+  const admission =
+    isMainThread && !incognito ? resolveSqliteWriteAdmissionScope(target) : undefined;
+  const prepare = async () => {
+    const resolved = await prepareSqliteScope(target);
+    if (admission && resolved.path !== admission.path) {
+      throw new Error("Session creation preparation changed its reserved database path");
+    }
+    return resolved;
+  };
   const resolved = captureLifecycleDatabaseScope(
-    isMainThread && !incognito ? await prepareSqliteScope(target) : resolveSqliteScope(target),
+    isMainThread && !incognito
+      ? admission
+        ? await runExclusiveSqliteSessionWrite(
+            admission,
+            prepare,
+            "session.entry.create-with-transcript",
+          )
+        : await prepare()
+      : resolveSqliteScope(target),
   );
   return createSessionEntryWithTranscriptInScope(resolved, createEntry, options);
 }

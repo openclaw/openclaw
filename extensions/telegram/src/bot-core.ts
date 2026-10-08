@@ -303,59 +303,53 @@ export async function createTelegramBotCore(
     return resolveTelegramScopedGroupConfig(turnTelegramCfg, chatId, messageThreadId);
   };
 
-  const { nativeCommandNames, nativeCommandCallbackDispatcher } = registerTelegramNativeCommands({
+  const botContext = {
     bot,
-    cfg,
     runtime,
+    opts: runtimeOpts,
+    telegramDeps,
+    resolveTelegramGroupConfig,
+  };
+  const { nativeCommandNames, nativeCommandCallbackDispatcher } = registerTelegramNativeCommands({
+    ...botContext,
+    cfg,
     accountId: account.accountId,
     telegramCfg,
     mediaMaxBytes,
     nativeEnabled,
     nativeSkillsEnabled,
     resolveGroupPolicy,
-    resolveTelegramGroupConfig,
     shouldSkipUpdate,
-    opts: runtimeOpts,
     telegramDeps: {
       ...telegramDeps,
       sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
     },
   });
-
-  const processMessage = createTelegramMessageProcessor({
+  const messageContext = {
+    ...botContext,
     nativeCommandNames,
-    bot,
-    account,
     logger,
     resolveGroupActivation,
     resolveGroupRequireMention,
-    resolveTelegramGroupConfig,
+  };
+  const processMessage = createTelegramMessageProcessor({
+    ...messageContext,
+    account,
     sendChatActionHandler,
-    runtime,
     buildContext: opts.buildContext,
-    opts: runtimeOpts,
-    telegramDeps,
   });
 
   const handlers = createTelegramHandlers({
-    nativeCommandNames,
+    ...messageContext,
     cfg,
     accountId: account.accountId,
     ownerAgentId,
-    bot,
-    opts: runtimeOpts,
     telegramTransport,
-    runtime,
     mediaMaxBytes,
     telegramCfg,
     resolveGroupPolicy,
-    resolveGroupActivation,
-    resolveGroupRequireMention,
-    resolveTelegramGroupConfig,
     shouldSkipUpdate,
     processMessage,
-    logger,
-    telegramDeps,
   });
 
   handlers.register(nativeCommandCallbackDispatcher);

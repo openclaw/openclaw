@@ -88,20 +88,23 @@ describe("published baseline startup admission", () => {
         },
         { docker_lanes: "onboard", label: "onboard" },
       ]);
-      expect(fixture.report.baselines).toEqual([
-        expect.objectContaining({
-          baseline: "openclaw@2026.8.33",
-          status: "skipped",
-          reason: expect.stringContaining("unusable published baseline"),
-          error: expect.stringContaining("Cannot find package fixture-runtime"),
-          scenarios: ["legacy-operator-state", "base"],
-        }),
-        expect.objectContaining({
-          baseline: "openclaw@2026.8.34",
-          status: "usable",
-          scenarios: ["legacy-operator-state", "base"],
-        }),
-      ]);
+      expect(fixture.report.baselines).toHaveLength(2);
+      expect(fixture.report.baselines).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            baseline: "openclaw@2026.8.33",
+            status: "skipped",
+            reason: expect.stringContaining("unusable published baseline"),
+            error: expect.stringContaining("Cannot find package fixture-runtime"),
+            scenarios: ["legacy-operator-state", "base"],
+          }),
+          expect.objectContaining({
+            baseline: "openclaw@2026.8.34",
+            status: "usable",
+            scenarios: ["legacy-operator-state", "base"],
+          }),
+        ]),
+      );
       const installs = readFileSync(fixture.installs, "utf8")
         .trim()
         .split("\n")
@@ -154,7 +157,12 @@ describe("published baseline startup admission", () => {
     ({ failure, error }) => {
       const fixture = runFixture(failure);
       expect(fixture.result.status).not.toBe(0);
-      expect(fixture.report.baselines[0]).toMatchObject({
+      expect(
+        fixture.report.baselines.find(
+          (entry: { baseline: string }) => entry.baseline === "openclaw@2026.8.33",
+        ),
+      ).toMatchObject({
+        baseline: "openclaw@2026.8.33",
         status: "failed",
         error: expect.stringContaining(error),
       });

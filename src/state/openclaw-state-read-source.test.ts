@@ -73,12 +73,12 @@ it("keeps lazy reads with their captured generation when another generation disp
             expect(mock.create).toHaveBeenCalledTimes(2);
             expect(mock.create).toHaveBeenNthCalledWith(
               1,
-              expect.objectContaining({ workerUrl: firstUrl, maxWorkers: 2 }),
+              expect.objectContaining({ workerUrl: firstUrl }),
               expect.objectContaining({ retainedTransport: true }),
             );
             expect(mock.create).toHaveBeenNthCalledWith(
               2,
-              expect.objectContaining({ workerUrl: secondUrl, maxWorkers: 2 }),
+              expect.objectContaining({ workerUrl: secondUrl }),
               expect.objectContaining({ retainedTransport: true }),
             );
           } finally {

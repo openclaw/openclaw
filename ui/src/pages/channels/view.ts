@@ -21,7 +21,12 @@ import { renderChannelRefreshAction, resolveChannelDisplayState } from "./view.s
 import type { ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
-type ChannelCardState = "running" | "configured" | "attention";
+const CHANNEL_CARD_STATES = {
+  running: { kind: "ok", labelKey: "channels.hub.stateRunning" },
+  configured: { kind: "muted", labelKey: "channels.hub.stateConfigured" },
+  attention: { kind: "danger", labelKey: "channels.hub.stateAttention" },
+} as const;
+type ChannelCardState = keyof typeof CHANNEL_CARD_STATES;
 
 const RECOMMENDED_CHANNEL_ORDER: string[] = [
   "whatsapp",
@@ -206,16 +211,8 @@ function resolveRowState(key: string, props: ChannelsProps): ChannelCardState {
 }
 
 function rowStatus(state: ChannelCardState) {
-  switch (state) {
-    case "running":
-      return renderSettingsStatus({ kind: "ok", label: t("channels.hub.stateRunning") });
-    case "configured":
-      return renderSettingsStatus({ kind: "muted", label: t("channels.hub.stateConfigured") });
-    case "attention":
-      return renderSettingsStatus({ kind: "danger", label: t("channels.hub.stateAttention") });
-    default:
-      return state satisfies never;
-  }
+  const { kind, labelKey } = CHANNEL_CARD_STATES[state];
+  return renderSettingsStatus({ kind, label: t(labelKey) });
 }
 
 function lastActivityLine(key: string, props: ChannelsProps): string | null {

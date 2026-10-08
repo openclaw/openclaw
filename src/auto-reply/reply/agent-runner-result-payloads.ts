@@ -314,16 +314,6 @@ export async function prepareReplyAgentPayloads(state: {
     didLogHeartbeatStrip = result.didLogHeartbeatStrip;
     return result.replyPayloads;
   };
-  const returnPreparedFallbackPayload = async (
-    payload: ReplyPayload,
-  ): Promise<ReplyPayload | undefined> => {
-    const [preparedPayload] = await buildFinalPayloads([payload]);
-    if (!preparedPayload) {
-      return undefined;
-    }
-    await signalTypingIfNeeded([preparedPayload], typingSignals);
-    return returnWithQueuedFollowupDrain(preparedPayload);
-  };
   const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
     const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
       fallbackTransition,
@@ -342,7 +332,12 @@ export async function prepareReplyAgentPayloads(state: {
       ),
     );
     opts?.onAgentRunTerminalOutcome?.("failed");
-    return returnPreparedFallbackPayload(silentFallbackFailurePayload);
+    const [preparedPayload] = await buildFinalPayloads([silentFallbackFailurePayload]);
+    if (!preparedPayload) {
+      return undefined;
+    }
+    await signalTypingIfNeeded([preparedPayload], typingSignals);
+    return returnWithQueuedFollowupDrain(preparedPayload);
   };
   const finishEmptyReply = async () => {
     if (completion.outcome === "silent" || completion.outcome === "blocked") {
@@ -593,10 +588,18 @@ export async function prepareReplyAgentPayloads(state: {
   const statusPayload = guardedReplyPayloads.find(
     (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
   );
+  // Media admission owns runs under the tools' runtime policy key, not a shared main key.
+  const mediaSessionKey =
+    implicitContinuation && !continuationOwner
+      ? (runtimePolicySessionKey ?? sessionKey ?? followupRun.run.sessionKey)
+      : undefined;
   if (statusPayload) {
     await attachWaitingStatusProgressContinuation({
       payload: statusPayload,
       acceptedSessionSpawns: runResult.acceptedSessionSpawns,
+      mediaRequester: mediaSessionKey
+        ? { sessionKey: mediaSessionKey, agentId: followupRun.run.agentId }
+        : undefined,
       operation: replyOperation,
     });
   }

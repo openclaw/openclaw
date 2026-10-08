@@ -1087,8 +1087,10 @@ describe("release decision policy", () => {
     ]);
   });
 
-  it("preserves the last valid snapshot through a transient error and then recovers", async () => {
-    const message = "HTTP 403: secondary rate limit";
+  it.each([
+    "HTTP 403: secondary rate limit",
+    "stream error: stream ID 47; CANCEL; received from peer",
+  ])("preserves the last valid snapshot through %s and then recovers", async (message) => {
     const planned = child("normalCi");
     const previous = {
       ...planned,

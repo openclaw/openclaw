@@ -158,6 +158,18 @@ describe("native subagent completion worker admission", () => {
       expect(
         database.db.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get()?.count,
       ).toBe(1);
+      database.db
+        .prepare("UPDATE subagent_runs SET payload_json = payload_json || ' ' WHERE run_id = ?")
+        .run(input.subagent.runId);
+      await expect(admit()).resolves.toMatchObject({ claimed: false, status: "pending" });
+      const updateAcknowledged = vi.fn((rows: ReadonlyMap<string, typeof input.subagent>) => ({
+        value: undefined,
+        postimages: new Map([
+          [input.subagent.runId, { ...rows.get(input.subagent.runId)!, label: "after replay" }],
+        ]),
+      }));
+      await mutateSubagentRuns([input.subagent.runId], updateAcknowledged);
+      expect(updateAcknowledged).toHaveBeenCalledOnce();
     });
   });
 

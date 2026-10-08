@@ -305,6 +305,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     emitWarnings: true,
   });
 
+  const { recoverCommandOwnerTargetKinds } = await import("./doctor-command-owner-recovery.js");
+  applyConfigMutation(
+    runWithCurrentPluginMetadata(state.candidate, () =>
+      recoverCommandOwnerTargetKinds({ config: state.candidate, snapshot }),
+    ),
+    {
+      fixHint: `Run "${doctorFixCommand}" to restore recorded command-owner target kinds.`,
+      sanitize: true,
+      emitWarnings: true,
+    },
+  );
+
   const { repairUnownedChannelAccountBindings } =
     await import("./doctor/shared/legacy-config-binding-repair.js");
   applyConfigMutation(

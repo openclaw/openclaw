@@ -226,6 +226,23 @@ export async function resolveApiKeyForProviderCore(input: {
       profileId: requestedProfileId,
       preferredProfile,
     }));
+  const projectProfileAuth = (
+    resolved: NonNullable<Awaited<ReturnType<typeof resolveApiKeyForProfile>>>,
+    resolvedProfileId: string,
+    credential: AuthProfileStore["profiles"][string] | undefined,
+    store: AuthProfileStore,
+  ) => {
+    const mode = resolved.profileType ?? credential?.type;
+    return authConfig.projectResolvedProfileAuth({
+      apiKey: resolved.apiKey,
+      enabled: params.secretSentinels,
+      profileId: resolvedProfileId,
+      provider,
+      store,
+      mode: mode ? authConfig.profileTypeToAuthMode(mode) : "api-key",
+      authFlow: credential?.type === "oauth" ? credential.authFlow : undefined,
+    });
+  };
 
   if (profileId) {
     const awsSdkProfileAuth = authConfig.resolveConfiguredAwsSdkProfileAuth({
@@ -281,16 +298,7 @@ export async function resolveApiKeyForProviderCore(input: {
         `Auth profile "${resolvedProfileId}" is not compatible with the resolved model endpoint for "${provider}".`,
       );
     }
-    const mode = resolved.profileType ?? credential?.type;
-    const result = authConfig.projectResolvedProfileAuth({
-      apiKey: resolved.apiKey,
-      enabled: params.secretSentinels,
-      profileId: resolvedProfileId,
-      provider,
-      store,
-      mode: mode ? authConfig.profileTypeToAuthMode(mode) : "api-key",
-      authFlow: credential?.type === "oauth" ? credential.authFlow : undefined,
-    });
+    const result = projectProfileAuth(resolved, resolvedProfileId, credential, store);
     assertAuthModeAllowedForModel({
       provider,
       modelApi: params.modelApi,
@@ -536,16 +544,7 @@ export async function resolveApiKeyForProviderCore(input: {
       if (resolved) {
         const resolvedProfileId = resolved.profileId ?? candidate;
         const credential = resolved.credential ?? store.profiles[resolvedProfileId];
-        const mode = resolved.profileType ?? credential?.type;
-        const result = authConfig.projectResolvedProfileAuth({
-          apiKey: resolved.apiKey,
-          enabled: params.secretSentinels,
-          profileId: resolvedProfileId,
-          provider,
-          store,
-          mode: mode ? authConfig.profileTypeToAuthMode(mode) : "api-key",
-          authFlow: credential?.type === "oauth" ? credential.authFlow : undefined,
-        });
+        const result = projectProfileAuth(resolved, resolvedProfileId, credential, store);
         if (!modeAllowed(result.mode, result.authFlow)) {
           continue;
         }

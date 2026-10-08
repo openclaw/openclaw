@@ -33,6 +33,7 @@ import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
+import { buildCompactionFailureResult } from "./compact-reasons.js";
 import { runForegroundCompactionWork } from "./compact.foreground-work.js";
 import type {
   CompactEmbeddedAgentSessionParams,
@@ -53,15 +54,6 @@ import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 
-function lockedHarnessCompactionFailure(runtime: string): EmbeddedAgentCompactResult {
-  return {
-    ok: false,
-    compacted: false,
-    reason: `Model selection is locked to native agent harness "${runtime}"; generic compaction is unavailable.`,
-    failure: { reason: "model_selection_locked" },
-  };
-}
-
 export async function compactNativeCliSession(params: {
   runtime: string | undefined;
   compactParams: CompactEmbeddedAgentSessionParams;
@@ -79,20 +71,16 @@ export async function compactNativeCliSession(params: {
   }
   const manualCompaction = backend.manualCompaction;
   if (!manualCompaction) {
-    return {
-      ok: false,
-      compacted: false,
-      reason: `CLI backend "${runtime}" owns compaction but does not support manual compaction.`,
-    };
+    return buildCompactionFailureResult(
+      `CLI backend "${runtime}" owns compaction but does not support manual compaction.`,
+    );
   }
   const cliSessionBinding = params.compactParams.cliSessionBinding;
   const cliSessionId = (cliSessionBinding?.sessionId ?? params.compactParams.cliSessionId)?.trim();
   if (!cliSessionId) {
-    return {
-      ok: false,
-      compacted: false,
-      reason: `CLI backend "${runtime}" cannot manually compact without a resumable native session.`,
-    };
+    return buildCompactionFailureResult(
+      `CLI backend "${runtime}" cannot manually compact without a resumable native session.`,
+    );
   }
   const { runCliAgent } = await import("../cli-runner.js");
   const runId = `${params.compactParams.runId ?? params.compactParams.sessionId}:native-compact`;
@@ -147,21 +135,17 @@ export async function compactNativeCliSession(params: {
         abortSignal: params.compactParams.abortSignal,
       });
     };
-    if (params.runControlOperation) {
-      await params.runControlOperation(runControlOperation);
-    } else {
-      await runControlOperation();
-    }
+    await (params.runControlOperation
+      ? params.runControlOperation(runControlOperation)
+      : runControlOperation());
   } catch (err) {
     const signal = params.compactParams.abortSignal;
     if (signal?.aborted && (isAbortError(err) || err === signal.reason)) {
       throw err;
     }
-    return {
-      ok: false,
-      compacted: false,
-      reason: `CLI backend "${runtime}" failed to compact its native session: ${formatErrorMessage(err)}`,
-    };
+    return buildCompactionFailureResult(
+      `CLI backend "${runtime}" failed to compact its native session: ${formatErrorMessage(err)}`,
+    );
   } finally {
     preparedRunAdmission.close();
   }
@@ -185,26 +169,6 @@ function resolveCompactionFallbacksOverride(
       sessionKey: params.sessionKey,
     })
   );
-}
-
-function classifyCompactionFallbackResult(
-  result: EmbeddedAgentCompactResult,
-  provider: string,
-  model: string,
-) {
-  if (result.ok) {
-    return null;
-  }
-  const reason = result.reason?.trim();
-  if (!reason) {
-    return null;
-  }
-  const failureError = Object.assign(new Error(result.failure?.rawError ?? reason), {
-    status: result.failure?.status,
-    code: result.failure?.code,
-  });
-  const failoverError = coerceToFailoverError(failureError, { provider, model });
-  return failoverError ? { error: failoverError } : null;
 }
 
 /**
@@ -304,7 +268,10 @@ export async function compactEmbeddedAgentSessionDirect(
     lockedHarnessRuntime !== "openclaw" &&
     !transcriptBytePreflightAuthority
   ) {
-    return lockedHarnessCompactionFailure(lockedHarnessRuntime);
+    return buildCompactionFailureResult(
+      `Model selection is locked to native agent harness "${lockedHarnessRuntime}"; generic compaction is unavailable.`,
+      { reason: "model_selection_locked" },
+    );
   }
   const sharedRuntimeWorkspace = resolveSharedPluginRuntimeWorkspace(
     {
@@ -509,8 +476,18 @@ export async function compactEmbeddedAgentSessionDirect(
               pluginRegistry: preparedModelRuntime.pluginRegistry!,
             });
           },
-          classifyResult: ({ result, provider, model }) =>
-            classifyCompactionFallbackResult(result, provider, model),
+          classifyResult: ({ result, provider, model }) => {
+            const reason = result.ok ? undefined : result.reason?.trim();
+            if (!reason) {
+              return null;
+            }
+            const failureError = Object.assign(new Error(result.failure?.rawError ?? reason), {
+              status: result.failure?.status,
+              code: result.failure?.code,
+            });
+            const failoverError = coerceToFailoverError(failureError, { provider, model });
+            return failoverError ? { error: failoverError } : null;
+          },
           run: async (provider, model) => {
             const isPrimaryCandidate =
               provider === resolvedPrimaryCandidate?.provider &&
@@ -539,11 +516,9 @@ export async function compactEmbeddedAgentSessionDirect(
         return compactPrepared();
       });
     } catch (err) {
-      return {
-        ok: false,
-        compacted: false,
-        reason: isFallbackSummaryError(err) ? err.message : formatErrorMessage(err),
-      };
+      return buildCompactionFailureResult(
+        isFallbackSummaryError(err) ? err.message : formatErrorMessage(err),
+      );
     }
   }, requestedParams.abortSignal);
 }

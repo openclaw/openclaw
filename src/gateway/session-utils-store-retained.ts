@@ -182,6 +182,11 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
               storeKeys: [sessionKey],
               store: read.entry ? { [sessionKey]: read.entry } : {},
               readSource: { agentId: actor.agentId, path: actor.path },
+              capturedReadSource: {
+                agentId: actor.agentId,
+                path: actor.path,
+                databaseIdentity: actor.identity.incarnation,
+              },
             },
             params.includeMembership ? new Map([[sessionKey, members]]) : new Map(),
             assertCurrent,

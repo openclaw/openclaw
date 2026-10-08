@@ -6,9 +6,8 @@ import {
   validateGatewaySuspendResumeParams,
   validateGatewaySuspendStatusParams,
   validateGatewaySuspendHandoffParams,
-  type GatewaySuspendPrepareResult,
-  type GatewaySuspendStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { waitForGatewayDrain } from "../../infra/gateway-drain.js";
 import {
   armGatewaySuspendHandoff,
   getGatewaySuspendStatus,
@@ -32,17 +31,6 @@ function schedulerRecoveryError(retryAfterMs: number) {
   });
 }
 
-function logDraining(
-  result: GatewaySuspendPrepareResult | GatewaySuspendStatusResult,
-  log: GatewayRequestContext["logGateway"],
-): void {
-  if (result.status === "draining") {
-    log.info(
-      `DRAINING activeCount=${result.activeCount} blockers=${result.blockers.map(({ kind, count }) => `${kind}:${count}`).join(",")} holders=${JSON.stringify(result.blockers.map(({ message }) => message))} custody=${result.writeCustody?.some(({ count }) => count > 0) ? "held" : "clear"}`,
-    );
-  }
-}
-
 function respondSuspendStatus(
   result: ReturnType<typeof prepareGatewaySuspend> | ReturnType<typeof getGatewaySuspendStatus>,
   context: GatewayRequestContext,
@@ -62,7 +50,11 @@ function respondSuspendStatus(
   } else if (result.status === "recovering") {
     respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
   } else {
-    logDraining(result, context.logGateway);
+    if (result.status === "draining") {
+      context.logGateway.info(
+        `DRAINING activeCount=${result.activeCount} blockers=${result.blockers.map(({ kind, count }) => `${kind}:${count}`).join(",")} holders=${JSON.stringify(result.blockers.map(({ message }) => message))} custody=${result.writeCustody?.some(({ count }) => count > 0) ? "held" : "clear"}`,
+      );
+    }
     respond(true, result);
   }
 }
@@ -132,6 +124,23 @@ export const suspendHandlers: GatewayRequestHandlers = {
       return;
     }
     const suspensionId = params.suspensionId.trim();
+    // A policy check must let transient final writes settle, without interrupting
+    // admitted work or treating a drain lease as authority to stop it.
+    const settleDeadline = performance.now() + 15_000;
+    await waitForGatewayDrain(
+      () => {
+        const status = getGatewaySuspendStatus(suspensionId, params.includeLifecycle === true);
+        return {
+          idle:
+            status.status !== "draining" ||
+            !status.writeCustody?.some(({ count }) => count > 0) ||
+            performance.now() >= settleDeadline,
+        };
+      },
+      15_000,
+      { pollMs: 250 },
+    );
+    // Lease expiry, replacement, and new writes can race the awaited observation.
     const result = getGatewaySuspendStatus(suspensionId, params.includeLifecycle === true);
     respondSuspendStatus(result, context, respond, "a different gateway suspension is prepared");
   },

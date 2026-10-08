@@ -23,6 +23,11 @@ cannot parse its catalog. A known legacy index defect must not replace that
 refusal with advice to repair the database using the older build. Doctor checks
 compatibility before stopping the Gateway service.
 
+Target-release checks distinguish the target's schema support from the running
+inspector's capabilities. When shared state is too new for the target but still
+readable by the inspector, preflight continues checking agent stores and reports
+all incompatibilities without modifying the source files.
+
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
 Linux Node worker cleanup uses the additive `node_worker_launch_process_scopes`
@@ -456,8 +461,8 @@ The runner records the applied content version in the existing
 deferred, new code uses that content version, and both `PRAGMA user_version` and
 `schema_meta.schema_version` retain the previous published version. Content and
 its marker commit together. Reopening skips migration steps already covered by
-the marker, including the schema-16 Skill Workshop rebuild; it does not infer
-completion from table shape or repeat the rebuild. This requires no new table,
+the marker; it does not infer completion from table shape or repeat a
+completed rebuild. This requires no new table,
 configuration option, or environment override.
 
 Current content is ready for readers even while its version is unpublished.

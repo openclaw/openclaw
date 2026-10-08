@@ -1,6 +1,7 @@
 // Plans grouped targeted Docker lane matrix entries without installed dependencies.
 import { fileURLToPath } from "node:url";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";
 import { expandUpdateFirstHopCompatLanes } from "./lib/update-first-hop-lanes.mjs";
 import {
   assertSupportedUpgradeSurvivorBaselineSpec,
@@ -14,6 +15,10 @@ import {
 const BASELINE_SHARDED_LANES = new Set(["published-upgrade-survivor", "update-migration"]);
 // The 62-minute update-restart-auth lane needs room for runner setup and artifact upload.
 const LONG_LANE_JOB_TIMEOUT_MINUTES = new Map([["update-restart-auth", 75]]);
+// Candidate checks 37729815008 queued these behind the expanded upgrade matrix:
+// restart-auth took 27m27s, plugin-update 25m38s, and root-managed upgrade 15m34s.
+// Admit their existing groups first, without changing grouping or runner capacity.
+const LONG_LANE_ORDER = ["update-restart-auth", "plugin-update", "root-managed-vps-upgrade"];
 
 function splitTokens(raw) {
   return [
@@ -74,6 +79,19 @@ export function planTargetedDockerLaneGroups({
   baselineSpecs.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
   assertSupportedUpgradeSurvivorBaselineSpec(predecessor);
   const hasExpandedSurvivorScenarios = splitTokens(upgradeSurvivorScenarios).length > 0;
+  // The same run's September scenario jobs took 14-16 minutes at the median,
+  // versus about 10 minutes for June/August. Start recent pinned cohorts first;
+  // unresolved tags retain their caller order until baseline resolution pins them.
+  if (
+    hasExpandedSurvivorScenarios &&
+    baselineSpecs.every((baseline) => parseReleaseVersion(baseline.replace(/^openclaw@/u, "")))
+  ) {
+    baselineSpecs.sort(
+      (left, right) =>
+        compareReleaseVersions(right.replace(/^openclaw@/u, ""), left.replace(/^openclaw@/u, "")) ??
+        0,
+    );
+  }
   const survivorScenarios = selectedLanes.some((lane) => BASELINE_SHARDED_LANES.has(lane))
     ? parseUpgradeSurvivorScenarios(upgradeSurvivorScenarios)
     : [];
@@ -199,6 +217,16 @@ export function planTargetedDockerLaneGroups({
     throw new Error(
       `Targeted Docker coverage requires ${groups.length} jobs, exceeding the GitHub Actions matrix limit of 256. Split the requested baselines or scenarios across workflow runs; no coverage was dropped.`,
     );
+  }
+  if (hasExpandedSurvivorScenarios) {
+    const priority = (group) =>
+      Math.min(
+        ...splitTokens(group.docker_lanes).map((lane) => {
+          const index = LONG_LANE_ORDER.indexOf(lane);
+          return index < 0 ? LONG_LANE_ORDER.length : index;
+        }),
+      );
+    groups.sort((left, right) => priority(left) - priority(right));
   }
   return groups;
 }

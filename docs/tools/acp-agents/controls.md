@@ -32,7 +32,9 @@ The OpenClaw agent that owns a session is separate from the external harness
 selected by ACP. For example, a session owned by `work` can run the `claude`
 harness. Owner-aware manager calls carry `agentId`; `agent` remains the harness
 name. Configured bindings use their OpenClaw agent owner and their configured
-ACP harness independently. Free ACP spawns keep their existing harness namespace.
+ACP harness independently. `sessions_spawn` uses the requester as owner for raw
+harnesses and the configured agent as owner for ACP aliases. `/acp spawn`
+retains its existing harness namespace.
 
 Bare keys such as `global` require an explicit owner when ownership is explicit.
 ACP keeps arbitrary logical keys such as `shared-project` unchanged; ACPX scopes

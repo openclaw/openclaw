@@ -30,7 +30,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   getOpenClawStateRuntimeSchema,
-  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
 } from "../state/openclaw-state-schema-compatibility.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -247,7 +247,7 @@ it("preserves older readers and version markers when watcher provenance is first
       /^ {2}(?:watcher_store_path|requester_store_path|controller_store_path) TEXT,\n/gm,
       "",
     ),
-    STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+    STATE_RUNTIME_SCHEMA_COMPATIBILITY,
   );
   reopened.db
     .prepare(

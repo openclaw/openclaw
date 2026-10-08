@@ -80,7 +80,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     };
     state.assertProgressCurrent();
     if (shouldRouteToOriginating) {
-      await sendPayloadAsync(replyPayload, undefined, false);
+      await sendPayloadAsync(replyPayload);
       return;
     }
     markInboundDedupeReplayUnsafe();

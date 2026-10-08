@@ -1,5 +1,5 @@
 import {
-  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
@@ -56,11 +56,10 @@ export async function maybeHandleModelDirectiveInfo(params: {
     return undefined;
   }
 
-  const rawDirective = normalizeOptionalString(params.directives.rawModelDirective);
-  const directive = rawDirective ? normalizeLowercaseStringOrEmpty(rawDirective) : undefined;
+  const directive = normalizeOptionalLowercaseString(params.directives.rawModelDirective);
   const isLiteralModelDirective = params.directives.modelDirectiveSource !== "alias";
   const wantsStatus = isLiteralModelDirective && directive === "status";
-  const wantsSummary = isLiteralModelDirective && !rawDirective;
+  const wantsSummary = isLiteralModelDirective && !directive;
   const wantsLegacyList = isLiteralModelDirective && directive === "list";
   if (!wantsSummary && !wantsStatus && !wantsLegacyList) {
     return undefined;
@@ -117,8 +116,11 @@ export async function maybeHandleModelDirectiveInfo(params: {
     ...modelParams,
     sessionEntry: completedModel ?? params.sessionEntry,
   });
+  const lines = [
+    `Current: ${modelRefs.selected.label}${modelRefs.activeDiffers ? " (selected)" : ""}`,
+    modelRefs.activeDiffers ? `Active: ${modelRefs.active.label} (runtime)` : null,
+  ].filter((line): line is string => Boolean(line));
   if (wantsSummary) {
-    const current = modelRefs.selected.label;
     const thinkingRuntime = resolveEffectiveAgentRuntime({
       cfg: params.cfg,
       provider: params.provider,
@@ -134,10 +136,6 @@ export async function maybeHandleModelDirectiveInfo(params: {
       catalog: params.thinkingCatalog,
       agentRuntime: thinkingRuntime,
     });
-    const thinkingLine = `Think: ${effectiveThinkLevel} (change with /think <level>)`;
-    const activeRuntimeLine = modelRefs.activeDiffers
-      ? `Active: ${modelRefs.active.label} (runtime)`
-      : null;
     const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
     const channelData = commandPlugin?.commands?.buildModelBrowseChannelData?.();
     const instructions = channelData
@@ -159,14 +157,10 @@ export async function maybeHandleModelDirectiveInfo(params: {
         ];
     return {
       text: [
-        `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
-        activeRuntimeLine,
-        thinkingLine,
-        "",
+        ...lines,
+        `Think: ${effectiveThinkLevel} (change with /think <level>)`,
         ...instructions,
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      ].join("\n"),
       ...(channelData ? { channelData } : {}),
     };
   }
@@ -215,15 +209,11 @@ export async function maybeHandleModelDirectiveInfo(params: {
   });
   const authByProvider = prepared.providerAuthLabels;
 
-  const current = modelRefs.selected.label;
-  const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
-  const lines = [
-    `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
-    modelRefs.activeDiffers ? `Active: ${modelRefs.active.label} (runtime)` : null,
-    `Default: ${defaultLabel}`,
+  lines.push(
+    `Default: ${params.defaultProvider}/${params.defaultModel}`,
     `Agent: ${params.activeAgentId}`,
     `Auth store: ${shortenHomePath(resolveAuthStorePathForDisplay(params.agentDir))}`,
-  ].filter((line): line is string => Boolean(line));
+  );
   if (params.resetModelOverride) {
     lines.push(`(previous selection reset to default)`);
   }

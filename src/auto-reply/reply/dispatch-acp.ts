@@ -124,13 +124,11 @@ async function hasBoundConversationForSession(params: {
   const { listSessionBindingsBySessionAsync } = await loadDispatchAcpManagerRuntime();
   const bindings = await listSessionBindingsBySessionAsync(params.sessionKey);
   return bindings.some((binding) => {
-    const bindingChannel = normalizeOptionalLowercaseString(binding.conversation.channel) ?? "";
-    const bindingAccountId = normalizeOptionalLowercaseString(binding.conversation.accountId) ?? "";
-    const conversationId = normalizeOptionalString(binding.conversation.conversationId) ?? "";
     return (
-      bindingChannel === channel &&
-      (bindingAccountId || "default") === normalizedAccountId &&
-      conversationId.length > 0
+      normalizeOptionalLowercaseString(binding.conversation.channel) === channel &&
+      (normalizeOptionalLowercaseString(binding.conversation.accountId) || "default") ===
+        normalizedAccountId &&
+      Boolean(normalizeOptionalString(binding.conversation.conversationId))
     );
   });
 }
@@ -324,8 +322,7 @@ export async function tryDispatchAcpReplyCore(
         return false;
       });
     params.markIdle("message_error");
-    const counts = params.dispatcher.getQueuedCounts();
-    delivery.applyRoutedCounts(counts);
+    const counts = delivery.applyRoutedCounts(params.dispatcher.getQueuedCounts());
     return { queuedFinal: queuedNotice, counts };
   }
   const deliverDeferredTextFallback = async (): Promise<boolean> =>
@@ -346,8 +343,7 @@ export async function tryDispatchAcpReplyCore(
     finalQueued: boolean,
     error?: AcpRuntimeError,
   ): AcpDispatchAttemptResult => {
-    const counts = params.dispatcher.getQueuedCounts();
-    delivery.applyRoutedCounts(counts);
+    const counts = delivery.applyRoutedCounts(params.dispatcher.getQueuedCounts());
     const hasQueuedDelivery = counts.tool + counts.block + counts.final > 0 || finalQueued;
     const suppressionReason = hasQueuedDelivery
       ? undefined
@@ -605,8 +601,7 @@ export async function tryDispatchAcpReplyCore(
       : promptText;
     transcriptPromptText = turnPromptText;
     if (!turnPromptText && attachments.length === 0) {
-      const counts = params.dispatcher.getQueuedCounts();
-      delivery.applyRoutedCounts(counts);
+      const counts = delivery.applyRoutedCounts(params.dispatcher.getQueuedCounts());
       params.recordProcessed("completed", { reason: "acp_empty_prompt" });
       params.markIdle("message_completed");
       return { queuedFinal: false, counts };
@@ -717,8 +712,7 @@ export async function tryDispatchAcpReplyCore(
         delivery.hasPendingFinalTtsMedia() ||
         delivery.hasDeliveredFinalReply() ||
         queuedFinal;
-      const counts = params.dispatcher.getQueuedCounts();
-      delivery.applyRoutedCounts(counts);
+      const counts = delivery.applyRoutedCounts(params.dispatcher.getQueuedCounts());
       params.recordProcessed("completed", { reason: "acp_aborted" });
       params.markIdle("message_aborted");
       emitAuditTerminal();

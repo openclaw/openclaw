@@ -29,6 +29,11 @@ import {
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
 } from "./context-engine-lifecycle.js";
+import {
+  createContextEngine,
+  sessionParams,
+  textMessage,
+} from "./context-engine-lifecycle.test-support.js";
 
 function registerTestContextEngine(
   id: string,
@@ -37,14 +42,6 @@ function registerTestContextEngine(
   return registerContextEngineForOwner(id, factory, `test:${id}`, {
     allowSameOwnerRefresh: true,
   });
-}
-
-function textMessage(role: "user" | "assistant", text: string, timestamp: number): AgentMessage {
-  return {
-    role,
-    content: [{ type: "text", text }],
-    timestamp,
-  } as AgentMessage;
 }
 
 function runtimeContextMessage(content: string, timestamp: number): AgentMessage {
@@ -59,26 +56,6 @@ function runtimeContextMessage(content: string, timestamp: number): AgentMessage
     timestamp,
   } as AgentMessage;
 }
-
-function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEngine {
-  return {
-    info: { id: "test", name: "Test context engine" },
-    ingest: vi.fn(async () => ({ ingested: true })),
-    assemble: vi.fn(async (params) => ({
-      messages: params.messages,
-      estimatedTokens: 0,
-    })),
-    compact: vi.fn(async () => ({ ok: true, compacted: false })),
-    ...overrides,
-  };
-}
-
-const sessionParams = {
-  sessionIdUsed: "session-1",
-  sessionId: "session-1",
-  sessionKey: "agent:main:main",
-  sessionFile: "sessions/main.jsonl",
-};
 
 let configuredProofEngineIdCounter = 0;
 function uniqueConfiguredProofEngineId() {
