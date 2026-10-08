@@ -31,7 +31,11 @@ vi.mock("../chat/composer-dictation.ts", () => ({
       return this.active;
     }
 
-    handleClick = vi.fn();
+    handleClick = vi.fn(() => {
+      if (this.active) {
+        void this.finishActive();
+      }
+    });
     startDirect = vi.fn(() => {
       this.active = true;
       this.options.onStateChange?.();
