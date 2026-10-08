@@ -4498,7 +4498,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/new-session/composer.test.ts",
   "ui/src/pages/new-session/draft-place-browser.test.ts",
   "ui/src/pages/new-session/model-control.metadata-lifecycle.test.ts",
-  "ui/src/pages/new-session/model-control.policy.test.ts",
   "ui/src/pages/new-session/started-session-navigation.test.ts",
   "ui/src/pages/new-session/submit-gates.test.ts",
   "ui/src/pages/plugin/plugin-page.test.ts",
