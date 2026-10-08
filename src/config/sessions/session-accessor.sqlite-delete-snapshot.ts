@@ -33,52 +33,53 @@ export function readSessionStateDeleteSnapshot(
   sessionId: string,
 ): SessionStateDeleteSnapshot {
   const db = getNodeSqliteKysely<SessionStateDeleteSnapshotDatabase>(database);
-  const window = executeSqliteQueryTakeFirstSync(
+  // The target survives a missing window so orphaned child state still fences deletion.
+  const target = db.selectNoFrom((eb) => eb.val(sessionId).as("session_id")).as("target");
+  const snapshot = executeSqliteQueryTakeFirstSync(
     database,
     db
-      .selectFrom("session_windows")
-      .select(["session_key", "transcript_updated_at", "updated_at"])
-      .where("session_id", "=", sessionId),
-  );
-  const rewriteWatermark = executeSqliteQueryTakeFirstSync(
-    database,
-    db
-      .selectFrom("transcript_rewrite_watermarks")
-      .select("generation")
-      .where("session_id", "=", sessionId),
-  );
-  const lastEvent = executeSqliteQueryTakeFirstSync(
-    database,
-    db
-      .selectFrom("transcript_events")
-      .select("seq")
-      .where("session_id", "=", sessionId)
-      .orderBy("seq", "desc")
-      .limit(1),
-  );
-  const lastTrajectory = executeSqliteQueryTakeFirstSync(
-    database,
-    db
-      .selectFrom("trajectory_runtime_events")
-      .select("seq")
-      .where("session_id", "=", sessionId)
-      .orderBy("seq", "desc")
-      .limit(1),
-  );
-  const acpParentStream = executeSqliteQueryTakeFirstSync(
-    database,
-    db
-      .selectFrom("acp_parent_stream_events")
-      .select((eb) => eb.fn.countAll<number | bigint>().as("event_count"))
-      .where("session_id", "=", sessionId),
+      .selectFrom(target)
+      .leftJoin("session_windows as window", "window.session_id", "target.session_id")
+      .leftJoin(
+        "transcript_rewrite_watermarks as watermark",
+        "watermark.session_id",
+        "target.session_id",
+      )
+      .select([
+        "window.session_key",
+        "window.transcript_updated_at",
+        "window.updated_at",
+        "watermark.generation",
+      ])
+      .select((eb) => [
+        eb
+          .selectFrom("transcript_events")
+          .select("seq")
+          .whereRef("transcript_events.session_id", "=", "target.session_id")
+          .orderBy("seq", "desc")
+          .limit(1)
+          .as("last_seq"),
+        eb
+          .selectFrom("trajectory_runtime_events")
+          .select("seq")
+          .whereRef("trajectory_runtime_events.session_id", "=", "target.session_id")
+          .orderBy("seq", "desc")
+          .limit(1)
+          .as("trajectory_last_seq"),
+        eb
+          .selectFrom("acp_parent_stream_events")
+          .select((inner) => inner.fn.countAll<number | bigint>().as("event_count"))
+          .whereRef("acp_parent_stream_events.session_id", "=", "target.session_id")
+          .as("acp_parent_stream_event_count"),
+      ]),
   );
   return {
-    acpParentStreamEventCount: sqliteNumber(acpParentStream?.event_count ?? 0),
-    generation: rewriteWatermark?.generation ?? null,
-    lastSeq: lastEvent?.seq ?? null,
-    sessionKey: window?.session_key ?? null,
-    sessionUpdatedAt: window?.updated_at ?? null,
-    trajectoryLastSeq: lastTrajectory?.seq ?? null,
-    transcriptUpdatedAt: window?.transcript_updated_at ?? null,
+    acpParentStreamEventCount: sqliteNumber(snapshot?.acp_parent_stream_event_count ?? 0),
+    generation: snapshot?.generation ?? null,
+    lastSeq: snapshot?.last_seq ?? null,
+    sessionKey: snapshot?.session_key ?? null,
+    sessionUpdatedAt: snapshot?.updated_at ?? null,
+    trajectoryLastSeq: snapshot?.trajectory_last_seq ?? null,
+    transcriptUpdatedAt: snapshot?.transcript_updated_at ?? null,
   };
 }
