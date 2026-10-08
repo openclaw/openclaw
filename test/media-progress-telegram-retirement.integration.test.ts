@@ -15,22 +15,24 @@ const http = createTelegramDispatchHttpFixture();
 const sessionKey = "agent:main:telegram:group:-100";
 const waitingText = "Waiting for the image.";
 
-it.each([
-  ["a delivered image", ["delivered"]],
-  ["a failed image", ["failed"]],
-  ["a delivered then a failed image", ["delivered", "failed"]],
-  ["a failed then a delivered image", ["failed", "delivered"]],
-] as const)("keeps the quiet card until %s settles", async (_label, outcomes) => {
+it.each<[string, ("delivered" | "failed")[], number | undefined]>([
+  ["a delivered image", ["delivered"], undefined],
+  ["a failed image", ["failed"], undefined],
+  ["a delivered then a failed image", ["delivered", "failed"], undefined],
+  ["a failed then a delivered image", ["failed", "delivered"], undefined],
+  ["a failed then a delivered image on a one-line card", ["failed", "delivered"], 1],
+])("keeps the quiet card until %s settles", async (_label, outcomes, maxLines) => {
   onTestFinished(resetGeneratedMediaTaskActivityForTests);
-  const handles = outcomes.map((_, index) =>
-    admitMediaHandle({
+  const runs = outcomes.map((outcome, index) => ({
+    outcome,
+    handle: admitMediaHandle({
       taskId: `image-${index}`,
       runId: `tool:image_generate:${index}`,
       requesterSessionKey: sessionKey,
       requesterAgentId: "main",
       taskLabel: "wedding portrait",
     }),
-  );
+  }));
   let adopted = false;
   await http.dispatchProgressTurn(
     async (options) => {
@@ -49,6 +51,9 @@ it.each([
     {
       mode: "progress",
       toolProgress: false,
+      telegramCfg: maxLines
+        ? { streaming: { mode: "progress", progress: { toolProgress: false, maxLines } } }
+        : undefined,
       finalReply: setReplyPayloadMetadata(
         { text: waitingText },
         {
@@ -70,8 +75,7 @@ it.each([
     .toContain("Image generation: running");
 
   const lifecycle = createMediaGenerationTaskLifecycle("image");
-  for (const [index, outcome] of outcomes.entries()) {
-    const handle = handles[index];
+  for (const { outcome, handle } of runs) {
     if (outcome === "delivered") {
       lifecycle.completeTaskRun({ handle, provider: "fixture", model: "fixture", count: 1 });
     } else {
@@ -89,7 +93,6 @@ it.each([
     .toContain("Image generation: failed");
   const card = http.visibleMessages.get(cardId);
   expect(card).not.toContain("running");
-  if (outcomes.includes("delivered")) {
-    expect(card).toContain("Image generation: completed");
-  }
+  // The delivered image is in the chat; only the failed run stays on the card.
+  expect(card).not.toContain("completed");
 });
