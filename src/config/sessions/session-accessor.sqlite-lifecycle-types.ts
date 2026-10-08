@@ -3,7 +3,10 @@ import type {
   SubagentRunsDurableBasis,
 } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
-import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
+import type {
+  DatabaseFileIdentity,
+  DatabasePathIdentity,
+} from "../../infra/sqlite-worker-identity.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -220,6 +223,8 @@ export type SessionMaintenanceMetadataCommand =
       ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
       maintenance: ResolvedSessionMaintenanceConfig;
       expected?: SessionMaintenanceAgeSnapshot;
+      /** A no-op reader rechecks the same policy instead of borrowing a writer snapshot. */
+      readOnly?: { input: SessionEntryMaintenanceInput; snapshot: SessionMaintenanceAgeSnapshot };
     }
   | {
       kind: "maintenance-plan";
@@ -237,7 +242,17 @@ export type SessionMaintenanceMetadataResult =
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;
       ageSnapshot: SessionMaintenanceAgeSnapshot;
+      readOnlyInput?: SessionEntryMaintenanceInput;
     };
+
+export type SessionMaintenanceReadCommand = Exclude<
+  SessionMaintenanceMetadataCommand,
+  { kind: "maintenance-statistics" }
+> & { expectedIdentity: DatabasePathIdentity };
+
+export type SessionMaintenanceReadResult =
+  | { kind: "maintenance-write-required" }
+  | Exclude<SessionMaintenanceMetadataResult, { kind: "maintenance-statistics" }>;
 
 export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {

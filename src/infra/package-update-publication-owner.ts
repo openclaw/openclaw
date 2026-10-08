@@ -5,11 +5,13 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
-import { hasErrnoCode } from "./errors.js";
+import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { retainMutationAuthority } from "./mutation-authority.js";
 import {
   completePackageActivationCustody,
   packageActivationIdentityOrAbsent as entryIdentity,
   inspectPackageActivationCustody,
+  settlePackageActivationCustody,
 } from "./package-update-activation-custody.js";
 import {
   packageActivationIdentity,
@@ -20,8 +22,13 @@ import {
   type PackageActivationRecord,
   isPackageActivationComplete,
 } from "./package-update-activation-journal.js";
-import { decodePackageActivationLauncher } from "./package-update-activation-launcher.js";
 import {
+  assertPackageActivationSelectedLaunchers as assertSelectedLaunchers,
+  matchesPackageActivationLauncher as matchesLauncher,
+  verifyPackageActivationSelectedLaunchers as verifySelectedLaunchers,
+} from "./package-update-activation-launcher.js";
+import {
+  assertPackageActivationActionAllowed,
   readPackageActivationRecordStatus as packageActivationStatus,
   selectedPackageRetirementGeneration,
 } from "./package-update-activation-status.js";
@@ -33,8 +40,6 @@ import {
 } from "./package-update-filesystem.js";
 import {
   createPackageIntegrityReader,
-  packageLauncherDifferences,
-  type PackageLauncherFingerprint,
   type PackageIntegrityFingerprint,
 } from "./package-update-integrity.js";
 import {
@@ -45,29 +50,28 @@ import { assertManagedUpdateLeaseDatabaseIdentity } from "./update-managed-servi
 
 const log = createSubsystemLogger("update/package-integrity");
 
-function matchesLauncher(actual: PackageLauncherFingerprint | null, encoded: string | null) {
-  return actual === null || encoded === null
-    ? actual === null && encoded === null
-    : packageLauncherDifferences(decodePackageActivationLauncher(encoded), actual, {
-        checkMode: true,
-      }).length === 0;
-}
-
 export function createPublicationOwner(
   anchor: string,
   journal: PackageActivationJournal,
-  assertion: () => void,
+  assertOwner: () => void,
   initial = journal.read(),
   assertJournalCurrent: (expected: PackageActivationRecord) => void = journal.assertCurrent.bind(
     journal,
   ),
   onWarning: (message: string) => void = (message) => log.warn(message),
 ) {
+  const assertion = retainMutationAuthority(assertOwner);
   let record = initial;
   let descriptor = record.descriptor;
   const matches = createPackagePublicationTreeMatcher(descriptor.candidate, onWarning);
   let retirementSelected: "previous" | "candidate" | undefined;
   const live = descriptor.authority.installKey;
+  const matchesSelected = (selected: "previous" | "candidate") =>
+    matches(
+      live,
+      descriptor[selected],
+      selected === "previous" ? live : descriptor.originalStageRoot,
+    );
   const root = (name: string) => path.join(anchor, name);
   // Creation can lose its acknowledgement before custody is journaled. Keep
   // that empty staging object outside the anchor so recovery can still abort.
@@ -121,33 +125,6 @@ export function createPublicationOwner(
       }
     }
   };
-  const assertSelectedLaunchers = (selected: "previous" | "candidate") => {
-    for (const entry of descriptor.launchers) {
-      const expected =
-        selected === "previous" && entry.previous === null
-          ? null
-          : record.phase === "aborted"
-            ? entry.previousIdentity
-            : record.publications.find((published) => published.name === entry.name)?.identity;
-      if (entryIdentity(path.join(descriptor.binDir, entry.name), "launcher") !== expected) {
-        throw new Error("Selected package launcher identity changed.");
-      }
-    }
-  };
-  const verifySelectedLaunchers = async (selected: "previous" | "candidate") => {
-    const reader = createPackageIntegrityReader();
-    assertSelectedLaunchers(selected);
-    for (const entry of descriptor.launchers) {
-      const destination = path.join(descriptor.binDir, entry.name);
-      const fingerprint = (await reader.exists(destination))
-        ? await reader.launcher(destination)
-        : null;
-      if (!matchesLauncher(fingerprint, entry[selected])) {
-        throw new Error("Selected package launcher fingerprint changed.");
-      }
-    }
-    assertSelectedLaunchers(selected);
-  };
   const assertCurrent = () => {
     assertion();
     assertJournalCurrent(record);
@@ -168,7 +145,7 @@ export function createPublicationOwner(
       if (packageActivationIdentity(live, true) !== descriptor[retirementSelected].identity) {
         throw new Error("Selected package changed during retirement.");
       }
-      assertSelectedLaunchers(retirementSelected);
+      assertSelectedLaunchers(record, retirementSelected);
     }
   };
   const transition = (
@@ -264,21 +241,8 @@ export function createPublicationOwner(
     }
     assertCurrent();
   };
-  const assertActionAllowed = (action: "repair" | "retire") => {
-    const allowed =
-      action === "repair"
-        ? ["preparing", "prepared", "publishing", "publication-complete"]
-        : ["publication-complete", "rolled-back", "aborted", "retiring", "anchor-retired"];
-    if (!allowed.includes(record.phase)) {
-      const refusal =
-        action === "repair"
-          ? "Forward publication is disarmed"
-          : "Package evidence cannot be retired";
-      throw new Error(`${refusal} (${record.phase}).`);
-    }
-  };
   const preflight = async (action: "repair" | "retire") => {
-    assertActionAllowed(action);
+    assertPackageActivationActionAllowed(record, action);
     await verifyClosure();
     if (record.phase === "preparing") {
       inspectPackageActivationCustody(anchor, record);
@@ -295,7 +259,7 @@ export function createPublicationOwner(
       ) {
         throw new Error("Selected package is missing.");
       }
-      await verifySelectedLaunchers(selected);
+      await verifySelectedLaunchers(record, selected);
     }
     assertCurrent();
   };
@@ -416,7 +380,7 @@ export function createPublicationOwner(
     onDisplaced?: (previous: PackageIntegrityFingerprint, copied: boolean) => void | Promise<void>,
   ) => {
     await verifyClosure();
-    assertActionAllowed("repair");
+    assertPackageActivationActionAllowed(record, "repair");
     if (record.phase === "preparing") {
       await completePackageActivationCustody(anchor, journal, assertion);
       record = journal.read();
@@ -552,17 +516,13 @@ export function createPublicationOwner(
   };
   const retire = async () => {
     await verifyClosure();
-    assertActionAllowed("retire");
+    assertPackageActivationActionAllowed(record, "retire");
     const selected = selectedPackageRetirementGeneration(record);
-    await matches(
-      live,
-      descriptor[selected],
-      selected === "previous" ? live : descriptor.originalStageRoot,
-    );
+    await matchesSelected(selected);
     if (!(await packagePathEntryExists(live))) {
       throw new Error("Selected package is missing.");
     }
-    await verifySelectedLaunchers(selected);
+    await verifySelectedLaunchers(record, selected);
     retirementSelected = selected;
     assertCurrent();
     if (!["retiring", "anchor-retired"].includes(record.phase)) {
@@ -653,9 +613,56 @@ export function createPublicationOwner(
     await fsp.unlink(helper());
     return persistRetirement();
   };
+  // Callers have elected retirement after verified publication, restoration, or
+  // untouched-preparation refusal. Raw recovery entrypoints retain strict retirement;
+  // they never infer completion from an unverified package.
+  const retireVerified = async (
+    onSettled?: (detail: string) => void,
+  ): Promise<string | undefined> => {
+    if (record.phase !== "prepared") {
+      assertPackageActivationActionAllowed(record, "retire");
+    }
+    const selected = selectedPackageRetirementGeneration(record);
+    try {
+      await retire();
+      return undefined;
+    } catch (error) {
+      const assertSelected = () => {
+        assertion();
+        assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
+        if (packageActivationIdentity(live, true) !== descriptor[selected].identity) {
+          throw new Error("Selected package changed during retirement.", { cause: error });
+        }
+        assertSelectedLaunchers(record, selected);
+      };
+      assertSelected();
+      assertJournalCurrent(record);
+      await matchesSelected(selected);
+      await verifySelectedLaunchers(record, selected);
+      assertSelected();
+      assertJournalCurrent(record);
+      const detail = `Verified ${selected} package; recovery evidence retained after cleanup failed: ${formatErrorMessage(error)}`;
+      const settled = settlePackageActivationCustody({
+        anchor,
+        journal,
+        record,
+        settlement: {
+          kind: "publication-settled-external-change",
+          replacementIdentity: descriptor[selected].identity,
+          settled: true,
+          detail,
+        },
+        assertCurrent: assertSelected,
+        onSettled: () => onSettled?.(detail),
+      });
+      record = settled.record;
+      return settled.warning;
+    }
+  };
   return {
     publish,
     retire,
+    retireVerified,
     persistRetirement,
     preflight,
     async disarmRollback() {
@@ -689,11 +696,11 @@ export function createPublicationOwner(
     },
     async restored() {
       assertCurrent();
-      assertSelectedLaunchers("previous");
+      assertSelectedLaunchers(record, "previous");
       // Restoration also removes launchers that did not exist in the old package.
       const outcome = await syncDirectory(descriptor.binDir);
       assertCurrent();
-      assertSelectedLaunchers("previous");
+      assertSelectedLaunchers(record, "previous");
       requireDirectorySync(outcome, "Restored package launchers");
       await persistPackageSelection("previous");
       const publications = descriptor.launchers.flatMap((entry) => {

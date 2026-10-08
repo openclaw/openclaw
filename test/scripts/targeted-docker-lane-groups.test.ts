@@ -145,10 +145,15 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
       [
         ...synthetic.map((scenario) => `openclaw@2026.9.1:${scenario}`),
         "openclaw@2026.9.4:custom-plugin-siblings",
+        "openclaw@2026.9.8:package-publication-recovery",
+        "openclaw@2026.9.9:package-publication-recovery",
+        "openclaw@2026.9.8:package-verification-recovery",
+        "openclaw@2026.9.9:package-verification-recovery",
+        "openclaw@2026.9.7:package-stranded-first-hop",
         ...["2026.9.2", "2026.9.1"].map((baseline) => `openclaw@${baseline}:legacy-operator-state`),
       ].toSorted(),
     );
-    expect(groups).toHaveLength(15);
+    expect(groups).toHaveLength(20);
     expect(
       groups.every(
         (group) => (group.published_upgrade_survivor_scenarios ?? "").split(" ").length === 1,
@@ -474,6 +479,27 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
       scenarios: "base feishu-channel tilde-log-path legacy-operator-state custom-plugin-siblings",
     },
     { label: "the default baseline", baselines: "", scenarios: "far-reaching" },
+    {
+      label: "one ordinary scenario with recovery",
+      baselines: "2026.9.8 2026.9.9",
+      scenarios: "base package-publication-recovery",
+    },
+    {
+      label: "already selected recovery drivers",
+      baselines: "2026.9.8 2026.9.9",
+      scenarios: "reported-issues",
+    },
+    {
+      label: "recovery-only rows",
+      baselines: "2026.10.1",
+      scenarios:
+        "package-publication-recovery package-verification-recovery package-stranded-first-hop",
+    },
+    {
+      label: "one recovery scenario",
+      baselines: "2026.9.8 2026.9.9",
+      scenarios: "package-publication-recovery",
+    },
   ])("preserves each expanded lane exactly once for $label", ({ baselines, scenarios }) => {
     const lanes = "doctor-switch published-upgrade-survivor update-migration plugin-update";
     const groups = planTargetedDockerLaneGroups({

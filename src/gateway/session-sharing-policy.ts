@@ -37,6 +37,10 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreCache,
 } from "./session-utils-store-lookup.js";
+import {
+  withQualifiedGatewaySessionStoreTarget,
+  type GatewaySessionStoreSelection,
+} from "./session-utils-store-retained.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 
 export type SessionSharingTarget = {
@@ -149,14 +153,48 @@ export function resolveSessionSharingTarget(params: {
 export async function withSessionSharingTarget<T>(
   params: { cfg: OpenClawConfig; sessionKey: string; agentId?: string },
   consume: (facts: {
+    selection?: GatewaySessionStoreSelection;
     target: SessionSharingTarget | null;
     storageTarget: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "storePath">;
     members: readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[];
     assertCurrent: () => void;
   }) => T,
+  retainedSelection?: GatewaySessionStoreSelection,
 ): Promise<T> {
   // Prepared sharing must enforce the same configured physical target as synchronous reads.
   captureSessionSharingIncognitoTarget(params);
+  const read: Parameters<typeof withGatewaySessionStoreTarget<T>>[1] = (
+    selected,
+    membership,
+    assertCurrent,
+    _related,
+    selection,
+  ) => {
+    const target = toSessionSharingTarget(selected);
+    return consume({
+      selection,
+      target,
+      storageTarget: {
+        agentId: selected.agentId,
+        canonicalKey: selected.canonicalKey,
+        storePath: selected.storePath,
+      },
+      members: target ? (membership.get(target.storeKey) ?? []) : [],
+      assertCurrent,
+    });
+  };
+  if (retainedSelection) {
+    return withQualifiedGatewaySessionStoreTarget({
+      target: retainedSelection.target,
+      logicalStorePath: retainedSelection.logicalStorePath,
+      env: retainedSelection.env,
+      preparedSource: retainedSelection.source,
+      includeMembership: true,
+      readOptions: { snapshotFields: [], lifecycleSessionKey: undefined },
+      consume: (target, membership, assertCurrent) =>
+        read(target, membership, assertCurrent, [], retainedSelection),
+    });
+  }
   return withGatewaySessionStoreTarget(
     {
       cfg: params.cfg,
@@ -165,19 +203,7 @@ export async function withSessionSharingTarget<T>(
       projection: "list",
       includeMembership: true,
     },
-    (selected, membership, assertCurrent) => {
-      const target = toSessionSharingTarget(selected);
-      return consume({
-        target,
-        storageTarget: {
-          agentId: selected.agentId,
-          canonicalKey: selected.canonicalKey,
-          storePath: selected.storePath,
-        },
-        members: target ? (membership.get(target.storeKey) ?? []) : [],
-        assertCurrent,
-      });
-    },
+    read,
   );
 }
 

@@ -51,6 +51,7 @@ import type {
   SessionTranscriptSearchReadResult,
   SessionTranscriptSearchResult,
 } from "./session-transcript-search.types.js";
+import { transcriptSearchLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 const SEARCH_SNIPPET_MAX_CHARS = 500;
@@ -235,19 +236,25 @@ export async function searchSessionTranscripts(
     sessionKeys: params.sessionKeys?.slice(),
   };
   let statusOwnerFailure: { error: unknown } | undefined;
-  const readIndexStatus = async (assertCurrent?: () => void): Promise<boolean> => {
+  const readIndexStatus = async (
+    assertCurrent?: () => void,
+    signal?: AbortSignal,
+  ): Promise<boolean> => {
+    signal?.throwIfAborted();
     assertCurrent?.();
     let indexing: boolean;
     try {
       if (statusOwnerFailure) {
         throw statusOwnerFailure.error;
       }
-      indexing = await readSessionTranscriptIndexStatus(options, assertCurrent);
+      indexing = await readSessionTranscriptIndexStatus(options, assertCurrent, signal);
     } catch {
       // Writable maintenance failure must not discard an authorized read-only result.
+      signal?.throwIfAborted();
       assertCurrent?.();
       return true;
     }
+    signal?.throwIfAborted();
     assertCurrent?.();
     if (indexing) {
       startSessionTranscriptIndexReconcile(options);
@@ -276,16 +283,20 @@ export async function searchSessionTranscripts(
     } catch (error) {
       statusOwnerFailure = { error };
     }
-    return await withSessionHistoryWorkerDatabase(options, async (owner) => {
-      const result = await owner.searchTranscripts(request, () =>
-        readIndexStatus(owner.assertCurrent),
-      );
-      owner.assertCurrent();
-      return {
-        ...result,
-        indexing: result.indexing || isSessionTranscriptIndexReconcileRunning(options),
-      };
-    });
+    return await withSessionHistoryWorkerDatabase(
+      options,
+      async (owner) => {
+        const result = await owner.searchTranscripts(request, (signal) =>
+          readIndexStatus(owner.assertCurrent, signal),
+        );
+        owner.assertCurrent();
+        return {
+          ...result,
+          indexing: result.indexing || isSessionTranscriptIndexReconcileRunning(options),
+        };
+      },
+      transcriptSearchLane,
+    );
   } finally {
     await execution?.release();
   }

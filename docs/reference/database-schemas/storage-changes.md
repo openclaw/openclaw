@@ -67,6 +67,8 @@ and only a full pass at a stable foreign revision can certify a clean store.
 The planner consumes this owner's pending list.
 Search keeps its hit read, host readiness exchange, and original-connection
 revision check in one worker task while independent searches remain parallel.
+A separate, bounded search lane keeps writable readiness checks from occupying
+the workers serving committed history, reactions, and progress-card reads.
 A changed hit snapshot keeps the indexing hint. Read-only
 searches also retain their results with that conservative hint when writable
 maintenance is unavailable.
