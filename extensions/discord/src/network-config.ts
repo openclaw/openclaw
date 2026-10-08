@@ -1,16 +1,12 @@
-// Discord helper module supports network config behavior.
 import * as dns from "node:dns";
 import type { LookupFunction } from "node:net";
 import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DISCORD_DNS_HOSTS = ["discord.com", "discord.gg", "gateway.discord.gg"];
 
-function normalizeHostname(hostname: string): string {
-  return hostname.trim().toLowerCase();
-}
-
 function isDiscordTransportHostname(hostname: string): boolean {
-  const normalized = normalizeHostname(hostname);
+  const normalized = normalizeLowercaseStringOrEmpty(hostname);
   if (!normalized) {
     return false;
   }
@@ -20,17 +16,11 @@ function isDiscordTransportHostname(hostname: string): boolean {
 }
 
 function reorderLookupAddresses(addresses: dns.LookupAddress[]): dns.LookupAddress[] {
-  if (!Array.isArray(addresses) || addresses.length < 2) {
+  if (addresses.length < 2) {
     return addresses;
   }
   const ipv4 = addresses.filter((entry) => entry.family === 4);
   const ipv6 = addresses.filter((entry) => entry.family === 6);
-  if (ipv4.length === 0) {
-    return ipv6;
-  }
-  if (ipv6.length === 0) {
-    return ipv4;
-  }
   return [...ipv4, ...ipv6];
 }
 
@@ -81,7 +71,7 @@ export function createDiscordDnsLookup(): LookupFunction {
 }
 
 export function createDiscordEndpointDnsLookup(endpointHostname: string): LookupFunction {
-  const normalizedEndpointHostname = normalizeHostname(endpointHostname);
+  const normalizedEndpointHostname = normalizeLowercaseStringOrEmpty(endpointHostname);
   if (!normalizedEndpointHostname) {
     throw new Error("Discord endpoint Gateway hostname is required");
   }

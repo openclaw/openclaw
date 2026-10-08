@@ -8,6 +8,8 @@ import {
   validateTerminalUploadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isCanonicalTerminalUploadBase64 } from "../../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -38,13 +40,15 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
       const result = await context.terminalSessions.upload(connId, params.sessionId, {
         name: params.name,
         contentBase64: params.contentBase64,
+        assertCommitAllowed: captureGatewayClientUploadCommitGuard({
+          method: "terminal.upload",
+          requestParams: params,
+          client: opts.client,
+          context,
+        }),
       });
       if (!result) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown terminal session "${params.sessionId}"`),
-        );
+        invalid(respond, `unknown terminal session "${params.sessionId}"`);
         return;
       }
       respond(true, {
@@ -62,10 +66,12 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          error instanceof Error ? error.message : "terminal upload failed",
-        ),
+        error instanceof SessionMutationAuthorizationChangedError
+          ? error.error
+          : errorShape(
+              ErrorCodes.UNAVAILABLE,
+              error instanceof Error ? error.message : "terminal upload failed",
+            ),
       );
     }
   },

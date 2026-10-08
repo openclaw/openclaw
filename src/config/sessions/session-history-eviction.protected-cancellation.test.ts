@@ -123,21 +123,22 @@ describe("protected historical session cancellation", () => {
       };
       if (stage === "planning") {
         const mutate = lifecycle.runExclusiveSessionLifecycleMutation;
-        vi.spyOn(lifecycle, "runExclusiveSessionLifecycleMutation").mockImplementation((params) =>
-          mutate({
-            ...params,
-            run: async () => {
-              if (
-                !protectionChanged &&
-                "scope" in params &&
-                params.scope === storePath &&
-                Array.from(params.identities).includes(protectedHistory.sessionId)
-              ) {
-                releasePressure();
-              }
-              return await params.run();
-            },
-          }),
+        vi.spyOn(lifecycle, "runExclusiveSessionLifecycleMutation").mockImplementation(
+          (operation, params) =>
+            mutate(operation, {
+              ...params,
+              run: async () => {
+                if (
+                  !protectionChanged &&
+                  "scope" in params &&
+                  params.scope === storePath &&
+                  Array.from(params.identities).includes(protectedHistory.sessionId)
+                ) {
+                  releasePressure();
+                }
+                return await params.run();
+              },
+            }),
         );
       }
       if (stage === "materialization") {
@@ -152,7 +153,7 @@ describe("protected historical session cancellation", () => {
           },
         );
       }
-      const reclamation = await import("./session-accessor.sqlite-reclamation.js");
+      const reclamation = await import("./session-accessor.sqlite-reclamation-run.js");
       const reclaim = reclamation.runSqliteSessionReclamation;
       const reclaimedHistories: Array<{ sessionId: string; deleted: boolean }> = [];
       const reclaimedEntries: Array<{ sessionKey: string; deleted: boolean }> = [];

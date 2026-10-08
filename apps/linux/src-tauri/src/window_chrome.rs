@@ -35,7 +35,7 @@ pub fn install(window: &Window) -> tauri::Result<()> {
     #[cfg(target_os = "linux")]
     return crate::window_chrome_linux::install(window);
     #[cfg(target_os = "macos")]
-    return crate::window_chrome_macos::install_window(window);
+    return crate::window_chrome_macos::set_unified(window, false);
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = window;
@@ -196,25 +196,16 @@ pub async fn window_chrome_request(
         return Ok(current);
     }
     match action {
-        WindowAction::Ready => {
+        WindowAction::Ready | WindowAction::NativeFrame => {
+            let unified = matches!(action, WindowAction::Ready);
             #[cfg(target_os = "macos")]
-            crate::window_chrome_macos::set_unified(&window, true)
-                .map_err(|error| error.to_string())?;
+            {
+                crate::window_chrome_macos::set_unified(&window, unified)
+            }
             #[cfg(not(target_os = "macos"))]
-            window
-                .set_decorations(false)
-                .map_err(|error| error.to_string())?;
-            Ok(())
-        }
-        WindowAction::NativeFrame => {
-            #[cfg(target_os = "macos")]
-            crate::window_chrome_macos::set_unified(&window, false)
-                .map_err(|error| error.to_string())?;
-            #[cfg(not(target_os = "macos"))]
-            window
-                .set_decorations(true)
-                .map_err(|error| error.to_string())?;
-            Ok(())
+            {
+                window.set_decorations(!unified)
+            }
         }
         WindowAction::Minimize => window.minimize(),
         WindowAction::ToggleMaximize => {

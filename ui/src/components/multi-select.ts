@@ -9,17 +9,12 @@ import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { configureAnchoredPopup } from "./anchored-overlay.ts";
 import { icons } from "./icons.ts";
+import type { ModelPickerOption } from "./model-picker.ts";
 import { renderProviderBrandIcon } from "./provider-icon.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import "../styles/multi-select.css";
 
-export type MultiSelectOption = {
-  value: string;
-  label: string;
-  provider?: string;
-  detail?: string;
-  disabled?: boolean;
-};
+export type MultiSelectOption = ModelPickerOption;
 
 type MultiSelectRow = MultiSelectOption & { custom?: boolean };
 
@@ -98,7 +93,6 @@ export class MultiSelect extends OpenClawLightDomElement {
     return this.options.find((option) => this.getValueKey(option.value) === key);
   }
 
-  /** Dropdown rows: unchosen options matching the query, then the custom entry. */
   private rows(): MultiSelectRow[] {
     const taken = new Set(this.value.map((entry) => this.getValueKey(entry)));
     const custom = this.query.trim();

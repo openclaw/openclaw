@@ -1,6 +1,4 @@
-/* ── Settings design language ──────────────────────────────────────────────
- *
- * One structural pattern for every settings surface:
+/* One structural pattern for every settings surface:
  *   .settings-page > .settings-section > .settings-group > .settings-row
  *
  * Rules (see ui/docs/design-system/settings-design.md):
@@ -35,20 +33,12 @@
   font-weight: 600;
 }
 
-/* ── Workspace shell (shared by every settings takeover page) ── */
-
-.settings-workspace {
-  width: 100%;
-}
-
+.settings-workspace,
 .settings-workspace__body {
   width: 100%;
 }
 
-.content-header + .settings-workspace {
-  margin-top: var(--space-5);
-}
-
+.content-header + .settings-workspace,
 .settings-workspace__body > * + * {
   margin-top: var(--space-5);
 }
@@ -68,13 +58,7 @@
   max-width: 100%;
 }
 
-.settings-workspace--fill-height {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
+.settings-workspace--fill-height,
 .settings-workspace--fill-height > .settings-workspace__body {
   flex: 1 1 auto;
   min-height: 0;
@@ -85,19 +69,17 @@
 /* The page headline adopts the column of the page below it; without this the
    shell caps headers at 1120px while narrow pages use a 760px column, leaving
    the title floating left of the content. */
-.shell--settings .content:has(.settings-page) .content-header,
-.content:has(.settings-page) .content-header--settings {
+.shell--settings .content.content--settings-page .content-header,
+.content.content--settings-page .content-header--settings {
   max-width: 760px;
   margin-inline: auto;
   padding-inline: var(--space-4);
 }
 
-.shell--settings .content:has(.settings-page--wide) .content-header,
-.content:has(.settings-page--wide) .content-header--settings {
+.shell--settings .content.content--settings-wide .content-header,
+.content.content--settings-wide .content-header--settings {
   max-width: 1120px;
 }
-
-/* ── Page ── */
 
 /* Section separation stays generous (--space-8) so group surfaces read as
    distinct blocks; headings bind to their own group via the tighter
@@ -165,8 +147,6 @@
   color: var(--muted);
   font: 400 var(--control-ui-text-sm) / 1.5 var(--mono);
 }
-
-/* ── Section ── */
 
 .settings-section {
   display: flex;
@@ -304,8 +284,6 @@
   font-weight: 600;
 }
 
-/* ── Group (the only surface) ── */
-
 .settings-group {
   background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
@@ -318,8 +296,7 @@
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
 }
 
-/* ── Advanced tier ──
- * Lives here rather than config.css because every schema-driven surface
+/* Lives here rather than config.css because every schema-driven surface
  * (config pages and the channel detail forms) renders the same split. */
 
 .config-tier-groups {
@@ -344,8 +321,6 @@
 .config-advanced-disclosure > .settings-group {
   margin-top: var(--space-3);
 }
-
-/* ── Row ── */
 
 .settings-row {
   display: flex;
@@ -403,7 +378,6 @@
   margin-left: auto;
 }
 
-/* Plain right-aligned value text ("Default", "v2026.7.1", …). */
 .settings-row__value {
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
@@ -467,7 +441,6 @@
   cursor: not-allowed;
 }
 
-/* Clickable drill-in row. */
 .settings-row--nav {
   width: 100%;
   border: none;
@@ -513,7 +486,6 @@
   transform: rotate(90deg);
 }
 
-/* Indented child rows (e.g. per-item options under a parent toggle). */
 .settings-subrows .settings-row {
   padding-left: var(--space-7);
 }
@@ -521,8 +493,6 @@
 .settings-subrows .settings-row + .settings-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 }
-
-/* ── Controls ── */
 
 .settings-toggle {
   display: inline-flex;
@@ -546,7 +516,7 @@ wa-switch.settings-toggle {
   width: 340px;
 }
 
-.settings-row__control input.settings-input {
+.settings-row__control input.settings-input:not(.picker-select__search) {
   text-align: right;
 }
 
@@ -603,8 +573,6 @@ wa-switch.settings-toggle {
   width: auto;
 }
 
-/* ── Secret input (inset reveal toggle; no trailing button) ── */
-
 /* Stacked rows (config form arrays/maps) give the control full width; the
    wrapper must grow or the inner 100% resolves against fit-content. */
 .settings-row--stacked .settings-row__control > .settings-secret {
@@ -633,8 +601,6 @@ textarea.settings-input {
     font-size: 16px;
   }
 }
-
-/* ── Status (dot + text — replaces status pills) ── */
 
 .settings-status {
   display: inline-flex;
@@ -779,8 +745,6 @@ textarea.settings-input {
   overflow-wrap: anywhere;
 }
 
-/* ── Empty state ── */
-
 .settings-empty {
   padding: var(--space-5) var(--space-4);
   font-size: var(--control-ui-text-sm);
@@ -827,8 +791,6 @@ textarea.settings-input {
   width: 104px;
 }
 
-/* ── Key/value facts (About build info, agent facts) ── */
-
 .settings-kv {
   display: grid;
   grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
@@ -855,7 +817,8 @@ textarea.settings-input {
 /* Identity composes existing row controls; these wrappers only keep the
    avatar/file action and name/save action aligned as one control cluster. */
 .identity-avatar-control,
-.identity-name-control {
+.identity-name-control,
+.settings-account {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -868,15 +831,6 @@ textarea.settings-input {
 
 .identity-error .settings-row__desc {
   color: var(--danger);
-}
-
-/* ── Account value (small round avatar + handle inside a row control) ── */
-
-.settings-account {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
 }
 
 .settings-account__avatar {
@@ -893,8 +847,6 @@ textarea.settings-input {
   letter-spacing: 0.08em;
   user-select: all;
 }
-
-/* ── Mobile ── */
 
 .shell--embed-settings {
   --settings-control-height: 44px;
@@ -956,16 +908,16 @@ textarea.settings-input {
   }
 
   .shell--settings .content:not(.content--custodian),
-  .content:has(.plugins-hub-header) {
+  .content.content--hub-header {
     --content-inline-padding: var(--space-3);
     --settings-header-inline-padding: 0;
     padding: var(--space-3) var(--space-3) var(--space-4);
   }
 
-  .shell--settings .content:has(.settings-workspace) .content-header,
-  .content:has(.plugins-hub-header) .content-header,
+  .shell--settings .content.content--settings-workspace .content-header,
+  .content.content--hub-header .content-header,
   .shell--settings .settings-page,
-  .content:has(.plugins-hub-header) .settings-page,
+  .content.content--hub-header .settings-page,
   .shell--settings .config-content,
   .shell--settings .config-lead,
   .shell--settings .config-content-callout {
@@ -1130,4 +1082,14 @@ textarea.settings-input {
     min-height: 44px;
     white-space: normal;
   }
+}
+
+/* Quiet-hours details stay connected to their toggle without changing row controls. */
+.settings-row + .quiet-hours-window,
+.quiet-hours-window .settings-row + .settings-row {
+  border-top: 0;
+}
+
+.quiet-hours-window .settings-row {
+  padding-top: 0;
 }

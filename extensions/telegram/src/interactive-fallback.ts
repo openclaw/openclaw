@@ -22,6 +22,7 @@ import {
   type TelegramButtonBuildOptions,
   type TelegramDroppedControl,
 } from "./button-types.js";
+import { escapeTelegramHtml } from "./format-html.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 
 const TELEGRAM_CONTROL_ONLY_FALLBACK = "Choose an option.";
@@ -60,12 +61,7 @@ export function resolveTelegramPresentationCapabilities(params: {
 }
 
 function escapeTelegramTableCellText(value: string | number): string {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replace(/\s+/g, " ")
-    .trim();
+  return escapeTelegramHtml(String(value)).replace(/\s+/g, " ").trim();
 }
 
 // The `<table>` HTML island feeds the existing island -> rich-block converter,
@@ -147,12 +143,13 @@ export function copyTelegramDroppedControlFallback<T extends ReplyPayload | unde
   }
   return payload;
 }
-function canEncodeTelegramPresentationControl(
-  block: MessagePresentationInteractiveBlock,
-  options?: TelegramButtonBuildOptions,
-): boolean {
-  return Boolean(buildTelegramPresentationButtons({ blocks: [block] }, options)?.length);
-}
+export const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload =>
+  payload.text === text
+    ? payload
+    : copyTelegramDroppedControlFallback(
+        payload,
+        copyReplyPayloadMetadata(payload, { ...payload, text }),
+      );
 
 function partitionTelegramPresentationBlocks(params: {
   presentation: MessagePresentation;
@@ -164,49 +161,38 @@ function partitionTelegramPresentationBlocks(params: {
 } {
   const fallbackBlocks: MessagePresentation["blocks"] = [];
   const nativeControlBlocks: MessagePresentationInteractiveBlock[] = [];
+  const partitionControls = <T>(
+    controls: readonly T[],
+    blockFor: (controls: T[]) => MessagePresentationInteractiveBlock,
+  ): boolean => {
+    const native: T[] = [];
+    const fallback: T[] = [];
+    for (const control of controls) {
+      const buttons = buildTelegramPresentationButtons(
+        { blocks: [blockFor([control])] },
+        params.buttonOptions,
+      );
+      (buttons?.length ? native : fallback).push(control);
+    }
+    if (native.length > 0) {
+      nativeControlBlocks.push(blockFor(native));
+    }
+    if (fallback.length > 0) {
+      fallbackBlocks.push(blockFor(fallback));
+    }
+    return fallback.length > 0;
+  };
   for (const block of params.presentation.blocks) {
     if (!params.presentationControlsSelected || !isMessagePresentationInteractiveBlock(block)) {
       fallbackBlocks.push(block);
       continue;
     }
     if (block.type === "buttons") {
-      const nativeButtons: typeof block.buttons = [];
-      const fallbackButtons: typeof block.buttons = [];
-      for (const button of block.buttons) {
-        const target = canEncodeTelegramPresentationControl(
-          { type: "buttons", buttons: [button] },
-          params.buttonOptions,
-        )
-          ? nativeButtons
-          : fallbackButtons;
-        target.push(button);
-      }
-      if (nativeButtons.length > 0) {
-        nativeControlBlocks.push({ type: "buttons", buttons: nativeButtons });
-      }
-      if (fallbackButtons.length > 0) {
-        fallbackBlocks.push({ type: "buttons", buttons: fallbackButtons });
-      }
-      continue;
-    }
-
-    const nativeOptions: typeof block.options = [];
-    const fallbackOptions: typeof block.options = [];
-    for (const option of block.options) {
-      const target = canEncodeTelegramPresentationControl(
-        { type: "select", options: [option] },
-        params.buttonOptions,
-      )
-        ? nativeOptions
-        : fallbackOptions;
-      target.push(option);
-    }
-    if (nativeOptions.length > 0) {
-      nativeControlBlocks.push({ ...block, options: nativeOptions });
-    }
-    if (fallbackOptions.length > 0) {
-      fallbackBlocks.push({ ...block, options: fallbackOptions });
-    } else if (block.placeholder) {
+      partitionControls(block.buttons, (buttons) => ({ type: "buttons", buttons }));
+    } else if (
+      !partitionControls(block.options, (options) => ({ ...block, options })) &&
+      block.placeholder
+    ) {
       // Telegram maps selects to buttons, so retain the select prompt in message text.
       fallbackBlocks.push({ type: "text", text: block.placeholder });
     }

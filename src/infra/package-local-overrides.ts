@@ -14,7 +14,6 @@ import {
 } from "./package-local-overrides-preflight.js";
 import {
   assertLocalOverrideMutationTopology,
-  buildLocalOverrideInventoryEntry,
   emptyResult,
   fileModesHaveSameExecutableSemantics,
   mergeLocalOverrideFileMode,
@@ -29,6 +28,7 @@ import {
   type LocalPackageOverridesPlan,
   type LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import { relocateRuntimePath } from "./update-runtime-relocation.js";
 
 export { captureLocalPackageOverrides } from "./package-local-overrides-capture.js";
@@ -110,6 +110,7 @@ async function runRequiredFsSafeMove(params: {
     execFile(
       process.execPath,
       [
+        ...resolveRuntimeArgs(),
         "--input-type=module",
         "--eval",
         REQUIRED_FS_SAFE_OPERATION_SCRIPT,
@@ -136,7 +137,6 @@ async function runRequiredFsSafeMove(params: {
 class LocalOverrideRollbackError extends Error {
   constructor(
     readonly relativePath: string,
-    readonly action: string,
     readonly rollbackError: unknown,
   ) {
     super(
@@ -198,11 +198,7 @@ async function throwAfterRestoringMovedLocalOverrideTarget(params: {
     if (params.removeMovedAfterFailedRestore) {
       await params.packageFs.remove(params.movedPath).catch(() => undefined);
     }
-    throw new LocalOverrideRollbackError(
-      params.relativePath,
-      "restore current target",
-      rollbackError,
-    );
+    throw new LocalOverrideRollbackError(params.relativePath, rollbackError);
   }
   throw params.originalError;
 }
@@ -392,6 +388,25 @@ async function deleteLocalOverrideTarget(params: {
   }
 }
 
+function appliedLocalOverridesResult(
+  plan: LocalPackageOverridesPlan,
+  conflicts: LocalPackageOverridesResult["conflicts"],
+  applied: number,
+): LocalPackageOverridesResult {
+  return {
+    ...plan.result,
+    status: conflicts.length > 0 ? "conflict" : "applied",
+    applied,
+    conflicts,
+    warnings:
+      conflicts.length > 0
+        ? [
+            "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
+          ]
+        : [],
+  };
+}
+
 export async function applyLocalPackageOverrides(params: {
   packageRoot: string;
   plan: LocalPackageOverridesPlan | null;
@@ -459,18 +474,7 @@ export async function applyLocalPackageOverrides(params: {
     changesToApply.push(change);
   }
   if (changesToApply.length === 0) {
-    return {
-      ...params.plan.result,
-      status: conflicts.length > 0 ? "conflict" : "applied",
-      applied: 0,
-      conflicts,
-      warnings:
-        conflicts.length > 0
-          ? [
-              "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
-            ]
-          : [],
-    };
+    return appliedLocalOverridesResult(params.plan, conflicts, 0);
   }
 
   let rollbackDir: string | null = null;
@@ -502,9 +506,6 @@ export async function applyLocalPackageOverrides(params: {
       const backupPath = path.join(rollbackDir, change.path);
 
       if (change.kind === "deleted") {
-        if (!change.baseline) {
-          throw new Error(`missing local override baseline for ${change.path}`);
-        }
         const backupMode = await deleteLocalOverrideTarget({
           packageFs,
           runtimeUrls,
@@ -514,14 +515,14 @@ export async function applyLocalPackageOverrides(params: {
         });
         rollbackEntries.push({ path: change.path, backupPath, backupMode });
       } else {
-        if (!change.savedPath) {
-          throw new Error(`missing saved override payload for ${change.path}`);
-        }
-        const appliedEntry = await buildLocalOverrideInventoryEntry({
-          relativePath: change.path,
-          sourcePath: change.savedPath,
-          mode: change.mode,
-        });
+        const content = await fs.readFile(change.savedPath);
+        const stats = await fs.stat(change.savedPath);
+        const appliedEntry: PackageDistContentInventoryEntry = {
+          path: change.path,
+          sha256: createHash("sha256").update(content).digest("hex"),
+          mode: change.mode ?? normalizeFileMode(stats.mode),
+          size: content.length,
+        };
         const cleanupPaths = await replaceLocalOverrideTarget({
           packageFs,
           runtimeUrls,
@@ -558,7 +559,11 @@ export async function applyLocalPackageOverrides(params: {
       rollbackFailures.set(relativePath, messages);
     };
     if (applyError instanceof LocalOverrideRollbackError) {
-      recordRollbackFailure(applyError.relativePath, applyError.action, applyError.rollbackError);
+      recordRollbackFailure(
+        applyError.relativePath,
+        "restore current target",
+        applyError.rollbackError,
+      );
     }
     for (const entry of rollbackEntries.toReversed()) {
       if (entry.cleanupPaths && packageFs) {
@@ -638,16 +643,5 @@ export async function applyLocalPackageOverrides(params: {
     }
   }
 
-  return {
-    ...params.plan.result,
-    status: conflicts.length > 0 ? "conflict" : "applied",
-    applied,
-    conflicts,
-    warnings:
-      conflicts.length > 0
-        ? [
-            "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
-          ]
-        : [],
-  };
+  return appliedLocalOverridesResult(params.plan, conflicts, applied);
 }

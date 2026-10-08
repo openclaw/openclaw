@@ -130,7 +130,7 @@ export function renderComposer(
 
 export function resetComposerTestFixtures() {
   for (const attachmentDraft of attachmentDrafts) {
-    attachmentDraft.reset({ release: true });
+    attachmentDraft.reset();
   }
   attachmentDrafts.length = 0;
   for (const textareaController of textareaControllers) {

@@ -5,6 +5,7 @@ import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { holdModuleResponse, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   NEW_SESSION_MODEL_CATALOG,
@@ -645,7 +646,10 @@ suite.define(() => {
             return digest(algorithm, data);
           };
         });
-        const chatModule = await holdModuleResponse(page, /\/assets\/route-entry-[^/]+\.js/);
+        const chatModule = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
+        );
         try {
           const sessionKey = "agent:main:late-recovery-scope";
           const gateway = await installMockGateway(page, {

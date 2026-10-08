@@ -32,17 +32,13 @@ function hasMeaningfulConversationContent(message: AgentMessage): boolean {
     const custom = message as { content?: unknown; display?: unknown };
     return custom.display !== false && hasMeaningfulMessageContent(custom.content);
   }
-  if ((message as { role?: unknown }).role === "bashExecution") {
-    const bash = message as {
-      command?: unknown;
-      output?: unknown;
-    };
-    const command = typeof bash.command === "string" ? bash.command : "";
-    const output = typeof bash.output === "string" ? bash.output : "";
+  if (message.role === "bashExecution") {
+    const command = typeof message.command === "string" ? message.command : "";
+    const output = typeof message.output === "string" ? message.output : "";
     return hasMeaningfulText(`${command}\n${output}`);
   }
-  if (isSummaryRole((message as { role?: unknown }).role)) {
-    const summary = (message as { summary?: unknown }).summary;
+  if (message.role === "branchSummary" || message.role === "compactionSummary") {
+    const summary = message.summary;
     return typeof summary === "string" && hasMeaningfulText(summary);
   }
   const content = (message as { content?: unknown }).content;
@@ -76,7 +72,7 @@ function hasMeaningfulMessageContent(content: unknown): boolean {
 }
 
 function isToolResultConversationAnchor(message: AgentMessage): boolean {
-  const role = (message as { role?: unknown }).role;
+  const role = message.role;
   return (
     (role === "user" || role === "custom" || role === "bashExecution" || isSummaryRole(role)) &&
     hasMeaningfulConversationContent(message)
@@ -109,4 +105,19 @@ export function isRealConversationMessage(
     }
   }
   return false;
+}
+
+/** Classifies an ordered transcript without retaining earlier pages. */
+export function createRealConversationClassifier(): (message: AgentMessage) => boolean {
+  let anchorLookback = 0;
+  return (message) => {
+    const real =
+      message.role === "toolResult"
+        ? anchorLookback > 0
+        : isRealConversationMessage(message, [], 0);
+    anchorLookback = isToolResultConversationAnchor(message)
+      ? TOOL_RESULT_REAL_CONVERSATION_LOOKBACK
+      : Math.max(0, anchorLookback - 1);
+    return real;
+  };
 }

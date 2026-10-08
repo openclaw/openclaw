@@ -1,4 +1,5 @@
 // Health-state tests cover probe coalescing, sensitive snapshots, and broadcast version behavior.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -92,6 +93,7 @@ function createHealthSummary(): HealthSummary {
 const revisionProjector = {
   projectRawHash: (hash: string) => `raw-token:${hash}`,
   projectResolvedHash: (hash: string) => `resolved-token:${hash}`,
+  hashResponseSessionBearer: () => "unused-test-scope",
 };
 
 async function loadHealthState() {

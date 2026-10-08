@@ -230,16 +230,33 @@ dashboards, bridge mode, and Obsidian-friendly workflows.
 
 Before [compaction](/concepts/compaction) summarizes your conversation,
 OpenClaw runs a silent turn that reminds the agent to save important context
-to memory files. This is on by default; set
+to durable memory. Memory Core saves to a workspace memory file. A selected
+memory plugin can supply its own persistence tools. This is on by default; set
 `agents.defaults.compaction.memoryFlush.enabled: false` to turn it off.
+OpenClaw resolves when the flush runs from that host config and the active
+context window. The selected memory provider supplies the prompts and
+persistence target or tools. It inherits host timing unless it deliberately
+overrides an optional timing field.
 
 The flush uses a private copy of the conversation, so its housekeeping messages
-never appear in later user turns, even if interrupted. Its writes to memory files
+never appear in later user turns, even if interrupted. Its writes to memory
 are still saved normally.
 
-Memory flushing requires writable workspace access. Sessions whose sandbox
+Memory Core's file flush requires writable workspace access. Sessions whose sandbox
 requires read-only or no workspace access skip the flush, including sessions
 with a persisted sandbox requirement that overrides the agent's configuration.
+
+A native provider's tools-based flush does not require a writable workspace;
+other flush plans are not resolved for sessions that cannot write it. It exposes
+`read`, the provider's declared persistence tools, and optional read-only lookup
+tools, subject to normal tool policies. Those tools receive the source turn's
+memory audience and sandbox state. Missing lookup tools produce a warning but do
+not block a flush that can still persist. The flush is skipped if no valid
+audience or permitted persistence tool is available. It succeeds when a
+persistence tool completes without error or the agent returns `NO_REPLY`; lookup
+success alone does not complete the flush. Skipping or failing this optional step
+does not prevent compaction. Plugin authors can find the contract and retry
+identity in [Pre-compaction memory flush](/plugins/sdk-overview/memory-and-context#pre-compaction-memory-flush).
 
 To keep that housekeeping turn on a local model, set an exact override that
 applies only to the memory-flush turn (it does not inherit the active
@@ -260,9 +277,9 @@ session's model fallback chain):
 ```
 
 <Tip>
-The memory flush prevents context loss during compaction. If your agent has
-important facts in the conversation that are not yet written to a file, they
-are saved automatically before the summary happens.
+The memory flush gives the agent a chance to save important facts before
+compaction summarizes the conversation. Check your memory plugin's saved notes
+or records when you need to confirm that a fact was retained.
 </Tip>
 
 ## Dreaming
@@ -298,10 +315,18 @@ The dreaming system has two related review lanes:
 
 - **Live dreaming** works from short-term dreaming state in SQLite plugin
   storage and is what the normal deep phase uses to decide what graduates into
-  `MEMORY.md`. Doctor owns migration of legacy dreaming JSON state from
-  `memory/.dreams/`; run `openclaw doctor --fix` before using that old state.
+  `MEMORY.md`.
 - **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
   standalone day files and writes structured review output into `DREAMS.md`.
+
+Dreaming JSON journals from before July 2026 are no longer imported. The
+migration check leaves `memory/.dreams/daily-ingestion.json`, `session-ingestion.json`,
+`short-term-recall.json`, and `phase-signals.json` untouched. Existing SQLite
+state remains authoritative. If Doctor cannot establish canonical state,
+restore a backup from a July 2026 or newer release. An empty ingestion store
+without a previous migration acknowledgement is indistinguishable from
+unmigrated state; after verifying its SQLite state, back up and move the retired
+JSON file aside, then rerun `openclaw doctor --fix`.
 
 Grounded backfill is useful for replaying older notes and inspecting what the
 system considers durable, without manually editing `MEMORY.md`.

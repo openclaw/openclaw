@@ -47,8 +47,9 @@ export function verifyPluginSourceInputs(
     const identity = input.native
       ? pluginSourceFileIdentity(source, input.boundary)
       : pluginSourceInputIdentity(fs.statSync(source, { bigint: true }));
+    // Retaining native namespaces also hardlinks ordinary companion files.
     if (
-      input.native &&
+      !input.directory &&
       identity !== input.identity &&
       pluginSourceIdentityChangedOnlyByCtime(input.identity, identity) &&
       hashPluginSourceFile(source, input.boundary).contentHash === input.contentHash

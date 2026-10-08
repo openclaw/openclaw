@@ -6,8 +6,10 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
+import { wrapToolWorkspaceRootGuardWithOptions } from "./agent-tools.read.js";
 import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import {
   isRuntimeToolAllowed,
   isToolAllowedByPolicies,
@@ -32,14 +34,30 @@ function expandProgressCardPolicyNames(
     : undefined;
 }
 
-/** Drops disabled optional tools while preserving candidate order. */
-export function collectPresentOpenClawTools(
-  candidates: readonly (AnyAgentTool | null | undefined)[],
-): AnyAgentTool[] {
-  return candidates.filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
+/** Wraps the nodes tool with a workspace-only output-path guard when policy requires it. */
+export function applyNodesToolWorkspaceGuard(
+  nodesToolBase: AnyAgentTool,
+  options: {
+    fsPolicy?: ToolFsPolicy;
+    sandboxContainerWorkdir?: string;
+    sandboxRoot?: string;
+    workspaceDir: string;
+  },
+): AnyAgentTool {
+  if (options.fsPolicy?.workspaceOnly !== true) {
+    return nodesToolBase;
+  }
+  return wrapToolWorkspaceRootGuardWithOptions(
+    nodesToolBase,
+    options.sandboxRoot ?? options.fsPolicy.root ?? options.workspaceDir,
+    {
+      containerWorkdir: options.sandboxContainerWorkdir,
+      normalizeGuardedPathParams: true,
+      pathParamKeys: ["outPath"],
+    },
+  );
 }
 
-/** Decides whether progress_card should be included in the assembled OpenClaw tool set. */
 export function shouldIncludeProgressCardToolForOpenClawTools(params: {
   agentId?: string;
   agentSessionKey?: string;

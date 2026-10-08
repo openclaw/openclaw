@@ -48,6 +48,7 @@ import {
   isSessionTranscriptValidationErrorMessage,
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
+  resolveExecutionApprovalFailureMessage,
 } from "./message-patterns.js";
 import type { classifyProviderPluginError } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
@@ -265,6 +266,9 @@ export function classifyFailoverSignalCore(
   signal: FailoverSignal,
   classifyProviderError?: ProviderErrorClassifier,
 ): FailoverClassification | null {
+  if (resolveExecutionApprovalFailureMessage(signal.message)) {
+    return null;
+  }
   const inferredStatus = inferSignalStatus(signal);
   const explicitStatus =
     typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
@@ -399,9 +403,6 @@ const API_ERROR_TRANSIENT_SIGNALS_RE =
   /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream error|backend error|try again later|temporarily.+unable|unexpected error/i;
 
 function isJsonApiInternalServerError(raw: string): boolean {
-  if (!raw) {
-    return false;
-  }
   const value = normalizeLowercaseStringOrEmpty(raw);
   // Providers wrap transient 5xx errors in JSON payloads like:
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
@@ -421,9 +422,6 @@ function isJsonApiInternalServerError(raw: string): boolean {
 }
 
 function isStructuredServerErrorMessage(raw: string): boolean {
-  if (!raw) {
-    return false;
-  }
   const parsedType = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
   if (parsedType === "server_error" || parsedType === "upstream_error") {
     return true;

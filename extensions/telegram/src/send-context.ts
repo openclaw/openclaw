@@ -25,7 +25,12 @@ import {
 } from "./request-authority.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
-import { normalizeTelegramChatId, normalizeTelegramLookupTarget } from "./targets.js";
+import {
+  hasRejectedTelegramTopic,
+  normalizeTelegramChatId,
+  normalizeTelegramLookupTarget,
+  TELEGRAM_INVALID_TOPIC_ID_MESSAGE,
+} from "./targets.js";
 
 export type TelegramApi = Bot["api"];
 export type TelegramApiOverride = Partial<TelegramApi>;
@@ -127,17 +132,13 @@ export const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 type CachedTelegramClientOptions = {
   activeLeases: number;
-  clientOptions: ApiClientOptions | undefined;
+  clientOptions: ApiClientOptions & { fetch: NonNullable<ApiClientOptions["fetch"]> };
   closeStarted: boolean;
   retired: boolean;
   transport: TelegramTransport;
 };
 type TelegramClientOptionsLease = {
   release: () => void;
-};
-type ResolvedTelegramClientOptions = {
-  clientOptions: ApiClientOptions | undefined;
-  lease: () => TelegramClientOptionsLease;
 };
 const telegramClientOptionsCache = new Map<string, CachedTelegramClientOptions>();
 const MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE = 64;
@@ -212,7 +213,7 @@ function leaseCachedTelegramClientOptions(
 function setCachedTelegramClientOptions(
   cacheKey: string,
   entry: CachedTelegramClientOptions,
-): ResolvedTelegramClientOptions {
+): CachedTelegramClientOptions {
   telegramClientOptionsCache.set(cacheKey, entry);
   if (telegramClientOptionsCache.size > MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE) {
     const oldestKey = telegramClientOptionsCache.keys().next().value;
@@ -224,49 +225,41 @@ function setCachedTelegramClientOptions(
       }
     }
   }
-  return {
-    clientOptions: entry.clientOptions,
-    lease: () => leaseCachedTelegramClientOptions(entry),
-  };
+  return entry;
 }
 
 function resolveTelegramClientOptions(
   account: ResolvedTelegramAccount,
-): ResolvedTelegramClientOptions {
+): CachedTelegramClientOptions {
   const cacheKey = buildTelegramClientOptionsCacheKey(account);
-  const entry = telegramClientOptionsCache.get(cacheKey);
-  if (entry) {
-    return {
-      clientOptions: entry.clientOptions,
-      lease: () => leaseCachedTelegramClientOptions(entry),
-    };
-  }
+  return (
+    telegramClientOptionsCache.get(cacheKey) ??
+    setCachedTelegramClientOptions(cacheKey, createTelegramClientOptions(account))
+  );
+}
 
-  const proxyUrl = normalizeOptionalString(account.config.proxy);
-  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+function createTelegramClientOptions(
+  account: ResolvedTelegramAccount,
+): CachedTelegramClientOptions {
   const apiRoot = normalizeOptionalString(account.config.apiRoot);
   const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
-  const transport = resolveTelegramTransport(proxyFetch, {
-    network: account.config.network,
-  });
+  const proxyUrl = normalizeOptionalString(account.config.proxy);
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+  const transport = resolveTelegramTransport(proxyFetch, { network: account.config.network });
   const fetchImpl = createTelegramClientFetch({
     fetchImpl: asTelegramClientFetch(transport.fetch),
     transport,
   });
-  const clientOptions =
-    fetchImpl || normalizedApiRoot
-      ? {
-          ...(fetchImpl ? { fetch: asTelegramClientFetch(fetchImpl) } : {}),
-          ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
-        }
-      : undefined;
-  return setCachedTelegramClientOptions(cacheKey, {
+  return {
     activeLeases: 0,
-    clientOptions,
+    clientOptions: {
+      fetch: asTelegramClientFetch(fetchImpl),
+      ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
+    },
     closeStarted: false,
     retired: false,
     transport,
-  });
+  };
 }
 
 function resolveToken(explicit: string | undefined, params: { accountId: string; token: string }) {
@@ -292,7 +285,11 @@ async function resolveChatId(
   const lookupTarget = normalizeTelegramLookupTarget(to);
   const getChat = params.api.getChat;
   if (!lookupTarget || typeof getChat !== "function") {
-    throw new Error("Telegram recipient must be a numeric chat ID");
+    throw new Error(
+      hasRejectedTelegramTopic(to)
+        ? TELEGRAM_INVALID_TOPIC_ID_MESSAGE
+        : "Telegram recipient must be a numeric chat ID",
+    );
   }
   try {
     const chat = await getChat.call(params.api, lookupTarget);
@@ -341,11 +338,7 @@ export function normalizeMessageId(raw: string | number): number {
     return Math.trunc(raw);
   }
   if (typeof raw === "string") {
-    const value = raw.trim();
-    if (!value) {
-      throw new Error("Message id is required for Telegram actions");
-    }
-    const parsed = parseStrictInteger(value);
+    const parsed = parseStrictInteger(raw);
     if (parsed !== undefined) {
       return parsed;
     }
@@ -387,16 +380,15 @@ function resolveTelegramApiContext(opts: {
     const client = resolveTelegramClientOptions(account);
     // One op-level lease covers the full send/action (including pre-request work
     // and retries) so eviction cannot close the transport mid-operation.
-    clientOptionsLease = client.lease();
-    const fetch = client.clientOptions?.fetch;
-    const clientOptions =
-      fetch && opts.assertPlatformSendAuthorized
-        ? {
-            ...client.clientOptions,
-            fetch: bindTelegramRequestAuthority(fetch, opts.assertPlatformSendAuthorized),
-          }
-        : client.clientOptions;
-    const bot = new Bot(token, clientOptions ? { client: clientOptions } : undefined);
+    clientOptionsLease = leaseCachedTelegramClientOptions(client);
+    const fetch = client.clientOptions.fetch;
+    const clientOptions = opts.assertPlatformSendAuthorized
+      ? {
+          ...client.clientOptions,
+          fetch: bindTelegramRequestAuthority(fetch, opts.assertPlatformSendAuthorized),
+        }
+      : client.clientOptions;
+    const bot = new Bot(token, { client: clientOptions });
     if (opts.signal || opts.assertPlatformSendAuthorized) {
       // grammY wraps later transformers around earlier ones. Check authority
       // after the account queue drains, immediately before its HTTP client runs.
@@ -446,7 +438,7 @@ export async function withTelegramApiContext<T>(
 
 type TelegramRequestWithDiag = <T>(
   fn: () => Promise<T>,
-  label?: string,
+  label: string,
   options?: { shouldLog?: (err: unknown) => boolean },
 ) => Promise<T>;
 
@@ -466,22 +458,18 @@ export function createTelegramRequestWithDiag(params: {
     ...(params.strictShouldRetry ? { strictShouldRetry: true } : {}),
   });
   const logHttpError = createTelegramHttpLogger(params.cfg);
-  return <T>(
-    fn: () => Promise<T>,
-    label?: string,
-    options?: { shouldLog?: (err: unknown) => boolean },
-  ) => {
+  return (fn, label, options) => {
     const runRequest = () => request(fn, label);
     const call =
       params.useApiErrorLogging === false
         ? runRequest()
         : withTelegramApiErrorLogging({
-            operation: label ?? "request",
+            operation: label,
             fn: runRequest,
             ...(options?.shouldLog ? { shouldLog: options.shouldLog } : {}),
           });
     return call.catch((err: unknown) => {
-      logHttpError(label ?? "request", err);
+      logHttpError(label, err);
       throw err;
     });
   };
@@ -490,7 +478,6 @@ export function createTelegramRequestWithDiag(params: {
 function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; input: string }) {
   const errorMsg = formatErrorMessage(err);
 
-  // Check for 403 "bot is not a member" or "bot was blocked" errors
   if (/403.*(bot.*not.*member|bot.*blocked|bot.*kicked)/i.test(errorMsg)) {
     return new Error(
       [
@@ -518,12 +505,8 @@ export function createRequestWithChatNotFound(params: {
   requestWithDiag: TelegramRequestWithDiag;
   chatId: string;
   input: string;
-}) {
-  return async <T>(
-    fn: () => Promise<T>,
-    label: string,
-    options?: { shouldLog?: (err: unknown) => boolean },
-  ) =>
+}): TelegramRequestWithDiag {
+  return async (fn, label, options) =>
     params.requestWithDiag(fn, label, options).catch((err: unknown) => {
       throw wrapTelegramChatNotFoundError(err, {
         chatId: params.chatId,
@@ -539,10 +522,7 @@ export function createTelegramNonIdempotentRequestWithDiag(params: {
   useApiErrorLogging?: boolean;
 }): TelegramRequestWithDiag {
   const request = createTelegramRequestWithDiag({
-    cfg: params.cfg,
-    retry: params.retry,
-    verbose: params.verbose,
-    useApiErrorLogging: params.useApiErrorLogging,
+    ...params,
     shouldRetry: isSafeToRetrySendError,
     strictShouldRetry: true,
   });

@@ -90,20 +90,17 @@ describe("renderModelPicker", () => {
     const customOption = Array.from(container.querySelectorAll('[role="option"]')).find(
       (option) => option.textContent?.trim() === "Custom model…",
     );
-    const picker = container.querySelector<SelectPicker>("openclaw-select-picker");
-    const input = container.querySelector<HTMLInputElement>("input");
+    const picker = container.querySelector<SelectPicker>("openclaw-select-picker")!;
+    const input = container.querySelector<HTMLInputElement>("input")!;
     expect(customOption).not.toBeNull();
     expect(input?.hidden).toBe(true);
-    if (!customOption || !picker || !input) {
-      return;
-    }
-    await choosePickerValue(picker, customOption.getAttribute("data-value")!);
+    await choosePickerValue(picker, customOption!.getAttribute("data-value")!);
     expect(input.hidden).toBe(false);
 
     input.value = "vendor/model with spaces";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith("vendor/model with spaces");
-    expect(onChange).not.toHaveBeenCalledWith(customOption.getAttribute("data-value"));
+    expect(onChange).not.toHaveBeenCalledWith(customOption!.getAttribute("data-value"));
   });
 
   it("does not show a raw model reference when a model option receives pointer hover", async () => {

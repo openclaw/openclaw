@@ -171,6 +171,7 @@ export function createMeetingDurableTranscriptBridge<
               (await store.readSummarySnapshot(descriptor, 1))?.nextSequence ?? 0;
             await store.writeSession(descriptor);
             active.summaryUpdates = await createTranscriptSummaryUpdates({
+              stateDir,
               config,
               cfg: params.options.openclawConfig,
               store,
@@ -349,6 +350,7 @@ export function createMeetingDurableTranscriptBridge<
             await tasks.enqueue(session.id, async () => {
               await store.writeSession(stopped);
               await persistTranscriptSummary({
+                stateDir,
                 config,
                 cfg: params.options.openclawConfig,
                 store,

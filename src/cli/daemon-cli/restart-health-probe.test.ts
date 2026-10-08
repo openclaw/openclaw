@@ -146,6 +146,7 @@ describe("restart health", () => {
     await expect(
       confirmGatewayReachable({
         port: 18_789,
+        auth: { token: "fixture-token" },
         configuredProbe,
         config: { gateway: { tls: { enabled: true } } },
       }),
@@ -272,7 +273,7 @@ describe("restart health", () => {
           timeoutMs: 3_000,
         });
         expect(renderRestartDiagnostics(snapshot)).toContain(
-          `Gateway probe failed: ${snapshot.probeError}`,
+          `Gateway check failed: ${snapshot.probeError}`,
         );
       } finally {
         await closeMinimalGatewayServer(gateway);

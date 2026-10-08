@@ -12,8 +12,8 @@ import {
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import { runWebSearch } from "../../web-search/runtime.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { prepareAuthenticatedProfile } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 import { prepareWebSearchStatus } from "./web-search-status.js";
 
@@ -48,6 +48,14 @@ function searchTestError(error: unknown): string {
   return "The search provider could not complete the request. Check its endpoint, connectivity, and provider status.";
 }
 
+function respondSearchError(
+  respond: RespondFn,
+  code: Parameters<typeof errorShape>[0],
+  message: string,
+) {
+  respond(false, undefined, errorShape(code, message));
+}
+
 export const webSearchHandlers: GatewayRequestHandlers = {
   "webSearch.status": async (options) => {
     const { params, respond, context } = options;
@@ -55,50 +63,45 @@ export const webSearchHandlers: GatewayRequestHandlers = {
       return;
     }
     if (Boolean(params.modelProvider) !== Boolean(params.modelId)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "modelProvider and modelId must be supplied together.",
-        ),
+      respondSearchError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "modelProvider and modelId must be supplied together.",
       );
       return;
     }
     if (!hasSearchAuthority(options, "read")) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Current read access is required to inspect search settings.",
-        ),
+      respondSearchError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Current read access is required to inspect search settings.",
       );
       return;
     }
-    const requesterProfileId = resolveAuthenticatedProfileId(options.client);
     try {
-      const prepared = await prepareWebSearchStatus(context, params, requesterProfileId);
+      const requester = await prepareAuthenticatedProfile(options);
+      requester.assertCurrent();
+      const prepared = await prepareWebSearchStatus(context, params, requester.profileId);
+      requester.assertCurrent();
       if (prepared.error) {
         respond(false, undefined, prepared.error);
       } else if (
         !hasSearchAuthority(options, "read") ||
-        resolveAuthenticatedProfileId(options.client) !== requesterProfileId ||
         context.getRuntimeConfig() !== prepared.config
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "Search settings changed. Refresh and try again."),
+        respondSearchError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "Search settings changed. Refresh and try again.",
         );
       } else {
         respond(true, prepared.status, undefined);
       }
     } catch {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "Search settings are not ready. Refresh and try again."),
+      respondSearchError(
+        respond,
+        ErrorCodes.UNAVAILABLE,
+        "Search settings are not ready. Refresh and try again.",
       );
     }
   },
@@ -109,47 +112,40 @@ export const webSearchHandlers: GatewayRequestHandlers = {
     }
     const query = params.query.trim();
     if (!query || Boolean(params.modelProvider) !== Boolean(params.modelId)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Provide a search query and both model selection fields, or neither.",
-        ),
+      respondSearchError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Provide a search query and both model selection fields, or neither.",
       );
       return;
     }
     if (!hasSearchAuthority(options, "admin")) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Current administrator access is required to test search.",
-        ),
+      respondSearchError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Current administrator access is required to test search.",
       );
       return;
     }
-    const requesterProfileId = resolveAuthenticatedProfileId(options.client);
     try {
-      const prepared = await prepareWebSearchStatus(context, params, requesterProfileId);
+      const requester = await prepareAuthenticatedProfile(options);
+      requester.assertCurrent();
+      const prepared = await prepareWebSearchStatus(context, params, requester.profileId);
+      requester.assertCurrent();
       if (prepared.error) {
         respond(false, undefined, prepared.error);
         return;
       }
       const { status, config, agentDir } = prepared;
-      const hasCurrentAuthority = () =>
-        hasSearchAuthority(options, "admin") &&
-        resolveAuthenticatedProfileId(options.client) === requesterProfileId &&
-        context.getRuntimeConfig() === config;
+      const hasCurrentAuthority = () => {
+        requester.assertCurrent();
+        return hasSearchAuthority(options, "admin") && context.getRuntimeConfig() === config;
+      };
       if (!hasCurrentAuthority()) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "Search settings or access changed. Refresh and try again.",
-          ),
+        respondSearchError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "Search settings or access changed. Refresh and try again.",
         );
         return;
       }
@@ -159,13 +155,10 @@ export const webSearchHandlers: GatewayRequestHandlers = {
         ? explicitProvider === status.testProvider?.id
         : status.route.kind === "managed" && status.route.testable;
       if (!canTest || !provider) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            status.route.reason ?? "Choose an available search provider before testing.",
-          ),
+        respondSearchError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          status.route.reason ?? "Choose an available search provider before testing.",
         );
         return;
       }
@@ -247,22 +240,19 @@ export const webSearchHandlers: GatewayRequestHandlers = {
         };
       }
       if (!hasCurrentAuthority()) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "Search settings or access changed during the test. Refresh and try again.",
-          ),
+        respondSearchError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "Search settings or access changed during the test. Refresh and try again.",
         );
         return;
       }
       respond(true, result, undefined);
     } catch {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "Search settings are not ready. Refresh and try again."),
+      respondSearchError(
+        respond,
+        ErrorCodes.UNAVAILABLE,
+        "Search settings are not ready. Refresh and try again.",
       );
     }
   },

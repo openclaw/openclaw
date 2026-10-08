@@ -52,21 +52,15 @@ export type SkillWorkshopContext = {
 export function resolveSkillWorkshopAgentId(context: SkillWorkshopContext): string {
   const snapshot = context.gateway.snapshot;
   const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
-  const selectedAgentId = context.agentSelection.state.selectedId;
-  return selectedAgentId
-    ? normalizeAgentId(selectedAgentId)
-    : sessionAgentId
-      ? normalizeAgentId(sessionAgentId)
-      : resolveUiSelectedGlobalAgentId(snapshot);
+  const agentId = context.agentSelection.state.selectedId || sessionAgentId;
+  return agentId ? normalizeAgentId(agentId) : resolveUiSelectedGlobalAgentId(snapshot);
 }
 
-export function loadedSkillWorkshopAgentParams(
+export function loadedSkillWorkshopAgentId(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
-): { agentId: string } {
-  return {
-    agentId: state.skillWorkshopAgentId ?? resolveSkillWorkshopAgentId(context),
-  };
+): string {
+  return state.skillWorkshopAgentId ?? resolveSkillWorkshopAgentId(context);
 }
 
 function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string): void {
@@ -76,7 +70,6 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
   state.skillWorkshopInstalledSkills = [];
   state.skillWorkshopInstalledName = null;
   state.skillWorkshopSelectedKey = null;
-  state.skillWorkshopInspectingKey = null;
   state.skillWorkshopRevisionKey = null;
   state.skillWorkshopRevisionDraft = "";
   state.skillWorkshopFilePreviewKey = null;
@@ -87,15 +80,8 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
 export function mergeProposal(state: SkillWorkshopState, proposal: SkillWorkshopProposal): void {
   const proposals = state.skillWorkshopProposals;
   const index = proposals.findIndex((item) => item.key === proposal.key);
-  if (index < 0) {
-    state.skillWorkshopProposals = [proposal, ...proposals];
-    return;
-  }
-  state.skillWorkshopProposals = [
-    ...proposals.slice(0, index),
-    proposal,
-    ...proposals.slice(index + 1),
-  ];
+  state.skillWorkshopProposals =
+    index < 0 ? [proposal, ...proposals] : proposals.with(index, proposal);
 }
 
 export async function selectSkillWorkshopInstalledSkill(
@@ -119,7 +105,7 @@ async function loadInstalledSkill(
   options?: SkillWorkshopLoadOptions,
 ): Promise<void> {
   const { client, phase } = context.gateway.snapshot;
-  const agentId = loadedSkillWorkshopAgentParams(state, context).agentId;
+  const agentId = loadedSkillWorkshopAgentId(state, context);
   if (
     !client ||
     phase !== "connected" ||
@@ -240,10 +226,7 @@ export async function loadSkillWorkshopProposals(
   if (state.skillWorkshopAgentId !== requestAgentId) {
     resetSkillWorkshopAgentScope(state, requestAgentId);
   }
-  if (state.skillWorkshopLoading) {
-    return;
-  }
-  if (state.skillWorkshopLoaded && !options?.force) {
+  if (state.skillWorkshopLoading || (state.skillWorkshopLoaded && !options?.force)) {
     return;
   }
   const generation = readGeneration(state);
@@ -299,14 +282,14 @@ export async function loadSkillWorkshopProposals(
       // Only a refresh that actually reassigns the pane owns the selection
       // fence; otherwise a background reload would silence an in-flight click.
       if (state.skillWorkshopSelectedKey) {
-        markSkillWorkshopSelectionRequest(state, state.skillWorkshopSelectedKey);
+        selectionRequestByState.set(state, state.skillWorkshopSelectedKey);
       }
     }
     const selectedKey = state.skillWorkshopSelectedKey;
     if (selectedKey) {
       // Route data retains the selection but not its ephemeral request fence.
       if (!selectionRequestByState.has(state)) {
-        markSkillWorkshopSelectionRequest(state, selectedKey);
+        selectionRequestByState.set(state, selectedKey);
       }
       await loadSkillWorkshopProposalDetail(state, context, selectedKey, {
         isCurrent: options?.isCurrent,
@@ -349,14 +332,6 @@ function inspectRequests(state: SkillWorkshopState): Map<string, Promise<boolean
   return requests;
 }
 
-function markSkillWorkshopSelectionRequest(state: SkillWorkshopState, proposalId: string): void {
-  selectionRequestByState.set(state, proposalId);
-}
-
-function isLatestSkillWorkshopSelection(state: SkillWorkshopState, proposalId: string): boolean {
-  return selectionRequestByState.get(state) === proposalId;
-}
-
 async function inspectSkillWorkshopProposal(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
@@ -365,10 +340,8 @@ async function inspectSkillWorkshopProposal(
   existing: SkillWorkshopProposal | undefined,
   options?: SkillWorkshopLoadOptions,
 ): Promise<boolean> {
-  const requestAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
-  if (state.skillWorkshopAgentId === null) {
-    state.skillWorkshopAgentId = requestAgentId;
-  }
+  const requestAgentId = loadedSkillWorkshopAgentId(state, context);
+  state.skillWorkshopAgentId ??= requestAgentId;
   const generation = readGeneration(state);
   const isCurrentRead = () =>
     readGeneration(state) === generation &&
@@ -379,11 +352,10 @@ async function inspectSkillWorkshopProposal(
   state.skillWorkshopInspectingKey = proposalId;
   state.skillWorkshopError = null;
   try {
-    const requestParams = { agentId: requestAgentId, proposalId };
-    const result = await client.request<SkillsProposalInspectResult>(
-      "skills.proposals.inspect",
-      requestParams,
-    );
+    const result = await client.request<SkillsProposalInspectResult>("skills.proposals.inspect", {
+      agentId: requestAgentId,
+      proposalId,
+    });
     if (!isCurrentRead()) {
       return false;
     }
@@ -392,7 +364,7 @@ async function inspectSkillWorkshopProposal(
   } catch (err) {
     // Only the revision the operator is waiting on may publish an error; a
     // superseded click stays quiet.
-    if (isCurrentRead() && isLatestSkillWorkshopSelection(state, proposalId)) {
+    if (isCurrentRead() && selectionRequestByState.get(state) === proposalId) {
       state.skillWorkshopError = formatUiError(err);
     }
     return false;
@@ -444,11 +416,11 @@ export async function selectSkillWorkshopProposal(
   context: SkillWorkshopContext,
   proposalId: string,
 ): Promise<void> {
-  markSkillWorkshopSelectionRequest(state, proposalId);
+  selectionRequestByState.set(state, proposalId);
   const current = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
   if (!current?.bodyLoaded) {
     const loaded = await loadSkillWorkshopProposalDetail(state, context, proposalId);
-    if (!loaded || !isLatestSkillWorkshopSelection(state, proposalId)) {
+    if (!loaded || selectionRequestByState.get(state) !== proposalId) {
       return;
     }
   }

@@ -38,8 +38,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-canonical_team="${canonical_team//$'\r'/}"
-
 if [[ -n "${IOS_DEVELOPMENT_TEAM:-}" ]]; then
   explicit_team="${IOS_DEVELOPMENT_TEAM//$'\r'/}"
   if [[ "$require_canonical" == "1" && "$explicit_team" != "$canonical_team" ]]; then
@@ -60,7 +58,6 @@ preferred_team_name="${preferred_team_name//$'\r'/}"
 declare -a team_ids=()
 declare -a team_is_free=()
 declare -a team_names=()
-python_cmd=""
 
 detect_python() {
   local candidate
@@ -136,11 +133,6 @@ for teams in data.values():
   )
 }
 
-load_teams_from_xcode_preferences() {
-  load_teams_from_xcode_team_key IDEProvisioningTeamByIdentifier
-  load_teams_from_xcode_team_key IDEProvisioningTeams
-}
-
 load_teams_from_legacy_defaults_key() {
   while IFS= read -r team; do
     [[ -z "$team" ]] && continue
@@ -187,7 +179,8 @@ has_xcode_account() {
   [[ -n "$accts" ]] && [[ "$accts" != *"does not exist"* ]] && grep -q 'identifier' <<< "$accts"
 }
 
-load_teams_from_xcode_preferences
+load_teams_from_xcode_team_key IDEProvisioningTeamByIdentifier
+load_teams_from_xcode_team_key IDEProvisioningTeams
 load_teams_from_legacy_defaults_key
 
 if [[ ${#team_ids[@]} -eq 0 ]]; then

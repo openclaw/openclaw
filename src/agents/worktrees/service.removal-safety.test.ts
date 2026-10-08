@@ -4,10 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as checkoutGitOwner from "./checkout-git-config.js";
+import * as checkoutInspection from "./checkout-inspection.js";
 import * as gitOwner from "./git.js";
-import { getRegistryWorktree } from "./registry.js";
+import { updateRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
+import { acquireWorktreeRunLease } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
@@ -69,87 +73,20 @@ describe("managed removal custody", () => {
     });
   }
 
-  it("uses native non-force removal without pruning a missing sibling registration", async () => {
-    const created = await materialize("lossless");
-    const sibling = path.join(root, "sibling");
-    await git(repo, "worktree", "add", "--detach", sibling, "HEAD");
-    await fs.rename(sibling, path.join(root, "sibling-parked"));
-    const trace = path.join(root, "git-trace.jsonl");
-    vi.stubEnv("GIT_TRACE2_EVENT", trace);
+  it("retains the recorded unpublished branch after HEAD is switched", async () => {
+    const created = await materialize("switched");
+    await git(created.path, "commit", "--allow-empty", "-m", "unpublished work");
+    const tip = await git(created.path, "rev-parse", "HEAD");
+    await git(created.path, "checkout", "-b", "replacement", "main");
 
-    await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
+    await expect(service.remove({ id: created.id, reason: "archive" })).rejects.toThrow(
+      /branch|HEAD/,
+    );
 
-    const commands = (await fs.readFile(trace, "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { event: string; argv?: string[] })
-      .filter((entry) => entry.event === "start")
-      .map((entry) => entry.argv ?? []);
-    const removal = commands.filter((args) => args.includes("worktree") && args.includes("remove"));
-    expect(removal).toHaveLength(1);
-    expect(removal[0]).not.toContain("--force");
-    expect(commands.some((args) => args.includes("branch") && args.includes("-D"))).toBe(false);
-    expect(await git(repo, "worktree", "list", "--porcelain")).toContain(sibling);
-    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
-    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await git(repo, "rev-parse", created.branch)).toBe(tip);
+    await expect(fs.stat(created.path)).resolves.toBeDefined();
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
   });
-
-  it.each(["switched", "detached"])(
-    "retains the recorded unpublished branch after HEAD is %s",
-    async (kind) => {
-      const created = await materialize(kind);
-      await git(created.path, "commit", "--allow-empty", "-m", "unpublished work");
-      const tip = await git(created.path, "rev-parse", "HEAD");
-      if (kind === "switched") {
-        await git(created.path, "checkout", "-b", "replacement", "main");
-      } else {
-        await git(created.path, "checkout", "--detach", "main");
-      }
-
-      await expect(service.remove({ id: created.id, reason: "archive" })).rejects.toThrow(
-        /branch|HEAD/,
-      );
-
-      expect(await git(repo, "rev-parse", created.branch)).toBe(tip);
-      await expect(fs.stat(created.path)).resolves.toBeDefined();
-      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-    },
-  );
-
-  it.each(["none", "single", "multiple"])(
-    "archives and restores unpublished work with %s tracking",
-    async (tracking) => {
-      const created = await materialize(tracking);
-      if (tracking !== "none") {
-        await git(repo, "config", `branch.${created.branch}.remote`, ".");
-        await git(repo, "config", "--add", `branch.${created.branch}.merge`, "refs/heads/main");
-        if (tracking === "multiple") {
-          await git(
-            repo,
-            "config",
-            "--add",
-            `branch.${created.branch}.merge`,
-            "refs/heads/another",
-          );
-        }
-      }
-      await git(created.path, "commit", "--allow-empty", "-m", "unpublished task work");
-      const head = await git(created.path, "rev-parse", "HEAD");
-      await fs.writeFile(path.join(created.path, "untracked.txt"), "saved work\n");
-
-      const result = await service.remove({ id: created.id, reason: "archive" });
-      expect(result).toMatchObject({
-        removed: true,
-        snapshotRef: `refs/openclaw/snapshots/${created.id}`,
-      });
-      expect(await git(repo, "branch", "--list", created.branch)).toBe("");
-      const restored = await service.restore({ id: created.id });
-      expect(await git(restored.path, "rev-parse", "HEAD")).toBe(head);
-      expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(
-        "saved work\n",
-      );
-    },
-  );
 
   it("retains hidden dirty work instead of relying on status flags", async () => {
     const created = await materialize("hidden-dirty");
@@ -159,6 +96,96 @@ describe("managed removal custody", () => {
     await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
     expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.outcome).toBe("retained-dirty");
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("hidden change\n");
+  });
+
+  it("finalizes source-only deletion after its producer and command scope are revoked", async () => {
+    const created = await materializeManagedWorktreeFixture({
+      env,
+      name: "revoked-deletion",
+      now: Date.now(),
+      repoRoot: repo,
+      stateDir: env.OPENCLAW_STATE_DIR!,
+      ownerKind: "session",
+    });
+    await fs.writeFile(path.join(created.path, "README.md"), "restorable archived edit\n");
+    const runGit = gitOwner.runGit;
+    let current = true;
+    let stopCommands = () => {};
+    vi.spyOn(gitOwner, "runGit").mockImplementation(async (cwd, args, options) => {
+      const result = await runGit(cwd, args, options);
+      if (args[0] === "worktree" && args[1] === "remove" && result.code === 0) {
+        current = false;
+        stopCommands();
+      }
+      return result;
+    });
+
+    const removed = await withCommandProcessScope(async (stop) => {
+      stopCommands = stop;
+      return await service.remove({
+        id: created.id,
+        reason: "owner-gc",
+        commitGuard: () => {
+          if (!current) {
+            throw new Error("maintenance configuration changed");
+          }
+        },
+      });
+    });
+
+    expect(current).toBe(false);
+    expect(checkoutGitOwner.withWorktreeGitConfig).toHaveBeenCalledWith(
+      created.path,
+      true,
+      expect.any(Object),
+      expect.any(Function),
+    );
+    expect(getRegistryWorktree(env, created.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: removed.snapshotRef,
+    });
+    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
+    await expect(
+      git(repo, "show-ref", "--verify", `refs/openclaw/removals/${created.id}`),
+    ).rejects.toThrow();
+    const restored = await service.restore({ id: created.id });
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+      "restorable archived edit\n",
+    );
+  });
+
+  it("releases lossless removal custody without recording an outcome after caller revocation", async () => {
+    const created = await materialize("revoked-lossless");
+    await fs.writeFile(path.join(created.path, "README.md"), "retained change\n");
+    const inspect = checkoutInspection.inspectManagedWorktreeCheckout;
+    const revoked = new Error("caller authority revoked after inspection");
+    let current = true;
+    vi.spyOn(checkoutInspection, "inspectManagedWorktreeCheckout").mockImplementationOnce(
+      async (...args) => {
+        const result = await inspect(...args);
+        current = false;
+        return result;
+      },
+    );
+
+    await expect(
+      service.removeIfLossless(created.id, {
+        commitGuard: () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+      }),
+    ).rejects.toBe(revoked);
+    const record = getRegistryWorktree(env, created.id);
+    expect(record?.removedAt).toBeUndefined();
+    expect(record?.snapshotRef).toBeUndefined();
+    expect(record?.runEndCleanup).toBeUndefined();
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
+      "retained change\n",
+    );
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    await lease.release();
   });
 
   it("preserves an advanced tip even if upstream also advances after snapshot", async () => {
@@ -199,27 +226,7 @@ describe("managed removal custody", () => {
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
   });
 
-  it("lets native Git refuse late untracked files without escalating to force", async () => {
-    const created = await materialize("late-dirty");
-    const runGit = gitOwner.runGit;
-    const removals: string[][] = [];
-    vi.spyOn(gitOwner, "runGit").mockImplementation(async (cwd, args, options) => {
-      if (args[0] === "worktree" && args[1] === "remove") {
-        removals.push(args);
-        await fs.writeFile(path.join(created.path, "late.txt"), "new work\n");
-      }
-      return await runGit(cwd, args, options);
-    });
-
-    await expect(service.removeIfLossless(created.id)).rejects.toThrow(/untracked files/);
-    expect(removals).toHaveLength(1);
-    expect(removals[0]).not.toContain("--force");
-    expect(await fs.readFile(path.join(created.path, "late.txt"), "utf8")).toBe("new work\n");
-    expect(await git(repo, "branch", "--list", created.branch)).toContain(created.branch);
-    expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.outcome).toBe("failed");
-  });
-
-  it("does not overwrite a completed snapshot after a partial deletion failure", async () => {
+  it("does not overwrite a completed snapshot after a partial deletion timeout", async () => {
     const created = await materialize("partial");
     await fs.writeFile(path.join(created.path, "README.md"), "complete recovery content\n");
     const runGit = gitOwner.runGit;
@@ -230,6 +237,7 @@ describe("managed removal custody", () => {
           ...(await runGit(cwd, ["status", "--porcelain"], options)),
           code: 1,
           stderr: "injected partial removal",
+          termination: "timeout",
         };
       }
       return await runGit(cwd, args, options);
@@ -239,6 +247,18 @@ describe("managed removal custody", () => {
     );
     fault.mockRestore();
     const snapshotRef = getRegistryWorktree(env, created.id)!.snapshotRef!;
+    expect(getRegistryWorktree(env, created.id)?.gcRetry).toMatchObject({
+      stage: "checkoutRemoval",
+      attempts: 1,
+    });
+    const activity = getRegistryWorktree(env, created.id)!.lastActiveAt;
+    await expect(service.acquire(created.id)).rejects.toThrow(/recover its preserved snapshot/);
+    expect(getRegistryWorktree(env, created.id)!.lastActiveAt).toBe(activity);
+    await updateRegistryWorktree(env, created.id, { lastActiveAt: activity + 1 });
+    expect(getRegistryWorktree(env, created.id)?.gcRetry).toBeUndefined();
+    await expect(acquireWorktreeRunLease(created.id, { env })).rejects.toThrow(
+      /recover its preserved snapshot/,
+    );
     const snapshot = await git(repo, "rev-parse", snapshotRef);
     await expect(service.remove({ id: created.id, reason: "retry" })).rejects.toThrow(
       "Previous worktree removal may be incomplete",

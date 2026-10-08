@@ -11,13 +11,10 @@ import {
   type PluginCommandCatalogDecision,
 } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type {
-  ButtonInteraction,
-  CommandInteraction,
-  StringSelectMenuInteraction,
-} from "../internal/discord.js";
+import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import type { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import {
@@ -30,24 +27,13 @@ import {
 import { nativeCommandRuntime } from "./native-command.runtime.js";
 import type { DiscordConfig, DiscordDispatchReplyFromConfig } from "./native-command.types.js";
 
-type NativeCommandEffectiveRoute = {
-  accountId: string;
-  agentId: string;
-  sessionKey: string;
-};
-
-type DispatchDiscordNativeAgentReplyResult = {
-  dispatched: boolean;
-  hiddenFinalReply?: ReplyPayload;
-};
-
 export async function dispatchDiscordNativeAgentReply(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  interaction: CommandInteraction | BaseComponentInteraction;
   ctxPayload: Awaited<ReturnType<typeof buildDiscordNativeCommandContext>>;
-  effectiveRoute: NativeCommandEffectiveRoute;
+  effectiveRoute: Pick<ResolvedAgentRoute, "accountId" | "agentId" | "sessionKey">;
   channelConfig: DiscordChannelConfigResolved | null;
   mediaLocalRoots: ReturnType<typeof getAgentScopedMediaLocalRoots>;
   preferFollowUp: boolean;
@@ -56,7 +42,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
   log: ReturnType<typeof createSubsystemLogger>;
   pluginCommandDispatch: PluginCommandCatalogDecision;
-}): Promise<DispatchDiscordNativeAgentReplyResult> {
+}) {
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.discordConfig);
 
   let didReply = false;
@@ -160,21 +146,16 @@ export async function dispatchDiscordNativeAgentReply(params: {
 
   if (!didReply && shouldSettleWithoutVisibleReply) {
     await settleDiscordInteractionWithoutVisibleReply(params.interaction);
-    return dispatchResult;
-  }
-  if (
-    didReply ||
-    (turnResult.dispatched && hasVisibleInboundReplyDispatch(turnResult.dispatchResult))
+  } else if (
+    !didReply &&
+    !(turnResult.dispatched && hasVisibleInboundReplyDispatch(turnResult.dispatchResult))
   ) {
-    return dispatchResult;
+    await safeDiscordInteractionCall("interaction empty fallback", () =>
+      params.interaction[params.preferFollowUp ? "followUp" : "reply"]({
+        content: DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
+        ephemeral: true,
+      }),
+    );
   }
-
-  await safeDiscordInteractionCall("interaction empty fallback", async () => {
-    const payload = {
-      content: DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
-      ephemeral: true,
-    };
-    await params.interaction[params.preferFollowUp ? "followUp" : "reply"](payload);
-  });
   return dispatchResult;
 }

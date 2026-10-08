@@ -26,6 +26,7 @@ import {
   renderPluginCapabilitySection,
   renderPluginDeclaredCapabilities,
   renderPluginMetadata,
+  renderPluginMcpServers,
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.ts";
@@ -35,7 +36,6 @@ import {
   renderPluginRowMessage,
   type PluginRowMessage,
 } from "./plugin-row-message.ts";
-import { matchesPluginQuery } from "./plugin-state-presentation.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 import {
   flattenPluginSettingsFields,
@@ -81,6 +81,10 @@ export type DetailProps = SharedProps &
   PluginSettingsEditorModel & {
     renderCredential?: PluginSettingsEditor["renderCredential"];
     onAskPlugin?: () => void;
+    mcpLoginBusy?: boolean;
+    canMcpLogin?: boolean;
+    onMcpLogin?: (serverName: string) => void;
+    onEditMcp?: () => void;
     installProgress?: PluginInstallProgress;
     onAskSetting?: (field: PluginSettingsField) => void;
     skillsSection?: TemplateResult;
@@ -153,8 +157,16 @@ function renderInstalledInventory(props: InventoryProps): TemplateResult {
     return renderRetryError(props.error, props.onRefresh);
   }
   const refreshError = props.error ? renderRetryError(props.error, props.onRefresh) : nothing;
+  const query = props.query.trim().toLocaleLowerCase();
   const plugins = (props.result?.plugins ?? [])
-    .filter((plugin) => plugin.installed && matchesPluginQuery(plugin, props.query))
+    .filter(
+      (plugin) =>
+        plugin.installed &&
+        (!query ||
+          [plugin.name, plugin.id, plugin.description, plugin.packageName].some((value) =>
+            value?.toLocaleLowerCase().includes(query),
+          )),
+    )
     .toSorted((left, right) => left.name.localeCompare(right.name));
   if (plugins.length === 0) {
     return html`${refreshError}${renderSettingsEmpty(
@@ -454,6 +466,51 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
           : undefined,
       panel: html`${notices}
       ${!props.inspection && !catalog && !props.inspectionError ? renderSettingsLoadingSkeleton({ rows: 2, carapace: true }) : nothing}
+      ${renderPluginCapabilitySection(
+        t("pluginsPage.auth.accounts"),
+        (props.inspection?.mcpAuth ?? []).map((server) => ({
+          name: server.serverName,
+          trailing: html`${
+              server.state === "authorized"
+                ? html`<span class="plugin-connection-status" role="status">
+                    ${icons.check} ${t("pluginsPage.auth.connected")}
+                  </span>`
+                : nothing
+            }
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              aria-label=${t(server.state === "authorized" ? "pluginsPage.auth.editAccount" : "pluginsPage.auth.connectAccount", { name: server.serverName })}
+              ?disabled=${server.state === "authorized" ? !props.onEditMcp : !props.canMcpLogin || props.mcpLoginBusy || !props.onMcpLogin}
+              @click=${() => (server.state === "authorized" ? props.onEditMcp?.() : props.onMcpLogin?.(server.serverName))}
+            >
+              ${t(server.state === "authorized" ? "pluginsPage.auth.edit" : "pluginsPage.auth.connect")}
+            </button>`,
+        })),
+        icons.circleUser,
+      )}
+      ${renderPluginCapabilitySection(
+        t("pluginsPage.auth.credentials"),
+        (props.inspection?.credentials ?? []).map((credential) => ({
+          name: credential.envVars.join(" / ") || credential.label,
+          trailing: html`${
+              credential.status === "configured"
+                ? html`<span class="plugin-connection-status" role="status">
+                    ${icons.check} ${t("pluginsPage.auth.configured")}
+                  </span>`
+                : nothing
+            }
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              aria-label=${t(credential.status === "configured" ? "pluginsPage.auth.editCredential" : "pluginsPage.auth.configureCredential", { name: credential.label })}
+              @click=${() => props.onTabChange("configuration")}
+            >
+              ${t(credential.status === "configured" ? "pluginsPage.auth.edit" : "pluginsPage.auth.configure")}
+            </button>`,
+        })),
+        icons.key,
+      )}
       ${renderPluginDeclaredCapabilities(props.inspection?.overview?.capabilities?.contracts, props.inspection?.overview?.capabilities?.ui)}
       ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), skills, icons.bookOpenText)}
       ${renderPluginCapabilitySection(
@@ -468,7 +525,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
         })),
         icons.wrench,
       )}
-      ${renderPluginCapabilitySection(t("pluginsPage.detailMcpServers"), names(components?.mcpServers ?? catalog?.detail.mcpServers), icons.plug)}`,
+      ${renderPluginMcpServers(components?.mcpServers ?? catalog?.detail.mcpServers ?? [], catalog?.detail.mcpServerDetails)}`,
       readme:
         props.inspection?.overview?.readme || catalog?.detail.readme
           ? renderPluginReadme(props.inspection?.overview?.readme ?? catalog?.detail.readme)

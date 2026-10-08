@@ -65,11 +65,8 @@ export function isTelegramExecApprovalTargetRecipient(params: {
     ...params,
     channel: "telegram",
     matchTarget: ({ target, normalizedSenderId }) => {
-      const to = target.to ? normalizeTelegramChatId(target.to) : undefined;
-      if (!to || to.startsWith("-")) {
-        return false;
-      }
-      return to === normalizedSenderId;
+      const to = target.to ? normalizeTelegramDirectApproverId(target.to) : undefined;
+      return to !== undefined && to === normalizedSenderId;
     },
   });
 }
@@ -142,13 +139,11 @@ export function shouldInjectTelegramExecApprovalButtons(params: {
   }
   const target = resolveTelegramExecApprovalTarget(params);
   const chatType = resolveTelegramTargetChatType(params.to);
-  if (chatType === "direct") {
-    return target === "dm" || target === "both";
-  }
-  if (chatType === "group") {
-    return target === "channel" || target === "both";
-  }
-  return target === "both";
+  return (
+    target === "both" ||
+    (chatType === "direct" && target === "dm") ||
+    (chatType === "group" && target === "channel")
+  );
 }
 
 export const shouldSuppressLocalTelegramExecApprovalPrompt =

@@ -191,21 +191,17 @@ fn run(
     let mut diagnostic_tail = VecDeque::new();
     loop {
         let desired = shared.lock().expect("desktop node state").desired.clone();
+        let publish_status = |status| publish(&app, &shared, desired.revision, status);
         if applied != Some(desired.revision) {
             let mut cleanup_failed = false;
             for owner in [&mut child, &mut probe_owner] {
                 if let Some(process) = owner.as_mut() {
                     if let Err(error) = process.stop() {
-                        publish(
-                            &app,
-                            &shared,
-                            desired.revision,
-                            Status {
-                                enabled: Some(false),
-                                state: "error",
-                                detail: Some(error),
-                            },
-                        );
+                        publish_status(Status {
+                            enabled: Some(false),
+                            state: "error",
+                            detail: Some(error),
+                        });
                         cleanup_failed = true;
                         continue;
                     }
@@ -224,7 +220,7 @@ fn run(
                 enabled: shared.lock().expect("desktop node state").status.enabled,
                 ..Status::default()
             };
-            publish(&app, &shared, desired.revision, preparing.clone());
+            publish_status(preparing.clone());
             let prepared = prepare(
                 &root,
                 &profiles,
@@ -237,41 +233,31 @@ fn run(
                 |enabled| {
                     preparing.enabled = Some(enabled);
                     preparing.detail = Some("Preparing desktop sharing.".into());
-                    publish(&app, &shared, desired.revision, preparing.clone());
+                    publish_status(preparing.clone());
                 },
             );
             applied = Some(desired.revision);
             match prepared {
-                Err(error) => publish(
-                    &app,
-                    &shared,
-                    desired.revision,
-                    Status {
-                        enabled: preparing.enabled,
-                        state: "error",
-                        detail: Some(error),
-                    },
-                ),
+                Err(error) => publish_status(Status {
+                    enabled: preparing.enabled,
+                    state: "error",
+                    detail: Some(error),
+                }),
                 Ok((enabled, command)) => {
                     let Some((mut command, secrets)) = command else {
-                        publish(
-                            &app,
-                            &shared,
-                            desired.revision,
-                            Status {
-                                enabled: Some(enabled),
-                                state: if desired.preference_error.is_some() {
-                                    "error"
-                                } else {
-                                    "off"
-                                },
-                                detail: desired.preference_error.clone().or_else(|| {
-                                    enabled.then(|| {
-                                        "Select a Primary Gateway to share this desktop.".into()
-                                    })
-                                }),
+                        publish_status(Status {
+                            enabled: Some(enabled),
+                            state: if desired.preference_error.is_some() {
+                                "error"
+                            } else {
+                                "off"
                             },
-                        );
+                            detail: desired.preference_error.clone().or_else(|| {
+                                enabled.then(|| {
+                                    "Select a Primary Gateway to share this desktop.".into()
+                                })
+                            }),
+                        });
                         continue;
                     };
                     redactions = secrets;
@@ -294,19 +280,14 @@ fn run(
                     match started {
                         Ok(Some(process)) => {
                             child = Some(process);
-                            publish(&app, &shared, desired.revision, Status { enabled: Some(enabled), state: "running", detail: Some("Desktop sharing is running for the Primary Gateway. Approve this computer's desktop capability there if requested.".into()) });
+                            publish_status(Status { enabled: Some(enabled), state: "running", detail: Some("Desktop sharing is running for the Primary Gateway. Approve this computer's desktop capability there if requested.".into()) });
                         }
                         Ok(None) => {}
-                        Err(error) => publish(
-                            &app,
-                            &shared,
-                            desired.revision,
-                            Status {
-                                enabled: Some(enabled),
-                                state: "error",
-                                detail: Some(error),
-                            },
-                        ),
+                        Err(error) => publish_status(Status {
+                            enabled: Some(enabled),
+                            state: "error",
+                            detail: Some(error),
+                        }),
                     }
                 }
             }
@@ -319,16 +300,11 @@ fn run(
                     let stopped = process.stop();
                     retain_diagnostics(process, &redactions, &mut diagnostic_tail);
                     let error = outcome.err().or_else(|| stopped.as_ref().err().cloned()).unwrap_or_else(|| format!("Desktop sharing exited. Check the local CLI and Primary Gateway, then turn sharing off and on to retry.\n{}", diagnostic_tail.iter().cloned().collect::<Vec<_>>().join("\n")));
-                    publish(
-                        &app,
-                        &shared,
-                        desired.revision,
-                        Status {
-                            enabled: Some(true),
-                            state: "error",
-                            detail: Some(error),
-                        },
-                    );
+                    publish_status(Status {
+                        enabled: Some(true),
+                        state: "error",
+                        detail: Some(error),
+                    });
                     // Join descendants before considering a later operator-requested restart.
                     if stopped.is_ok() {
                         child = None;

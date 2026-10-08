@@ -1,5 +1,5 @@
-// Stable public surface for short-term promotion behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { readPhaseSignalStore, readStore } from "./short-term-promotion-store.js";
 import {
@@ -7,6 +7,7 @@ import {
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
   type PromotionCandidate,
+  type PromotionWeights,
   type RankShortTermPromotionOptions,
   type ShortTermPhaseSignalEntry,
 } from "./short-term-promotion-types.js";
@@ -16,7 +17,6 @@ import {
   isContaminatedDreamingSnippet,
   isShortTermMemoryPath,
   isShortTermSessionCorpusPath,
-  normalizeWeights,
   toFiniteNonNegativeInt,
   toFinitePositive,
   toFiniteScore,
@@ -29,6 +29,14 @@ const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
 const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
 const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
+const PROMOTION_WEIGHTS: PromotionWeights = {
+  frequency: 0.24,
+  relevance: 0.3,
+  diversity: 0.15,
+  recency: 0.15,
+  consolidation: 0.1,
+  conceptual: 0.06,
+};
 
 function calculateConsolidationComponent(recallDays: string[]): number {
   if (recallDays.length === 0) {
@@ -102,8 +110,6 @@ export async function rankShortTermPromotionCandidates(
     options.recencyHalfLifeDays,
     DEFAULT_RECENCY_HALF_LIFE_DAYS,
   );
-  const weights = normalizeWeights(options.weights);
-
   const [store, phaseSignals] = await Promise.all([
     readStore(workspaceDir, nowIso),
     readPhaseSignalStore(workspaceDir, nowIso),
@@ -111,7 +117,7 @@ export async function rankShortTermPromotionCandidates(
   const candidates: PromotionCandidate[] = [];
 
   for (const entry of Object.values(store.entries)) {
-    if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
+    if (!isShortTermMemoryPath(entry.path)) {
       continue;
     }
     // Apply rejects these origins too; exclude them before scoring and candidate limits.
@@ -128,18 +134,13 @@ export async function rankShortTermPromotionCandidates(
     if (!includePromoted && entry.promotedAt) {
       continue;
     }
-    const recallCount = Math.max(0, Math.floor(entry.recallCount ?? 0));
-    const dailyCount = Math.max(0, Math.floor(entry.dailyCount ?? 0));
-    const groundedCount = Math.max(0, Math.floor(entry.groundedCount ?? 0));
+    const { recallCount, dailyCount, groundedCount, recallDays, conceptTags } = entry;
     const signalCount = totalSignalCountForEntry(entry);
-    if (signalCount <= 0) {
-      continue;
-    }
-    if (signalCount < minRecallCount) {
+    if (signalCount <= 0 || signalCount < minRecallCount) {
       continue;
     }
 
-    const avgScore = clampScore(entry.totalScore / Math.max(1, signalCount));
+    const avgScore = clampScore(entry.totalScore / signalCount);
     const frequency = clampScore(Math.log1p(signalCount) / Math.log1p(10));
     // Scheduler and grounded-backfill keys are synthetic. Only provenance-
     // qualified interactive recalls can satisfy user-query diversity.
@@ -156,8 +157,6 @@ export async function rankShortTermPromotionCandidates(
       continue;
     }
     const recency = clampScore(calculateRecencyComponent(ageDays, halfLifeDays));
-    const recallDays = entry.recallDays ?? [];
-    const conceptTags = entry.conceptTags ?? [];
     const consolidation = Math.max(
       calculateConsolidationComponent(recallDays),
       clampScore(groundedCount / 3),
@@ -166,12 +165,12 @@ export async function rankShortTermPromotionCandidates(
 
     const phaseBoost = calculatePhaseSignalBoost(phaseSignals.entries[entry.key], nowMs);
     const score =
-      weights.frequency * frequency +
-      weights.relevance * avgScore +
-      weights.diversity * diversity +
-      weights.recency * recency +
-      weights.consolidation * consolidation +
-      weights.conceptual * conceptual +
+      PROMOTION_WEIGHTS.frequency * frequency +
+      PROMOTION_WEIGHTS.relevance * avgScore +
+      PROMOTION_WEIGHTS.diversity * diversity +
+      PROMOTION_WEIGHTS.recency * recency +
+      PROMOTION_WEIGHTS.consolidation * consolidation +
+      PROMOTION_WEIGHTS.conceptual * conceptual +
       phaseBoost;
 
     if (score < minScore) {
@@ -223,9 +222,7 @@ export async function rankShortTermPromotionCandidates(
     return a.path.localeCompare(b.path);
   });
 
-  const limit = Number.isFinite(options.limit)
-    ? Math.max(0, Math.floor(options.limit as number))
-    : sorted.length;
+  const limit = resolveNonNegativeIntegerOption(options.limit, sorted.length);
   return sorted.slice(0, limit);
 }
 
@@ -247,7 +244,6 @@ export {
 export {
   filterLiveShortTermRecallEntries,
   readShortTermRecallEntries,
-  recordGroundedShortTermCandidates,
   recordShortTermRecalls,
 } from "./short-term-promotion-record.js";
 export { applyShortTermPromotions } from "./short-term-promotion-apply.js";

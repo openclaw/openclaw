@@ -1,6 +1,7 @@
 import type { Chat, Message } from "grammy/types";
-import { firstDefined } from "openclaw/plugin-sdk/allow-from";
+import { firstDefined, isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   OpenClawConfig,
   DmPolicy,
@@ -17,12 +18,10 @@ import {
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
 import {
-  isSenderAllowed,
   normalizeAllowFrom,
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
-import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import type { TelegramThreadSpec } from "../thread-spec.js";
 import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
@@ -44,6 +43,7 @@ import {
 import type { TelegramGetChat } from "./types.js";
 
 export { resolveTelegramPreviewStreamMode as resolveTelegramStreamMode } from "../preview-streaming.js";
+export { normalizeTelegramReplyToMessageId as resolveTelegramReplyId } from "../outbound-params.js";
 
 export type {
   TelegramForwardedContext,
@@ -77,19 +77,11 @@ function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs
     telegramForumFlagByChatId.delete(cacheKey);
     return;
   }
-  if (
-    !telegramForumFlagByChatId.has(cacheKey) &&
-    telegramForumFlagByChatId.size >= TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS
-  ) {
-    const oldestKey = telegramForumFlagByChatId.keys().next().value;
-    if (oldestKey !== undefined) {
-      telegramForumFlagByChatId.delete(oldestKey);
-    }
-  }
   telegramForumFlagByChatId.set(cacheKey, {
     expiresAtMs,
     isForum,
   });
+  pruneMapToMaxSize(telegramForumFlagByChatId, TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS);
 }
 
 export function getCachedTelegramForumFlag(
@@ -160,11 +152,7 @@ export async function resolveTelegramForumFlag(params: {
   isTopicMessage?: boolean;
   getChat?: TelegramGetChat;
 }): Promise<boolean> {
-  const forumHint = resolveTelegramMessageForumFlagHint({
-    chatType: params.chatType,
-    isForum: params.isForum,
-    isTopicMessage: params.isTopicMessage,
-  });
+  const forumHint = resolveTelegramMessageForumFlagHint(params);
   if (typeof forumHint === "boolean") {
     if (params.isGroup && params.chatType === "supergroup") {
       cacheTelegramForumFlag(params.chatId, forumHint);
@@ -310,33 +298,6 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   };
 }
 
-async function isTelegramDmAllowedByConfiguredAllowFrom(params: {
-  cfg?: OpenClawConfig;
-  allowFrom?: Array<string | number>;
-  groupAllowOverride?: Array<string | number>;
-  accountId: string;
-  senderId?: string;
-}): Promise<boolean> {
-  const configuredAllowFrom = params.groupAllowOverride ?? params.allowFrom;
-  if (!configuredAllowFrom || configuredAllowFrom.length === 0) {
-    return false;
-  }
-  const expandedAllowFrom = await expandTelegramAllowFromWithAccessGroups({
-    cfg: params.cfg,
-    allowFrom: configuredAllowFrom,
-    accountId: params.accountId,
-    senderId: params.senderId,
-  });
-  const normalizedAllowFrom = normalizeAllowFrom(expandedAllowFrom);
-  return (
-    normalizedAllowFrom.hasEntries &&
-    isSenderAllowed({
-      allow: normalizedAllowFrom,
-      senderId: params.senderId,
-    })
-  );
-}
-
 export class TelegramPairingStoreReadError extends Error {
   override readonly cause: unknown;
   constructor(cause: unknown) {
@@ -360,15 +321,19 @@ async function loadTelegramPairingStoreIfNeeded(params: {
   if (params.skipPairingStoreRead || params.isGroup || params.effectiveDmPolicy !== "pairing") {
     return [];
   }
-  const configuredDmAllowed = await isTelegramDmAllowedByConfiguredAllowFrom({
-    cfg: params.cfg,
-    allowFrom: params.allowFrom,
-    groupAllowOverride: params.groupAllowOverride,
-    accountId: params.accountId,
-    senderId: params.senderId,
-  });
-  if (configuredDmAllowed) {
-    return [];
+  const configuredAllowFrom = params.groupAllowOverride ?? params.allowFrom;
+  if (configuredAllowFrom?.length) {
+    const expandedAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+      ...params,
+      allowFrom: configuredAllowFrom,
+    });
+    const normalizedAllowFrom = normalizeAllowFrom(expandedAllowFrom);
+    if (
+      normalizedAllowFrom.hasEntries &&
+      isSenderIdAllowed(normalizedAllowFrom, params.senderId, true)
+    ) {
+      return [];
+    }
   }
   try {
     return await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
@@ -395,10 +360,7 @@ export function resolveTelegramThreadSpec(params: {
   messageThreadId?: number | null;
 }): TelegramThreadSpec {
   if (params.isGroup) {
-    const id = resolveTelegramForumThreadId({
-      isForum: params.isForum,
-      messageThreadId: params.messageThreadId,
-    });
+    const id = resolveTelegramForumThreadId(params);
     return id === undefined ? { scope: "none" } : { id, scope: "forum" };
   }
   if (params.messageThreadId == null) {
@@ -541,10 +503,6 @@ export function buildGroupLabel(msg: Message, chatId: number | string, messageTh
     return `${title} id:${chatId}${topicSuffix}`;
   }
   return `group:${chatId}${topicSuffix}`;
-}
-
-export function resolveTelegramReplyId(raw?: string): number | undefined {
-  return normalizeTelegramReplyToMessageId(raw);
 }
 
 export type TelegramReplyTarget = {

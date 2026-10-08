@@ -330,6 +330,7 @@ describeControlUiE2e("session pull request chips", () => {
           "chat.startup",
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
           "sessions.github.publish",
+          "sessions.github.options",
         ],
         methodResponses: {
           [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -370,8 +371,11 @@ describeControlUiE2e("session pull request chips", () => {
       const create = row.getByRole("button", { name: "Publish PR" });
       await expect.poll(() => create.textContent()).toContain("Publish PR");
       await expect.poll(() => create.getAttribute("href")).toBeNull();
-      // No dismiss control: the row reflects the checkout itself.
-      await expect.poll(() => row.locator(".chat-pr__dismiss").count()).toBe(0);
+      const dismiss = row.getByRole("button", {
+        name: "Hide claude/cloud-workers-live-events for this session",
+        exact: true,
+      });
+      await expect.poll(() => dismiss.isEnabled()).toBe(true);
 
       // The row shares the composer's centered width; it is part of the input
       // stack, not a full-pane banner.
@@ -395,6 +399,9 @@ describeControlUiE2e("session pull request chips", () => {
         expect(gap).toBeGreaterThanOrEqual(0);
         expect(gap).toBeLessThanOrEqual(8);
       }
+
+      await dismiss.click();
+      await expect.poll(() => page.locator(".chat-prs").count()).toBe(0);
     },
   );
 
@@ -416,6 +423,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -453,7 +461,7 @@ describeControlUiE2e("session pull request chips", () => {
       .poll(() => page.locator("[data-publication-account]").textContent())
       .toContain("Publish as @system-bot");
     await expect
-      .poll(() => page.getByRole("combobox", { name: "Publication account" }).count())
+      .poll(() => page.getByRole("button", { name: "Publication account", exact: true }).count())
       .toBe(0);
     expect(request.params).not.toHaveProperty("title");
     expect(JSON.stringify(request.params)).not.toContain("token");
@@ -534,6 +542,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -637,6 +646,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -673,7 +683,7 @@ describeControlUiE2e("session pull request chips", () => {
 
     await page.getByRole("button", { name: "Publish PR" }).click();
     const failure = page.locator('.chat-pr__publication-outcome[data-state="failed"]');
-    await expect.poll(() => failure.textContent()).toContain("GitHub publication failed.");
+    await expect.poll(() => failure.textContent()).toContain("Publication failed");
     await expect.poll(() => failure.textContent()).toContain("Check repository write access");
     await expect
       .poll(() => page.getByRole("button", { name: "Choose a new publication" }).count())
@@ -712,6 +722,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -779,6 +790,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -834,11 +846,11 @@ describeControlUiE2e("session pull request chips", () => {
     await expect
       .poll(() => page.getByRole("button", { name: "Publish PR" }).isEnabled())
       .toBe(true);
-    await page.getByRole("button", { name: "Publication account" }).click();
-    await expect
-      .poll(() => page.locator("wa-popover").textContent())
-      .toContain("My GitHub requires an idle, reconciled local workspace");
-    await page.keyboard.press("Escape");
+    expect(
+      await page.getByRole("button", { name: "Publication account", exact: true }).count(),
+    ).toBe(0);
+    expect(await page.locator(".chat-pr wa-dropdown, .chat-pr wa-popover").count()).toBe(0);
+    expect(await page.locator(".chat-prs").textContent()).not.toContain("reclaim the workspace");
     await page.getByRole("button", { name: "Publish PR" }).click();
     const request = await gateway.waitForRequest("sessions.github.publish");
     expect(request.params).toMatchObject({

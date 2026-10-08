@@ -8,7 +8,7 @@ import { isPathStrictlyInside } from "../../infra/path-guards.js";
 import {
   UPDATE_DESTINATION_RECOVERY,
   type UpdateDestinationFailure,
-} from "../../infra/update-destination-failure.js";
+} from "../../infra/update-failure-facts-format.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import {
@@ -87,8 +87,7 @@ export async function inspectNpmGlobalDestination(
     if (launcherPresent && !launcherTarget) {
       return unknown(prefix, "unreadable-layout");
     }
-    const manageable = isGatewayServiceManagementAllowedForUpdate(process.env);
-    const serviceInspection = manageable
+    const serviceInspection = isGatewayServiceManagementAllowedForUpdate(process.env)
       ? await readManagedGatewayServiceForUpdate(process.env)
       : null;
     const command = serviceInspection?.command ?? null;

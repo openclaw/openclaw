@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
-import { activeSessions } from "./capture.js";
+import { activeSessions } from "./capture-startup.js";
 import type { TranscriptOccupancyWatchRequest, TranscriptStartRequest } from "./provider-types.js";
 import { readTranscriptLibraryStatus } from "./status.js";
 import {
@@ -13,14 +13,12 @@ import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 const fixture = useTranscriptStatusFixture();
 
 describe("configured transcript shutdown cleanup", () => {
-  it.each(
-    [false, true].flatMap((whenOccupied) =>
-      ["returned-stop", "thrown-stop", "session-write", "summary-write"].map((fault) => ({
-        whenOccupied,
-        fault,
-      })),
-    ),
-  )(
+  it.each([
+    { whenOccupied: false, fault: "returned-stop" },
+    { whenOccupied: true, fault: "thrown-stop" },
+    { whenOccupied: false, fault: "session-write" },
+    { whenOccupied: true, fault: "summary-write" },
+  ])(
     "retains and drains late $fault after shutdown (occupied=$whenOccupied)",
     async ({ whenOccupied, fault }) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });

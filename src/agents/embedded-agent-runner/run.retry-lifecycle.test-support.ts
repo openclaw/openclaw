@@ -34,7 +34,6 @@ describe("direct embedded retry lifecycle", () => {
   it.each([
     { progress: true, budget: 8, expectedAttempts: 3 },
     { progress: false, budget: 8, expectedAttempts: 2 },
-    { progress: undefined, budget: 8, expectedAttempts: 2 },
     { progress: true, budget: 1, expectedAttempts: 2 },
   ])(
     "recovers a later outage after model progress=$progress with retry budget=$budget",

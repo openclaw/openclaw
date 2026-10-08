@@ -3,8 +3,13 @@ import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  attachSessionEntrySnapshots,
+  sessionEntrySnapshotColumns,
+} from "../config/sessions/session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import {
@@ -39,18 +44,20 @@ import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-ma
 export function createRecoveryDestinationVerifier(stateDir: string) {
   const destinations = new Map<
     string,
-    { agentId: string; files: (fs.BigIntStats | undefined)[] }
+    { agentId?: string; files: (fs.BigIntStats | undefined)[] }
   >();
   return (refs: Iterable<{ target: SessionSqliteMigrationTargetManifest }>) => {
     for (const { target } of refs) {
       const paths = resolveSqliteDatabaseFilePaths(target.sqlitePath);
       assertDoctorSqliteMaintenancePathsNotAliased("update recovery cleanup", paths, [stateDir]);
       const expected = destinations.get(target.sqlitePath);
+      let agentId = expected?.agentId;
       if (!expected) {
         const owner = inspectOpenClawAgentDatabaseOwner(target.sqlitePath);
-        if (owner.status !== "owned" || owner.agentId !== target.agentId) {
-          throw new Error("destination database ownership cannot be verified");
-        }
+        agentId = owner.status === "owned" ? owner.agentId : undefined;
+      }
+      if (!target.databaseIdentity && agentId !== target.agentId) {
+        throw new Error("destination database ownership cannot be verified");
       }
       // Even a read-only SQLite connection can create WAL/SHM files. Establish the baseline
       // after owner inspection closes it; later checks only stat, never reopen or hash the DB.
@@ -59,19 +66,24 @@ export function createRecoveryDestinationVerifier(stateDir: string) {
       );
       if (
         !files[0]?.isFile() ||
+        (target.databaseIdentity &&
+          (String(files[0]?.dev) !== target.databaseIdentity.dev ||
+            String(files[0]?.ino) !== target.databaseIdentity.ino)) ||
         files.some((file) => file && (!file.isFile() || file.nlink !== 1n)) ||
         (expected &&
-          (expected.agentId !== target.agentId ||
-            files.some((file, index) =>
-              (["dev", "ino", "ctimeNs", "mtimeNs", "size"] as const).some(
-                (key) => file?.[key] !== expected.files[index]?.[key],
-              ),
-            )))
+          files.some((file, index) =>
+            (["dev", "ino", "ctimeNs", "mtimeNs", "size"] as const).some(
+              (key) => file?.[key] !== expected.files[index]?.[key],
+            ),
+          ))
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");
       }
       if (!expected) {
-        destinations.set(target.sqlitePath, { agentId: target.agentId, files });
+        destinations.set(target.sqlitePath, {
+          agentId,
+          files,
+        });
       }
     }
   };
@@ -143,16 +155,20 @@ export function verifyHistoricalMigrationArtifact(params: {
           db
             .selectFrom("session_nodes")
             .select(["current_session_id", "entry_json"])
+            .select(sessionEntrySnapshotColumns)
             .where("session_key", "=", key),
         );
         if (!row || row.current_session_id !== raw.sessionId) {
           return false;
         }
         const current: unknown = JSON.parse(row.entry_json);
-        const entry = { ...raw, sessionId, updatedAt: raw.updatedAt };
+        if (!isRecord(current)) {
+          return false;
+        }
+        attachSessionEntrySnapshots(current, row);
+        const entry: SessionEntry = { ...raw, sessionId, updatedAt: raw.updatedAt };
         const normalized = migrateLegacySessionCreator(normalizeLegacySessionEntryDelivery(entry));
         if (
-          !isRecord(current) ||
           Object.entries(normalized).some(
             ([field, value]) =>
               field !== "sessionFile" && JSON.stringify(current[field]) !== JSON.stringify(value),
@@ -200,6 +216,9 @@ export function validateLegacySessionRecords(
   purpose: "validate" | "before-archive",
   env: NodeJS.ProcessEnv,
 ): boolean {
+  if (report.issues.some((issue) => issue.code === "legacy_import_deferred" && !issue.sessionKey)) {
+    return false;
+  }
   if (purpose === "before-archive" && records.length === 0) {
     return true;
   }
@@ -230,11 +249,12 @@ function validateLegacySessionRecord(
   const normalizedKey = beforeArchive
     ? record.sessionKey
     : normalizeStoreSessionKey(record.sessionKey);
-  const sqliteSessionId = record.historical
-    ? snapshot.sessionKeysBySessionId.get(record.entry.sessionId) === normalizedKey
-      ? record.entry.sessionId
-      : undefined
-    : snapshot.sessionIdsBySessionKey.get(normalizedKey);
+  const sqliteSessionId =
+    record.historical || record.preserveCurrentSession
+      ? snapshot.sessionKeysBySessionId.get(record.entry.sessionId) === normalizedKey
+        ? record.entry.sessionId
+        : undefined
+      : snapshot.sessionIdsBySessionKey.get(normalizedKey);
   if (!sqliteSessionId) {
     report.issues.push({
       code: "sqlite_entry_missing",
@@ -249,6 +269,16 @@ function validateLegacySessionRecord(
       message: `SQLite sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
       sessionKey: record.sessionKey,
     });
+    return;
+  }
+  // A proven canonical owner permits protected archival, not certification of conflicting bytes.
+  if (
+    beforeArchive &&
+    record.preserveCurrentSession &&
+    report.issues.some(
+      (issue) => issue.code === "legacy_import_deferred" && issue.sessionKey === record.sessionKey,
+    )
+  ) {
     return;
   }
   if (!beforeArchive) {

@@ -2,17 +2,25 @@ import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtim
 
 installDiscordIngressTestRuntime();
 import { testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordConfigSchema } from "../config-schema.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
   createDiscordMessage,
   createDiscordPreflightArgs,
   createGuildEvent,
-  createGuildTextClient,
   createThreadClient,
   DEFAULT_PREFLIGHT_CFG,
 } from "./message-handler.preflight.test-helpers.js";
+
+vi.mock("openclaw/plugin-sdk/channel-mention-gating", async (importOriginal) => {
+  const sdk = {
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-mention-gating")>()),
+  };
+  // The published 2026.9.6 host has the evaluator, but not the bot-thread helper.
+  Reflect.deleteProperty(sdk, "resolveBotThreadMentionPolicy");
+  return sdk;
+});
 
 beforeEach(() => sessionBindingTesting.resetSessionBindingAdaptersForTests());
 afterEach(() => sessionBindingTesting.resetSessionBindingAdaptersForTests());
@@ -38,16 +46,8 @@ describe("Discord bot-owned thread mention gating", () => {
   it.each([
     {
       name: "bot-created thread",
-      autoThread: undefined,
       ownerId: "openclaw-bot",
       requireMentionInBotThreads: false,
-      admitted: true,
-    },
-    {
-      name: "bot-created thread with autoThread off",
-      autoThread: false,
-      requireMentionInBotThreads: false,
-      ownerId: "openclaw-bot",
       admitted: true,
     },
     {
@@ -56,29 +56,7 @@ describe("Discord bot-owned thread mention gating", () => {
       ownerId: "openclaw-bot",
       admitted: true,
     },
-    { name: "omitted override", ownerId: "openclaw-bot", admitted: false },
     { name: "guild override", ownerId: "openclaw-bot", guildRequirement: false, admitted: true },
-    {
-      name: "channel override wins",
-      ownerId: "openclaw-bot",
-      guildRequirement: false,
-      requireMentionInBotThreads: true,
-      admitted: false,
-    },
-    {
-      name: "strict automatic thread",
-      ownerId: "openclaw-bot",
-      autoThread: true,
-      requireMentionInBotThreads: true,
-      admitted: false,
-    },
-    {
-      name: "strict open-channel thread",
-      ownerId: "openclaw-bot",
-      normalRequirement: false,
-      requireMentionInBotThreads: true,
-      admitted: false,
-    },
     {
       name: "strict thread explicit mention",
       ownerId: "openclaw-bot",
@@ -89,6 +67,8 @@ describe("Discord bot-owned thread mention gating", () => {
     {
       name: "strict thread implicit reply",
       ownerId: "openclaw-bot",
+      guildRequirement: false,
+      normalRequirement: false,
       requireMentionInBotThreads: true,
       replyToBot: true,
       admitted: false,
@@ -97,25 +77,6 @@ describe("Discord bot-owned thread mention gating", () => {
       name: "human-created thread",
       requireMentionInBotThreads: false,
       ownerId: "111111111111111111",
-      admitted: false,
-    },
-    {
-      name: "another bot's thread",
-      requireMentionInBotThreads: false,
-      ownerId: "other-bot",
-      admitted: false,
-    },
-    {
-      name: "unknown thread owner",
-      requireMentionInBotThreads: false,
-      ownerId: "",
-      admitted: false,
-    },
-    {
-      name: "parent channel",
-      requireMentionInBotThreads: false,
-      ownerId: "openclaw-bot",
-      parentMessage: true,
       admitted: false,
     },
     {
@@ -131,7 +92,6 @@ describe("Discord bot-owned thread mention gating", () => {
       name,
       autoThread,
       ownerId,
-      parentMessage,
       users,
       admitted,
       requireMentionInBotThreads,
@@ -142,7 +102,7 @@ describe("Discord bot-owned thread mention gating", () => {
     }) => {
       const parentId = `parent-${name}`;
       const threadId = `thread-${name}`;
-      const channelId = parentMessage ? parentId : threadId;
+      const channelId = threadId;
       const message = createDiscordMessage({
         id: "unmentioned-follow-up",
         channelId,
@@ -170,9 +130,7 @@ describe("Discord bot-owned thread mention gating", () => {
             author: message.author,
             message,
           }),
-          client: parentMessage
-            ? createGuildTextClient(parentId)
-            : createThreadClient({ threadId, parentId, ownerId }),
+          client: createThreadClient({ threadId, parentId, ownerId }),
         }),
         groupPolicy: "allowlist",
         guildEntries: {

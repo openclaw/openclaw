@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 import JSON5 from "json5";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -32,6 +34,33 @@ export function hashConfigRaw(raw: string | null): string {
   // Present-file hashes stay compatible with last-known-good recovery metadata.
   // Missing needs a distinct token so optimistic writes reject missing-to-empty races.
   return raw === null ? hashConfigIncludeRaw(null) : sha256Hex(raw);
+}
+
+export function hashConfigRevision(
+  raw: string,
+  includeFileHashes: Record<string, string>,
+  includeFileTargets: Record<string, string>,
+): string {
+  const revision = createHash("sha256").update(raw);
+  for (const [includePath, includeHash] of Object.entries(includeFileHashes)) {
+    revision.update(JSON.stringify([includePath, includeFileTargets[includePath], includeHash]));
+  }
+  return revision.digest("hex");
+}
+
+export function readConfigFileIfPresent(
+  deps: Pick<NormalizedConfigIoDeps, "fs">,
+  configPath: string,
+): string | undefined {
+  try {
+    return deps.fs.readFileSync(configPath, "utf-8");
+  } catch (error) {
+    // existsSync also hides inaccessible parents; only ENOENT establishes absence.
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 export function resolveConfigSnapshotHash(snapshot: {
@@ -124,17 +153,6 @@ function isPathLikeConfigKey(key: string | undefined): boolean {
   return Boolean(key && (PATH_LIKE_CONFIG_KEY_RE.test(key) || PATH_LIKE_CONFIG_LIST_KEYS.has(key)));
 }
 
-function expandAuthoredTildePath(value: string, home: string): string {
-  const suffix = value.slice(1);
-  if (!suffix) {
-    return home;
-  }
-  if (suffix.startsWith("/") || suffix.startsWith("\\")) {
-    return path.join(home, suffix.slice(1));
-  }
-  return value;
-}
-
 export function restoreAuthoredTildePathsForWrite(
   next: unknown,
   authored: unknown,
@@ -146,7 +164,7 @@ export function restoreAuthoredTildePathsForWrite(
     typeof authored === "string" &&
     isPathLikeConfigKey(key) &&
     TILDE_PATH_VALUE_RE.test(authored.trim()) &&
-    path.normalize(next) === path.normalize(expandAuthoredTildePath(authored.trim(), home))
+    path.normalize(next) === path.join(home, authored.trim().slice(2))
   ) {
     return authored;
   }

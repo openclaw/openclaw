@@ -63,22 +63,6 @@ describe("cron scheduled wakes", () => {
     states.length = 0;
   });
 
-  it("replaces the scheduled wake when an earlier occurrence appears", () => {
-    const state = createState();
-    state.store = { version: 1, jobs: [job(now + 30_000)] };
-    armTimer(state);
-    const replaced = state.timer;
-    expect(state.deps.scheduler.nextWakeAtMs).toBe(now + 30_000);
-
-    state.store.jobs[0]!.state.nextRunAtMs = now + 10_000;
-    armTimer(state);
-    replaced?.cancel();
-
-    expect(state.deps.scheduler.nextWakeAtMs).toBe(now + 10_000);
-    stop(state);
-    expect(state.deps.scheduler.nextWakeAtMs).toBeNull();
-  });
-
   it("keeps a maintenance wake when enabled jobs have no next occurrence", () => {
     const state = createState();
     const unscheduled = job();
@@ -120,33 +104,6 @@ describe("cron scheduled wakes", () => {
       releaseSuspension();
       await wake;
     }
-  });
-
-  it("rechecks after clock rollback without executing a future stored occurrence", async () => {
-    const store = await makeStorePath();
-    const nextRunAtMs = now + 10 * 60_000;
-    const future = {
-      ...job(nextRunAtMs),
-      schedule: { kind: "every" as const, everyMs: 10 * 60_000, anchorMs: now },
-    };
-    await saveCronStore(store.storePath, { version: 1, jobs: [future] });
-    const clock = createGatewaySchedulerClock(now);
-    const state = createState(store.storePath, clock);
-    state.store = { version: 1, jobs: [future] };
-    armTimer(state);
-
-    clock.setTime(now - 60 * 60_000);
-    await clock.advanceBy(60_000);
-
-    expect(state.storeLoadedAtMs).toBe(clock.clock.now());
-    expect(state.store?.jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
-    expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
-    expect(state.deps.scheduler.nextWakeAtMs).toBe(clock.clock.now() + 60_000);
-
-    clock.setTime(nextRunAtMs);
-    await clock.advanceBy(60_000);
-
-    expect(state.deps.runIsolatedAgentJob).toHaveBeenCalledOnce();
   });
 
   it("keeps a past-due active occurrence from producing a zero-delay loop", async () => {

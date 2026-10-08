@@ -116,8 +116,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   let preambleAt: number | undefined;
   let narrationText = "";
   let finalReplyStarted = false;
-  let finalReplyDelivered = false;
-  const isTurnActive = () => params.active && !finalReplyStarted && !finalReplyDelivered;
+  const isTurnActive = () => params.active && !finalReplyStarted;
   const canUpdateProgress = () =>
     isTurnActive() && params.mode === "progress" && !progressSuppressed;
   const diffStatTracker = createProgressDraftDiffStatTracker({
@@ -278,8 +277,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       !narrationText ||
       preambleAt === undefined ||
       !gate?.hasStarted ||
-      finalReplyStarted ||
-      finalReplyDelivered
+      finalReplyStarted
     ) {
       return;
     }
@@ -454,7 +452,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       return gate?.hasStarted ?? false;
     },
     get isVisible() {
-      return Boolean(lastRenderedText) && !finalReplyStarted && !finalReplyDelivered;
+      return Boolean(lastRenderedText) && !finalReplyStarted;
     },
     get hasStatusHeadline() {
       return Boolean(resolveStatusText().text);
@@ -472,17 +470,16 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       clearPreambleExpiryTimer();
     },
     markFinalReplyDelivered() {
-      finalReplyDelivered = true;
+      finalReplyStarted = true;
       clearPreambleExpiryTimer();
     },
     // Authoritative queued admission may force reset after a silent turn;
     // ordinary assistant boundaries still require a settled final.
     beginNewTurn(options?: { force?: boolean }) {
-      if (options?.force !== true && !finalReplyStarted && !finalReplyDelivered) {
+      if (options?.force !== true && !finalReplyStarted) {
         return false;
       }
       finalReplyStarted = false;
-      finalReplyDelivered = false;
       gate?.reset();
       clearProgressState(false);
       return true;
@@ -595,11 +592,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         return await renderAfterRetraction();
       }
       const isNewPreambleItem = Boolean(itemId && itemId !== preambleItemId);
-      if (isNewPreambleItem) {
-        preambleItemId = itemId;
-      } else if (!itemId) {
-        preambleItemId = undefined;
-      }
+      preambleItemId = itemId;
       if (normalized === preambleText && !isNewPreambleItem) {
         return false;
       }
@@ -706,7 +699,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       }
       const line: ChannelProgressDraftLine = {
         id: lineId,
-        // The lane marker (💬, matching 🧠 thinking / 🛠️ tools) is a per-channel
+        // The lane marker (such as 💬 for commentary) is a per-channel
         // presentation choice supplied via commentaryLinePrefix; default none.
         text: `${commentaryLinePrefix}${commentaryItalics ? normalized : bareNormalized}`,
         kind: "item",

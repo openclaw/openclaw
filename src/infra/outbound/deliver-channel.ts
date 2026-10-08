@@ -12,7 +12,7 @@ import type {
   ChannelOutboundPayloadContext,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -210,8 +210,13 @@ function createPluginHandler(
     // Keep the final authority check and adapter invocation in one synchronous
     // call stack. An awaited callback leaves a microtask gap where custody can
     // change after validation but before recipient-visible transport code runs.
-    assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-    return await send();
+    const initiate = () => {
+      assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+      return send();
+    };
+    return params.withDirectAdapterHandoff
+      ? await params.withDirectAdapterHandoff(initiate)
+      : await initiate();
   };
   // A prepared transport id identifies one atomic platform message. Splitting it
   // would either reuse the id or leave later chunks outside reply correlation.
@@ -393,32 +398,13 @@ function createPluginHandler(
         }
       : undefined,
     pinDeliveredMessage: outbound?.pinDeliveredMessage
-      ? async ({ target, messageId, pin, gatewayClientScopes, assertDirectAdapterHandoff }) =>
-          outbound.pinDeliveredMessage!({
-            cfg: params.cfg,
-            target,
-            messageId,
-            pin,
-            gatewayClientScopes,
-            assertDirectAdapterHandoff,
-          })
+      ? async (delivery) => outbound.pinDeliveredMessage!({ cfg: params.cfg, ...delivery })
       : undefined,
     afterDeliverPayload: outbound?.afterDeliverPayload
-      ? async ({ target, payload, results }) =>
-          outbound.afterDeliverPayload!({
-            cfg: params.cfg,
-            target,
-            payload,
-            results,
-          })
+      ? async (delivery) => outbound.afterDeliverPayload!({ cfg: params.cfg, ...delivery })
       : undefined,
     adoptTargetFromDelivery: outbound?.adoptTargetFromDelivery
-      ? ({ target, result }) =>
-          outbound.adoptTargetFromDelivery!({
-            cfg: params.cfg,
-            target,
-            result,
-          })
+      ? (delivery) => outbound.adoptTargetFromDelivery!({ cfg: params.cfg, ...delivery })
       : undefined,
     shouldSkipPlainTextSanitization: outbound?.shouldSkipPlainTextSanitization
       ? (payload) => outbound.shouldSkipPlainTextSanitization!({ payload })
@@ -516,16 +502,15 @@ function normalizeChannelMessageSendResult(
   channel: string,
   result: ChannelMessageSendResult,
 ): OutboundDeliveryResult {
-  const source = result as ChannelMessageSendResult & Partial<OutboundDeliveryResult>;
   return {
-    ...source,
+    ...result,
     channel,
     messageId:
-      source.messageId ??
-      source.receipt.primaryPlatformMessageId ??
-      source.receipt.platformMessageIds[0] ??
+      result.messageId ??
+      result.receipt.primaryPlatformMessageId ??
+      result.receipt.platformMessageIds[0] ??
       "",
-    receipt: source.receipt,
+    receipt: result.receipt,
   };
 }
 

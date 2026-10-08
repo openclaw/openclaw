@@ -12,6 +12,7 @@ import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement, settleLitElements } from "../../test-helpers/lit-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ConfigPage } from "./config-page.ts";
@@ -30,11 +31,11 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-async function mount(client: GatewayBrowserClient) {
+async function mount(client: GatewayBrowserClient, scopes: readonly string[] = ["operator.admin"]) {
   const source = createApplicationGateway({
     client,
     phase: "connected",
-    hello: { features: { methods: ["system.info"] } },
+    hello: gatewayHelloForMethods(["system.info"], scopes),
   } as ApplicationGatewaySnapshot);
   const subscribe = () => () => undefined;
   const context = {
@@ -65,6 +66,27 @@ async function mount(client: GatewayBrowserClient) {
 }
 
 describe("ConfigPage session observer models", () => {
+  it("keeps session-only Appearance usable without polling host details or models", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const { page, state, source } = await mount({ request } as unknown as GatewayBrowserClient, [
+      "operator.sessions.read",
+    ]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(request).not.toHaveBeenCalled();
+    expect(state.sessionObserverModels).toEqual([]);
+    source.publish({ ...source.gateway.snapshot, hello: gatewayHelloForMethods(["system.info"]) });
+    await settleLitElement(page);
+    expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1);
+    source.publish({
+      ...source.gateway.snapshot,
+      hello: gatewayHelloForMethods(["system.info"], ["operator.sessions.read"]),
+    });
+    await settleLitElement(page);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1);
+    expect(state.sessionObserverModels).toEqual([]);
+  });
+
   it("pauses hidden status reads and resumes one ten-second poll when visible", async () => {
     let visibility: DocumentVisibilityState = "hidden";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);

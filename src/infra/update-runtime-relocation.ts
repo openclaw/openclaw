@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { parseBunCliLauncher, renderBunCliLauncher } from "../../scripts/lib/bun-cli-launcher.mjs";
 import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
@@ -91,6 +92,18 @@ export async function relocateRuntimeLauncher(
 ): Promise<void> {
   const prepared = prepareRuntimeRelocations(relocations);
   const original = await fs.readFile(file, "utf8");
+  const bunLauncher = parseBunCliLauncher(original);
+  if (bunLauncher) {
+    const content = renderBunCliLauncher({
+      bunPath: relocateRuntimePath(bunLauncher.bunPath, prepared),
+      entryPath: relocateRuntimePath(bunLauncher.entryPath, prepared),
+    });
+    if (content !== original) {
+      assertBeforeMutation?.();
+      await fs.writeFile(file, content);
+    }
+    return;
+  }
   // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
   // Resolve them before changing the directory; absolute store/runtime paths stay external.
   let content = original.replace(
@@ -188,40 +201,15 @@ async function relocateModulesManifest(
   }
 }
 
-/** Relocate one admitted entry without traversing neighboring private files. */
-export async function relocateRuntimeEntry(
-  file: string,
-  sourceFile: string,
-  destinationFile: string,
-  kind: "file" | "symlink",
-  relocations: RuntimeRelocations,
-  assertBeforeMutation?: () => void,
-): Promise<void> {
-  if (kind === "symlink") {
-    await relocateRuntimeSymlink(
-      file,
-      sourceFile,
-      destinationFile,
-      relocations,
-      assertBeforeMutation,
-    );
-  } else if (path.basename(file) === ".modules.yaml") {
-    await relocateModulesManifest(
-      file,
-      sourceFile,
-      destinationFile,
-      relocations,
-      assertBeforeMutation,
-    );
-  } else if (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe")) {
-    await relocateRuntimeLauncher(
-      file,
-      sourceFile,
-      destinationFile,
-      relocations,
-      assertBeforeMutation,
-    );
+/** Files rewritten during relocation must never share an inode with the live package. */
+export function resolveRuntimeFileRelocator(file: string) {
+  if (path.basename(file) === ".modules.yaml") {
+    return relocateModulesManifest;
   }
+  if (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe")) {
+    return relocateRuntimeLauncher;
+  }
+  return undefined;
 }
 
 /** Rebind copied entries only; following a store symlink would mutate external data. */
@@ -238,14 +226,20 @@ export async function relocateRuntimeTree(
   }
   for (const entry of await fs.readdir(root, { withFileTypes: true })) {
     const file = path.join(root, entry.name);
-    const sourceFile = path.join(sourceRoot, entry.name);
-    const destinationFile = path.join(destinationRoot, entry.name);
-    if (entry.isDirectory()) {
-      await relocateRuntimeTree(file, sourceFile, destinationFile, prepared);
-    } else if (entry.isSymbolicLink()) {
-      await relocateRuntimeEntry(file, sourceFile, destinationFile, "symlink", prepared);
-    } else if (entry.isFile()) {
-      await relocateRuntimeEntry(file, sourceFile, destinationFile, "file", prepared);
+    const relocate = entry.isDirectory()
+      ? relocateRuntimeTree
+      : entry.isSymbolicLink()
+        ? relocateRuntimeSymlink
+        : entry.isFile()
+          ? resolveRuntimeFileRelocator(file)
+          : undefined;
+    if (relocate) {
+      await relocate(
+        file,
+        path.join(sourceRoot, entry.name),
+        path.join(destinationRoot, entry.name),
+        prepared,
+      );
     }
   }
 }

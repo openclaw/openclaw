@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   SessionDiscussionInfo,
   SessionDiscussionProvider,
 } from "openclaw/plugin-sdk/session-discussion";
-import {
-  createClickClackClient,
-  isClickClackChannelNameConflict,
-  type ClickClackClient,
-} from "../http-client.js";
+import { createClickClackClient, type ClickClackClient } from "../http-client.js";
+import { findClickClackWorkspace } from "../resolve.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
 import {
   clearDiscussionBindingGeneration,
@@ -47,17 +47,14 @@ import {
   assertChannelPatch,
   reconcilePendingDiscussionOpen,
   openClickClackDiscussionBinding,
-  resolveAvailableChannelName,
+  renameDiscussionChannel,
 } from "./service-open.js";
 
 const RECONCILE_INTERVAL_MS = 60_000;
-const CHANNEL_NAME_MUTATION_ATTEMPTS = 4;
 type DiscussionServiceOptions = {
   clientFactory?: (account: ResolvedClickClackAccount) => ClickClackClient;
   installationId?: string;
   bindingGenerationFactory?: () => string;
-  gatewayEvents?: Pick<OpenClawPluginGatewayEvents, "onSessionsChanged">;
-  startTimer?: boolean;
   maxRetainedDetachedBindings?: number;
 };
 
@@ -71,15 +68,11 @@ export class ClickClackDiscussionService {
   #installationId: string | undefined;
   readonly #bindingGenerationFactory: () => string;
   readonly #detachedBindings: DetachedDiscussionBindingRetention;
-  readonly #timersEnabled: boolean;
-  readonly #sessionLocks = new Map<string, Promise<unknown>>();
-  readonly #reconcileScheduler = new DiscussionReconcileScheduler({
-    shouldSchedule: () => !this.#closed,
-    run: async (sessionKey) => await this.reconcile(sessionKey),
-    warn: (message) => this.#logger().warn(message),
-  });
-  #channelMutationLock: Promise<unknown> = Promise.resolve();
-  #timer: ReturnType<typeof setInterval> | undefined;
+  readonly #sessionQueue = new KeyedAsyncQueue();
+  #scheduler: PluginServiceSchedulerV1 | undefined;
+  #reconcileScheduler: DiscussionReconcileScheduler | undefined;
+  readonly #withChannelMutationLock = createAsyncLock();
+  #timer: ReturnType<PluginServiceSchedulerV1["schedule"]> | undefined;
   #reconcileAllPromise: Promise<void> | undefined;
   #unsubscribeSessionsChanged: (() => void) | undefined;
   #closed = false;
@@ -100,29 +93,16 @@ export class ClickClackDiscussionService {
       store: this.#store,
       maxRetained: options.maxRetainedDetachedBindings ?? MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
     });
-    this.#timersEnabled = options.startTimer !== false;
     this.provider = {
       id: "clickclack",
-      info: async ({ sessionKey }) => await this.info(sessionKey),
-      open: async ({ sessionKey }) => await this.open(sessionKey),
+      info: ({ sessionKey }) => this.info(sessionKey),
+      open: ({ sessionKey }) => this.open(sessionKey),
     };
-    // Activation (event subscription + catch-up reconciles) belongs to the
-    // registered service lifecycle via bindGatewayEvents; construction alone
-    // must not touch remote channels. Tests may inject events for immediacy.
-    if (options.gatewayEvents) {
-      void this.bindGatewayEvents(options.gatewayEvents).catch((error: unknown) => {
-        this.#logger().warn(`discussion activation failed: ${String(error)}`);
-      });
-    }
-    if (this.#timersEnabled && !options.gatewayEvents) {
-      void this.#withOperation(() => this.#ensureTimer()).catch((error: unknown) => {
-        this.#logger().warn(`discussion timer initialization failed: ${String(error)}`);
-      });
-    }
   }
 
   async bindGatewayEvents(
     gatewayEvents: Pick<OpenClawPluginGatewayEvents, "onSessionsChanged"> | undefined,
+    scheduler: PluginServiceSchedulerV1,
   ): Promise<void> {
     const activation = ++this.#activation;
     if (this.#cleanupPromise) {
@@ -131,10 +111,21 @@ export class ClickClackDiscussionService {
     if (activation !== this.#activation) {
       return;
     }
+    if (this.#scheduler) {
+      await this.#scheduler.stop();
+    }
+    if (activation !== this.#activation) {
+      return;
+    }
     this.#cleanupPromise = undefined;
     this.#unsubscribeSessionsChanged?.();
     this.#closed = false;
-    this.#reconcileScheduler.supersede();
+    this.#scheduler = scheduler.scope();
+    this.#timer = undefined;
+    this.#reconcileScheduler = new DiscussionReconcileScheduler(this.#scheduler, {
+      run: (sessionKey) => this.reconcile(sessionKey),
+      warn: (message) => this.#logger().warn(message),
+    });
     this.#unsubscribeSessionsChanged = gatewayEvents?.onSessionsChanged((event) => {
       void this.#withOperation(async () => {
         if (
@@ -144,7 +135,7 @@ export class ClickClackDiscussionService {
           )
         ) {
           if (activation === this.#activation) {
-            this.#reconcileScheduler.schedule(event.sessionKey);
+            this.#reconcileScheduler?.schedule(event.sessionKey);
           }
         }
       }).catch((error: unknown) => {
@@ -156,7 +147,7 @@ export class ClickClackDiscussionService {
         if (activation !== this.#activation) {
           return;
         }
-        this.#reconcileScheduler.schedule(sessionKey, 0);
+        this.#reconcileScheduler?.schedule(sessionKey, 0);
       }
       await this.#ensureTimer();
     });
@@ -168,7 +159,7 @@ export class ClickClackDiscussionService {
 
   async info(sessionKey: string): Promise<SessionDiscussionInfo> {
     return await this.#withOperation(() =>
-      this.#withSessionLock(sessionKey, async () => {
+      this.#sessionQueue.enqueue(sessionKey, async () => {
         const accounts = discussionAccounts(this.#currentConfig());
         if (accounts.length !== 1) {
           return { state: "none" };
@@ -202,7 +193,7 @@ export class ClickClackDiscussionService {
 
   async open(sessionKey: string): Promise<SessionDiscussionInfo> {
     return await this.#withOperation(() =>
-      this.#withSessionLock(sessionKey, () => this.#open(sessionKey)),
+      this.#sessionQueue.enqueue(sessionKey, () => this.#open(sessionKey)),
     );
   }
 
@@ -243,9 +234,9 @@ export class ClickClackDiscussionService {
         bindingGenerationFactory: this.#bindingGenerationFactory,
         sessionKey,
         ensureTimer: () => this.#ensureTimer(),
-        reconcilePendingOpen: async (pending) =>
-          await this.#reconcilePendingOpen(pending, { allowRetry: false }),
-        withChannelMutationLock: async (run) => await this.#withChannelMutationLock(run),
+        reconcilePendingOpen: (pending) =>
+          this.#reconcilePendingOpen(pending, { allowRetry: false }),
+        withChannelMutationLock: (run) => this.#withChannelMutationLock(run),
         ensureBindingCapacity: (key) => this.#detachedBindings.ensureCapacity(key),
         finalizePendingBinding: (key, nextBinding) =>
           this.#finalizePendingBinding(key, nextBinding),
@@ -266,7 +257,7 @@ export class ClickClackDiscussionService {
 
   async #reconcile(sessionKey: string): Promise<void> {
     try {
-      await this.#withSessionLock(sessionKey, async () => {
+      await this.#sessionQueue.enqueue(sessionKey, async () => {
         const binding = this.#store.get(sessionKey);
         if (binding) {
           await this.#reconcileBinding(sessionKey, binding);
@@ -314,18 +305,12 @@ export class ClickClackDiscussionService {
     limit: number,
   ): Promise<{ binding?: ClickClackDiscussionBinding; text: string }> {
     return await this.#withOperation(() =>
-      this.#withSessionLock(sessionKey, async () => {
+      this.#sessionQueue.enqueue(sessionKey, async () => {
         const binding = this.#store.get(sessionKey);
         if (!binding) {
           return { text: "No discussion is bound to this session." };
         }
         const resolved = await this.#resolveBindingForUse(binding);
-        if (resolved.state === "retargeted") {
-          return { text: "No discussion is bound to this session." };
-        }
-        if (resolved.state === "stale") {
-          return { text: "No discussion is bound to this session." };
-        }
         if (resolved.state !== "active") {
           return { text: "No discussion is bound to this session." };
         }
@@ -360,13 +345,12 @@ export class ClickClackDiscussionService {
     this.#activation += 1;
     this.#unsubscribeSessionsChanged?.();
     this.#unsubscribeSessionsChanged = undefined;
-    this.#reconcileScheduler.supersede();
-    this.#reconcileScheduler.clear();
-    if (this.#timer) {
-      clearInterval(this.#timer);
-      this.#timer = undefined;
-    }
-    this.#cleanupPromise ??= Promise.allSettled(this.#operations).then(() => undefined);
+    this.#reconcileScheduler = undefined;
+    this.#timer = undefined;
+    this.#cleanupPromise ??= Promise.allSettled([
+      this.#scheduler?.stop(),
+      ...this.#operations,
+    ]).then(() => undefined);
     return this.#cleanupPromise;
   }
 
@@ -472,31 +456,17 @@ export class ClickClackDiscussionService {
     const client = this.#clientFactory(account);
     let updated: Awaited<ReturnType<ClickClackClient["updateChannel"]>>;
     if (labelChanged) {
-      updated = await this.#withChannelMutationLock(async () => {
-        for (let attempt = 0; attempt < CHANNEL_NAME_MUTATION_ATTEMPTS; attempt += 1) {
-          patch.name = await resolveAvailableChannelName({
-            client,
-            workspaceId: currentBinding.workspaceId,
-            label,
-            sessionKey,
-            agentId: currentBinding.agentId,
-            ownChannelId: currentBinding.channelId,
-          });
-          try {
-            const renamed = await client.updateChannel(currentBinding.channelId, patch);
-            assertChannelPatch(renamed, patch);
-            return renamed;
-          } catch (error) {
-            if (
-              !isClickClackChannelNameConflict(error) ||
-              attempt === CHANNEL_NAME_MUTATION_ATTEMPTS - 1
-            ) {
-              throw error;
-            }
-          }
-        }
-        throw new Error("ClickClack discussion channel name retries were exhausted");
-      });
+      updated = await this.#withChannelMutationLock(() =>
+        renameDiscussionChannel({
+          client,
+          workspaceId: currentBinding.workspaceId,
+          channelId: currentBinding.channelId,
+          label,
+          sessionKey,
+          agentId: currentBinding.agentId,
+          patch,
+        }),
+      );
     } else {
       updated = await client.updateChannel(currentBinding.channelId, patch);
       assertChannelPatch(updated, patch);
@@ -607,12 +577,7 @@ export class ClickClackDiscussionService {
       return resolved;
     }
     const workspaces = await this.#clientFactory(resolved.account).workspaces();
-    const workspace = workspaces.find(
-      (candidate) =>
-        candidate.id === resolved.account.discussions.workspace ||
-        candidate.slug === resolved.account.discussions.workspace ||
-        candidate.name === resolved.account.discussions.workspace,
-    );
+    const workspace = findClickClackWorkspace(workspaces, resolved.account.discussions.workspace);
     const current = resolveDiscussionBindingAccount(this.#currentConfig(), binding);
     if (current.state !== "active") {
       return current;
@@ -635,23 +600,26 @@ export class ClickClackDiscussionService {
       this.#unsubscribeSessionsChanged === undefined && this.#store.count() > 0;
     if (this.#closed || (!hasPendingOpens && !needsBindingPoll)) {
       if (this.#timer) {
-        clearInterval(this.#timer);
+        this.#timer.cancel();
         this.#timer = undefined;
       }
       return;
     }
-    if (!this.#timersEnabled || this.#timer) {
+    if (!this.#scheduler || this.#scheduler.signal.aborted || this.#timer) {
       return;
     }
     // Session changes drive normal binding reconciliation through gateway events.
     // Only ambiguous creates still need time-based retries while their durable
     // pending-open record exists.
-    this.#timer = setInterval(() => {
-      void this.reconcileAll().catch((error: unknown) => {
-        this.#logger().warn(`discussion reconcile pass failed: ${String(error)}`);
-      });
-    }, RECONCILE_INTERVAL_MS);
-    this.#timer.unref?.();
+    this.#timer = this.#scheduler.schedule({
+      id: "reconcile-all",
+      delayMs: RECONCILE_INTERVAL_MS,
+      everyMs: RECONCILE_INTERVAL_MS,
+      run: () =>
+        this.reconcileAll().catch((error: unknown) => {
+          this.#logger().warn(`discussion reconcile pass failed: ${String(error)}`);
+        }),
+    });
   }
 
   async #listReconcileSessionKeys(): Promise<Set<string>> {
@@ -676,24 +644,5 @@ export class ClickClackDiscussionService {
       () => this.#operations.delete(operation),
     );
     return operation;
-  }
-
-  async #withSessionLock<T>(sessionKey: string, run: () => Promise<T>): Promise<T> {
-    const previous = this.#sessionLocks.get(sessionKey) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(run);
-    this.#sessionLocks.set(sessionKey, current);
-    try {
-      return await current;
-    } finally {
-      if (this.#sessionLocks.get(sessionKey) === current) {
-        this.#sessionLocks.delete(sessionKey);
-      }
-    }
-  }
-
-  async #withChannelMutationLock<T>(run: () => Promise<T>): Promise<T> {
-    const current = this.#channelMutationLock.catch(() => undefined).then(run);
-    this.#channelMutationLock = current;
-    return await current;
   }
 }

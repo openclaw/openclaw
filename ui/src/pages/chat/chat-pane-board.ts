@@ -482,10 +482,17 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           retry = true;
           return;
         }
-        const enabled =
-          state.connected &&
-          isSwarmEnabledInConfig(context.runtimeConfig?.state.configSnapshot?.config, agentId);
-        if (!enabled) {
+        const swarmEnabled = isSwarmEnabledInConfig(
+          context.runtimeConfig?.state.configSnapshot?.config,
+          agentId,
+        );
+        if (this.swarmEnabled !== swarmEnabled) {
+          this.swarmEnabled = swarmEnabled;
+          requestChatPageUpdate(state, "animation-frame");
+        }
+        // The child roster also owns ordinary subagent waits, launch rows, and
+        // attention. Disabling swarm must not hide those recorded outcomes.
+        if (!state.connected) {
           if (this.swarmHydrator) {
             this.swarmHydrator.dispose();
             this.swarmHydrator = null;
@@ -499,13 +506,16 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           parentKey,
           agentId,
           sourceEpoch,
-          readParent: () =>
-            client
-              .request<{ session: GatewaySessionRow | null }>("sessions.describe", {
-                key: parentKey,
-                ...(parseAgentSessionKey(parentKey) ? {} : { agentId }),
-              })
-              .then((result) => result.session),
+          readParent: (refresh) =>
+            context.sessions
+              .describe(
+                {
+                  key: parentKey,
+                  ...(parseAgentSessionKey(parentKey) ? {} : { agentId }),
+                },
+                { client, refresh },
+              )
+              .then((result) => result.session ?? null),
           currentRows: () => (isCurrent() ? (state.sessionsResult?.sessions ?? []) : []),
           onRows: () => {
             if (isCurrent()) {
@@ -560,7 +570,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     return board.available && Boolean(this.resolveBoardSessionKey(board.snapshot.sessionKey));
   }
 
-  private fullscreenBoardWidget(layout: SidebarLayout | undefined, board: ResolvedBoardView) {
+  private pageBoardWidget(layout: SidebarLayout | undefined, board: ResolvedBoardView) {
     if (
       !layout ||
       !this.state ||
@@ -568,7 +578,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       !this.visuallyPresented ||
       !board.provider.hasLoadedSnapshot ||
       !customElements.get("openclaw-board-view") ||
-      sidebarDashboardPresentation(layout) !== "expanded"
+      !isSidebarSlotVisible(layout, "dashboard")
     ) {
       return undefined;
     }
@@ -577,11 +587,11 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     return widget?.sizeW === BOARD_GRID_COLUMNS ? widget : undefined;
   }
 
-  protected fullscreenBoardWidgetMenu(
+  protected pageBoardWidgetMenu(
     layout: SidebarLayout | undefined,
     board = this.resolveBoardView(),
   ): BoardWidgetPageMenu | undefined {
-    const widget = this.fullscreenBoardWidget(layout, board);
+    const widget = this.pageBoardWidget(layout, board);
     if (!widget) {
       return undefined;
     }
@@ -595,7 +605,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         const current = this.resolveBoardView();
         if (
           current.provider !== board.provider ||
-          this.fullscreenBoardWidget(this.state?.sidebarLayout, current) !== widget
+          this.pageBoardWidget(this.state?.sidebarLayout, current) !== widget
         ) {
           return;
         }
@@ -633,13 +643,18 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     // must not replace the original session target (notably global versus a literal key).
     session.agentId ??= parseAgentSessionKey(board.snapshot.sessionKey)?.agentId;
     const boardActive = isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented;
-    const renderSurface = (active: boolean) =>
+    const connectionGeneration = this.connectionGeneration;
+    const renderSurface = () =>
       renderBoardSessionSurface({
-        active,
+        active: {
+          owner: this,
+          isPresented: () => isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented,
+          preview: () => !this.presented && this.connectionGeneration === connectionGeneration,
+        },
         session,
         snapshot: board.snapshot,
         activeTabId: board.activeTabId,
-        pageWidgetName: this.fullscreenBoardWidget(layout, board)?.name,
+        pageWidgetName: this.pageBoardWidget(layout, board)?.name,
         canMutate: board.provider.canMutate,
         canGrant: board.provider.canGrant,
         callbacks: {
@@ -659,9 +674,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       });
     // Keep one template boundary so hiding the panel does not remount app iframes.
     return html`${
-      boardActive
-        ? renderSurface(true)
-        : guard([sessionKey, session.agentId], () => renderSurface(false))
+      boardActive ? renderSurface() : guard([sessionKey, session.agentId], renderSurface)
     }`;
   }
 

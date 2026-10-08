@@ -1,4 +1,3 @@
-// Doctor contribution for low disk space around the OpenClaw state directory.
 import os from "node:os";
 import { expectDefined, formatByteSize } from "@openclaw/normalization-core";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -56,16 +55,16 @@ function buildDiskSpaceWarnings(params: {
   return warnings;
 }
 
-function collectDiskSpaceWarnings(params: {
-  env?: NodeJS.ProcessEnv;
-  readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
-}): { availableBytes: number; stateDir: string; warnings: readonly string[] } | null {
-  const env = params.env ?? process.env;
+function collectDiskSpaceWarnings(): {
+  availableBytes: number;
+  stateDir: string;
+  warnings: readonly string[];
+} | null {
+  const env = process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
 
-  const readDiskSpace = params.readDiskSpace ?? tryReadDiskSpace;
-  const snapshot = readDiskSpace(stateDir);
+  const snapshot = tryReadDiskSpace(stateDir);
   // If we cannot determine free space (no existing ancestor, unsupported FS,
   // or permission error), skip silently — other contributions already
   // handle missing directories.
@@ -87,14 +86,8 @@ function collectDiskSpaceWarnings(params: {
 }
 
 /** Collects read-only structured findings for low disk space around the state directory. */
-export function collectDiskSpaceHealthFindings(deps?: {
-  env?: NodeJS.ProcessEnv;
-  readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
-}): readonly HealthFinding[] {
-  const result = collectDiskSpaceWarnings({
-    env: deps?.env,
-    readDiskSpace: deps?.readDiskSpace,
-  });
+export function collectDiskSpaceHealthFindings(): readonly HealthFinding[] {
+  const result = collectDiskSpaceWarnings();
   if (!result || result.warnings.length === 0) {
     return [];
   }
@@ -114,14 +107,8 @@ export function collectDiskSpaceHealthFindings(deps?: {
   ];
 }
 
-export function noteDiskSpace(deps?: {
-  env?: NodeJS.ProcessEnv;
-  readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
-}): void {
-  const result = collectDiskSpaceWarnings({
-    env: deps?.env,
-    readDiskSpace: deps?.readDiskSpace,
-  });
+export function noteDiskSpace(): void {
+  const result = collectDiskSpaceWarnings();
   if (!result || result.warnings.length === 0) {
     return;
   }

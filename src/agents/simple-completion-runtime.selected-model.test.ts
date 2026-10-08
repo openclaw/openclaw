@@ -1,11 +1,12 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as sessionEntryRuntime from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   executeWorkerInference,
   type WorkerInferenceExecutionParams,
 } from "../gateway/worker-environments/inference-runtime.js";
+import * as workerTurnOwner from "../gateway/worker-environments/placement-turn-claim-events.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -145,10 +146,15 @@ module.exports = {
           storePath: state.path("unused-session-store.sqlite"),
         };
         if (mode === "worker") {
-          vi.spyOn(sessionAccessor, "loadSessionEntry").mockImplementation((target) => {
-            expect(target).toEqual(sessionTarget);
-            return { sessionId: "selected-test", updatedAt: 0 };
+          vi.spyOn(workerTurnOwner, "readWorkerTurnPromptCacheContext").mockReturnValue({
+            boundaryCount: 0,
           });
+          vi.spyOn(sessionEntryRuntime, "readSessionEntryInWorker").mockImplementation(
+            async (target) => {
+              expect(target).toEqual(sessionTarget);
+              return { sessionId: "selected-test", updatedAt: 0 };
+            },
+          );
           vi.spyOn(sessionAuthRuntime, "resolveSessionAuthSelection").mockResolvedValue(undefined);
         }
 

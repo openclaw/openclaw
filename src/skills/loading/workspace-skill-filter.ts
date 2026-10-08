@@ -14,24 +14,23 @@ const skillsLogger = createSubsystemLogger("skills");
 
 export function filterSkillEntries(
   entries: SkillEntry[],
-  config?: OpenClawConfig,
-  skillFilter?: string[],
-  skillOverrides?: Readonly<Record<string, boolean>>,
-  eligibility?: SkillEligibilityContext,
-  hasBin?: (bin: string) => boolean,
-  platform?: string,
+  opts?: {
+    config?: OpenClawConfig;
+    skillFilter?: string[];
+    skillOverrides?: Readonly<Record<string, boolean>>;
+    eligibility?: SkillEligibilityContext;
+    hasBin?: (bin: string) => boolean;
+    platform?: string;
+  },
 ): SkillEntry[] {
+  const { config, skillFilter, skillOverrides, eligibility, hasBin, platform } = opts ?? {};
   const bundledAllowlist = resolveBundledAllowlist(config);
   assertUnambiguousManagedSkillNames(entries);
   const normalized = normalizeSkillFilter(skillFilter);
   const filtered = entries.filter(
     (entry) =>
-      isSessionSkillEnabled(
-        entry.skill.name,
-        normalized,
-        skillOverrides,
-        resolveSkillKey(entry.skill, entry),
-      ) && shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility, hasBin, platform }),
+      isSessionSkillEnabled(entry.skill.name, normalized, skillOverrides, resolveSkillKey(entry)) &&
+      shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility, hasBin, platform }),
   );
   if (skillFilter !== undefined || skillOverrides !== undefined) {
     const label = normalized?.length ? normalized.join(", ") : "(none)";

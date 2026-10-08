@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   canonicalAndroidVersionCode,
-  normalizeGatewayVersionToPinnedAndroidVersion,
   normalizePinnedAndroidVersion,
   renderAndroidReleaseNotes,
   renderAndroidVersionProperties,
@@ -14,6 +13,7 @@ import {
   syncAndroidVersioning,
 } from "../../scripts/lib/android-version.ts";
 import { extractChangelogSection } from "../../scripts/lib/mobile-changelog.ts";
+import { normalizeGatewayVersionToPinnedMobileVersion } from "../../scripts/lib/mobile-version.ts";
 import {
   parseVersionQueryArgs,
   parseVersionSyncArgs,
@@ -184,12 +184,12 @@ describe("resolveAndroidVersion", () => {
 
 describe("gateway version normalization", () => {
   it("keeps stable gateway release values", () => {
-    expect(normalizeGatewayVersionToPinnedAndroidVersion("2026.6.2")).toBe("2026.6.2");
+    expect(normalizeGatewayVersionToPinnedMobileVersion("2026.6.2")).toBe("2026.6.2");
   });
 
   it("strips prerelease suffixes when pinning from gateway version", () => {
-    expect(normalizeGatewayVersionToPinnedAndroidVersion("2026.6.2-beta.3")).toBe("2026.6.2");
-    expect(normalizeGatewayVersionToPinnedAndroidVersion("2026.6.2-alpha.1")).toBe("2026.6.2");
+    expect(normalizeGatewayVersionToPinnedMobileVersion("2026.6.2-beta.3")).toBe("2026.6.2");
+    expect(normalizeGatewayVersionToPinnedMobileVersion("2026.6.2-alpha.1")).toBe("2026.6.2");
   });
 
   it("derives the default Play-compatible versionCode from the pinned version", () => {
@@ -203,11 +203,11 @@ describe("gateway version normalization", () => {
   });
 
   it("rejects impossible gateway release versions", () => {
-    expect(() => normalizeGatewayVersionToPinnedAndroidVersion("2026.13.2-beta.1")).toThrow(
+    expect(() => normalizeGatewayVersionToPinnedMobileVersion("2026.13.2-beta.1")).toThrow(
       "Expected YYYY.M.PATCH",
     );
     expect(() =>
-      normalizeGatewayVersionToPinnedAndroidVersion("2026.6.2-beta.9007199254740993"),
+      normalizeGatewayVersionToPinnedMobileVersion("2026.6.2-beta.9007199254740993"),
     ).toThrow("Expected YYYY.M.PATCH");
   });
 

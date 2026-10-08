@@ -52,7 +52,6 @@ type SetupParams = {
   runtimeStatus?: FaceTimeRuntimeStatus | Promise<FaceTimeRuntimeStatus>;
   runtimeError?: string;
   preflight?: FaceTimePreflightResult | Promise<FaceTimePreflightResult>;
-  readAssertionsFile?: () => Promise<string>;
 };
 
 const XCODE_APP = "/Applications/Xcode.app";
@@ -196,12 +195,11 @@ function hasActiveFocusAssertion(raw: string): boolean {
   return visit(parsed);
 }
 
-async function checkFocusMode(params: SetupParams): Promise<FaceTimeSetupCheck> {
-  const readAssertions =
-    params.readAssertionsFile ??
-    (() => readFile(resolve(homedir(), "Library/DoNotDisturb/DB/Assertions.json"), "utf8"));
+async function checkFocusMode(): Promise<FaceTimeSetupCheck> {
   try {
-    const active = hasActiveFocusAssertion(await readAssertions());
+    const active = hasActiveFocusAssertion(
+      await readFile(resolve(homedir(), "Library/DoNotDisturb/DB/Assertions.json"), "utf8"),
+    );
     return {
       id: "focus-mode",
       label: "Focus mode",
@@ -484,7 +482,7 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     }
   }
 
-  checks.push(await checkFocusMode(params));
+  checks.push(await checkFocusMode());
   checks.push(await checkNotificationsDuringSharing(params.runCommandWithTimeout));
 
   checks.push({

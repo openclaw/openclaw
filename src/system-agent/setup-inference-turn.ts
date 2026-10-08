@@ -11,7 +11,6 @@ import {
 } from "../agents/agent-run-result.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import { describeFailoverError } from "../agents/failover-error.js";
 import type { AgentHarnessPluginSelection } from "../agents/harness/runtime-plugin-load-plan.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { SessionManager } from "../agents/sessions/index.js";
@@ -30,7 +29,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
-  sameDefaultInferenceRoute,
   type SystemAgentConfigSnapshot,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
@@ -38,8 +36,8 @@ import {
   type ActivateSetupInferenceDeps,
   type BoundVerifySetupInferenceResult,
   type CompleteSetupInferenceResult,
+  describeSetupInferenceError,
   invalidSetupConfigError,
-  mapFailoverReasonToSetupStatus,
   parseInferenceRef,
   redactSetupInferenceError,
   resolveSetupInferenceWinnerError,
@@ -94,7 +92,7 @@ export async function runSetupInferenceTurn(params: {
     deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
   )();
   const failed = (status: SetupInferenceFailureStatus, error: string): SetupTurnFailure => {
-    setupInferenceLog.warn("Inference setup probe failed.", {
+    setupInferenceLog.warn("Inference setup check failed.", {
       event: "setup_inference_probe_failed",
       provider: route.provider,
       model: route.model,
@@ -178,6 +176,7 @@ export async function runSetupInferenceTurn(params: {
         ...(route.authProfileId ? { authProfileIdSource: "user" as const } : {}),
         authProfileStateMode: "read-only",
         allowAuthProfileFallback: false,
+        retryConnectionErrors: false,
         preparedModelRuntimeMode: "isolated-read-only",
         ...(harness === "codex" ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(harness ? { agentHarnessRuntimeOverride: harness } : {}),
@@ -200,7 +199,7 @@ export async function runSetupInferenceTurn(params: {
     if (terminalError) {
       throw new Error(terminalError);
     }
-    const text = extractAgentRunText(result)?.trim();
+    const text = extractAgentRunText(result);
     if (!text) {
       return failed(
         "format",
@@ -230,8 +229,8 @@ export async function runSetupInferenceTurn(params: {
       auth: successfulAuth ?? (route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };
   } catch (error) {
-    const described = describeFailoverError(error);
-    return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
+    const described = describeSetupInferenceError(error, route);
+    return failed(described.status, described.error);
   } finally {
     preparedRunAdmission.close();
     clearAgentRunContext(runId);
@@ -482,7 +481,7 @@ export async function verifySetupInference(
   const latestRoute = latestConfig
     ? await projectInferenceRoute(latestConfig, params.agentId, routeOptions)
     : undefined;
-  if (!latestRoute || !sameDefaultInferenceRoute(baselineRoute, latestRoute)) {
+  if (!latestRoute || !isDeepStrictEqual(baselineRoute, latestRoute)) {
     return {
       ok: false,
       status: "unknown",
@@ -504,19 +503,6 @@ export async function verifySetupInference(
   return { ...verification, binding: verifiedBinding };
 }
 
-type BoundSetupInferenceVerifier = (params: {
-  runtime: RuntimeEnv;
-  bindSession: true;
-  agentId?: string;
-  deps?: ActivateSetupInferenceDeps;
-}) => Promise<BoundVerifySetupInferenceResult>;
-
-export type ResolvePersistentApplyInferenceDeps = SystemAgentVerifiedInferenceDeps & {
-  resolveVerifiedInferenceRoute?: typeof resolveSystemAgentVerifiedInferenceRoute;
-  hasCurrentOwnerPluginArtifacts?: typeof hasCurrentSystemAgentOwnerPluginArtifacts;
-  verifyBoundInference?: BoundSetupInferenceVerifier;
-};
-
 function executionRouteIdentity(route: SystemAgentConfiguredRoute): unknown {
   const { runConfig: _runConfig, sourceConfig: _sourceConfig, ...identity } = route;
   return identity;
@@ -530,26 +516,21 @@ function executionRouteIdentity(route: SystemAgentConfiguredRoute): unknown {
 export async function resolvePersistentApplyInference(params: {
   binding: SystemAgentVerifiedInferenceBinding;
   runtime: RuntimeEnv;
-  deps?: ResolvePersistentApplyInferenceDeps;
+  deps?: SystemAgentVerifiedInferenceDeps;
 }): Promise<SystemAgentConfiguredRoute | null> {
   const deps = params.deps ?? {};
-  const resolveVerified =
-    deps.resolveVerifiedInferenceRoute ?? resolveSystemAgentVerifiedInferenceRoute;
-  const initialRoute = await resolveVerified(params.binding, deps);
+  const initialRoute = await resolveSystemAgentVerifiedInferenceRoute(params.binding, deps);
   if (!initialRoute) {
     return null;
   }
-  const hasCurrentOwnerPluginArtifacts =
-    deps.hasCurrentOwnerPluginArtifacts ?? hasCurrentSystemAgentOwnerPluginArtifacts;
-  if (!(await hasCurrentOwnerPluginArtifacts(params.binding, deps))) {
+  if (!(await hasCurrentSystemAgentOwnerPluginArtifacts(params.binding, deps))) {
     return null;
   }
   if (params.binding.auth.proofKind !== "runtime-owner") {
     return initialRoute;
   }
 
-  const verifyBound = deps.verifyBoundInference ?? verifySetupInference;
-  const live = await verifyBound({
+  const live = await verifySetupInference({
     runtime: params.runtime,
     bindSession: true,
     agentId: params.binding.execution.agentId,
@@ -571,8 +552,8 @@ export async function resolvePersistentApplyInference(params: {
   }
   // The live probe is not a lock. Recheck the authored route after it returns,
   // then keep using the original frozen execution snapshot.
-  const finalRoute = await resolveVerified(params.binding, deps);
-  if (!finalRoute || !(await hasCurrentOwnerPluginArtifacts(params.binding, deps))) {
+  const finalRoute = await resolveSystemAgentVerifiedInferenceRoute(params.binding, deps);
+  if (!finalRoute || !(await hasCurrentSystemAgentOwnerPluginArtifacts(params.binding, deps))) {
     return null;
   }
   return finalRoute;
@@ -664,7 +645,7 @@ export async function verifySetupInferenceConfig(
       );
       if (
         !currentRoute ||
-        !sameDefaultInferenceRoute(
+        !isDeepStrictEqual(
           baselineRoute!,
           await projectInferenceRoute(currentConfig, route.agentId, {
             modelTarget: params.modelTarget,

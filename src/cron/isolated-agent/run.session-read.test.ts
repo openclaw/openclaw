@@ -45,6 +45,54 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("cron session preparation", () => {
+  it("persists scheduled session rows through the worker without caller SQL", async () => {
+    resetRunCronIsolatedAgentTurnHarness();
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-write-"));
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+    resolveCronSessionMock.mockImplementation(actualSession.prepareCronSession);
+    loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
+    const queries: string[] = [];
+    patchSessionEntryMock.mockImplementation(
+      async (...args: Parameters<typeof actualAccessor.patchSessionEntryCore>) => {
+        const sql = observeHostDataSql();
+        try {
+          return await actualAccessor.patchSessionEntryCore(...args);
+        } finally {
+          queries.push(...sql.queries);
+          sql.restore();
+        }
+      },
+    );
+    const result = await prepareCronRunContext({
+      input: makeIsolatedAgentParamsFixture({
+        agentId: "main",
+        cfg: { session: { store: database.path } },
+        sessionKey: "cron:test-job",
+        job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" } }),
+      }),
+      isFastTestEnv: true,
+      onLifecycleInterrupt: () => {},
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("Cron preparation failed");
+    }
+    try {
+      await using _ = result.context.preparedModelRuntimeLease;
+      expect(patchSessionEntryMock).toHaveBeenCalled();
+      expect(queries).toEqual([]);
+      expect(
+        actualAccessor.loadSessionEntry({
+          storePath: database.path,
+          sessionKey: "agent:main:cron:test-job",
+        }),
+      ).toMatchObject({ createdVia: "cron", sessionId: result.context.runSessionId });
+    } finally {
+      result.context.sessionWorkAdmission.release();
+      await result.context.workspaceLease?.release();
+    }
+  });
+
   it("prepares full target and source rows without host database reads", async () => {
     resetRunCronIsolatedAgentTurnHarness();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-read-"));

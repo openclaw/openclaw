@@ -18,6 +18,7 @@ import {
 } from "../../../../src/config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../../src/state/openclaw-state-db.js";
+import { cleanupSessionStateForTest } from "../../../../src/test-utils/session-state-cleanup.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   buildSessionEntry,
@@ -33,10 +34,14 @@ let envSnapshot: Record<string, string | undefined> | undefined;
 let fixtureId = 0;
 
 beforeAll(() => {
-  fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-"));
+  fixtureRoot = fsSync.realpathSync.native(
+    fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-")),
+  );
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
@@ -53,10 +58,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  // Join native workers before removing their files; agent leases still need shared state
-  // and the fixture environment while they close.
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
+  // Close case databases before restoring its environment or removing its files.
+  await cleanupSessionStateForTest({ stateDir: tmpDir, rootPath: tmpDir });
   for (const [key, value] of Object.entries(envSnapshot ?? {})) {
     if (value === undefined) {
       Reflect.deleteProperty(process.env, key);
@@ -398,7 +401,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     );
   });
 
-  it("classifies active entries through cron parentage chains", async () => {
+  it("classifies active entries through cron parentage chains and cycles", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
     const cronPath = path.join(sessionsDir, "cron-run.jsonl");
@@ -445,10 +448,26 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         spawnedBy: "agent:main:chat:manual",
         updatedAt: 1,
       },
+      "agent:main:subagent:cycle-a": {
+        sessionId: "cycle-a",
+        parentSessionKey: "agent:main:subagent:cycle-b",
+        spawnedBy: "agent:main:cron:job-1:run:missing",
+        updatedAt: 1,
+      },
+      "agent:main:subagent:cycle-b": {
+        sessionId: "cycle-b",
+        parentSessionKey: "agent:main:subagent:cycle-a",
+        updatedAt: 1,
+      },
     });
 
     const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
-    expect(entries.filter((entry) => entry.generatedByCronRun)).toHaveLength(4);
+    expect(
+      entries
+        .filter((entry) => entry.generatedByCronRun)
+        .map((entry) => entry.sessionId)
+        .toSorted(),
+    ).toEqual(["cron-run", "cycle-a", "cycle-b", "keyed-child", "orphan-child", "spawned-child"]);
   });
 
   it("keeps archive classification when the active transcript is missing", async () => {
@@ -726,10 +745,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         },
       }),
     );
-    fsSync.writeFileSync(
-      configPath,
-      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
-    );
+    fsSync.writeFileSync(configPath, JSON.stringify({ agents: { entries: { ops: {} } } }));
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
     clearRuntimeConfigSnapshot();
     clearConfigCache();

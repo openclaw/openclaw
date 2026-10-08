@@ -30,7 +30,9 @@ const inventorySchema = z.object({
     .array(
       z.object({
         leaseId: z.string().min(1).max(512),
-        repoRoot: pathSchema,
+        // Crabbox records provider resources not yet attached to a repository
+        // with an empty root, and never clears an attached root without reclaim.
+        repoRoot: z.union([z.literal(""), pathSchema]),
       }),
     )
     .max(10_000),
@@ -304,7 +306,7 @@ export async function verifyNoStagingClaims(params: {
       if (Date.now() >= deadline) {
         throw new ClaimInventoryHold("Native claim inventory exceeded its inspection budget.");
       }
-      if (within(sourceRoot, directoryLocation(claim.repoRoot).directory)) {
+      if (claim.repoRoot && within(sourceRoot, directoryLocation(claim.repoRoot).directory)) {
         matches.add(claim.leaseId);
         if (matches.size === 16) {
           break;

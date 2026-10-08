@@ -1,4 +1,4 @@
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { ChannelDirectoryAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectMattermostAccount, listMattermostAccountIds } from "./accounts.js";
 import {
@@ -9,30 +9,9 @@ import {
   type MattermostUser,
 } from "./client.js";
 import { resolveMattermostTrustedChatKind } from "./monitor-auth.js";
-import type { ChannelDirectoryEntry, OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
+import type { ChannelDirectoryEntry } from "./runtime-api.js";
 
-type MattermostDirectoryParams = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  query?: string | null;
-  limit?: number | null;
-  runtime: RuntimeEnv;
-};
-
-function buildClient(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): MattermostClient | null {
-  const account = inspectMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.enabled || !account.botToken || !account.baseUrl) {
-    return null;
-  }
-  return createMattermostClient({
-    baseUrl: account.baseUrl,
-    botToken: account.botToken,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
-  });
-}
+type MattermostDirectoryParams = Parameters<NonNullable<ChannelDirectoryAdapter["listPeers"]>>[0];
 
 /** Build the requested account client, or aggregate accounts for an explicitly unscoped lookup. */
 function buildClients(params: MattermostDirectoryParams): MattermostClient[] {
@@ -43,8 +22,16 @@ function buildClients(params: MattermostDirectoryParams): MattermostClient[] {
   const seen = new Set<string>();
   const clients: MattermostClient[] = [];
   for (const id of accountIds) {
-    const client = buildClient({ cfg: params.cfg, accountId: id });
-    if (client && !seen.has(client.token)) {
+    const account = inspectMattermostAccount({ cfg: params.cfg, accountId: id });
+    if (!account.enabled || !account.botToken || !account.baseUrl) {
+      continue;
+    }
+    const client = createMattermostClient({
+      baseUrl: account.baseUrl,
+      botToken: account.botToken,
+      allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
+    });
+    if (!seen.has(client.token)) {
       seen.add(client.token);
       clients.push(client);
     }

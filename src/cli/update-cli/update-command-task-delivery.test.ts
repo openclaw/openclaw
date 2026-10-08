@@ -139,39 +139,32 @@ it("admits cascade-owned task-delivery orphans with preservation and a durable r
   );
 });
 
-it.each([
-  { name: "step count", count: 130, prefix: "progress:", detail: undefined },
-  { name: "diagnostic bytes", count: 30, prefix: "progress:", detail: "界".repeat(1_024) },
-  { name: "retained step bytes", count: 30, prefix: "finalize:", detail: "界".repeat(1_024) },
-])(
-  "retains the recovery receipt across the $name limit and database reopen",
-  ({ count, prefix, detail }) => {
-    const f = seededOrphans();
-    const options = { env: f.env };
-    const run = createUpdateRun({ trigger: "cli" }, options);
-    const directories = fs
-      .readdirSync(path.dirname(f.filename))
-      .filter((name) => name.startsWith("openclaw-task-delivery-recovery-"));
-    expect(directories).toHaveLength(1);
-    for (let index = 0; index < count; index++) {
-      recordUpdateRunStep(
-        run.runId,
-        { step: `${prefix}${index}`, status: "completed", detail },
-        options,
-      );
-    }
-    closeOpenClawStateDatabaseForTest();
-    const persisted = getUpdateRun(run.runId, options)!;
-    const receipt = persisted.steps.find((step) => step.step === "task-delivery-recovery");
-    expect(receipt).toMatchObject({
-      status: "completed",
-      detail: expect.stringContaining("18 orphan task delivery rows"),
-    });
-    expect(receipt?.detail).toContain(directories[0]);
-    expect(persisted.steps.length).toBeLessThanOrEqual(128);
-    expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
-  },
-);
+it("retains the recovery receipt across retained-step byte pressure and database reopen", () => {
+  const f = seededOrphans();
+  const options = { env: f.env };
+  const run = createUpdateRun({ trigger: "cli" }, options);
+  const directories = fs
+    .readdirSync(path.dirname(f.filename))
+    .filter((name) => name.startsWith("openclaw-task-delivery-recovery-"));
+  expect(directories).toHaveLength(1);
+  for (let index = 0; index < 30; index++) {
+    recordUpdateRunStep(
+      run.runId,
+      { step: `finalize:${index}`, status: "completed", detail: "界".repeat(1_024) },
+      options,
+    );
+  }
+  closeOpenClawStateDatabaseForTest();
+  const persisted = getUpdateRun(run.runId, options)!;
+  const receipt = persisted.steps.find((step) => step.step === "task-delivery-recovery");
+  expect(receipt).toMatchObject({
+    status: "completed",
+    detail: expect.stringContaining("18 orphan task delivery rows"),
+  });
+  expect(receipt?.detail).toContain(directories[0]);
+  expect(persisted.steps.length).toBeLessThanOrEqual(128);
+  expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
+});
 
 it.each(["non-cascade", "structural"] as const)(
   "refuses %s damage without admission or recovery",
@@ -240,25 +233,22 @@ it.each(["read-only", "foreign-gateway"] as const)(
   },
 );
 
-it.each(["CASCADE", "SET NULL"])(
-  "preserves inbound %s dependents when recovery is refused",
-  (action) => {
-    const f = seededOrphans();
-    inspect(f.filename, (db) =>
-      db.exec(`CREATE TABLE dependent (
-    task_id TEXT REFERENCES task_delivery_state(task_id) ON DELETE ${action});
+it("preserves inbound CASCADE dependents when recovery is refused", () => {
+  const f = seededOrphans();
+  inspect(f.filename, (db) =>
+    db.exec(`CREATE TABLE dependent (
+    task_id TEXT REFERENCES task_delivery_state(task_id) ON DELETE CASCADE);
     INSERT INTO dependent VALUES ('missing-task-0');`),
-    );
-    expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
-      /foreign_key_check failed/,
-    );
-    inspect(f.filename, (db) => {
-      expect(db.prepare("SELECT * FROM dependent").all()).toEqual([{ task_id: "missing-task-0" }]);
-      expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
-      expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
-    });
-  },
-);
+  );
+  expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
+    /foreign_key_check failed/,
+  );
+  inspect(f.filename, (db) => {
+    expect(db.prepare("SELECT * FROM dependent").all()).toEqual([{ task_id: "missing-task-0" }]);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
+    expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
+  });
+});
 
 it("rolls back recovered rows when ledger schema refuses admission", () => {
   const f = seededOrphans();

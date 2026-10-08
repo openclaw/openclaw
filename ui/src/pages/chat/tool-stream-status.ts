@@ -3,6 +3,8 @@ import {
   normalizeNullableString as toTrimmedString,
   normalizeLowercaseStringOrEmpty,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SessionOperationEvent } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
@@ -13,17 +15,6 @@ import type {
   CompactionStatus,
   ToolStreamHost,
 } from "./tool-stream-contract.ts";
-
-type SessionOperationEventPayload = {
-  operationId?: string;
-  operation?: string;
-  phase?: string;
-  sessionKey?: string;
-  agentId?: string;
-  ts?: number;
-  completed?: boolean;
-  reason?: string;
-};
 
 function resolveModelLabel(provider: unknown, model: unknown): string | null {
   const modelValue = toTrimmedString(model);
@@ -208,7 +199,7 @@ function setCompactionStatus(
 
 export function handleSessionOperationEvent(
   host: ToolStreamHost,
-  payload?: SessionOperationEventPayload,
+  payload?: Partial<SessionOperationEvent>,
 ) {
   if (!payload || payload.operation !== "compact") {
     return;
@@ -253,17 +244,17 @@ function handleCompactionEvent(host: ToolStreamHost, payload: AgentEventPayload)
     return;
   }
   if (phase === "end") {
-    if (data.willRetry === true && completed) {
-      // Compaction already succeeded, but the run is still retrying.
-      // Keep that distinct state until the matching lifecycle end arrives.
-      setCompactionStatus(host, payload.runId, "retrying", itemId);
-      return;
-    }
     if (completed) {
-      setCompactionStatus(host, payload.runId, "complete", itemId);
-      return;
+      // Successful compaction can precede a retry; only lifecycle end completes it.
+      setCompactionStatus(
+        host,
+        payload.runId,
+        data.willRetry === true ? "retrying" : "complete",
+        itemId,
+      );
+    } else {
+      host.compactionStatus = null;
     }
-    host.compactionStatus = null;
   }
 }
 
@@ -387,7 +378,7 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
         state: "status",
         runId: payload.runId,
         phase: "retrying",
-        message: formatUiExternalText(message.slice(0, 256)),
+        message: formatUiExternalText(truncateUtf16Safe(message, 256)),
         seq: payload.seq,
       });
     }

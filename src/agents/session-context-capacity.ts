@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { ModelCatalogSnapshot, ModelCatalogEntry } from "./model-catalog.types.js";
+import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 /**
@@ -13,13 +14,22 @@ export type SessionContextCapacity =
 
 export type SessionContextCapacityOwner = {
   isCurrent: () => boolean;
-  modelCatalog: Pick<ModelCatalogSnapshot, "entries" | "staticEntries">;
-  readFullModelCatalog?: () => Pick<ModelCatalogSnapshot, "entries" | "staticEntries"> | undefined;
+  modelCatalog: Pick<ModelCatalogSnapshot, "entries" | "staticEntries" | "providerOutcomes"> &
+    Partial<Pick<ModelCatalogSnapshot, "routeVariants">>;
+  readFullModelCatalog?: () =>
+    | (Pick<ModelCatalogSnapshot, "entries" | "staticEntries" | "providerOutcomes"> &
+        Partial<Pick<ModelCatalogSnapshot, "routeVariants">>)
+    | undefined;
 };
 
 export type SessionContextCapacityResolver = (
   provider: string | undefined,
   model: string | undefined,
+  selection?: {
+    profileId?: string;
+    route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
+    nativeRuntime?: string;
+  },
 ) => SessionContextCapacity | undefined;
 
 function positive(value: number | undefined): number | undefined {
@@ -30,13 +40,16 @@ function positive(value: number | undefined): number | undefined {
 export function createSessionContextCapacityResolver(
   owner: SessionContextCapacityOwner | undefined,
 ): SessionContextCapacityResolver {
-  return (provider, model) => {
+  return (provider, model, selection) => {
     const providerId = provider ? normalizeProviderId(provider) : "";
     const modelId = normalizeLowercaseStringOrEmpty(model);
     if (!providerId || !modelId) {
       return undefined;
     }
-    let catalog: Pick<ModelCatalogSnapshot, "entries" | "staticEntries"> | undefined;
+    let catalog:
+      | (Pick<ModelCatalogSnapshot, "entries" | "staticEntries" | "providerOutcomes"> &
+          Partial<Pick<ModelCatalogSnapshot, "routeVariants">>)
+      | undefined;
     try {
       // Failed, cancelled, retired or unbound preparation settles here as unavailable.
       if (!owner?.isCurrent()) {
@@ -50,10 +63,28 @@ export function createSessionContextCapacityResolver(
     } catch {
       return { state: "unavailable" };
     }
+    if (
+      selection?.profileId &&
+      !catalog?.providerOutcomes?.some(
+        (outcome) =>
+          normalizeProviderId(outcome.provider) === providerId &&
+          outcome.profileId === selection.profileId &&
+          outcome.status === "ready",
+      )
+    ) {
+      return { state: "unavailable" };
+    }
     let reported: number | undefined;
     let estimate: number | undefined;
-    for (const entry of [...(catalog?.entries ?? []), ...(catalog?.staticEntries ?? [])]) {
+    for (const entry of [
+      ...(catalog?.routeVariants ?? []),
+      ...(catalog?.entries ?? []),
+      ...(catalog?.staticEntries ?? []),
+    ]) {
       if (
+        (selection?.route && !modelTransportRoutesMatch(entry, selection.route)) ||
+        (selection?.nativeRuntime && entry.nativeRuntime !== selection.nativeRuntime) ||
+        (!selection?.nativeRuntime && Boolean(entry.nativeRuntime)) ||
         normalizeProviderId(entry.provider) !== providerId ||
         normalizeLowercaseStringOrEmpty(entry.id) !== modelId
       ) {

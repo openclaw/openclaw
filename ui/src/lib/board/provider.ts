@@ -41,7 +41,7 @@ class NullProvider implements BoardProvider {
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly events: BoardEventStream<BoardCommandEvent> = new EventStream<BoardCommandEvent>();
 
-  constructor(readonly sessionKey = "") {
+  constructor(readonly sessionKey: string) {
     this.snapshot$ = new ValueSignal(emptyBoardSnapshot(sessionKey));
   }
 

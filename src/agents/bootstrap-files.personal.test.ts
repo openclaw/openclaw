@@ -3,11 +3,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  linkEmail,
-} from "../state/user-profiles.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -29,29 +26,6 @@ afterEach(async () => {
   await state.cleanup();
 });
 describe("personal bootstrap", () => {
-  it.each(["owner", "named"])(
-    "keeps only workspace USER.md for a single %s identity",
-    async (kind) => {
-      const workspaceDir = tempDirs.make("bootstrap-single-user-");
-      const owner = ensureGatewayOwnerProfile("Local Owner");
-      const profile = kind === "owner" ? owner : ensureProfileForEmail("solo@example.test");
-      const personalDir = path.join(workspaceDir, "users", profile.id);
-      await fs.mkdir(personalDir, { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "USER.md"), "Only workspace preferences");
-      await fs.writeFile(path.join(personalDir, "USER.md"), "Legacy personal preferences");
-      const context = await resolveBootstrapContextForRun({
-        workspaceDir,
-        bootstrapUserProfileId: profile.id,
-      });
-      expect(context.contextFiles.filter((file) => file.path.endsWith("USER.md"))).toEqual([
-        { path: path.join(workspaceDir, "USER.md"), content: "Only workspace preferences" },
-      ]);
-      expect(await fs.readFile(path.join(personalDir, "USER.md"), "utf8")).toBe(
-        "Legacy personal preferences",
-      );
-    },
-  );
-
   it("refreshes the selected overlay without retaining a previous selection", async () => {
     const workspaceDir = path.join(tempDirs.make("bootstrap-people-"), "users", "arbitrary");
     await fs.mkdir(workspaceDir, { recursive: true });

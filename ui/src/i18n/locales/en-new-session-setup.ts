@@ -16,6 +16,7 @@ const enNewSessionSetup = {
       "The {runtime} runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
     deviceRuntimeUnsupported: "This runtime does not support paired devices",
     placementStartFailed: "The session was created, but startup needs attention: {error}",
+    placementCreateFailed: "Couldn't prepare session recovery. Your draft has been kept.",
     placementStillStarting:
       "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.",
     placementCompletionUnconfirmed:
@@ -131,6 +132,7 @@ const enNewSessionSetup = {
     checkout: "Checkout",
     checkoutCurrent: "Current checkout",
     checkoutWorktree: "New worktree",
+    checkoutWorktreeNamed: "Worktree · {name}",
     checkoutWorktreeSub: "Isolated copy of the repo",
     checkoutWorktreeFrom: "New worktree from {branch}",
     checkoutCloud: "Starting branch",

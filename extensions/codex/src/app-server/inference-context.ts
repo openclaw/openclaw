@@ -101,28 +101,25 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
         throw new Error("Codex inference has no current admitted parent generation");
       }
       registration.assertCurrent();
-      if (kind === "compaction") {
-        return {
-          body,
-          assertCurrent: registration.assertCurrent,
-          signal: registration.controller.signal,
-        };
-      }
-      // Responses Lite carries native base instructions in input and omits this optional field.
-      const instructions = body.instructions;
-      if (instructions !== undefined && typeof instructions !== "string") {
-        throw new Error("Codex inference request has invalid top-level instructions");
+      let preparedBody = body;
+      if (kind !== "compaction") {
+        // Responses Lite carries native base instructions in input and omits this optional field.
+        const instructions = body.instructions;
+        if (instructions !== undefined && typeof instructions !== "string") {
+          throw new Error("Codex inference request has invalid top-level instructions");
+        }
+        if (registration.text) {
+          preparedBody = {
+            ...body,
+            instructions:
+              instructions === undefined
+                ? registration.text
+                : instructions + "\n\n" + registration.text,
+          };
+        }
       }
       return {
-        body: registration.text
-          ? {
-              ...body,
-              instructions:
-                instructions === undefined
-                  ? registration.text
-                  : instructions + "\n\n" + registration.text,
-            }
-          : body,
+        body: preparedBody,
         assertCurrent: registration.assertCurrent,
         signal: registration.controller.signal,
       };

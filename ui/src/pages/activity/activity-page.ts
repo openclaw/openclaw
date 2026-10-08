@@ -16,6 +16,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { readPresenceEntries, type PresencePayload } from "../../app/user-profile.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
@@ -37,7 +38,7 @@ import { createPresenceActivityController } from "../../lit/presence-activity-co
 import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderCurrentWork } from "./current-work-view.ts";
-import { createLiveActivity, type LiveActivity } from "./live-activity.ts";
+import { createLiveActivity } from "./live-activity.ts";
 import {
   activityRunInspectorSearch,
   mergeDecisionPage,
@@ -98,7 +99,7 @@ class ActivityPage extends OpenClawLightDomElement {
     () => projectPresencePayload(this.presencePayload).users,
   );
 
-  private liveActivity: LiveActivity | null = null;
+  private liveActivity: ReturnType<typeof createLiveActivity> | null = null;
   private liveActivityRevision = -1;
   private readonly sessionActivity = new SessionActivityController(this);
   private sessionActivityRevision = -1;
@@ -112,10 +113,7 @@ class ActivityPage extends OpenClawLightDomElement {
     isEnabled: () => this.autoFollow,
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
+    .watchStore(() => this.context?.agents)
     .effect(
       () => this.context?.gateway,
       (gateway) => {
@@ -281,16 +279,16 @@ class ActivityPage extends OpenClawLightDomElement {
       this.runInspector = { status: "disconnected" };
       return;
     }
-    if (isGatewayMethodAdvertised(snapshot, "audit.run.inspect") === false) {
+    const unavailable =
+      isGatewayMethodAdvertised(snapshot, "audit.run.inspect") === false
+        ? "unsupported"
+        : !canCallGatewayMethod(snapshot, "audit.run.inspect", "operator.read")
+          ? "unauthorized"
+          : null;
+    if (unavailable) {
       this.cancelInspectorRequest();
       this.inspectorClient = snapshot.client;
-      this.runInspector = { status: "unsupported" };
-      return;
-    }
-    if (!canCallGatewayMethod(snapshot, "audit.run.inspect", "operator.read")) {
-      this.cancelInspectorRequest();
-      this.inspectorClient = snapshot.client;
-      this.runInspector = { status: "unauthorized" };
+      this.runInspector = { status: unavailable };
       return;
     }
     if (
@@ -377,14 +375,10 @@ class ActivityPage extends OpenClawLightDomElement {
           result.identity.state === "ambiguous"
         ) {
           const candidates = new Map(
-            previousState.result.identity.candidates.map((candidate) => [
-              candidate.executionId,
-              candidate,
-            ]),
+            [...previousState.result.identity.candidates, ...result.identity.candidates].map(
+              (candidate) => [candidate.executionId, candidate],
+            ),
           );
-          for (const candidate of result.identity.candidates) {
-            candidates.set(candidate.executionId, candidate);
-          }
           this.runInspector = {
             status: "ready",
             result: {
@@ -486,10 +480,6 @@ class ActivityPage extends OpenClawLightDomElement {
       const presence = readPresenceEntries(event.payload);
       this.presencePayload = presence ? { presence } : undefined;
     }
-  }
-
-  private clearEntries() {
-    this.liveActivity?.clear();
   }
 
   private renderMode(route: ActivityRouteData, location: RouteLocation, pending: boolean) {
@@ -600,7 +590,7 @@ class ActivityPage extends OpenClawLightDomElement {
           this.statusFilters = { ...this.statusFilters, [status]: enabled };
         },
         onToggleAutoFollow: (next) => (this.autoFollow = next),
-        onClear: () => this.clearEntries(),
+        onClear: () => this.liveActivity?.clear(),
         onExpandAll: () => {
           this.expandedIds = new Set(this.entries.map((entry) => entry.id));
         },
@@ -657,7 +647,7 @@ class ActivityPage extends OpenClawLightDomElement {
       </div>
     `;
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
           <div class="page-title">${titleForRoute("activity")}</div>
           ${
@@ -673,7 +663,10 @@ class ActivityPage extends OpenClawLightDomElement {
 export const activityPageComponent = {
   header: true,
   render: (location: RouteLocation | undefined) =>
-    html`<openclaw-activity-page .routeLocation=${location}></openclaw-activity-page>`,
+    html`<openclaw-activity-page
+      .routeLocation=${location}
+      ${shellLayoutTraits({ activityPage: true })}
+    ></openclaw-activity-page>`,
 };
 
 if (!customElements.get("openclaw-activity-page")) {

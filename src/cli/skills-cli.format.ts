@@ -1,4 +1,3 @@
-// Formatting layer for `openclaw skills` commands; keeps discovery data separate from terminal UI.
 import type { SkillsCuratorCompatibleStatusResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
@@ -19,21 +18,19 @@ import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
+import { formatCliRequirements } from "./skills-hooks-cli.format.js";
 
-/** Options for rendering the skill list command. */
-export type SkillsListOptions = {
+type SkillsListOptions = {
   json?: boolean;
   eligible?: boolean;
   verbose?: boolean;
 };
 
-/** Options for rendering one skill detail view. */
-export type SkillInfoOptions = {
+type SkillInfoOptions = {
   json?: boolean;
 };
 
-/** Options for rendering skill readiness checks. */
-export type SkillsCheckOptions = {
+type SkillsCheckOptions = {
   json?: boolean;
   agent?: string;
 };
@@ -129,7 +126,6 @@ function formatSkillCheckSection(
       ];
 }
 
-/** Render skill discovery status as sanitized JSON or a terminal table. */
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
   const isReadyForAgent = (skill: SkillStatusEntry) =>
     skill.eligible && !skill.blockedByAgentFilter;
@@ -186,22 +182,18 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
     columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
   }
 
-  const lines: string[] = [];
-  lines.push(
-    `${theme.heading("Skills")} ${theme.muted(`(${ready.length}/${skills.length} ready)`)}`,
+  return appendClawHubHint(
+    [
+      `${theme.heading("Skills")} ${theme.muted(`(${ready.length}/${skills.length} ready)`)}`,
+      renderTable({
+        width: tableWidth,
+        columns,
+        rows,
+      }).trimEnd(),
+    ].join("\n"),
   );
-  lines.push(
-    renderTable({
-      width: tableWidth,
-      columns,
-      rows,
-    }).trimEnd(),
-  );
-
-  return appendClawHubHint(lines.join("\n"));
 }
 
-/** Render one skill's status, requirements, install hints, and API-key setup details. */
 export function formatSkillInfo(
   report: SkillStatusReport,
   skillName: string,
@@ -227,22 +219,19 @@ export function formatSkillInfo(
     return formatSkillsJson(skill);
   }
 
-  const lines: string[] = [];
   const emoji = normalizeSkillEmoji(skill.emoji);
-  const status = formatSkillStatus(skill, true);
-
   const safeName = sanitizeForLog(skill.name);
   const safeHomepage = skill.homepage ? sanitizeForLog(skill.homepage) : undefined;
   const safeSkillKey = sanitizeForLog(skill.skillKey);
-
-  lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(safeName)} ${status}`);
-  lines.push("");
-  lines.push(sanitizeForLog(skill.description));
-  lines.push("");
-
-  lines.push(theme.heading("Details:"));
-  lines.push(`${theme.muted("  Source:")} ${sanitizeForLog(skill.source)}`);
-  lines.push(`${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`);
+  const lines = [
+    `${emoji ? `${emoji} ` : ""}${theme.heading(safeName)} ${formatSkillStatus(skill, true)}`,
+    "",
+    sanitizeForLog(skill.description),
+    "",
+    theme.heading("Details:"),
+    `${theme.muted("  Source:")} ${sanitizeForLog(skill.source)}`,
+    `${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`,
+  ];
   if (safeHomepage) {
     lines.push(`${theme.muted("  Homepage:")} ${safeHomepage}`);
   }
@@ -259,36 +248,7 @@ export function formatSkillInfo(
     lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
   }
 
-  const requirementGroups = SKILL_REQUIREMENT_GROUPS.filter(
-    ([key]) => skill.requirements[key].length > 0,
-  );
-
-  if (requirementGroups.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Requirements:"));
-    const formatRequirementStatus = (value: string, satisfied: boolean) =>
-      satisfied ? theme.success(`✓ ${value}`) : theme.error(`✗ ${value}`);
-    for (const [key, label] of requirementGroups) {
-      const required = skill.requirements[key];
-      const missing = skill.missing[key];
-      let requirementStatus: string;
-      if (key === "anyBins" || key === "os") {
-        // Missing arrays describe the whole alternative group, not individual availability.
-        const prefix = key === "anyBins" ? "any of: " : "";
-        requirementStatus = formatRequirementStatus(
-          `(${prefix}${required.join(", ")})`,
-          missing.length === 0,
-        );
-      } else {
-        requirementStatus = required
-          .map((requirement) =>
-            formatRequirementStatus(requirement, !missing.includes(requirement)),
-          )
-          .join(", ");
-      }
-      lines.push(`${theme.muted(`  ${label}:`)} ${requirementStatus}`);
-    }
-  }
+  lines.push(...formatCliRequirements(skill, SKILL_REQUIREMENT_GROUPS));
 
   if (skill.install.length > 0 && !skill.eligible) {
     lines.push("");
@@ -319,7 +279,6 @@ export function formatSkillInfo(
   return appendClawHubHint(lines.join("\n"));
 }
 
-/** Render aggregate setup health for all discovered skills. */
 export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOptions): string {
   const eligible = report.skills.filter((s) => s.eligible);
   const modelVisible = report.skills.filter((s) => s.modelVisible);

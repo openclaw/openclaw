@@ -293,6 +293,7 @@ jobs:
             libxdo-dev \
             mesa-utils \
             patchelf \
+            unzip \
             pciutils \
             procps \
             psmisc \

@@ -1,7 +1,11 @@
 /** Shared secrets runtime resolver context, assignments, and warning helpers. */
 import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SecretRef } from "../config/types.secrets.js";
+import {
+  coerceSecretRef,
+  isLegacySecretRefWithoutProvider,
+  type SecretRef,
+} from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
@@ -10,7 +14,7 @@ import {
   canonicalizeSecretRefsForOwnerContract,
   digestSecretOwnerContract,
 } from "./runtime-owner-contract.js";
-import { assertExpectedResolvedSecretValue } from "./secret-value.js";
+import { isExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
 export type SecretResolverWarningCode =
@@ -153,7 +157,7 @@ export function pushInactiveSurfaceWarning(params: {
 /**
  * Converts an inline SecretInput value into a deferred assignment when its surface is active.
  */
-export function collectSecretInputAssignment(params: {
+export function collectCanonicalSecretInputAssignment(params: {
   value: unknown;
   path: string;
   expected: SecretAssignment["expected"];
@@ -165,6 +169,9 @@ export function collectSecretInputAssignment(params: {
   apply: (value: unknown) => void;
   applyUnavailable?: () => void;
 }): void {
+  if (params.active !== false && isLegacySecretRefWithoutProvider(params.value)) {
+    throw new Error(`${params.path}: SecretRef requires a provider; run openclaw doctor --fix.`);
+  }
   const ref = resolveConfigSecretRef({
     config: params.context.sourceConfig,
     path: params.path,
@@ -202,6 +209,18 @@ export function collectSecretInputAssignment(params: {
   });
 }
 
+/** The public channel SDK collector retains providerless input; core config uses Doctor. */
+export function collectSecretInputAssignment(
+  params: Parameters<typeof collectCanonicalSecretInputAssignment>[0],
+): void {
+  collectCanonicalSecretInputAssignment({
+    ...params,
+    value: isLegacySecretRefWithoutProvider(params.value)
+      ? coerceSecretRef(params.value, params.defaults)
+      : params.value,
+  });
+}
+
 /**
  * Applies resolved SecretRef values to their collected config targets with shape validation.
  */
@@ -218,18 +237,12 @@ export function applyResolvedAssignments(params: {
       throw new Error(`Secret reference "${key}" resolved to no value.`);
     }
     const value = params.resolved.get(key);
-    try {
-      assertExpectedResolvedSecretValue({
-        value,
-        expected: assignment.expected,
-        errorMessage:
-          assignment.expected === "string"
-            ? `${assignment.path} resolved to a non-string or empty value.`
-            : `${assignment.path} resolved to an unsupported value type.`,
-      });
-    } catch (error) {
-      const validationError = error instanceof Error ? error : new Error(String(error));
-      firstValidationError ??= validationError;
+    if (!isExpectedResolvedSecretValue(value, assignment.expected)) {
+      firstValidationError ??= new Error(
+        assignment.expected === "string"
+          ? `${assignment.path} resolved to a non-string or empty value.`
+          : `${assignment.path} resolved to an unsupported value type.`,
+      );
       failures.push({
         ownerKind: assignment.ownerKind,
         ownerId: assignment.ownerId,

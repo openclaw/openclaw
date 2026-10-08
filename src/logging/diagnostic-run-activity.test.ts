@@ -39,6 +39,51 @@ afterEach(() => {
 });
 
 describe("diagnostic run activity listener lifecycle", () => {
+  it("touches existing activity without creating unknown session observations", () => {
+    const ref = { sessionId: "runtime-wait", sessionKey: "agent:main:runtime-wait" };
+    const progress = { ...ref, reason: "worker:runtime_refresh", onlyIfActive: true };
+
+    markDiagnosticRunProgress(progress);
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toEqual({});
+
+    markDiagnosticRunProgress({ ...ref, reason: "global_lane:waiting" });
+    markDiagnosticRunProgress(progress);
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "worker:runtime_refresh",
+    });
+  });
+
+  it("does not rebind existing progress across mismatched sessions or stale run owners", () => {
+    const first = { sessionId: "first-session", sessionKey: "agent:main:first", runId: "first" };
+    const second = {
+      sessionId: "second-session",
+      sessionKey: "agent:main:second",
+      runId: "second",
+    };
+    markDiagnosticEmbeddedRunStarted(first);
+    markDiagnosticEmbeddedRunStarted(second);
+    for (const ref of [
+      { ...first, runId: "retired-run" },
+      { ...first, sessionId: second.sessionId },
+      { sessionId: first.sessionId, sessionKey: second.sessionKey },
+      { ...first, sessionId: "unknown-session" },
+    ]) {
+      markDiagnosticRunProgress({ ...ref, reason: "wrong-owner", onlyIfActive: true });
+    }
+    expect(getDiagnosticSessionActivitySnapshot(first)).toMatchObject({
+      lastProgressReason: "embedded_run:started",
+    });
+    expect(getDiagnosticSessionActivitySnapshot(second)).toMatchObject({
+      lastProgressReason: "embedded_run:started",
+    });
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "unknown-session" })).toEqual({});
+    markDiagnosticRunProgress({ ...first, reason: "worker:runtime_refresh", onlyIfActive: true });
+    expect(getDiagnosticSessionActivitySnapshot(first)).toMatchObject({
+      lastProgressReason: "worker:runtime_refresh",
+    });
+  });
+
   it("does not register a listener when the module is imported", async () => {
     stopDiagnosticRunActivityTracking();
     resetDiagnosticEventsForTest();

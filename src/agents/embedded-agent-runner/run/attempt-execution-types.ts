@@ -3,7 +3,6 @@ import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-con
 import type { AgentTool } from "../../runtime/index.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
-/** Shared contracts for the prepared attempt execution phases. */
 import type { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
 import type { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -39,14 +38,17 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     sessionRuntime: Prepared<typeof prepareEmbeddedAttemptSessionRuntime>;
     systemPrompt: Prepared<typeof prepareEmbeddedAttemptSystemPrompt>;
     toolBase: Prepared<typeof prepareEmbeddedAttemptToolBase>;
-    toolCatalog: ReturnType<typeof prepareEmbeddedAttemptToolCatalog>;
+    toolCatalog: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolCatalog>>;
     promptToolPolicy: ReturnType<
       typeof createPromptBuildToolPolicy<AgentTool, AgentTool, AgentTool>
     >;
   };
   sessionLock: Pick<
     PreparedTranscriptLifecycle,
-    "compactionTimeoutMs" | "ownedTranscriptWriteContext" | "withOwnedTranscriptWrite"
+    | "compactionTimeoutMs"
+    | "assertCronRootCurrent"
+    | "ownedTranscriptWriteContext"
+    | "withOwnedTranscriptWrite"
   >;
   setup: Pick<
     EmbeddedAttemptSetup,
@@ -67,12 +69,13 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     applyPermissionMode?: (
       mode: NonNullable<EmbeddedRunAttemptParams["permissionMode"]> | null,
       revokeApprovals: () => void,
-    ) => void;
+    ) => Promise<void>;
     readYieldState: () => {
       yieldAbortSettled: Promise<void> | null;
       yieldDetected: boolean;
       yieldMessage: string | null;
       yieldAcknowledgment?: string;
+      yieldMessageWaitRegistered?: boolean;
     };
     setToolSearchCatalogExecutor: (
       executor: ReturnType<typeof prepareEmbeddedAttemptStream>["toolSearchCatalogExecutor"],

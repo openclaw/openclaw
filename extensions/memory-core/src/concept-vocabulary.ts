@@ -6,12 +6,7 @@ export const MAX_CONCEPT_TAGS = 8;
 
 type ConceptTagScriptFamily = "latin" | "cjk" | "mixed" | "other";
 
-export type ConceptTagScriptCoverage = {
-  latinEntryCount: number;
-  cjkEntryCount: number;
-  mixedEntryCount: number;
-  otherEntryCount: number;
-};
+export type ConceptTagScriptCoverage = ReturnType<typeof summarizeConceptTagScriptCoverage>;
 
 const LANGUAGE_STOP_WORDS = {
   shared: [
@@ -287,8 +282,7 @@ const HIRAGANA_RE = /\p{Script=Hiragana}/u;
 const KATAKANA_RE = /\p{Script=Katakana}/u;
 const HANGUL_RE = /\p{Script=Hangul}/u;
 
-const DEFAULT_WORD_SEGMENTER =
-  typeof Intl.Segmenter === "function" ? new Intl.Segmenter("und", { granularity: "word" }) : null;
+const DEFAULT_WORD_SEGMENTER = new Intl.Segmenter("und", { granularity: "word" });
 
 function classifyConceptTagScript(tag: string): ConceptTagScriptFamily {
   const normalized = tag.normalize("NFKC");
@@ -373,49 +367,27 @@ const GLOSSARY_ENTRIES = PROTECTED_GLOSSARY.map((entry) => ({
 
 function collectGlossaryMatches(source: string): string[] {
   const normalizedSource = normalizeLowercaseStringOrEmpty(source.normalize("NFKC"));
-  const matches: string[] = [];
-  for (const { entry, wholeWord } of GLOSSARY_ENTRIES) {
-    const present = wholeWord ? wholeWord.test(normalizedSource) : normalizedSource.includes(entry);
-    if (present) {
-      matches.push(entry);
-    }
-  }
-  return matches;
-}
-
-function collectCompoundTokens(source: string): string[] {
-  return source.match(COMPOUND_TOKEN_RE) ?? [];
+  return GLOSSARY_ENTRIES.filter(({ entry, wholeWord }) =>
+    wholeWord ? wholeWord.test(normalizedSource) : normalizedSource.includes(entry),
+  ).map(({ entry }) => entry);
 }
 
 function collectSegmentTokens(source: string): string[] {
-  if (DEFAULT_WORD_SEGMENTER) {
-    return Array.from(DEFAULT_WORD_SEGMENTER.segment(source), (part) =>
-      part.isWordLike ? part.segment : "",
-    ).filter(Boolean);
-  }
-  return source.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  return Array.from(DEFAULT_WORD_SEGMENTER.segment(source), (part) =>
+    part.isWordLike ? part.segment : "",
+  ).filter(Boolean);
 }
 
-export function deriveConceptTags(params: {
-  path: string;
-  snippet: string;
-  limit?: number;
-}): string[] {
+export function deriveConceptTags(params: { path: string; snippet: string }): string[] {
   // Recall annotations are control metadata; deriving tags from them can turn
   // project identities into promoted triggers instead of user-visible concepts.
   const visibleSnippet = params.snippet.replace(/<!--[\s\S]*?-->/gu, " ");
   const source = `${path.basename(params.path)} ${visibleSnippet}`;
-  const limit = Number.isFinite(params.limit)
-    ? Math.max(0, Math.floor(params.limit as number))
-    : MAX_CONCEPT_TAGS;
-  if (limit === 0) {
-    return [];
-  }
 
   const tags: string[] = [];
   const tokenSources = [
     collectGlossaryMatches(source),
-    collectCompoundTokens(source),
+    source.match(COMPOUND_TOKEN_RE) ?? [],
     collectSegmentTokens(source),
   ];
   for (const tokens of tokenSources) {
@@ -425,7 +397,7 @@ export function deriveConceptTags(params: {
         continue;
       }
       tags.push(normalized);
-      if (tags.length >= limit) {
+      if (tags.length >= MAX_CONCEPT_TAGS) {
         return tags;
       }
     }
@@ -433,10 +405,8 @@ export function deriveConceptTags(params: {
   return tags;
 }
 
-export function summarizeConceptTagScriptCoverage(
-  conceptTagsByEntry: string[][],
-): ConceptTagScriptCoverage {
-  const coverage: ConceptTagScriptCoverage = {
+export function summarizeConceptTagScriptCoverage(conceptTagsByEntry: string[][]) {
+  const coverage = {
     latinEntryCount: 0,
     cjkEntryCount: 0,
     mixedEntryCount: 0,
@@ -444,24 +414,8 @@ export function summarizeConceptTagScriptCoverage(
   };
 
   for (const conceptTags of conceptTagsByEntry) {
-    let hasLatin = false;
-    let hasCjk = false;
-    let hasOther = false;
-    for (const tag of conceptTags) {
-      const family = classifyConceptTagScript(tag);
-      hasLatin ||= family === "latin" || family === "mixed";
-      hasCjk ||= family === "cjk" || family === "mixed";
-      hasOther ||= family === "other";
-    }
-
-    if (hasLatin && hasCjk) {
-      coverage.mixedEntryCount += 1;
-    } else if (hasCjk) {
-      coverage.cjkEntryCount += 1;
-    } else if (hasLatin) {
-      coverage.latinEntryCount += 1;
-    } else if (hasOther) {
-      coverage.otherEntryCount += 1;
+    if (conceptTags.length > 0) {
+      coverage[`${classifyConceptTagScript(conceptTags.join(" "))}EntryCount`] += 1;
     }
   }
 

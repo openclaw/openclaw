@@ -1,8 +1,22 @@
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect } from "vitest";
+import { formatCliCommand } from "../../src/cli/command-format.js";
 import type { runSqliteSessionsTranscriptsFlipProof } from "./sqlite-sessions-transcripts-flip-proof.ts";
 
 type SqliteFlipProofReport = Awaited<ReturnType<typeof runSqliteSessionsTranscriptsFlipProof>>;
+
+export function assertSqliteFlipStartupRefusal(
+  refusal: SqliteFlipProofReport["startupRefusal"],
+): void {
+  expect(refusal?.message).toContain(`Run "${formatCliCommand("openclaw doctor --fix")}"`);
+  expect(refusal?.preservedSourceFiles.map((filePath) => filePath.replaceAll("\\", "/"))).toEqual(
+    expect.arrayContaining([
+      "agents/main/sessions/sessions.json",
+      "agents/main/sessions/archive-fixture/cold-archive.jsonl",
+      "agents/main/sessions/sqlite-legacy-main.jsonl",
+    ]),
+  );
+}
 
 export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   expect(report.failures).toEqual([]);
@@ -13,18 +27,8 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   const refusalCheckpoint = report.checkpoints.find(
     (checkpoint) => checkpoint.label === "after-startup-refusal",
   );
-  expect(report.startupRefusal?.message).toContain('Run "openclaw doctor --fix"');
-  expect(
-    report.startupRefusal?.preservedSourceFiles.map((filePath) => filePath.replaceAll("\\", "/")),
-  ).toEqual(
-    expect.arrayContaining([
-      "agents/main/sessions/sessions.json",
-      "agents/main/sessions/archive-fixture/cold-archive.jsonl",
-      "sessions/sessions.json",
-    ]),
-  );
+  assertSqliteFlipStartupRefusal(report.startupRefusal);
   expect(refusalCheckpoint?.activeJsonl).toEqual(seededCheckpoint?.activeJsonl);
-  expect(refusalCheckpoint?.legacyStateJsonl).toEqual(seededCheckpoint?.legacyStateJsonl);
   expect(refusalCheckpoint?.sqlite.sessionEntries).toBe(seededCheckpoint?.sqlite.sessionEntries);
   expect(refusalCheckpoint?.sqlite.transcriptEvents).toBe(
     seededCheckpoint?.sqlite.transcriptEvents,
@@ -38,21 +42,7 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
       )
       .every((checkpoint) => checkpoint.activeJsonl.length === 0),
   ).toBe(true);
-  expect(
-    report.checkpoints.some(
-      (checkpoint) =>
-        checkpoint.label === "seeded-legacy-store" && checkpoint.legacyStateJsonl.length > 0,
-    ),
-  ).toBe(true);
-  expect(
-    report.checkpoints
-      .filter(
-        (checkpoint) =>
-          checkpoint.label !== "seeded-legacy-store" &&
-          checkpoint.label !== "after-startup-refusal",
-      )
-      .every((checkpoint) => checkpoint.legacyStateJsonl.length === 0),
-  ).toBe(true);
+  expect(seededCheckpoint?.activeJsonl.length).toBeGreaterThan(0);
   expect(
     report.checkpoints.some(
       (checkpoint) =>

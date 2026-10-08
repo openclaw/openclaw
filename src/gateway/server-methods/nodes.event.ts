@@ -19,11 +19,7 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const payloadJSON =
-      typeof p.payloadJSON === "string"
-        ? p.payloadJSON
-        : p.payload !== undefined
-          ? JSON.stringify(p.payload)
-          : null;
+      p.payloadJSON ?? (p.payload !== undefined ? JSON.stringify(p.payload) : null);
     await respondUnavailableOnThrow(respond, async () => {
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
       const nodeSession = context.nodeRegistry.get(nodeId);
@@ -54,32 +50,25 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         nodeSession !== undefined &&
         nodeSession.connId === client?.connId &&
         nodeSession.permissions?.accessibility === true;
+      const bindSubscription =
+        (method: "nodeSubscribe" | "nodeUnsubscribe"): NodeEventContext["nodeSubscribe"] =>
+        async (subscriptionNodeId, sessionKey, subscriptionConnId) => {
+          if (
+            subscriptionNodeId !== nodeId ||
+            !subscriptionConnId ||
+            subscriptionConnId !== client?.connId ||
+            !(await isEventConnectionCurrent())
+          ) {
+            return;
+          }
+          context[method](subscriptionNodeId, sessionKey, subscriptionConnId);
+        };
       const nodeContext: NodeEventContext = {
         deps: context.deps,
         broadcast: context.broadcast,
         nodeSendToSession: context.nodeSendToSession,
-        nodeSubscribe: async (subscriptionNodeId, sessionKey, subscriptionConnId) => {
-          if (
-            subscriptionNodeId !== nodeId ||
-            !subscriptionConnId ||
-            subscriptionConnId !== client?.connId ||
-            !(await isEventConnectionCurrent())
-          ) {
-            return;
-          }
-          context.nodeSubscribe(subscriptionNodeId, sessionKey, subscriptionConnId);
-        },
-        nodeUnsubscribe: async (subscriptionNodeId, sessionKey, subscriptionConnId) => {
-          if (
-            subscriptionNodeId !== nodeId ||
-            !subscriptionConnId ||
-            subscriptionConnId !== client?.connId ||
-            !(await isEventConnectionCurrent())
-          ) {
-            return;
-          }
-          context.nodeUnsubscribe(subscriptionNodeId, sessionKey, subscriptionConnId);
-        },
+        nodeSubscribe: bindSubscription("nodeSubscribe"),
+        nodeUnsubscribe: bindSubscription("nodeUnsubscribe"),
         broadcastVoiceWakeChanged: context.broadcastVoiceWakeChanged,
         addChatRun: context.addChatRun,
         removeChatRun: context.removeChatRun,
@@ -90,14 +79,16 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         refreshHealthSnapshot: context.refreshHealthSnapshot,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
-        authorizeNodeSystemRunEvent: (eventParams) =>
-          context.nodeRegistry.authorizeSystemRunEvent({
+        authorizeNodeSystemRunEvent: (eventParams) => {
+          const authorization = context.nodeRegistry.authorizeSystemRunEventWithState({
             nodeId: eventParams.nodeId,
             connId: eventParams.connId,
             runId: eventParams.runId,
             sessionKey: eventParams.sessionKey,
-            terminal: eventParams.terminal,
-          }),
+            terminal: eventParams.event !== "exec.started",
+          });
+          return authorization ?? false;
+        },
         updateNodePresenceActivity: (activity) => {
           const updated = context.nodeRegistry.updatePresenceActivity(activity);
           return updated?.lastActiveAtMs !== undefined && updated.presenceUpdatedAtMs !== undefined

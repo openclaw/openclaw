@@ -87,6 +87,15 @@ export function markInterruptedStartupRun(params: {
       "cron: auto-disabled interrupted job after consecutive run failures",
     );
   }
+  // Only startup recovery with durable evidence of no delivery handoff may replay
+  // a started one-shot; an operator's distinct replacement stays scheduled.
+  if (
+    job.schedule.kind === "at" &&
+    replacementAtMs === undefined &&
+    !params.recoverInterruptedOneShot
+  ) {
+    job.enabled = false;
+  }
   finalizeCronFailureNotifications(params.state, {
     job,
     alertConfig,
@@ -99,16 +108,6 @@ export function markInterruptedStartupRun(params: {
     autoDisableNotificationOwnsFailure,
     deferredNotifications: params.deferredNotifications,
   });
-
-  // Live owner reclamation consumes an already-started one-shot. Only startup
-  // recovery may replay it; an operator's distinct replacement stays scheduled.
-  if (
-    job.schedule.kind === "at" &&
-    replacementAtMs === undefined &&
-    !params.recoverInterruptedOneShot
-  ) {
-    job.enabled = false;
-  }
 
   return {
     jobId: job.id,
@@ -248,7 +247,7 @@ export function restoreFinalizedStartupRun(params: {
   }
   state.deps.log.info(
     { jobId: job.id, runningAtMs, status: entry.status },
-    "cron: restored finalized task-ledger run on startup",
+    "cron: restored finalized run history on startup",
   );
   return {
     shouldDelete,

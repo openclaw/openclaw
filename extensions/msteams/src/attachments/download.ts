@@ -1,4 +1,5 @@
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed } from "openclaw/plugin-sdk/ssrf-policy";
 import {
   isRecord,
@@ -25,7 +26,6 @@ import {
   normalizeContentType,
   resolveMSTeamsMediaKind,
   resolveAttachmentFetchPolicy,
-  resolveRequestUrl,
   safeFetchWithPolicy,
   tryBuildGraphSharesUrlForSharedLink,
 } from "./shared.js";
@@ -114,19 +114,15 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
 }
 
 function scopeCandidatesForUrl(url: string): string[] {
-  try {
-    const host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
-    const looksLikeGraph =
-      host.endsWith("graph.microsoft.com") ||
-      host.endsWith("sharepoint.com") ||
-      host.endsWith("1drv.ms") ||
-      host.includes("sharepoint");
-    return looksLikeGraph
-      ? ["https://graph.microsoft.com", "https://api.botframework.com"]
-      : ["https://api.botframework.com", "https://graph.microsoft.com"];
-  } catch {
-    return ["https://api.botframework.com", "https://graph.microsoft.com"];
-  }
+  const host = normalizeLowercaseStringOrEmpty(URL.parse(url)?.hostname);
+  const looksLikeGraph =
+    host.endsWith("graph.microsoft.com") ||
+    host.endsWith("sharepoint.com") ||
+    host.endsWith("1drv.ms") ||
+    host.includes("sharepoint");
+  return looksLikeGraph
+    ? ["https://graph.microsoft.com", "https://api.botframework.com"]
+    : ["https://api.botframework.com", "https://graph.microsoft.com"];
 }
 
 function canonicalizeInlineBase64Payload(value: string): string | undefined {
@@ -191,7 +187,6 @@ async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
   policy: MSTeamsAttachmentFetchPolicy;
@@ -201,7 +196,6 @@ async function fetchWithAuthFallback(params: {
     url: params.url,
     policy: params.policy,
     fetchFn: params.fetchFn,
-    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
     requestInit: params.requestInit,
     resolveFn: params.resolveFn,
     timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
@@ -235,7 +229,6 @@ async function fetchWithAuthFallback(params: {
         url: params.url,
         policy: params.policy,
         fetchFn,
-        fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
         requestInit: {
           ...params.requestInit,
           headers: authHeaders,
@@ -264,7 +257,6 @@ export async function downloadMSTeamsAttachments(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
   deadline?: MSTeamsRequestDeadline;
   /** When true, embeds original filename in stored path for later extraction. */
@@ -393,7 +385,6 @@ export async function downloadMSTeamsAttachments(params: {
             url: resolveRequestUrl(input),
             tokenProvider: params.tokenProvider,
             fetchFn: params.fetchFn,
-            fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
             requestInit: init,
             resolveFn: params.resolveFn,
             policy,
@@ -413,9 +404,5 @@ export async function downloadMSTeamsAttachments(params: {
 }
 
 function safeHostForLog(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return "invalid-url";
-  }
+  return URL.parse(url)?.host ?? "invalid-url";
 }

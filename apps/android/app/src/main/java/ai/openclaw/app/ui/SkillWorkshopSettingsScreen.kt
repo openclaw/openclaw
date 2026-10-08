@@ -4,7 +4,10 @@ import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewaySkillWorkshopProposal
 import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.selectableAgents
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -22,11 +25,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -109,36 +110,14 @@ internal fun SkillWorkshopSettingsScreen(
       onDismiss = { pendingAction = null },
       onConfirm = {
         pendingAction = null
-        when (action.action) {
-          SkillWorkshopProposalAction.Apply -> {
-            viewModel.applySkillWorkshopProposal(
-              proposalId = action.proposalId,
-              agentId = selectedAgentParam,
-            )
-          }
-
-          SkillWorkshopProposalAction.Reject -> {
-            viewModel.rejectSkillWorkshopProposal(
-              proposalId = action.proposalId,
-              agentId = selectedAgentParam,
-            )
-          }
-
-          SkillWorkshopProposalAction.Quarantine -> {
-            viewModel.quarantineSkillWorkshopProposal(
-              proposalId = action.proposalId,
-              agentId = selectedAgentParam,
-            )
-          }
-        }
+        action.action.perform(viewModel, action.proposalId, selectedAgentParam)
       },
     )
   }
 
   SettingsDetailFrame(
-    title = nativeString("Skill Workshop"),
     subtitle = nativeString("Review generated skill proposals before they become live skills."),
-    icon = Icons.Default.Settings,
+    route = SettingsRoute.SkillWorkshop,
     onBack = onBack,
   ) {
     SettingsMetricPanel(
@@ -179,28 +158,28 @@ internal fun SkillWorkshopSettingsScreen(
     )
 
     noticeText?.let { message ->
-      ClawPanel {
-        Text(text = message, style = ClawTheme.type.body, color = ClawTheme.colors.success)
-      }
+      SettingsMessagePanel(text = message, color = ClawTheme.colors.success)
     }
     errorText?.let { message ->
-      ClawPanel {
-        Text(text = message, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
+      SettingsMessagePanel(text = message, color = ClawTheme.colors.warning)
     }
 
     when {
       !isConnected -> {
-        SkillWorkshopEmptyPanel(
+        SettingsMessagePanel(
+          spacing = 4.dp,
+          titleStyle = ClawTheme.type.title,
           title = nativeString("Gateway offline"),
-          detail = nativeString("Connect to a Gateway to load Skill Workshop proposals."),
+          text = nativeString("Connect to a Gateway to load Skill Workshop proposals."),
         )
       }
 
       filteredProposals.isEmpty() -> {
-        SkillWorkshopEmptyPanel(
+        SettingsMessagePanel(
+          spacing = 4.dp,
+          titleStyle = ClawTheme.type.title,
           title = nativeString("No proposals"),
-          detail = nativeString("Matching proposals will appear here after agents create reusable skill drafts."),
+          text = nativeString("Matching proposals will appear here after agents create reusable skill drafts."),
         )
       }
 
@@ -244,11 +223,29 @@ internal fun SkillWorkshopSettingsScreen(
 }
 
 private enum class SkillWorkshopProposalAction(
-  val label: String,
+  val label: NativeText,
+  val confirmationTitle: NativeText,
+  val confirmationBody: (String) -> String,
+  val perform: (MainViewModel, String, String?) -> Unit,
 ) {
-  Apply("Apply"),
-  Reject("Reject"),
-  Quarantine("Quarantine"),
+  Apply(
+    nativeText("Apply"),
+    nativeText("Apply proposal?"),
+    { nativeString("This will apply \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", it) },
+    MainViewModel::applySkillWorkshopProposal,
+  ),
+  Reject(
+    nativeText("Reject"),
+    nativeText("Reject proposal?"),
+    { nativeString("This will reject \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", it) },
+    MainViewModel::rejectSkillWorkshopProposal,
+  ),
+  Quarantine(
+    nativeText("Quarantine"),
+    nativeText("Quarantine proposal?"),
+    { nativeString("This will quarantine \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", it) },
+    MainViewModel::quarantineSkillWorkshopProposal,
+  ),
 }
 
 private data class SkillWorkshopPendingAction(
@@ -263,41 +260,15 @@ private fun SkillWorkshopActionConfirmDialog(
   onDismiss: () -> Unit,
   onConfirm: () -> Unit,
 ) {
-  val dialogTitle =
-    when (action.action) {
-      SkillWorkshopProposalAction.Apply -> nativeString("Apply proposal?")
-      SkillWorkshopProposalAction.Reject -> nativeString("Reject proposal?")
-      SkillWorkshopProposalAction.Quarantine -> nativeString("Quarantine proposal?")
-    }
-  val dialogBody =
-    when (action.action) {
-      SkillWorkshopProposalAction.Apply -> {
-        nativeString("This will apply \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
-      }
-
-      SkillWorkshopProposalAction.Reject -> {
-        nativeString("This will reject \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
-      }
-
-      SkillWorkshopProposalAction.Quarantine -> {
-        nativeString("This will quarantine \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
-      }
-    }
-  AppAlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text(dialogTitle) },
+  val dialogTitle = action.action.confirmationTitle.resolveNativeText()
+  val dialogBody = action.action.confirmationBody(action.title)
+  AppConfirmationDialog(
+    title = dialogTitle,
+    confirmLabel = action.action.label.resolveNativeText(),
+    onConfirm = onConfirm,
+    onDismiss = onDismiss,
     text = {
       Text(text = dialogBody)
-    },
-    confirmButton = {
-      TextButton(onClick = onConfirm) {
-        Text(nativeString(action.action.label))
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss) {
-        Text(nativeString("Cancel"))
-      }
     },
   )
 }
@@ -316,41 +287,39 @@ private fun SkillWorkshopControls(
   isConnected: Boolean,
   onRefresh: () -> Unit,
 ) {
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        SkillWorkshopAgentMenu(
-          agents = agents,
-          defaultAgentId = defaultAgentId,
-          selectedAgentId = selectedAgentId,
-          onAgentChange = onAgentChange,
-          modifier = Modifier.weight(1f),
-        )
-        ClawSecondaryButton(
-          text = if (refreshing) nativeString("Refreshing") else nativeString("Refresh"),
-          onClick = onRefresh,
-          enabled = isConnected && !refreshing,
-          icon = Icons.Default.Refresh,
-        )
-      }
-      ClawSegmentedControl(
-        options = skillWorkshopFilters.map { (_, label) -> nativeString(label) },
-        selected = nativeString(skillWorkshopFilters.firstOrNull { it.first == statusFilter }?.second ?: "All"),
-        onSelect = { label ->
-          onStatusFilterChange(skillWorkshopFilters.firstOrNull { nativeString(it.second) == label }?.first ?: "all")
-        },
-        maxOptionsPerRow = 4,
+  ClawPanel(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      SkillWorkshopAgentMenu(
+        agents = agents,
+        defaultAgentId = defaultAgentId,
+        selectedAgentId = selectedAgentId,
+        onAgentChange = onAgentChange,
+        modifier = Modifier.weight(1f),
       )
-      ClawTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        placeholder = nativeString("Search proposals"),
+      ClawSecondaryButton(
+        text = if (refreshing) nativeString("Refreshing") else nativeString("Refresh"),
+        onClick = onRefresh,
+        enabled = isConnected && !refreshing,
+        icon = Icons.Default.Refresh,
       )
     }
+    ClawSegmentedControl(
+      options = skillWorkshopFilters.map { (_, label) -> nativeString(label) },
+      selected = nativeString(skillWorkshopFilters.firstOrNull { it.first == statusFilter }?.second ?: "All"),
+      onSelect = { label ->
+        onStatusFilterChange(skillWorkshopFilters.firstOrNull { nativeString(it.second) == label }?.first ?: "all")
+      },
+      maxOptionsPerRow = 4,
+    )
+    ClawTextField(
+      value = query,
+      onValueChange = onQueryChange,
+      placeholder = nativeString("Search proposals"),
+    )
   }
 }
 
@@ -560,32 +529,15 @@ private fun SkillWorkshopProposalDetail(
             .semantics { contentDescription = nativeString("Skill Workshop reject and quarantine actions") },
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        ClawSecondaryButton(
-          text = nativeString("Reject"),
-          onClick = { onAction(SkillWorkshopProposalAction.Reject) },
-          enabled = actionEnabled,
-          modifier = Modifier.weight(1f),
-        )
-        ClawSecondaryButton(
-          text = nativeString("Quarantine"),
-          onClick = { onAction(SkillWorkshopProposalAction.Quarantine) },
-          enabled = actionEnabled,
-          modifier = Modifier.weight(1f),
-        )
+        listOf(SkillWorkshopProposalAction.Reject, SkillWorkshopProposalAction.Quarantine).forEach { action ->
+          ClawSecondaryButton(
+            text = action.label.resolveNativeText(),
+            onClick = { onAction(action) },
+            enabled = actionEnabled,
+            modifier = Modifier.weight(1f),
+          )
+        }
       }
-    }
-  }
-}
-
-@Composable
-private fun SkillWorkshopEmptyPanel(
-  title: String,
-  detail: String,
-) {
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text(text = title, style = ClawTheme.type.title, color = ClawTheme.colors.text)
-      Text(text = detail, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
   }
 }

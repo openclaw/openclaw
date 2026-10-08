@@ -1,8 +1,12 @@
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import { describe, expect, it, vi } from "vitest";
-import { buildKnownAgentRunFailureReplyPayload } from "../../../auto-reply/reply/agent-runner-failure-reply.js";
+import {
+  buildExternalRunFailureReply,
+  buildKnownAgentRunFailureReplyPayload,
+} from "../../../auto-reply/reply/agent-runner-failure-reply.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover-error.js";
+import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import { recordModelFallbackStop } from "../../model-fallback-stop.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -11,48 +15,65 @@ import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 
 type Params = Parameters<typeof handleEmbeddedPromptFailure>[0];
 
-function makeParams(
-  overrides: Partial<Omit<Params, "failover">> & { failover?: Partial<Params["failover"]> } = {},
-): Params {
-  const provider = "openai";
-  const modelId = "gpt-5";
-  const defaults: Params = {
-    runParams: {
-      config: undefined,
-      runId: "run:prompt-failure-test",
-    } as Params["runParams"],
-    attempt: {
-      terminal: { kind: "ok" },
-      replayMetadata: {
-        replaySafe: true,
-      },
-    } as Params["attempt"],
-    promptError: new Error("rate limit exceeded"),
-    promptErrorSource: "prompt",
-    activeErrorContext: { provider, model: modelId },
-    provider,
-    modelId,
-    authProfileId: "openai:p1",
-    authProfileStore: {
-      version: 1,
-      profiles: {},
+type FixtureOptions = Partial<
+  Params["terminal"] &
+    Pick<Params["runtime"], "pluginHarnessOwnsTransport" | "thinkLevel"> &
+    Pick<
+      Params["preparedRuntime"],
+      "provider" | "modelId" | "maybeRefreshRuntimeAuthForAuthError" | "attemptedThinking"
+    > &
+    Pick<Params["runInput"], "fallbackConfigured"> &
+    Pick<Params["normalizedAttempt"], "activeErrorContext">
+> & { failover?: Partial<Params["failover"]> };
+
+function makeParams(overrides: FixtureOptions = {}): Params {
+  const provider = overrides.provider ?? "openai";
+  const modelId = overrides.modelId ?? "gpt-5";
+  return {
+    runInput: {
+      runParams: {
+        config: undefined,
+        runId: "run:prompt-failure-test",
+      } as Params["runInput"]["runParams"],
+      globalLane: "test",
+      agentDir: "/tmp/openclaw-prompt-failure-test",
+      suspendForFailure: vi.fn(),
+      startedAtMs: 0,
+      fallbackConfigured: overrides.fallbackConfigured ?? true,
     },
-    sessionIdUsed: "session:prompt-failure-test",
-    lane: "test",
-    agentDir: "/tmp/openclaw-prompt-failure-test",
+    normalizedAttempt: {
+      attempt: {
+        terminal: { kind: "ok" },
+        replayMetadata: { replaySafe: true },
+      } as Params["normalizedAttempt"]["attempt"],
+      activeErrorContext: overrides.activeErrorContext ?? { provider, model: modelId },
+      sessionIdUsed: "session:prompt-failure-test",
+      resolveReplayInvalidForAttempt: vi.fn(() => false),
+      setTerminalLifecycleMeta: vi.fn(),
+    },
+    terminal: {
+      promptError: overrides.promptError ?? new Error("rate limit exceeded"),
+      promptErrorSource: overrides.promptErrorSource ?? "prompt",
+      aborted: overrides.aborted ?? false,
+      externalAbort: overrides.externalAbort ?? false,
+      timedOutByRunBudget: overrides.timedOutByRunBudget ?? false,
+    },
+    preparedRuntime: {
+      provider,
+      modelId,
+      attemptAuthProfileStore: { version: 1, profiles: {} },
+      maybeRefreshRuntimeAuthForAuthError:
+        overrides.maybeRefreshRuntimeAuthForAuthError ?? vi.fn(async () => false),
+      attemptedThinking: overrides.attemptedThinking ?? new Set(),
+    },
+    runtime: {
+      lastProfileId: "openai:p1",
+      thinkLevel: overrides.thinkLevel ?? "low",
+      pluginHarnessOwnsTransport: overrides.pluginHarnessOwnsTransport ?? false,
+    },
     suspensionSessionId: "session:prompt-failure-test",
     runtimeAuthRetry: false,
-    maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
-    suspendForFailure: vi.fn(),
-    resolveReplayInvalid: vi.fn(() => false),
-    setTerminalLifecycleMeta: vi.fn(),
     buildErrorAgentMeta: vi.fn(),
-    startedAtMs: 0,
-    fallbackConfigured: true,
-    aborted: false,
-    externalAbort: false,
-    pluginHarnessOwnsTransport: false,
-    timedOutByRunBudget: false,
     failover: {
       resolveAuthProfileFailureReason: vi.fn<Params["failover"]["resolveAuthProfileFailureReason"]>(
         () => "rate_limit",
@@ -61,17 +82,36 @@ function makeParams(
       advanceRateLimitAuthProfile: vi.fn(async () => true),
       maybeMarkAuthProfileFailure: vi.fn(async () => {}),
       transientRetryCount: 0,
+      ...overrides.failover,
     },
-    attemptedThinking: new Set(),
-    thinkLevel: "low",
     getThinkLevel: () => "low",
     traceAttempts: [],
     previousRetryFailoverReason: null,
   };
-  return { ...defaults, ...overrides, failover: { ...defaults.failover, ...overrides.failover } };
 }
 
 describe("handleEmbeddedPromptFailure", () => {
+  it("preserves terminal preflight identity and public copy despite a retryable diagnostic", async () => {
+    const diagnostic = new Error("404 No managed agent resource found: session-fixture");
+    const userMessage =
+      "The saved session is unavailable. Check the API key's project permissions and retry.";
+    const failure = new AgentHarnessPreflightError(diagnostic.message, {
+      cause: diagnostic,
+      userMessage,
+    });
+    const params = makeParams({ promptError: failure, pluginHarnessOwnsTransport: true });
+
+    await expect(handleEmbeddedPromptFailure(params)).rejects.toBe(failure);
+
+    expect(params.preparedRuntime.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+    expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(params.traceAttempts).toEqual([]);
+    expect(buildExternalRunFailureReply({ message: failure.message, error: failure })).toEqual({
+      text: userMessage,
+      isGenericRunnerFailure: false,
+    });
+  });
+
   it("records local profile absence without an HTTP status in the fallback trace", async () => {
     const code = "selected_auth_profile_unavailable";
     const message = 'Selected auth profile "openai:work" was not found in OpenClaw.';
@@ -104,12 +144,12 @@ describe("handleEmbeddedPromptFailure", () => {
 
       await expect(handleEmbeddedPromptFailure(params)).rejects.toBe(failure);
 
-      expect(params.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
-      expect(params.suspendForFailure).not.toHaveBeenCalled();
+      expect(params.preparedRuntime.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+      expect(params.runInput.suspendForFailure).not.toHaveBeenCalled();
       expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
       expect(params.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
       expect(params.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-      expect(params.attemptedThinking).toEqual(new Set());
+      expect(params.preparedRuntime.attemptedThinking).toEqual(new Set());
       expect(params.traceAttempts).toEqual([]);
     },
   );
@@ -160,7 +200,7 @@ describe("handleEmbeddedPromptFailure", () => {
           resolveAuthProfileFailureReason: vi.fn(() => null),
         },
       });
-      params.attempt.terminal = { kind: "timeout", phase, source: "runtime" };
+      params.normalizedAttempt.attempt.terminal = { kind: "timeout", phase, source: "runtime" };
 
       const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
 
@@ -183,8 +223,12 @@ describe("handleEmbeddedPromptFailure", () => {
         resolveAuthProfileFailureReason: vi.fn(() => null),
       },
     });
-    params.attempt.terminal = { kind: "timeout", phase: "tool_execution", source: "runtime" };
-    params.attempt.promptTimeoutOutcome = { providerStarted: true };
+    params.normalizedAttempt.attempt.terminal = {
+      kind: "timeout",
+      phase: "tool_execution",
+      source: "runtime",
+    };
+    params.normalizedAttempt.attempt.promptTimeoutOutcome = { providerStarted: true };
     const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
     const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
     expect(fields).toEqual({ stopReason: "timeout", providerStarted: true });
@@ -200,7 +244,7 @@ describe("handleEmbeddedPromptFailure", () => {
         promptError: new Error("Opaque provider failure"),
         failover: { resolveAuthProfileFailureReason: vi.fn(() => null) },
       });
-      params.attempt.terminal = { kind: "timeout", phase, source: "runtime" };
+      params.normalizedAttempt.attempt.terminal = { kind: "timeout", phase, source: "runtime" };
 
       const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
 
@@ -209,7 +253,7 @@ describe("handleEmbeddedPromptFailure", () => {
         ...(phase === "prompt" ? { timeoutPhase: "provider", providerStarted: true } : {}),
       });
       expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(error).toHaveProperty("cause", params.promptError);
+      expect(error).toHaveProperty("cause", params.terminal.promptError);
     },
   );
 
@@ -243,13 +287,13 @@ describe("handleEmbeddedPromptFailure", () => {
         result: { payloads: [{ text: recoveryText, isError: true }] },
       });
       expect(JSON.stringify(outcome)).not.toContain("untrusted provider detail");
-      expect(params.setTerminalLifecycleMeta).toHaveBeenCalledWith({
+      expect(params.normalizedAttempt.setTerminalLifecycleMeta).toHaveBeenCalledWith({
         replayInvalid: false,
         livenessState: "blocked",
       });
       for (const callback of [
-        params.maybeRefreshRuntimeAuthForAuthError,
-        params.suspendForFailure,
+        params.preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
+        params.runInput.suspendForFailure,
         params.failover.resolveAuthProfileFailureReason,
         params.failover.advanceAuthProfile,
         params.failover.advanceRateLimitAuthProfile,
@@ -279,7 +323,7 @@ describe("handleEmbeddedPromptFailure", () => {
       "precheck",
     ],
     ["provider error", new CompactionReplayRefreshRequiredError(), "prompt"],
-  ] satisfies Array<[string, unknown, Params["promptErrorSource"]]>)(
+  ] satisfies Array<[string, unknown, Params["terminal"]["promptErrorSource"]]>)(
     "does not trust %s as local checkpoint recovery",
     async (_label, promptError, promptErrorSource) => {
       const params = makeParams({
@@ -290,8 +334,8 @@ describe("handleEmbeddedPromptFailure", () => {
 
       await expect(handleEmbeddedPromptFailure(params)).rejects.toBeInstanceOf(Error);
 
-      expect(params.setTerminalLifecycleMeta).not.toHaveBeenCalled();
-      expect(params.maybeRefreshRuntimeAuthForAuthError).toHaveBeenCalledOnce();
+      expect(params.normalizedAttempt.setTerminalLifecycleMeta).not.toHaveBeenCalled();
+      expect(params.preparedRuntime.maybeRefreshRuntimeAuthForAuthError).toHaveBeenCalledOnce();
     },
   );
 
@@ -320,7 +364,7 @@ describe("handleEmbeddedPromptFailure", () => {
     });
 
     for (const callback of [
-      params.maybeRefreshRuntimeAuthForAuthError,
+      params.preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
       params.failover.advanceAuthProfile,
       params.failover.advanceRateLimitAuthProfile,
     ]) {
@@ -423,7 +467,7 @@ describe("handleEmbeddedPromptFailure", () => {
         resolvedVerboseLevel: "off",
       }),
     ).toMatchObject({
-      text: "LLM request failed: the Gateway rejected a session transcript entry. Compact or reset this session and try again.",
+      text: "OpenClaw couldn't read this conversation's history. Try /compact, or start a new conversation with /new.",
       isError: true,
     });
   });

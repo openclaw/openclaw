@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
+import type { CliSessionBinding, InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -9,6 +9,7 @@ import {
   assertCliSessionBindingResultCommitAllowed,
   clearCliSession,
   getCliSessionBinding,
+  setCliSessionBinding,
 } from "./cli-session.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 
@@ -73,6 +74,120 @@ async function patchCliSessionBindingInStore(
     },
   );
   return committed;
+}
+
+type CliSessionForkStoreParams = Required<CliSessionStoreTarget> & {
+  expectedCliSessionId: string;
+  assertCommitAllowed?: () => void;
+};
+
+async function patchCliSessionForkBinding(
+  params: CliSessionForkStoreParams,
+  updateBinding: (binding: CliSessionBinding) => CliSessionBinding | undefined,
+): Promise<SessionEntry | undefined> {
+  const { provider, sessionKey, sessionStore, expectedCliSessionId } = params;
+  const entry = sessionStore[sessionKey];
+  if (!entry || entry.cliSessionBindings?.[provider]?.sessionId !== expectedCliSessionId) {
+    return undefined;
+  }
+  return await patchCliSessionBindingInStore({
+    ...params,
+    expectedSession: entry,
+    update: (current) => {
+      const binding = current.cliSessionBindings?.[provider];
+      if (binding?.sessionId !== expectedCliSessionId) {
+        return false;
+      }
+      const nextBinding = updateBinding(binding);
+      if (!nextBinding) {
+        return false;
+      }
+      setCliSessionBinding(current, provider, nextBinding);
+      return true;
+    },
+  });
+}
+
+/** Clears the one-shot fork marker before the resumed CLI process starts. */
+async function consumeCliSessionForkInStore(
+  params: CliSessionForkStoreParams,
+): Promise<SessionEntry | undefined> {
+  return await patchCliSessionForkBinding(params, (binding) => {
+    if (binding.forkNextResume !== true) {
+      return undefined;
+    }
+    const { forkNextResume: _forkNextResume, ...consumedBinding } = binding;
+    return consumedBinding;
+  });
+}
+
+/** Arms a fork marker for recovery, or re-arms one after a failed CLI turn. */
+export async function restoreCliSessionForkInStore(
+  params: CliSessionForkStoreParams,
+): Promise<SessionEntry | undefined> {
+  return await patchCliSessionForkBinding(params, (binding) =>
+    binding.forkNextResume === true ? undefined : { ...binding, forkNextResume: true },
+  );
+}
+
+/** Share fork publication and cancellation rules across command and live reply callers. */
+export function buildCliSessionForkRunParams(
+  params: CliSessionForkStoreParams & { abortSignal?: AbortSignal },
+  onEntryPatched: (entry: SessionEntry) => void,
+): {
+  claimCliSessionFork: () => Promise<boolean>;
+  restoreCliSessionFork: () => Promise<void>;
+  persistCliSessionForkSuccessor: (successorCliSessionId: string) => Promise<void>;
+} {
+  const activeParams = {
+    ...params,
+    assertCommitAllowed: () => {
+      params.assertCommitAllowed?.();
+      params.abortSignal?.throwIfAborted();
+    },
+  };
+  return {
+    claimCliSessionFork: async () => {
+      const claimed = await consumeCliSessionForkInStore(activeParams);
+      if (claimed) {
+        onEntryPatched(claimed);
+      }
+      return Boolean(claimed);
+    },
+    restoreCliSessionFork: async () => {
+      // Cancellation can restore an unspent marker, but a released owner cannot.
+      const restored = await restoreCliSessionForkInStore(params);
+      if (restored) {
+        onEntryPatched(restored);
+      }
+    },
+    persistCliSessionForkSuccessor: async (successorCliSessionId) => {
+      const persisted = await persistCliSessionForkSuccessorInStore({
+        ...activeParams,
+        successorCliSessionId,
+      });
+      if (!persisted) {
+        throw new Error("CLI session fork successor could not be persisted");
+      }
+      onEntryPatched(persisted);
+    },
+  };
+}
+
+/** Rebinds a claimed fork without bypassing its retained account/environment checks. */
+async function persistCliSessionForkSuccessorInStore(
+  params: CliSessionForkStoreParams & {
+    successorCliSessionId: string;
+  },
+): Promise<SessionEntry | undefined> {
+  if (params.successorCliSessionId === params.expectedCliSessionId) {
+    return undefined;
+  }
+  return await patchCliSessionForkBinding(params, (binding) =>
+    binding.forkNextResume === true
+      ? undefined
+      : { ...binding, sessionId: params.successorCliSessionId },
+  );
 }
 
 /** A rejected continuity write cannot erase completed effects or reopen model fallback. */

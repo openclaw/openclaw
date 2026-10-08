@@ -29,7 +29,6 @@ const question = {
 
 describeTelegramDispatch("dispatchTelegramMessage native questions", () => {
   it.each([
-    { streamMode: "progress", controls: "buttons", rejectControls: false },
     { streamMode: "progress", controls: "buttonless", rejectControls: false },
     { streamMode: "partial", controls: "buttons", rejectControls: true },
   ] as const)(

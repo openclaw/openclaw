@@ -1,6 +1,9 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelSummary
+import ai.openclaw.app.asBooleanOrNull
+import ai.openclaw.app.asJsonStringOrNull
+import ai.openclaw.app.asLongOrNull
 import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.gateway.GatewayLoadedMedia
@@ -17,18 +20,24 @@ import ai.openclaw.app.gateway.QuestionGetResult
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionRecord
 import ai.openclaw.app.gateway.SessionObserverDigest
+import ai.openclaw.app.gateway.SessionReactionEvent
+import ai.openclaw.app.gateway.SessionReactionsListParams
+import ai.openclaw.app.gateway.SessionReactionsListResult
+import ai.openclaw.app.gateway.SessionReactionsSetParams
+import ai.openclaw.app.gateway.SessionReactionsSetResult
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveOptionalNativeText
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.nonBlankString
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
-import ai.openclaw.app.ui.chat.chatModelSendBlocked
 import ai.openclaw.app.ui.chat.providerQualifiedRef
+import ai.openclaw.app.ui.chat.selectedChatModelSendBlockingReason
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -50,11 +59,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -74,13 +85,15 @@ internal const val SESSION_LIST_FETCH_LIMIT = 200
 internal const val SESSION_UNREAD_ACK_CAPABILITY = "session-unread-ack-contract"
 private const val SESSION_SCOPED_CHAT_METADATA_CAPABILITY = "session-scoped-chat-metadata"
 private const val SESSION_SCOPED_MODEL_CATALOG_CAPABILITY = "session-scoped-model-catalog"
+private val sessionClassificationFields = arrayOf("classification", "accountId", "peerKind", "isMain", "isBackground")
+private val sessionContextUsageFields = arrayOf("totalTokens", "totalTokensFresh", "contextTokens")
+private val sessionSessionUsageFields = arrayOf("inputTokens", "outputTokens", "estimatedCostUsd")
+private val sessionRunFields = arrayOf("status", "lastRunError", "startedAt", "endedAt", "runtimeMs", "outputTokens")
 private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private const val WEAR_AGENT_PULSE_SWARM_MAX_ROWS = 1_000
 private const val WEAR_AGENT_PULSE_SWARM_FETCH_LIMIT = WEAR_AGENT_PULSE_SWARM_MAX_ROWS + 1
 private const val WEAR_AGENT_PULSE_DIRECT_CHILDREN_GROUP = "__wear_agent_pulse_direct_children__"
-private const val SUBAGENT_ACTIVITY_RETENTION_MS = 60_000L
-private const val MAX_RETAINED_TERMINAL_SUBAGENT_TASKS = 100
 private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
 private val MANAGED_MEDIA_PATH_REGEX =
   Regex("^/api/chat/media/outgoing/[^/]+/([0-9a-fA-F-]{36})/full(?:\\?.*)?$")
@@ -140,12 +153,6 @@ internal data class ChatAgentSessionSelection(
   val rememberedSessionId: String?,
   val targetSessionKey: String?,
 )
-
-private fun normalizedChatCacheScope(scope: ChatCacheScope?): ChatCacheScope? {
-  val current = scope ?: return null
-  val gatewayId = current.gatewayId.trim().takeIf { it.isNotEmpty() } ?: return null
-  return if (gatewayId == current.gatewayId) current else current.copy(gatewayId = gatewayId)
-}
 
 internal data class MainSessionBinding(
   val key: String,
@@ -259,12 +266,8 @@ class ChatController internal constructor(
     cacheScope = cacheScope,
     currentDefaultAgentId = currentDefaultAgentId,
     currentDefaultAgentRevision = currentDefaultAgentRevision,
-    loadGatewayImageArtifact = { gatewayId, sessionKey, agentId, artifactId ->
-      session.loadImageArtifact(gatewayId, sessionKey, agentId, artifactId)
-    },
-    loadGatewayMediaArtifact = { gatewayId, sessionKey, agentId, artifactId, kind, playbackRendition ->
-      session.loadMediaArtifact(gatewayId, sessionKey, agentId, artifactId, kind, playbackRendition)
-    },
+    loadGatewayImageArtifact = session::loadImageArtifact,
+    loadGatewayMediaArtifact = session::loadMediaArtifact,
     commandOutbox = commandOutbox,
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
@@ -425,6 +428,20 @@ class ChatController internal constructor(
   private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
   val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
+  private val reactionState = ChatReactions()
+  val messageReactions: StateFlow<Map<String, List<ChatReactionSummary>>> = reactionState.reactions
+  private val _canReact = MutableStateFlow(false)
+  val canReact: StateFlow<Boolean> = _canReact.asStateFlow()
+  private val _reactionViewerId = MutableStateFlow<String?>(null)
+  val reactionViewerId: StateFlow<String?> = _reactionViewerId.asStateFlow()
+  private var reactionAccess = ChatReactionAccess()
+  private var reactionTarget: ReactionTarget? = null
+
+  private data class ReactionTarget(
+    val selection: SessionActionSnapshot,
+    val sessionId: String,
+  )
+
   private val _transcriptAnchor = MutableStateFlow<ChatTranscriptAnchorState?>(null)
   val transcriptAnchor: StateFlow<ChatTranscriptAnchorState?> = _transcriptAnchor.asStateFlow()
 
@@ -533,13 +550,6 @@ class ChatController internal constructor(
   private val _toolActivities = MutableStateFlow<List<ChatPendingToolCall>>(emptyList())
   val toolActivities: StateFlow<List<ChatPendingToolCall>> = _toolActivities.asStateFlow()
 
-  private val subagentActivityLock = Any()
-
-  // A null job preserves an expired terminal observation without retaining its UI row.
-  private val subagentActivityExpiryJobs = mutableMapOf<String, Job?>()
-  private val _subagentActivities = MutableStateFlow<Map<String, ChatSubagentActivity>>(emptyMap())
-  val subagentActivities: StateFlow<Map<String, ChatSubagentActivity>> = _subagentActivities.asStateFlow()
-
   private val _questions = MutableStateFlow<List<ChatQuestionPrompt>>(emptyList())
   val questions: StateFlow<List<ChatQuestionPrompt>> = _questions.asStateFlow()
   private val questionStateLock = Any()
@@ -574,6 +584,7 @@ class ChatController internal constructor(
       _sessions.value = entries
       val binding = currentCacheScope()?.let { desiredMainSessions[it.gatewayId] }
       presentedSessions.value = projectLocalSessionTitles(entries, binding)
+      publishReactionAccess()
     }
   }
 
@@ -587,9 +598,7 @@ class ChatController internal constructor(
   )
 
   private data class SwarmProjectionSnapshot(
-    val parentKey: String,
-    val cacheScope: ChatCacheScope,
-    val requestSequence: Long,
+    val lease: SwarmRefreshLease,
     val sessions: List<ChatSessionEntry>,
   )
 
@@ -627,26 +636,14 @@ class ChatController internal constructor(
       }
     val requestCacheScope = currentCacheScope() ?: return null
     val enabled =
-      try {
+      runCatchingCancellable {
         val params =
           buildJsonObject {
             put("agentId", JsonPrimitive(requestedAgentId))
           }
-        val root =
-          json
-            .parseToJsonElement(
-              requestGatewayBound(
-                requestCacheScope.gatewayId,
-                "chat.metadata",
-                params.toString(),
-              ),
-            ).asObjectOrNull()
+        val root = requestGatewayJson(requestCacheScope.gatewayId, "chat.metadata", params).asObjectOrNull()
         root?.get("swarmEnabled").asBooleanOrNull() == true
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
-        return null
-      }
+      }.getOrNull() ?: return null
     if (!enabled) {
       return ChatSwarmSnapshot(
         sessionKey = requestedSessionKey,
@@ -655,7 +652,7 @@ class ChatController internal constructor(
       )
     }
     val rows =
-      try {
+      runCatchingCancellable {
         val params =
           buildJsonObject {
             put("includeGlobal", JsonPrimitive(false))
@@ -668,16 +665,7 @@ class ChatController internal constructor(
             put("limit", JsonPrimitive(WEAR_AGENT_PULSE_SWARM_FETCH_LIMIT))
             put("offset", JsonPrimitive(0))
           }
-        val root =
-          json
-            .parseToJsonElement(
-              requestGatewayBound(
-                requestCacheScope.gatewayId,
-                "sessions.list",
-                params.toString(),
-              ),
-            ).asObjectOrNull()
-            ?: return null
+        val root = requestGatewayJson(requestCacheScope.gatewayId, "sessions.list", params).asObjectOrNull() ?: return null
         val sessionElements = root["sessions"] as? JsonArray ?: return null
         val parsedRows = sessionElements.mapNotNull { parseSessionEntry(it.asObjectOrNull()) }
         val truncated =
@@ -688,11 +676,7 @@ class ChatController internal constructor(
           return null
         }
         parsedRows
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
-        return null
-      }
+      }.getOrNull() ?: return null
     val projectedRows =
       rows.map { row ->
         val hasExplicitGroup = !row.swarmGroupId.isNullOrBlank()
@@ -731,56 +715,6 @@ class ChatController internal constructor(
 
   private val _commands = MutableStateFlow<List<ChatCommandEntry>>(emptyList())
   val commands: StateFlow<List<ChatCommandEntry>> = _commands.asStateFlow()
-
-  suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> {
-    val lease = captureRequestLease(cacheScope()) ?: throw GatewayRequestNotEnqueued("not connected")
-
-    suspend fun request(
-      statuses: List<String>?,
-      limit: Int,
-    ): List<BackgroundTask> {
-      val params =
-        buildJsonObject {
-          put("agentId", JsonPrimitive(agentId))
-          put("limit", JsonPrimitive(limit))
-          statuses?.let { values -> put("status", JsonArray(values.map(::JsonPrimitive))) }
-        }
-      return parseBackgroundTasks(json, requestBackgroundTask(lease, "tasks.list", params))
-    }
-
-    val active = request(listOf("queued", "running"), limit = 100)
-    val recent = request(listOf("completed", "failed", "cancelled", "timed_out"), limit = 50)
-    val tasks = mergeBackgroundTasks(active, recent)
-    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-    return tasks
-  }
-
-  suspend fun getBackgroundTask(taskId: String): BackgroundTask {
-    val lease = captureRequestLease(cacheScope()) ?: throw GatewayRequestNotEnqueued("not connected")
-    val params = buildJsonObject { put("taskId", JsonPrimitive(taskId)) }
-    val response = requestBackgroundTask(lease, "tasks.get", params)
-    val root = json.parseToJsonElement(response).jsonObject
-    val task =
-      root["task"]?.let(::parseBackgroundTask)
-        ?: error("Gateway returned no background task")
-    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-    return task
-  }
-
-  private suspend fun requestBackgroundTask(
-    lease: GatewaySession.RequestLease,
-    method: String,
-    params: JsonObject,
-  ): String {
-    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-    val response =
-      lease.request(method, params.toString()) { enqueue ->
-        if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-        enqueue()
-      }
-    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-    return response
-  }
 
   private data class LiveRunTelemetryState(
     val highestSequence: Long,
@@ -850,7 +784,7 @@ class ChatController internal constructor(
   private var lastHealthPollAtMs: Long? = null
   private val chatMetadataRequestSequence = AtomicLong(0)
   private var chatMetadataScope: ChatMetadataScope? = null
-  private var chatMetadataLoadState = ChatMetadataLoadState.Unloaded
+  private var chatMetadataLoaded = false
   private var sessionsListArchived = false
 
   // Retained selection and event rows must not enlarge the next requested page.
@@ -937,14 +871,10 @@ class ChatController internal constructor(
 
   /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
+    setReactionAccess(ChatReactionAccess())
     chatMetadataRequestSequence.incrementAndGet()
     retireMainSessionReadiness()
-    reconciledOutboxBranchScopes.clear()
-    ambiguousMutationReconciliationStates.clear()
-    synchronized(outboxSessionMutationEventLock) {
-      activeOutboxSessionMutations.clear()
-      deferredOutboxSessionMutationEvents.clear()
-    }
+    clearOutboxBranchReconciliation()
     synchronized(gatewayScopeApplyLock) {
       historyLoadGeneration.incrementAndGet()
       restoreRunStateOnReconnect = true
@@ -975,14 +905,16 @@ class ChatController internal constructor(
 
   /** Refreshes the connected gateway while preserving recovery ownership after a disconnect. */
   fun onGatewayConnected() {
-    refreshConnectedGateway()
+    refreshProgressCard()
+    refreshQuestions()
+    refreshHistoryForRecovery(forceHealth = true)
   }
 
   /** Creates/adopts the app-owned main session before connected history can load. */
   internal fun onGatewayConnected(mainSession: MainSessionBinding) {
     val requestScope = currentCacheScope()
     if (requestScope == null) {
-      refreshConnectedGateway()
+      onGatewayConnected()
       return
     }
     synchronized(gatewayScopeApplyLock) {
@@ -1005,12 +937,7 @@ class ChatController internal constructor(
             try {
               val existingSession = fetchSessionDescription(requestScope.gatewayId, mainSession.key)
               if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
-              val existingAutoLabel =
-                existingSession
-                  ?.get("autoLabel")
-                  .asStringOrNull()
-                  ?.trim()
-                  ?.takeIf { it.isNotEmpty() }
+              val existingAutoLabel = existingSession.nonBlankString("autoLabel")
               if (existingAutoLabel != mainSession.autoLabel) {
                 // Automatic display metadata atomically upserts the operator.write-scoped row,
                 // avoiding the concurrent-session identity race in sessions.create.
@@ -1037,7 +964,7 @@ class ChatController internal constructor(
           requestScope == currentCacheScope() &&
           desiredMainSessions[requestScope.gatewayId] == mainSession
         ) {
-          refreshConnectedGateway()
+          onGatewayConnected()
         }
       }
     readiness.job = adoptionJob
@@ -1052,14 +979,9 @@ class ChatController internal constructor(
     adoptionJob.start()
   }
 
-  private fun refreshConnectedGateway() {
-    refreshProgressCard()
-    refreshQuestions()
-    refreshHistoryForRecovery(forceHealth = true)
-  }
-
   /** Invalidates and clears gateway-bound UI state before a target switch can race old responses. */
   fun onGatewayScopeChanging(retireRunState: Boolean = false) {
+    setReactionAccess(ChatReactionAccess())
     val retiredSettings =
       synchronized(gatewayScopeApplyLock) { retireSessionSettingsLanes { _, _ -> true } }
     retiredSettings.forEach { it.complete(false) }
@@ -1080,7 +1002,6 @@ class ChatController internal constructor(
         refreshHealth = false,
       )
       clearProgressCard()
-      clearSubagentActivities()
       liveHistoryMarker = null
       publishSessions(emptyList())
       publishRunPresentation()
@@ -1098,12 +1019,7 @@ class ChatController internal constructor(
       outboxPublicationRevision += 1
       _outboxItems.value = emptyList()
       _outboxPresentationRestored.value = false
-      reconciledOutboxBranchScopes.clear()
-      ambiguousMutationReconciliationStates.clear()
-      synchronized(outboxSessionMutationEventLock) {
-        activeOutboxSessionMutations.clear()
-        deferredOutboxSessionMutationEvents.clear()
-      }
+      clearOutboxBranchReconciliation()
       _sessionBranches.value = emptyList()
       _sessionBranchesLoading.value = false
       sessionBranchesRefreshGeneration.incrementAndGet()
@@ -1122,6 +1038,15 @@ class ChatController internal constructor(
       }
     staleReadiness?.job?.cancel()
     staleReadiness?.ready?.complete(Unit)
+  }
+
+  private fun clearOutboxBranchReconciliation() {
+    reconciledOutboxBranchScopes.clear()
+    ambiguousMutationReconciliationStates.clear()
+    synchronized(outboxSessionMutationEventLock) {
+      activeOutboxSessionMutations.clear()
+      deferredOutboxSessionMutationEvents.clear()
+    }
   }
 
   /** Restores the selected gateway's local state without waiting for transport availability. */
@@ -1176,7 +1101,7 @@ class ChatController internal constructor(
     val key = normalizeRequestedSessionKey(sessionKey)
     val owner = normalizeSessionSelectionOwner(key, ownerAgentId)
     if (key == _sessionKey.value && owner == _sessionOwnerAgentId.value) {
-      if (hasCurrentLiveHistory(key)) return
+      if (hasCurrentHistorySnapshot(key) && _healthOk.value) return
       refreshHistoryForRecovery(forceHealth = true)
       return
     }
@@ -1261,26 +1186,23 @@ class ChatController internal constructor(
   ) {
     val trimmed = mainSessionKey.trim()
     if (trimmed.isEmpty()) return
-    val nextState =
-      applyMainSessionKey(
-        currentSessionKey = normalizeRequestedSessionKey(_sessionKey.value),
-        appliedMainSessionKey = appliedMainSessionKey,
-        nextMainSessionKey = trimmed,
-      )
-    appliedMainSessionKey = nextState.appliedMainSessionKey
-    if (_sessionKey.value == nextState.currentSessionKey) return
+    val currentKey = normalizeRequestedSessionKey(_sessionKey.value)
+    val nextKey = if (currentKey == appliedMainSessionKey) trimmed else currentKey
+    appliedMainSessionKey = trimmed
+    if (_sessionKey.value == nextKey) return
     val generation =
       beginHistoryLoad(
-        nextState.currentSessionKey,
-        ownerAgentId = resolveAgentIdFromMainSessionKey(nextState.currentSessionKey),
+        nextKey,
+        ownerAgentId = resolveAgentIdFromMainSessionKey(nextKey),
         refreshHealth = loadHistory,
       )
     if (!loadHistory) return
-    bootstrap(sessionKey = nextState.currentSessionKey, generation = generation)
+    bootstrap(sessionKey = nextKey, generation = generation)
   }
 
   /** Refreshes chat history, sessions, and model choices without clearing optimistic messages first. */
   fun refresh() {
+    syncSessionReactions(force = true)
     synchronized(gatewayScopeApplyLock) {
       if (_errorText.value != chatMetadataRefreshError) updateErrorText(null)
     }
@@ -1295,171 +1217,161 @@ class ChatController internal constructor(
     scope.launch { fetchSessions(limit = limit, archived = archived) }
   }
 
-  suspend fun patchSession(
-    key: String,
-    ownerAgentId: String? = null,
-    expectedSessionId: String? = null,
-    label: String? = null,
-    clearLabel: Boolean = false,
-    category: String? = null,
-    clearCategory: Boolean = false,
-    color: String? = null,
-    clearColor: Boolean = false,
-    pinned: Boolean? = null,
-    archived: Boolean? = null,
-    unread: Boolean? = null,
-    unreadExpectation: ChatSessionUnreadExpectation? = null,
-  ): Boolean {
-    val sessionKey = key.trim().takeIf { it.isNotEmpty() } ?: return false
-    val requestCacheScope = currentCacheScope()
-    val capturedOwnerAgentId =
-      resolveAgentIdFromMainSessionKey(sessionKey)
-        ?: ownerAgentId?.trim()?.takeIf { it.isNotEmpty() }
-        ?: if (sessionKey == _sessionKey.value) resolveAgentIdForSessionKey(sessionKey) else null
-    val hasPatch =
-      clearLabel ||
-        label != null ||
-        clearCategory ||
-        category != null ||
-        clearColor ||
-        color != null ||
-        pinned != null ||
-        archived != null ||
-        unread != null
-    if (!hasPatch) return false
-    val lifecycleSessionId = expectedSessionId?.trim()?.takeIf { it.isNotEmpty() }
-    if (archived != null && lifecycleSessionId == null) {
-      updateErrorText("Session lifecycle action requires a durable session identity.")
-      return false
-    }
-    try {
-      val params =
+  internal suspend fun patchSession(request: ChatSessionPatch): Boolean =
+    with(request) {
+      val sessionKey = key.trim().takeIf { it.isNotEmpty() } ?: return@with false
+      val requestCacheScope = currentCacheScope()
+      val capturedOwnerAgentId =
+        normalizeSessionSelectionOwner(sessionKey, ownerAgentId)
+          ?: if (sessionKey == _sessionKey.value) resolveAgentIdForSessionKey(sessionKey) else null
+      val patch =
         buildJsonObject {
-          put("key", JsonPrimitive(sessionKey))
-          capturedOwnerAgentId?.let { put("agentId", JsonPrimitive(it)) }
-          lifecycleSessionId?.let { put("expectedSessionId", JsonPrimitive(it)) }
-          if (clearLabel) {
-            put("label", JsonNull)
-          } else if (label != null) {
-            put("label", JsonPrimitive(label))
-          }
-          if (clearCategory) {
-            put("category", JsonNull)
-          } else if (category != null) {
-            put("category", JsonPrimitive(category))
-          }
-          if (clearColor) {
-            put("color", JsonNull)
-          } else if (color != null) {
-            put("color", JsonPrimitive(color))
+          listOf(
+            "label" to if (clearLabel) JsonNull else label?.let(::JsonPrimitive),
+            "category" to if (clearCategory) JsonNull else category?.let(::JsonPrimitive),
+            "snoozedUntil" to if (clearSnooze) JsonNull else snoozedUntil?.let(::JsonPrimitive),
+            "color" to if (clearColor) JsonNull else color?.let(::JsonPrimitive),
+          ).forEach { (key, value) ->
+            if (value != null) put(key, value)
           }
           if (pinned != null) put("pinned", JsonPrimitive(pinned))
           if (archived != null) put("archived", JsonPrimitive(archived))
           if (unread != null) put("unread", JsonPrimitive(unread))
-          if (unreadExpectation != null) {
-            val marker = unreadExpectation.markedUnreadAt
-            put("expectedMarkedUnreadAt", marker?.let(::JsonPrimitive) ?: JsonNull)
-          }
         }
-      if (archived == true) {
-        val defaultAgentRevision = currentDefaultAgentRevision().takeIf { activeSessionTracksDefaultAgent(sessionKey) }
-        val rememberedOwner = capturedOwnerAgentId?.let { ChatAgentSessionSelectionOwner(requestCacheScope?.gatewayId, it) }
-        val (selection, remembered) =
-          synchronized(gatewayScopeApplyLock) {
-            val active =
-              currentSessionActionSnapshot(sessionKey)?.takeIf {
-                it.gatewayScope == requestCacheScope &&
-                  it.ownerAgentId == capturedOwnerAgentId?.lowercase() &&
-                  _sessionId.value == lifecycleSessionId
-              }
-            val remembered =
-              rememberedOwner
-                ?.let { lastSelectedChatSessionByOwner[it] }
-                ?.takeIf { it.key == sessionKey && (it.observedSessionId == null || it.observedSessionId == lifecycleSessionId) }
-            active to remembered
-          }
-        val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
-        lease.request("sessions.patch", params.toString(), 10 * 60_000L)
-        lease.commitIfCurrent {
-          synchronized(gatewayScopeApplyLock) {
-            // ACK retirement belongs to the captured choice, even after an agent switch.
-            // A newer explicit choice or a history-observed successor keeps its intent.
-            if (
-              requestCacheScope == currentCacheScope() &&
-              rememberedOwner != null && remembered != null &&
-              (remembered.observedSessionId == null || remembered.observedSessionId == lifecycleSessionId)
-            ) {
-              lastSelectedChatSessionByOwner.remove(rememberedOwner, remembered)
-            }
-            // Same-key history and default-owner changes need not move selection generation.
-            // Only the selection captured at entry may navigate after the archive completes.
-            if (
-              selection != null &&
-              isCurrentSessionAction(selection) &&
-              _sessionId.value == lifecycleSessionId &&
-              (defaultAgentRevision == null || defaultAgentRevision == currentDefaultAgentRevision())
-            ) {
-              fallBackFromRetiredActiveSession(sessionKey)
-            }
-          }
-        }
-      } else {
-        requestGateway("sessions.patch", params.toString())
+      if (patch.isEmpty()) return@with false
+      val lifecycleSessionId = expectedSessionId?.trim()?.takeIf { it.isNotEmpty() }
+      if ((archived != null || snoozedUntil != null || clearSnooze) && lifecycleSessionId == null) {
+        updateErrorText("Session lifecycle action requires a durable session identity.")
+        return@with false
       }
-      fetchSessionsForCurrentWindow()
-      return true
-    } catch (err: Throwable) {
-      updateErrorText(err.message)
-      return false
+      try {
+        val params =
+          buildJsonObject {
+            put("key", JsonPrimitive(sessionKey))
+            capturedOwnerAgentId?.let { put("agentId", JsonPrimitive(it)) }
+            lifecycleSessionId?.let { put("expectedSessionId", JsonPrimitive(it)) }
+            patch.forEach { (key, value) -> put(key, value) }
+            if (unreadExpectation != null) {
+              val marker = unreadExpectation.markedUnreadAt
+              put("expectedMarkedUnreadAt", marker?.let(::JsonPrimitive) ?: JsonNull)
+            }
+          }
+        if (archived == true) {
+          val defaultAgentRevision = currentDefaultAgentRevision().takeIf { activeSessionTracksDefaultAgent(sessionKey) }
+          val rememberedOwner = capturedOwnerAgentId?.let { ChatAgentSessionSelectionOwner(requestCacheScope?.gatewayId, it) }
+          val (selection, remembered) =
+            synchronized(gatewayScopeApplyLock) {
+              val active =
+                currentSessionActionSnapshot(sessionKey)?.takeIf {
+                  it.gatewayScope == requestCacheScope &&
+                    it.ownerAgentId == capturedOwnerAgentId?.lowercase() &&
+                    _sessionId.value == lifecycleSessionId
+                }
+              val remembered =
+                rememberedOwner
+                  ?.let { lastSelectedChatSessionByOwner[it] }
+                  ?.takeIf { it.key == sessionKey && (it.observedSessionId == null || it.observedSessionId == lifecycleSessionId) }
+              active to remembered
+            }
+          val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
+          lease.request("sessions.patch", params.toString(), 10 * 60_000L)
+          lease.commitIfCurrent {
+            synchronized(gatewayScopeApplyLock) {
+              // ACK retirement belongs to the captured choice, even after an agent switch.
+              // A newer explicit choice or a history-observed successor keeps its intent.
+              if (
+                requestCacheScope == currentCacheScope() &&
+                rememberedOwner != null && remembered != null &&
+                (remembered.observedSessionId == null || remembered.observedSessionId == lifecycleSessionId)
+              ) {
+                lastSelectedChatSessionByOwner.remove(rememberedOwner, remembered)
+              }
+              // Same-key history and default-owner changes need not move selection generation.
+              // Only the selection captured at entry may navigate after the archive completes.
+              if (
+                selection != null &&
+                isCurrentSessionAction(selection) &&
+                _sessionId.value == lifecycleSessionId &&
+                (defaultAgentRevision == null || defaultAgentRevision == currentDefaultAgentRevision())
+              ) {
+                fallBackFromRetiredActiveSession(sessionKey)
+              }
+            }
+          }
+        } else {
+          requestGateway("sessions.patch", params.toString())
+        }
+        fetchSessionsForCurrentWindow()
+        true
+      } catch (err: Throwable) {
+        updateErrorText(err.message)
+        false
+      }
     }
-  }
 
   /** Renames a session group everywhere: every member session moves to the new category. */
   suspend fun renameSessionGroup(
     from: String,
     to: String,
+    expectedGatewayId: String?,
   ) {
     val fromName = from.trim().takeIf { it.isNotEmpty() } ?: return
     val toName = to.trim().takeIf { it.isNotEmpty() } ?: return
-    patchSessionGroupMembers(group = fromName, category = toName)
+    patchSessionGroupMembers(group = fromName, category = toName, expectedGatewayId = expectedGatewayId)
   }
 
   /** Deletes a session group: member sessions are kept and move back to Ungrouped. */
-  suspend fun dissolveSessionGroup(group: String) {
+  suspend fun dissolveSessionGroup(
+    group: String,
+    expectedGatewayId: String?,
+  ) {
     val groupName = group.trim().takeIf { it.isNotEmpty() } ?: return
-    patchSessionGroupMembers(group = groupName, category = null)
+    patchSessionGroupMembers(group = groupName, category = null, expectedGatewayId = expectedGatewayId)
   }
 
   private suspend fun patchSessionGroupMembers(
     group: String,
     category: String?,
+    expectedGatewayId: String?,
   ) {
-    try {
-      val ownerAgentId = resolveAgentIdForSessionKey(_sessionKey.value) ?: return
+    val gatewayScope = currentCacheScope()
+    if (gatewayScope?.gatewayId != expectedGatewayId) return
+    val ownerAgentId = resolveAgentIdForSessionKey(_sessionKey.value) ?: return
+    val lease = captureRequestLease(gatewayScope)
+
+    fun ownsCurrentAgent(): Boolean = gatewayScope == currentCacheScope() && ownerAgentId == resolveAgentIdForSessionKey(_sessionKey.value)
+
+    fun reportError(error: Throwable) {
+      val publish = {
+        synchronized(gatewayScopeApplyLock) {
+          if (ownsCurrentAgent()) updateErrorText(error.message)
+        }
+      }
+      if (lease == null) publish() else lease.commitIfCurrent(publish)
+    }
+
+    runCatchingCancellable {
+      val connection = lease ?: throw GatewayRequestNotEnqueued("not connected")
       var firstError: Throwable? = null
-      for (member in listSessionGroupMembers(group, ownerAgentId)) {
-        try {
+      for (member in listSessionGroupMembers(group, ownerAgentId, connection)) {
+        runCatchingCancellable {
           val params =
             buildJsonObject {
               put("key", JsonPrimitive(member.key))
               put("agentId", JsonPrimitive(ownerAgentId))
               put("category", category?.let(::JsonPrimitive) ?: JsonNull)
             }
-          requestGateway("sessions.patch", params.toString())
-        } catch (err: CancellationException) {
-          throw err
-        } catch (err: Throwable) {
+          connection.request("sessions.patch", params.toString())
+        }.onFailure { err ->
           // Best-effort: one failed member patch must not strand the rest of the group.
           if (firstError == null) firstError = err
         }
       }
-      firstError?.let { updateErrorText(it.message) }
-      fetchSessionsForCurrentWindow()
-    } catch (err: CancellationException) {
-      throw err
-    } catch (err: Throwable) {
-      updateErrorText(err.message)
-    }
+      firstError?.let(::reportError)
+      if (connection.isCurrent() && synchronized(gatewayScopeApplyLock) { ownsCurrentAgent() }) {
+        fetchSessionsForCurrentWindow()
+      }
+    }.onFailure(::reportError)
   }
 
   /**
@@ -1471,11 +1383,12 @@ class ChatController internal constructor(
   private suspend fun listSessionGroupMembers(
     group: String,
     ownerAgentId: String,
+    lease: GatewaySession.RequestLease,
   ): List<ChatSessionEntry> {
     val members = LinkedHashMap<String, ChatSessionEntry>()
     for (archived in listOf(false, true)) {
       val params = sessionListParams(ownerAgentId, GROUP_MEMBER_FETCH_LIMIT, archived)
-      val rows = parseSessions(requestGateway("sessions.list", params.toString())).sessions
+      val rows = parseSessions(lease.request("sessions.list", params.toString())).sessions
       for (row in rows) {
         if (row.category?.trim() == group && !members.containsKey(row.key)) members[row.key] = row
       }
@@ -1488,10 +1401,7 @@ class ChatController internal constructor(
     ownerAgentId: String? = null,
   ): ChatSessionDeletion? {
     val sessionKey = key.trim().takeIf { it.isNotEmpty() } ?: return null
-    val capturedOwnerAgentId =
-      resolveAgentIdFromMainSessionKey(sessionKey)
-        ?: ownerAgentId?.trim()?.takeIf { it.isNotEmpty() }
-        ?: return null
+    val capturedOwnerAgentId = normalizeSessionSelectionOwner(sessionKey, ownerAgentId) ?: return null
     val requestCacheScope = currentCacheScope()
     val requestMainSessionKey = appliedMainSessionKey
     val deleted =
@@ -1505,9 +1415,7 @@ class ChatController internal constructor(
             // the gateway grants write-scope deletes only for archived sessions.
             put("archivedOnly", JsonPrimitive(true))
           }
-        val response = requestGatewayBound(requestCacheScope?.gatewayId, "sessions.delete", params.toString())
-        json
-          .parseToJsonElement(response)
+        requestGatewayJson(requestCacheScope?.gatewayId, "sessions.delete", params)
           .asObjectOrNull()
           ?.get("deleted")
           .asBooleanOrNull() == true
@@ -1550,8 +1458,7 @@ class ChatController internal constructor(
     val sessionKey = parentKey.trim().takeIf { it.isNotEmpty() } ?: return null
     val requestCacheScope = currentCacheScope()
     val capturedOwnerAgentId =
-      resolveAgentIdFromMainSessionKey(sessionKey)
-        ?: ownerAgentId?.trim()?.takeIf { it.isNotEmpty() }
+      normalizeSessionSelectionOwner(sessionKey, ownerAgentId)
         ?: if (sessionKey == _sessionKey.value) resolveAgentIdForSessionKey(sessionKey) else null
     return try {
       val params =
@@ -1616,52 +1523,32 @@ class ChatController internal constructor(
     }
     val actionHistoryGeneration = historyLoadGeneration.incrementAndGet()
     return try {
-      val params =
-        buildJsonObject {
-          put("sessionKey", JsonPrimitive(snapshot.sessionKey))
-          put("agentId", JsonPrimitive(snapshot.ownerAgentId))
-          put("entryId", JsonPrimitive(entry))
+      runOutboxBranchMutation(snapshot, mutationLease, reportStaleError = true) {
+        val params =
+          sessionRequestParams(snapshot.sessionKey, snapshot.ownerAgentId) {
+            put("entryId", JsonPrimitive(entry))
+          }
+        val root = requestGatewayJson(snapshot.gatewayScope?.gatewayId, "sessions.rewind", params).asObjectOrNull()
+        if (!isCurrentSessionAction(snapshot)) {
+          recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
+          return@runOutboxBranchMutation null
         }
-      val root =
-        json
-          .parseToJsonElement(requestGatewayBound(snapshot.gatewayScope?.gatewayId, "sessions.rewind", params.toString()))
-          .asObjectOrNull()
-      if (!isCurrentSessionAction(snapshot)) {
-        recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
-        return null
+        val editorText = root?.get("editorText").asStringOrNull()
+        val historyApplied = refreshHistoryForSessionAction(snapshot, actionHistoryGeneration)
+        val branchApplied =
+          historyApplied != null &&
+            refreshSessionBranches(
+              snapshot,
+              previousState = null,
+              purpose = BranchRefreshPurpose.FinalizeMutation,
+              mutationLease = mutationLease,
+            )
+        if (!branchApplied) recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
+        SessionRewindResult(
+          editorText = editorText,
+          editorAttachments = parseSessionEditorAttachments(root?.get("editorAttachments")),
+        )
       }
-      val editorText = root?.get("editorText").asStringOrNull()
-      val historyApplied = refreshHistoryForSessionAction(snapshot, actionHistoryGeneration)
-      val branchApplied =
-        if (historyApplied != null) {
-          refreshSessionBranches(
-            snapshot,
-            previousState = null,
-            purpose = BranchRefreshPurpose.FinalizeMutation,
-            mutationLease = mutationLease,
-          )
-        } else {
-          false
-        }
-      if (!branchApplied) recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
-      SessionRewindResult(
-        editorText = editorText,
-        editorAttachments = parseSessionEditorAttachments(root?.get("editorAttachments")),
-      )
-    } catch (err: CancellationException) {
-      withContext(NonCancellable) {
-        recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
-      }
-      throw err
-    } catch (err: GatewayRequestDefinitiveFailure) {
-      cancelOutboxSessionMutation(snapshot, mutationLease)
-      reloadHistoryAfterDefinitiveSessionMutationFailure(snapshot)
-      updateErrorText(err.message)
-      null
-    } catch (err: Throwable) {
-      recoverOutboxAfterAmbiguousSessionMutation(snapshot, mutationLease)
-      updateErrorText(err.message)
-      null
     } finally {
       releaseOutboxSessionMutation(snapshot, mutationLease)
     }
@@ -1682,24 +1569,13 @@ class ChatController internal constructor(
     }
     return try {
       val params =
-        buildJsonObject {
-          put("sessionKey", JsonPrimitive(snapshot.sessionKey))
-          put("agentId", JsonPrimitive(snapshot.ownerAgentId))
+        sessionRequestParams(snapshot.sessionKey, snapshot.ownerAgentId) {
           put("entryId", JsonPrimitive(entry))
         }
-      val root =
-        json
-          .parseToJsonElement(requestGatewayBound(snapshot.gatewayScope?.gatewayId, "sessions.fork", params.toString()))
-          .asObjectOrNull()
+      val root = requestGatewayJson(snapshot.gatewayScope?.gatewayId, "sessions.fork", params).asObjectOrNull()
       // Fork leaves the source branch unchanged; its durable lease is only an entry gate.
       cancelOutboxSessionMutation(snapshot, mutationLease)
-      val createdKey =
-        root
-          ?.get("sessionKey")
-          .asStringOrNull()
-          ?.trim()
-          ?.takeIf { it.isNotEmpty() }
-          ?: return null
+      val createdKey = root.nonBlankString("sessionKey") ?: return null
       if (!isCurrentSessionAction(snapshot)) {
         fetchSessionsForCurrentWindow()
         return null
@@ -1731,7 +1607,7 @@ class ChatController internal constructor(
   ): Boolean {
     val leaf = leafEntryId.trim().takeIf { it.isNotEmpty() } ?: return false
     val snapshot = currentSessionActionSnapshot(sessionKey) ?: return false
-    if (!canSwitchSessionBranch(snapshot)) return false
+    if (!canPerformMessageSessionAction(snapshot, blockFailedOutbox = true)) return false
     if (_sessionBranches.value.any { it.leafEntryId == leaf && it.active }) return false
     if (!sessionBranchSwitchClaimed.compareAndSet(false, true)) return false
     val switchGeneration = sessionBranchSwitchGeneration.incrementAndGet()
@@ -1750,34 +1626,20 @@ class ChatController internal constructor(
     }
     val actionHistoryGeneration = historyLoadGeneration.incrementAndGet()
     return try {
-      val params =
-        buildJsonObject {
-          put("sessionKey", JsonPrimitive(snapshot.sessionKey))
-          put("agentId", JsonPrimitive(snapshot.ownerAgentId))
-          put("leafEntryId", JsonPrimitive(leaf))
-        }
-      requestGatewayBound(snapshot.gatewayScope?.gatewayId, "sessions.branches.switch", params.toString())
-      val branchConfirmed = confirmOutboxBranchChange(snapshot, leaf, mutationLease)
-      if (!isCurrentBranchSwitch(snapshot, switchGeneration)) return false
-      val historyApplied = refreshHistoryForSessionAction(snapshot, actionHistoryGeneration)
-      val branchesApplied =
-        historyApplied?.let { refreshSessionBranches(snapshot, it.branchState, BranchRefreshPurpose.ReadOnly) } == true
-      if (!branchConfirmed || historyApplied == null) recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
-      branchConfirmed && branchesApplied
-    } catch (err: CancellationException) {
-      withContext(NonCancellable) {
-        recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
-      }
-      throw err
-    } catch (err: GatewayRequestDefinitiveFailure) {
-      cancelOutboxSessionMutation(snapshot, mutationLease)
-      reloadHistoryAfterDefinitiveSessionMutationFailure(snapshot)
-      if (isCurrentSessionAction(snapshot)) updateErrorText(err.message)
-      false
-    } catch (err: Throwable) {
-      recoverOutboxAfterAmbiguousSessionMutation(snapshot, mutationLease)
-      if (isCurrentSessionAction(snapshot)) updateErrorText(err.message)
-      false
+      runOutboxBranchMutation(snapshot, mutationLease, reportStaleError = false) {
+        val params =
+          sessionRequestParams(snapshot.sessionKey, snapshot.ownerAgentId) {
+            put("leafEntryId", JsonPrimitive(leaf))
+          }
+        requestGatewayBound(snapshot.gatewayScope?.gatewayId, "sessions.branches.switch", params.toString())
+        val branchConfirmed = confirmOutboxBranchChange(snapshot, leaf, mutationLease)
+        if (!isCurrentBranchSwitch(snapshot, switchGeneration)) return@runOutboxBranchMutation false
+        val historyApplied = refreshHistoryForSessionAction(snapshot, actionHistoryGeneration)
+        val branchesApplied =
+          historyApplied?.let { refreshSessionBranches(snapshot, it.branchState, BranchRefreshPurpose.ReadOnly) } == true
+        if (!branchConfirmed || historyApplied == null) recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
+        branchConfirmed && branchesApplied
+      } ?: false
     } finally {
       releaseOutboxSessionMutation(snapshot, mutationLease)
       if (switchGeneration == sessionBranchSwitchGeneration.get()) {
@@ -1873,14 +1735,12 @@ class ChatController internal constructor(
       val caller = currentCoroutineContext()
       caller.ensureActive()
       val params =
-        buildJsonObject {
-          put("sessionKey", JsonPrimitive(snapshot.sessionKey))
-          put("agentId", JsonPrimitive(snapshot.ownerAgentId))
+        sessionRequestParams(snapshot.sessionKey, snapshot.ownerAgentId) {
           put("messageId", JsonPrimitive(message.entryId))
           put("maxChars", JsonPrimitive(FULL_MESSAGE_TEXT_MAX_CHARS))
         }.toString()
       val next =
-        try {
+        runCatchingCancellable {
           val response =
             capturedLease.request("chat.message.get", params) { enqueue ->
               // Selection retirement and dispatch are one decision, after any transport wait.
@@ -1893,11 +1753,7 @@ class ChatController internal constructor(
               }
             }
           parseFullMessage(response, message.entryId)
-        } catch (err: CancellationException) {
-          throw err
-        } catch (_: Throwable) {
-          ChatFullMessageState.Failed
-        }
+        }.getOrDefault(ChatFullMessageState.Failed)
       capturedLease.commitIfCurrent {
         synchronized(gatewayScopeApplyLock) {
           if (caller.isActive && isCurrentFullMessage(snapshot, owner, catalogRevision, message)) {
@@ -1985,17 +1841,6 @@ class ChatController internal constructor(
     reconciledOutboxBranchScope(gatewayScope, branchScope)?.let(reconciledOutboxBranchScopes::remove)
   }
 
-  private fun trackOutboxSessionMutation(
-    snapshot: SessionActionSnapshot,
-    lease: ChatOutboxMutationLease,
-    expectedEventReason: String?,
-  ) {
-    val key = reconciledOutboxBranchScope(snapshot.gatewayScope, snapshot.outboxScope()) ?: return
-    synchronized(outboxSessionMutationEventLock) {
-      activeOutboxSessionMutations[key] = ActiveOutboxSessionMutation(lease, expectedEventReason)
-    }
-  }
-
   private fun releaseOutboxSessionMutation(
     snapshot: SessionActionSnapshot,
     lease: ChatOutboxMutationLease,
@@ -2036,29 +1881,21 @@ class ChatController internal constructor(
     }
   }
 
-  private fun outboxItemMatches(
-    item: ChatOutboxItem,
+  private fun canPerformMessageSessionAction(
     snapshot: SessionActionSnapshot,
-  ): Boolean = item.outboxScope() == snapshot.outboxScope()
-
-  private fun canPerformMessageSessionAction(snapshot: SessionActionSnapshot): Boolean =
+    blockFailedOutbox: Boolean = false,
+  ): Boolean =
     _pendingRunCount.value == 0 &&
       !_sessionBranchSwitching.value &&
       _outboxPresentationRestored.value &&
       _outboxItems.value.none { item ->
-        outboxItemMatches(item, snapshot) && item.status != ChatOutboxStatus.Failed
+        item.outboxScope() == snapshot.outboxScope() && (blockFailedOutbox || item.status != ChatOutboxStatus.Failed)
       }
 
   internal fun canSwitchSessionBranch(sessionKey: String): Boolean {
     val snapshot = currentSessionActionSnapshot(sessionKey) ?: return false
-    return canSwitchSessionBranch(snapshot)
+    return canPerformMessageSessionAction(snapshot, blockFailedOutbox = true)
   }
-
-  private fun canSwitchSessionBranch(snapshot: SessionActionSnapshot): Boolean =
-    _pendingRunCount.value == 0 &&
-      !_sessionBranchSwitching.value &&
-      _outboxPresentationRestored.value &&
-      _outboxItems.value.none { outboxItemMatches(it, snapshot) }
 
   private suspend fun beginOutboxSessionMutation(
     snapshot: SessionActionSnapshot,
@@ -2076,9 +1913,38 @@ class ChatController internal constructor(
       }
     }
     durable ?: return null
-    trackOutboxSessionMutation(snapshot, durable, expectedEventReason)
+    val key = ReconciledOutboxBranchScope(snapshot.gatewayScope, snapshot.outboxScope())
+    synchronized(outboxSessionMutationEventLock) {
+      activeOutboxSessionMutations[key] = ActiveOutboxSessionMutation(durable, expectedEventReason)
+    }
     return durable
   }
+
+  private suspend fun <T> runOutboxBranchMutation(
+    snapshot: SessionActionSnapshot,
+    mutationLease: ChatOutboxMutationLease,
+    reportStaleError: Boolean,
+    action: suspend () -> T,
+  ): T? =
+    try {
+      action()
+    } catch (err: CancellationException) {
+      withContext(NonCancellable) {
+        recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
+      }
+      throw err
+    } catch (err: GatewayRequestDefinitiveFailure) {
+      cancelOutboxSessionMutation(snapshot, mutationLease)
+      if (isCurrentSessionAction(snapshot)) {
+        refreshHistoryForSessionAction(snapshot, historyLoadGeneration.incrementAndGet())
+      }
+      if (reportStaleError || isCurrentSessionAction(snapshot)) updateErrorText(err.message)
+      null
+    } catch (err: Throwable) {
+      recoverOutboxAfterAmbiguousSessionMutation(snapshot, mutationLease)
+      if (reportStaleError || isCurrentSessionAction(snapshot)) updateErrorText(err.message)
+      null
+    }
 
   private suspend fun cancelOutboxSessionMutation(
     snapshot: SessionActionSnapshot,
@@ -2169,14 +2035,9 @@ class ChatController internal constructor(
   ): List<SessionBranch> {
     if (gatewayAdvertisesMethod("sessions.branches.list") == false) throw BranchListingUnsupportedException()
     val params =
-      buildJsonObject {
-        put("sessionKey", JsonPrimitive(sessionKey))
-        put("agentId", JsonPrimitive(ownerAgentId))
-      }
+      sessionRequestParams(sessionKey, ownerAgentId)
     val root =
-      json
-        .parseToJsonElement(requestGatewayBound(gatewayId, "sessions.branches.list", params.toString()))
-        .asObjectOrNull()
+      requestGatewayJson(gatewayId, "sessions.branches.list", params).asObjectOrNull()
         ?: throw IllegalStateException("sessions.branches.list returned an invalid response")
     val entries =
       root["branches"].asArrayOrNull()
@@ -2309,24 +2170,14 @@ class ChatController internal constructor(
     mutationReconciliationState: ChatOutboxBranchState? = null,
   ): HistoryRefreshResult.Applied? {
     if (!isCurrentSessionAction(snapshot)) return null
-    return try {
+    return runCatchingCancellable {
       fetchAndApplyHistory(
         sessionKey = snapshot.sessionKey,
         generation = generation,
         purpose = HistoryRefreshPurpose.RestoreSession,
         mutationReconciliationState = mutationReconciliationState,
       ) as? HistoryRefreshResult.Applied
-    } catch (err: CancellationException) {
-      throw err
-    } catch (_: Throwable) {
-      null
-    }
-  }
-
-  private suspend fun reloadHistoryAfterDefinitiveSessionMutationFailure(snapshot: SessionActionSnapshot) {
-    if (!isCurrentSessionAction(snapshot)) return
-    val generation = historyLoadGeneration.incrementAndGet()
-    refreshHistoryForSessionAction(snapshot, generation)
+    }.getOrNull()
   }
 
   /**
@@ -2361,18 +2212,13 @@ class ChatController internal constructor(
         (!requestTracksDefaultAgent || currentDefaultAgentRevision() == requestDefaultAgentRevision)
     }
     val entries =
-      try {
+      runCatchingCancellable {
         val params = sessionListParams(ownerAgentId, SESSION_LIST_FETCH_LIMIT, archived, query)
         val sessions = parseSessions(requestGateway("sessions.list", params.toString())).sessions
         sessions.map { session ->
           session.copy(ownerAgentId = ownerAgentId)
         }
-      } catch (err: CancellationException) {
-        // A superseded search owns the results now; never repaint stale fallback rows.
-        throw err
-      } catch (_: Throwable) {
-        cachedMatches()
-      }
+      }.getOrElse { cachedMatches() }
     return synchronized(gatewayScopeApplyLock) {
       if (!requestOwnerIsCurrent()) {
         emptyList()
@@ -2388,7 +2234,7 @@ class ChatController internal constructor(
     val ownerAgentId = agentId.trim().takeIf(String::isNotEmpty) ?: return emptyList()
     val requestCacheScope = currentCacheScope()
     val cachedSessions =
-      try {
+      runCatchingCancellable {
         requestCacheScope
           ?.let { cacheScope ->
             transcriptCache
@@ -2396,25 +2242,17 @@ class ChatController internal constructor(
               .orEmpty()
               .map { session -> session.copy(ownerAgentId = ownerAgentId) }
           }.orEmpty()
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
-        emptyList()
-      }
+      }.getOrDefault(emptyList())
     if (requestCacheScope == null) return cachedSessions
 
-    return try {
+    return runCatchingCancellable {
       val params = sessionListParams(ownerAgentId, SESSION_LIST_FETCH_LIMIT)
       parseSessions(
         requestGatewayBound(requestCacheScope.gatewayId, "sessions.list", params.toString()),
       ).sessions
         .map { session -> session.copy(ownerAgentId = ownerAgentId) }
         .takeIf { requestCacheScope == currentCacheScope() }
-    } catch (err: CancellationException) {
-      throw err
-    } catch (_: Throwable) {
-      cachedSessions.takeIf { requestCacheScope == currentCacheScope() }
-    }
+    }.getOrElse { cachedSessions.takeIf { requestCacheScope == currentCacheScope() } }
   }
 
   /** Starts a fresh chat for the active gateway session key. */
@@ -2867,9 +2705,7 @@ class ChatController internal constructor(
     try {
       val lease = captureRequestLease(settingsKey.gatewayScope) ?: throw GatewayRequestNotEnqueued("not connected")
       val params =
-        buildJsonObject {
-          put("sessionKey", JsonPrimitive(settingsKey.sessionKey))
-          put("agentId", JsonPrimitive(ownerAgentId))
+        sessionRequestParams(settingsKey.sessionKey, ownerAgentId) {
           put("limit", JsonPrimitive(1))
         }
       while (true) {
@@ -2974,10 +2810,6 @@ class ChatController internal constructor(
 
   private fun settingsMutationRevision(gatewayScope: ChatCacheScope?): Long = settingsMutationRevisions[gatewayScope] ?: 0L
 
-  private fun hasPendingSessionSettings(
-    gatewayScope: ChatCacheScope?,
-  ): Boolean = pendingSettingsMutations.any { (key, lane) -> key.gatewayScope == gatewayScope && !lane.tail.isCompleted }
-
   private fun publishPendingSessionSettingsKeys() {
     _pendingSessionSettingsKeys.value = pendingSettingsMutations.keys.mapTo(linkedSetOf()) { it.sessionKey }
   }
@@ -3029,7 +2861,7 @@ class ChatController internal constructor(
       }
     val rememberedKey = remembered?.key
     val target =
-      try {
+      runCatchingCancellable {
         val candidates = fetchSessionSelectionCandidates(owner.agentId) ?: return null
         val candidate = selectChatAgentSessionKey(candidates, owner.agentId, rememberedKey, mainSessionKey)
         if (rememberedKey == null || candidate == rememberedKey) {
@@ -3039,13 +2871,10 @@ class ChatController internal constructor(
           // for unscoped keys, unlike sessions.describe, and must identify a real row.
           check(requestScope != null && requestScope.gatewayId == owner.gatewayStableId)
           val params =
-            buildJsonObject {
-              put("sessionKey", JsonPrimitive(rememberedKey))
-              put("agentId", JsonPrimitive(owner.agentId))
+            sessionRequestParams(rememberedKey, owner.agentId) {
               put("limit", JsonPrimitive(1))
             }
-          val response = requestGatewayBound(requestScope.gatewayId, "chat.history", params.toString())
-          val history = json.parseToJsonElement(response).asObjectOrNull()
+          val history = requestGatewayJson(requestScope.gatewayId, "chat.history", params).asObjectOrNull()
           val entry = parseSessionEntry(history?.get("sessionInfo").asObjectOrNull()) ?: error("session description unavailable")
           check(entry.sessionId != null && entry.key == rememberedKey && (entry.ownerAgentId == null || entry.ownerAgentId == owner.agentId))
           when (entry.archived) {
@@ -3054,11 +2883,7 @@ class ChatController internal constructor(
             null -> error("session description has no archive state")
           }
         }
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
-        null
-      }
+      }.getOrNull()
     return ChatAgentSessionSelection(requestScope, remembered, rememberedSessionId, target)
   }
 
@@ -3094,7 +2919,6 @@ class ChatController internal constructor(
     rememberSelection: Boolean = true,
   ) {
     val key = normalizeRequestedSessionKey(sessionKey)
-    if (key.isEmpty()) return
     val owner = normalizeSessionSelectionOwner(key, ownerAgentId)
     prepareSessionSelection(key)
     val generation =
@@ -3150,6 +2974,7 @@ class ChatController internal constructor(
         }
         _messages.value = emptyList()
         _messagesFromCache.value = false
+        clearSessionReactions()
         if (changed) {
           resetSwarmProgress(key)
           sessionBranchesRefreshGeneration.incrementAndGet()
@@ -3158,7 +2983,6 @@ class ChatController internal constructor(
           _sessionBranches.value = emptyList()
           _sessionBranchesLoading.value = false
           _sessionBranchSwitching.value = false
-          clearSubagentActivities()
           clearProgressCard()
         }
         val activeAgentId = resolveAgentIdForSessionKey(key)
@@ -3196,8 +3020,6 @@ class ChatController internal constructor(
     return generation
   }
 
-  private fun hasCurrentLiveHistory(sessionKey: String): Boolean = hasCurrentHistorySnapshot(sessionKey) && _healthOk.value
-
   private fun hasCurrentHistorySnapshot(sessionKey: String): Boolean {
     val marker = liveHistoryMarker ?: return false
     // Same-session load may skip refresh only for the exact live snapshot that
@@ -3229,22 +3051,6 @@ class ChatController internal constructor(
 
   private fun activeSessionTracksDefaultAgent(sessionKey: String): Boolean = resolveAgentIdFromMainSessionKey(sessionKey) == null && _sessionOwnerAgentId.value == null
 
-  /** Sends a chat message and returns once it is durably admitted or the gateway rejects it. */
-  suspend fun sendMessageAwaitAcceptance(
-    message: String,
-    thinkingLevel: String,
-    attachments: List<OutgoingAttachment>,
-  ): Boolean = sendMessageAwaitAcceptance(message, thinkingLevel, attachments, expectedOwner = null)
-
-  internal suspend fun sendMessageForOwnerAwaitAcceptance(
-    message: String,
-    thinkingLevel: String,
-    attachments: List<OutgoingAttachment>,
-    expectedOwner: ChatComposerOwner,
-    idempotencyKey: String? = null,
-    canAdmit: () -> Boolean = { true },
-  ): Boolean = sendMessageAwaitAcceptance(message, thinkingLevel, attachments, expectedOwner, idempotencyKey, canAdmit)
-
   internal suspend fun wasOutboxCommandAdmitted(id: String): Boolean = commandOutbox.wasAdmitted(id)
 
   internal fun isCurrentComposerOwner(expectedOwner: ChatComposerOwner): Boolean {
@@ -3261,11 +3067,11 @@ class ChatController internal constructor(
     return expectedOwner == routingOwner
   }
 
-  private suspend fun sendMessageAwaitAcceptance(
+  internal suspend fun sendMessageAwaitAcceptance(
     message: String,
     thinkingLevel: String,
     attachments: List<OutgoingAttachment>,
-    expectedOwner: ChatComposerOwner?,
+    expectedOwner: ChatComposerOwner? = null,
     idempotencyKey: String? = null,
     canAdmit: () -> Boolean = { true },
   ): Boolean {
@@ -3303,7 +3109,7 @@ class ChatController internal constructor(
     // must not leave with stale model or thinking state while sessions.patch is in flight.
     if (!waitForPendingSessionSettings(sessionSettingsKey(sessionKey))) return false
     if (!canAdmit() || !ownsCapturedUi()) return false
-    if (chatModelSendBlocked(_healthOk.value, _selectedModelRef.value, _modelCatalog.value)) return false
+    if (selectedChatModelSendBlockingReason(_healthOk.value, _selectedModelRef.value, _modelCatalog.value) != null) return false
     // agent-command.ts throws for explicit unsupported levels, so hidden controls must send off.
     // Applied at enqueue time too so durable rows never persist a level the selected model
     // rejects; reconnect flushes with a cleared catalog fail open, matching pre-gating behavior.
@@ -3333,13 +3139,9 @@ class ChatController internal constructor(
       // Restore the draft only when the still-queued row is atomically removed. A reconnect
       // flush may already own it; then the durable row remains the single input owner.
       val deleted =
-        try {
+        runCatchingCancellable {
           commandOutbox.deleteIfQueued(journaled.id)
-        } catch (err: CancellationException) {
-          throw err
-        } catch (_: Throwable) {
-          false
-        }
+        }.getOrDefault(false)
       publishOutbox()
       return !deleted
     }
@@ -3434,12 +3236,7 @@ class ChatController internal constructor(
 
   private fun currentSelectedSession(): ChatSessionEntry? = _sessions.value.firstOrNull { it.key == _sessionKey.value }
 
-  private fun advertisedRunIds(session: ChatSessionEntry? = currentSelectedSession()): List<String> =
-    session
-      ?.activeRunIds
-      .orEmpty()
-      .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
-      .distinct()
+  private fun advertisedRunIds(session: ChatSessionEntry? = currentSelectedSession()): List<String> = session?.activeRunIds.orEmpty().distinct()
 
   private fun publishRunPresentation() {
     synchronized(gatewayScopeApplyLock) {
@@ -3522,10 +3319,6 @@ class ChatController internal constructor(
         liveRunTelemetryByRunId.remove(runId)
       }
     }
-  }
-
-  private fun clearAllRunTelemetry() {
-    synchronized(liveRunTelemetryLock) { liveRunTelemetryByRunId.clear() }
   }
 
   private fun recordLiveRunUsage(
@@ -3724,9 +3517,7 @@ class ChatController internal constructor(
     idempotencyKey: String,
     attachments: List<OutgoingAttachment>,
   ): String =
-    buildJsonObject {
-      put("sessionKey", JsonPrimitive(sessionKey))
-      put("agentId", JsonPrimitive(ownerAgentId))
+    sessionRequestParams(sessionKey, ownerAgentId) {
       put("message", JsonPrimitive(text))
       put("thinking", JsonPrimitive(thinking))
       // No timeoutMs override: it becomes the server-side run expiry, and agent
@@ -3830,17 +3621,13 @@ class ChatController internal constructor(
     if (runIds.isEmpty()) return
     scope.launch {
       for (runId in runIds) {
-        try {
+        runCatchingCancellable {
           val params =
-            buildJsonObject {
-              put("sessionKey", JsonPrimitive(snapshot.sessionKey))
-              put("agentId", JsonPrimitive(snapshot.ownerAgentId))
+            sessionRequestParams(snapshot.sessionKey, snapshot.ownerAgentId) {
               put("runId", JsonPrimitive(runId))
             }
           requestGatewayBound(snapshot.gatewayScope?.gatewayId, "chat.abort", params.toString())
-        } catch (err: CancellationException) {
-          throw err
-        } catch (err: Throwable) {
+        }.onFailure { err ->
           synchronized(gatewayScopeApplyLock) {
             if (isCurrentSessionAction(snapshot)) {
               updateLocalizedErrorText(
@@ -3873,11 +3660,12 @@ class ChatController internal constructor(
           refreshHistoryForRecovery(forceHealth = true)
         } else {
           markHealthOk()
-          refreshCommandsAfterReconnect()
+          if (!hasCurrentChatMetadata()) refreshCommands()
         }
       }
 
       "seqGap" -> {
+        syncSessionReactions(force = true)
         // Metadata notifications can be dropped too, even when history and health remain current.
         refreshCommands()
         // Missed events can hide terminal state or usage for any active run.
@@ -3887,7 +3675,6 @@ class ChatController internal constructor(
         invalidateIncompleteRunTelemetry()
         publishRunPresentation()
         clearLiveRunUi()
-        clearSubagentActivities()
         refreshQuestions()
         refreshProgressCard()
         refreshHistoryForRecovery()
@@ -3909,9 +3696,19 @@ class ChatController internal constructor(
         }
       }
 
+      "session.narration" -> {
+        // Native foreground subscriptions use full streams; bounded narration
+        // tails cannot replace transcript messages.
+        return
+      }
+
       else -> {
         if (payloadJson.isNullOrBlank()) return
         when (event) {
+          "session.reaction" -> {
+            handleSessionReactionEvent(payloadJson)
+          }
+
           "progressCard.changed" -> {
             handleProgressCardChanged(payloadJson)
           }
@@ -3926,10 +3723,6 @@ class ChatController internal constructor(
 
           "agent" -> {
             handleAgentEvent(payloadJson)
-          }
-
-          "task" -> {
-            handleTaskEvent(payloadJson)
           }
 
           "question.requested" -> {
@@ -3982,16 +3775,11 @@ class ChatController internal constructor(
     val gatewayId = currentCacheScope()?.gatewayId
     var claimedOwner: Any? = null
     var allowedHosts: List<String>? = null
-    updateQuestions { prompts ->
-      prompts.map { prompt ->
-        if (prompt.promptOwner === expected.promptOwner && prompt.status() == ChatQuestionStatus.Pending) {
-          claimedOwner = prompt.promptOwner
-          allowedHosts = prompt.draft.secretStoreAllowedHosts(prompt.record.questions)
-          prompt.copy(submitting = true, skipping = cancel, errorText = null)
-        } else {
-          prompt
-        }
-      }
+    updateMatchingQuestions({ it.promptOwner === expected.promptOwner }) { prompt ->
+      if (prompt.status() != ChatQuestionStatus.Pending) return@updateMatchingQuestions prompt
+      claimedOwner = prompt.promptOwner
+      allowedHosts = prompt.draft.secretStoreAllowedHosts(prompt.record.questions)
+      prompt.copy(submitting = true, skipping = cancel, errorText = null)
     }
     // updateQuestions owns the question-state lock, so competing answer/skip callbacks
     // observe the first claim as Submitting and cannot launch a second mutation.
@@ -4021,40 +3809,24 @@ class ChatController internal constructor(
               )
             }
           }
-        val result = json.parseToJsonElement(requestGatewayBound(gatewayId, "question.resolve", params.toString())).jsonObject
+        val result = requestGatewayJson(gatewayId, "question.resolve", params).jsonObject
         val status = if (cancel) "cancelled" else "answered"
         check(result["status"].asStringOrNull() == status) { "Invalid question.resolve response" }
         // The Gateway owns normalized answers, including secret-store markers; never retain submitted values as the outcome.
         val resolvedAnswers = if (cancel) null else json.decodeFromJsonElement<QuestionAnswers>(result.getValue("answers"))
-        updateQuestions { prompts ->
-          prompts.map { prompt ->
-            if (prompt.promptOwner === owner) {
-              prompt.copy(
-                record =
-                  prompt.record.copy(
-                    status = status,
-                    answers = resolvedAnswers,
-                  ),
-                submitting = false,
-                skipping = false,
-                answeredLocally = !cancel,
-                recoveryUnavailable = false,
-                terminalObservedAtMs = prompt.terminalObservedAtMs ?: System.currentTimeMillis(),
-              )
-            } else {
-              prompt
-            }
-          }
+        updateMatchingQuestions({ it.promptOwner === owner }) { prompt ->
+          prompt.copy(
+            record = prompt.record.copy(status = status, answers = resolvedAnswers),
+            submitting = false,
+            skipping = false,
+            answeredLocally = !cancel,
+            recoveryUnavailable = false,
+            terminalObservedAtMs = prompt.terminalObservedAtMs ?: System.currentTimeMillis(),
+          )
         }
       } catch (error: Throwable) {
-        updateQuestions { prompts ->
-          prompts.map { prompt ->
-            if (prompt.promptOwner === owner) {
-              prompt.copy(submitting = false, skipping = false, errorText = error.message ?: "Question failed")
-            } else {
-              prompt
-            }
-          }
+        updateMatchingQuestions({ it.promptOwner === owner }) { prompt ->
+          prompt.copy(submitting = false, skipping = false, errorText = error.message ?: "Question failed")
         }
       }
     }
@@ -4284,29 +4056,30 @@ class ChatController internal constructor(
     val status = payload["status"].asStringOrNull() ?: return
     val answers = payload["answers"]?.let { runCatching { json.decodeFromJsonElement<QuestionAnswers>(it) }.getOrNull() }
     val nowMs = System.currentTimeMillis()
-    updateQuestions { prompts ->
-      prompts.map { prompt ->
-        if (prompt.record.id == id) {
-          prompt.copy(
-            record = prompt.record.copy(status = status, answers = answers ?: prompt.record.answers),
-            submitting = false,
-            skipping = false,
-            recoveryUnavailable = false,
-            terminalObservedAtMs = prompt.terminalObservedAtMs ?: nowMs,
-          )
-        } else {
-          prompt
-        }
-      }
+    updateMatchingQuestions({ it.record.id == id }) { prompt ->
+      prompt.copy(
+        record = prompt.record.copy(status = status, answers = answers ?: prompt.record.answers),
+        submitting = false,
+        skipping = false,
+        recoveryUnavailable = false,
+        terminalObservedAtMs = prompt.terminalObservedAtMs ?: nowMs,
+      )
     }
     refreshQuestions()
   }
 
-  private fun updateQuestions(transform: (List<ChatQuestionPrompt>) -> List<ChatQuestionPrompt>) {
+  private fun updateMatchingQuestions(
+    matches: (ChatQuestionPrompt) -> Boolean,
+    transform: (ChatQuestionPrompt) -> ChatQuestionPrompt,
+  ): Boolean =
+    updateQuestions { prompts ->
+      prompts.map { if (matches(it)) transform(it) else it }
+    }
+
+  private fun updateQuestions(transform: (List<ChatQuestionPrompt>) -> List<ChatQuestionPrompt>): Boolean =
     synchronized(questionStateLock) {
       publishQuestionsLocked(transform(_questions.value))
     }
-  }
 
   private fun publishQuestionsLocked(prompts: List<ChatQuestionPrompt>): Boolean {
     // Terminal cards remain in history, but must not retain unsent (possibly secret) input.
@@ -4346,20 +4119,13 @@ class ChatController internal constructor(
       val job =
         scope.launch(start = CoroutineStart.LAZY) {
           delay(remainingMs)
-          var shouldRefresh = false
-          synchronized(questionStateLock) {
-            questionEvictionJobs.remove(id)
-            val current = _questions.value
-            val next =
-              current.map {
-                if (it.record.id == id && it.record.status == "pending" && it.terminalObservedAtMs == null) {
-                  it.copy(terminalObservedAtMs = System.currentTimeMillis())
-                } else {
-                  it
-                }
+          val shouldRefresh =
+            synchronized(questionStateLock) {
+              questionEvictionJobs.remove(id)
+              updateMatchingQuestions({ it.record.id == id && it.record.status == "pending" && it.terminalObservedAtMs == null }) {
+                it.copy(terminalObservedAtMs = System.currentTimeMillis())
               }
-            shouldRefresh = publishQuestionsLocked(next)
-          }
+            }
           // The local deadline is only a presentation fallback. Reconcile outside
           // the state lock in case another surface supplied the terminal outcome.
           if (shouldRefresh) refreshQuestions()
@@ -4551,10 +4317,7 @@ class ChatController internal constructor(
             history =
               try {
                 val historyParams =
-                  buildJsonObject {
-                    put("sessionKey", JsonPrimitive(sessionKey))
-                    put("agentId", JsonPrimitive(requestAgentId))
-                  }.toString()
+                  sessionRequestParams(sessionKey, requestAgentId).toString()
                 val historyJson =
                   if (transcriptOwner == null) {
                     requestGatewayBound(requestCacheScope?.gatewayId, "chat.history", historyParams)
@@ -4720,6 +4483,7 @@ class ChatController internal constructor(
           continue
         }
         if (applied !is HistoryRefreshResult.Applied) return applied
+        syncSessionReactions()
         // Canonical history retires delivered rows before further RPCs can delay that proof.
         // Resuming their queued successors still waits for branch reconciliation and health.
         val outboxChanged =
@@ -4926,11 +4690,8 @@ class ChatController internal constructor(
           }
         val params = sessionListParams(requestAgentId, requestLimit, archived)
         val res = requestGateway("sessions.list", params.toString())
-        val parsed = parseSessions(res)
-        val result =
-          parsed.copy(
-            sessions = parsed.sessions.map { session -> session.copy(ownerAgentId = requestAgentId) },
-          )
+        val (entries, isTruncated) = parseSessions(res)
+        val result = entries.map { session -> session.copy(ownerAgentId = requestAgentId) }
         var retainedSessionKey: String? = null
         val appliedSessions =
           synchronized(gatewayScopeApplyLock) {
@@ -4938,8 +4699,8 @@ class ChatController internal constructor(
             if (requestSequence != sessionsRequestSequence.get()) return false
             if (
               settingsRevision != settingsMutationRevision(requestCacheScope) ||
-              hasPendingSessionSettings(requestCacheScope) ||
-              refresh.hasConflictingSettings(result.sessions)
+              pendingSettingsMutations.any { (key, lane) -> key.gatewayScope == requestCacheScope && !lane.tail.isCompleted } ||
+              refresh.hasConflictingSettings(result)
             ) {
               null
             } else {
@@ -4950,17 +4711,17 @@ class ChatController internal constructor(
                 _sessions.value
                   .firstOrNull {
                     it.key == activeSessionKey && it.ownerAgentId == requestAgentId
-                  }?.takeIf { result.sessions.none { row -> row.key == activeSessionKey } }
-              val sessions = if (selected == null) result.sessions else result.sessions + selected
+                  }?.takeIf { result.none { row -> row.key == activeSessionKey } }
+              val sessions = if (selected == null) result else result + selected
               publishSessions(sessions)
-              result.sessions.forEach { observeSessionSettings(it) }
+              result.forEach { observeSessionSettings(it) }
               sessionsListArchived = archived
               sessionsListLimit = requestLimit
               val activeOutsideLocalWindow =
                 sessions
                   .drop(MAX_CACHED_SESSIONS)
                   .any { session -> session.key == activeSessionKey }
-              retainedSessionKey = activeSessionKey.takeIf { selected != null || result.isTruncated || activeOutsideLocalWindow }
+              retainedSessionKey = activeSessionKey.takeIf { selected != null || isTruncated || activeOutsideLocalWindow }
               pruneRunTelemetryToAuthoritativeOwnership()
               publishRunPresentation()
               sessions
@@ -4970,7 +4731,7 @@ class ChatController internal constructor(
         unreadPatchSessionKey?.let { trackedKey ->
           acknowledgeUnreadIfNeeded(
             key = trackedKey,
-            entry = result.sessions.firstOrNull { it.key == trackedKey },
+            entry = result.firstOrNull { it.key == trackedKey },
             requireActive = true,
           )
         }
@@ -5004,12 +4765,18 @@ class ChatController internal constructor(
     _commands.value = emptyList()
     _modelCatalog.value = emptyList()
     chatMetadataScope = nextScope
-    chatMetadataLoadState = ChatMetadataLoadState.Unloaded
+    chatMetadataLoaded = false
   }
 
   private suspend fun fetchChatMetadata(requestSequence: Long = chatMetadataRequestSequence.incrementAndGet()) {
     val requestCacheScope = currentCacheScope()
     val metadataScope = currentChatMetadataScope() ?: return
+
+    fun isCurrent(): Boolean =
+      requestSequence == chatMetadataRequestSequence.get() &&
+        requestCacheScope == currentCacheScope() &&
+        metadataScope == currentChatMetadataScope()
+
     val requestSelection =
       synchronized(gatewayScopeApplyLock) {
         if (requestSequence != chatMetadataRequestSequence.get()) return
@@ -5019,23 +4786,20 @@ class ChatController internal constructor(
         }
         currentSessionActionSnapshot(_sessionKey.value)
       }
-    var shouldRefreshSwarm = false
-    var shouldDisableSwarm = false
-    try {
-      val res =
-        requestGatewayBound(
+    var requestedSwarmState: Boolean? = null
+    runCatchingCancellable {
+      val root =
+        requestGatewayJson(
           requestCacheScope?.gatewayId,
           "chat.metadata",
-          metadataScope.params(gatewayAdvertisesCapability(SESSION_SCOPED_CHAT_METADATA_CAPABILITY) == true).toString(),
-        )
-      val root = json.parseToJsonElement(res).asObjectOrNull()
+          metadataScope.params(gatewayAdvertisesCapability(SESSION_SCOPED_CHAT_METADATA_CAPABILITY) == true),
+        ).asObjectOrNull()
       val metadataSwarmEnabled = root?.get("swarmEnabled").asBooleanOrNull() == true
       synchronized(gatewayScopeApplyLock) {
-        if (requestSequence != chatMetadataRequestSequence.get() || requestCacheScope != currentCacheScope() || metadataScope != currentChatMetadataScope()) return
-        _commands.value = parseChatCommands(json, res)
+        if (!isCurrent()) return
+        _commands.value = parseChatCommands(root)
         synchronized(swarmLock) { swarmEnabled = metadataSwarmEnabled }
-        shouldRefreshSwarm = metadataSwarmEnabled
-        shouldDisableSwarm = !metadataSwarmEnabled
+        requestedSwarmState = metadataSwarmEnabled
       }
       val catalogParams =
         buildJsonObject {
@@ -5047,23 +4811,16 @@ class ChatController internal constructor(
       val catalogSupported = gatewayAdvertisesCapability(SESSION_SCOPED_MODEL_CATALOG_CAPABILITY) == true
       val catalogResult =
         if (catalogSupported) {
-          json
-            .parseToJsonElement(
-              requestGatewayBound(requestCacheScope?.gatewayId, GatewayMethod.ModelsList.rawValue, catalogParams.toString()),
-            ).jsonObject
+          requestGatewayJson(requestCacheScope?.gatewayId, GatewayMethod.ModelsList.rawValue, catalogParams).jsonObject
         } else {
           null
         }
       synchronized(gatewayScopeApplyLock) {
-        if (
-          requestSequence == chatMetadataRequestSequence.get() &&
-          requestCacheScope == currentCacheScope() &&
-          metadataScope == currentChatMetadataScope()
-        ) {
+        if (isCurrent()) {
           val catalog = parseGatewayModelCatalog(catalogResult)
           _modelCatalog.value = catalog.models
           val refreshFailed = catalog.refreshFailed
-          chatMetadataLoadState = ChatMetadataLoadState.Loaded
+          chatMetadataLoaded = true
           _sessions.value.firstOrNull { it.key == _sessionKey.value }?.let(::publishSelectedSessionSettings)
           if (requestSelection != null && isCurrentSessionAction(requestSelection)) {
             if (!catalogSupported && _errorText.value == null) {
@@ -5076,14 +4833,10 @@ class ChatController internal constructor(
           }
         }
       }
-    } catch (err: CancellationException) {
-      throw err
-    } catch (_: Throwable) {
+    }.onFailure {
       synchronized(gatewayScopeApplyLock) {
         if (
-          requestSequence == chatMetadataRequestSequence.get() &&
-          requestCacheScope == currentCacheScope() &&
-          metadataScope == currentChatMetadataScope() &&
+          isCurrent() &&
           requestSelection != null &&
           isCurrentSessionAction(requestSelection) &&
           _errorText.value == null
@@ -5092,10 +4845,11 @@ class ChatController internal constructor(
         }
       }
     }
-    if (requestSequence != chatMetadataRequestSequence.get() || requestCacheScope != currentCacheScope() || metadataScope != currentChatMetadataScope()) return
-    when {
-      shouldRefreshSwarm -> refreshSwarmSessions()
-      shouldDisableSwarm -> resetSwarmProgress()
+    if (!isCurrent()) return
+    when (requestedSwarmState) {
+      true -> refreshSwarmSessions()
+      false -> resetSwarmProgress()
+      null -> Unit
     }
   }
 
@@ -5140,24 +4894,15 @@ class ChatController internal constructor(
         if (expectedLease != null && !isSwarmRefreshLeaseCurrentLocked(expectedLease)) return
         val projectionCacheScope = expectedLease?.cacheScope ?: currentCacheScope() ?: return
         SwarmProjectionSnapshot(
-          parentKey = _sessionKey.value,
-          cacheScope = projectionCacheScope,
-          requestSequence = swarmRequestSequence.get(),
+          lease = SwarmRefreshLease(_sessionKey.value, projectionCacheScope, swarmRequestSequence.get()),
           sessions = swarmActivityTracker.decorate(swarmSessions),
         )
       }
     val groups =
-      buildChatSwarmGroups(snapshot.sessions) { candidate -> sameOutboxSession(candidate, snapshot.parentKey) }
+      buildChatSwarmGroups(snapshot.sessions) { candidate -> sameOutboxSession(candidate, snapshot.lease.parentKey) }
     synchronized(swarmLock) {
-      if (
-        !swarmEnabled ||
-        snapshot.cacheScope != currentCacheScope() ||
-        snapshot.requestSequence != swarmRequestSequence.get() ||
-        !sameOutboxSession(snapshot.parentKey, _sessionKey.value)
-      ) {
-        return
-      }
-      swarmSessionKey = snapshot.parentKey
+      if (!isSwarmRefreshLeaseCurrentLocked(snapshot.lease)) return
+      swarmSessionKey = snapshot.lease.parentKey
       _swarmGroups.value = groups
     }
   }
@@ -5199,7 +4944,7 @@ class ChatController internal constructor(
   ) {
     if (!isSwarmRefreshLeaseCurrent(lease)) return
     val rows =
-      try {
+      runCatchingCancellable {
         collectChatSwarmChildSessions { offset ->
           if (!isSwarmRefreshLeaseCurrent(lease)) throw CancellationException()
           val params =
@@ -5212,9 +4957,7 @@ class ChatController internal constructor(
               put("offset", JsonPrimitive(offset))
             }
           val root =
-            json
-              .parseToJsonElement(requestGatewayBound(lease.cacheScope.gatewayId, "sessions.list", params.toString()))
-              .asObjectOrNull()
+            requestGatewayJson(lease.cacheScope.gatewayId, "sessions.list", params).asObjectOrNull()
               ?: throw IllegalStateException("invalid sessions.list response")
           ChatSwarmSessionPage(
             sessions = root["sessions"].asArrayOrNull().orEmpty().mapNotNull { parseSessionEntry(it.asObjectOrNull()) },
@@ -5223,9 +4966,7 @@ class ChatController internal constructor(
             hasMore = root["hasMore"].asBooleanOrNull(),
           )
         }
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
+      }.getOrElse {
         if (isSwarmRefreshLeaseCurrent(lease)) {
           scheduleSwarmRetry(lease, attempt)
         }
@@ -5313,7 +5054,7 @@ class ChatController internal constructor(
             if (!shouldPoll) {
               null
             } else {
-              try {
+              runCatchingCancellable {
                 val connection = lease ?: throw GatewayRequestNotEnqueued("not connected")
                 connection.request("health", null) { enqueue ->
                   synchronized(gatewayScopeApplyLock) {
@@ -5323,11 +5064,7 @@ class ChatController internal constructor(
                 }
                 currentCoroutineContext().ensureActive()
                 true
-              } catch (err: CancellationException) {
-                throw err
-              } catch (_: Throwable) {
-                false
-              }
+              }.getOrDefault(false)
             }
           var applied = false
           val publish = {
@@ -5364,12 +5101,7 @@ class ChatController internal constructor(
 
   private fun hasCurrentChatMetadata(): Boolean {
     val currentScope = currentChatMetadataScope() ?: return false
-    return chatMetadataLoadState == ChatMetadataLoadState.Loaded && chatMetadataScope == currentScope
-  }
-
-  private fun refreshCommandsAfterReconnect() {
-    if (hasCurrentChatMetadata()) return
-    refreshCommands()
+    return chatMetadataLoaded && chatMetadataScope == currentScope
   }
 
   /**
@@ -5410,7 +5142,7 @@ class ChatController internal constructor(
     // that captured them, so a reconnect never silently replays a command-shaped input.
     val gatedEpoch = if (text.startsWith("/")) outboxScope.connectionGeneration else null
     val result =
-      try {
+      runCatchingCancellable {
         historyPublicationMutex.withLock {
           // Recheck the caller and selected attempt after the history wait, immediately before enqueue.
           if (!canAdmit()) return null
@@ -5426,45 +5158,24 @@ class ChatController internal constructor(
             idempotencyKey = idempotencyKey,
           )
         }
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
+      }.getOrElse {
         if (canPublishUi()) updateLocalizedErrorText(chatOutboxQueueFailureText())
         return null
       }
-    return when (result) {
-      is ChatOutboxEnqueueResult.Queued -> {
-        if (canPublishUi()) updateErrorText(null)
-        publishOutbox()
-        result.item
-      }
-
-      ChatOutboxEnqueueResult.QueueFull -> {
-        if (canPublishUi()) {
-          updateLocalizedErrorText(nativeText("Offline queue is full (\$OUTBOX_MAX_QUEUED messages); delete queued items first.", OUTBOX_MAX_QUEUED))
-        }
-        null
-      }
-
-      ChatOutboxEnqueueResult.AttachmentsTooLarge -> {
-        if (canPublishUi()) {
-          updateLocalizedErrorText(nativeText("Attachments are too large to queue for one message; remove some and try again."))
-        }
-        null
-      }
-
-      ChatOutboxEnqueueResult.StorageFull -> {
-        if (canPublishUi()) {
-          updateLocalizedErrorText(nativeText("Offline attachment storage is full; delete queued items first."))
-        }
-        null
-      }
-
-      ChatOutboxEnqueueResult.Unavailable -> {
-        if (canPublishUi()) updateLocalizedErrorText(nativeText("Gateway health not OK; cannot send"))
-        null
-      }
+    if (canPublishUi()) {
+      updateLocalizedErrorText(
+        when (result) {
+          is ChatOutboxEnqueueResult.Queued -> null
+          ChatOutboxEnqueueResult.QueueFull -> nativeText("Offline queue is full (\$OUTBOX_MAX_QUEUED messages); delete queued items first.", OUTBOX_MAX_QUEUED)
+          ChatOutboxEnqueueResult.AttachmentsTooLarge -> nativeText("Attachments are too large to queue for one message; remove some and try again.")
+          ChatOutboxEnqueueResult.StorageFull -> nativeText("Offline attachment storage is full; delete queued items first.")
+          ChatOutboxEnqueueResult.Unavailable -> nativeText("Gateway health not OK; cannot send")
+        },
+      )
     }
+    if (result !is ChatOutboxEnqueueResult.Queued) return null
+    publishOutbox()
+    return result.item
   }
 
   /** Re-queues a failed outbox item and flushes immediately when the gateway is healthy. */
@@ -5477,7 +5188,7 @@ class ChatController internal constructor(
       val gatedEpoch = row.gatedEpoch?.let { outboxScope.connectionGeneration }
       val retryOwnerAgentId =
         row.ownerAgentId ?: resolveAgentIdFromMainSessionKey(row.sessionKey)
-      if (row.ownerAgentId == null && retryOwnerAgentId == null) return@launch
+      if (retryOwnerAgentId == null) return@launch
       // Retry refreshes createdAt and requires this gateway's Failed state. The
       // compare-and-set keeps stale gateway or double Retry taps from reviving an in-flight row.
       val requeued =
@@ -5548,6 +5259,8 @@ class ChatController internal constructor(
     // leave this request pending so its finally block schedules reconciliation after the drain.
     if (outboxFlushInFlight.get()) {
       outboxBranchReconcileInFlight.set(false)
+      // The drain can retire before this owner; recheck its handoff after releasing ours.
+      if (!outboxFlushInFlight.get()) scope.launch { reconcileOutboxBranchesThenDrain() }
       return
     }
     try {
@@ -5567,34 +5280,26 @@ class ChatController internal constructor(
     drainOutboxFlushRequests()
   }
 
+  private fun deferFlushForBranchReconciliation(): Boolean {
+    if (!outboxBranchReconcileInFlight.get() && !outboxBranchReconcileRequested.get()) return false
+    outboxFlushRequested.set(true)
+    if (!outboxBranchReconcileInFlight.get()) scope.launch { reconcileOutboxBranchesThenDrain() }
+    return true
+  }
+
   private suspend fun drainOutboxFlushRequests() {
     if (!outboxFlushInFlight.compareAndSet(false, true)) return
     try {
-      if (
-        outboxBranchReconcileInFlight.get() || outboxBranchReconcileRequested.get()
-      ) {
-        outboxFlushRequested.set(true)
-        if (!outboxBranchReconcileInFlight.get()) {
-          scope.launch { reconcileOutboxBranchesThenDrain() }
-        }
-        return
-      }
+      if (deferFlushForBranchReconciliation()) return
       while (outboxFlushRequested.getAndSet(false)) {
-        if (
-          outboxBranchReconcileInFlight.get() || outboxBranchReconcileRequested.get()
-        ) {
-          outboxFlushRequested.set(true)
-          if (!outboxBranchReconcileInFlight.get()) {
-            scope.launch { reconcileOutboxBranchesThenDrain() }
-          }
-          return
-        }
+        if (deferFlushForBranchReconciliation()) return
         flushOutboxPass()
       }
     } finally {
       outboxFlushInFlight.set(false)
-      // Close the release race: a requester that observed in-flight ownership leaves this bit set.
-      if (outboxFlushRequested.get()) requestOutboxFlush()
+      // A drain can consume the flush bit before its requester publishes reconciliation.
+      // Preserve either pending request when handing off the single-flight owner.
+      if (outboxFlushRequested.get() || outboxBranchReconcileRequested.get()) requestOutboxFlush()
     }
   }
 
@@ -5727,10 +5432,7 @@ class ChatController internal constructor(
               requestGatewayBound(
                 flushScope.gatewayId,
                 "chat.history",
-                buildJsonObject {
-                  put("sessionKey", JsonPrimitive(sessionKey))
-                  put("agentId", JsonPrimitive(branchScope.ownerAgentId))
-                }.toString(),
+                sessionRequestParams(sessionKey, branchScope.ownerAgentId).toString(),
               )
             val history = parseHistory(historyJson, sessionKey = sessionKey, previousMessages = emptyList())
             if (mutationReconciliationState == null) {
@@ -5830,10 +5532,7 @@ class ChatController internal constructor(
             requestGatewayBound(
               flushScope.gatewayId,
               "chat.history",
-              buildJsonObject {
-                put("sessionKey", JsonPrimitive(branchScope.sessionKey))
-                put("agentId", JsonPrimitive(branchScope.ownerAgentId))
-              }.toString(),
+              sessionRequestParams(branchScope.sessionKey, branchScope.ownerAgentId).toString(),
             )
           val history = parseHistory(historyJson, sessionKey = branchScope.sessionKey, previousMessages = emptyList())
           // Record continuity before retiring the only send that can prove an empty root's
@@ -5875,11 +5574,7 @@ class ChatController internal constructor(
   ): Boolean {
     val rows = runCatching { commandOutbox.load(gatewayId) }.getOrDefault(emptyList())
     if (rows.isEmpty()) return false
-    val inFlightRunId =
-      history.inFlightRun
-        ?.runId
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() }
+    val inFlightRunId = history.inFlightRun?.runId
     val sessionRows =
       rows.filter { row ->
         sameOutboxSession(row.sessionKey, history.sessionKey) &&
@@ -5926,16 +5621,16 @@ class ChatController internal constructor(
     return changed
   }
 
-  /** Extracts the outbox row id from a persisted user turn's `<id>:user` idempotency key. */
-  private fun outboxRowIdFromMessage(message: ChatMessage): String? {
-    if (message.role.trim().lowercase() != "user") return null
-    val key = message.idempotencyKey?.trim() ?: return null
-    if (!key.endsWith(":user")) return null
-    return key.removeSuffix(":user").takeIf { it.isNotEmpty() }
-  }
-
   private fun ChatHistory.persistedOutboxAttempts(rows: List<ChatOutboxItem>): Map<String, Int> {
-    val provenIds = messages.mapNotNull(::outboxRowIdFromMessage).toSet()
+    // Only persisted user turns carry the outbox's `<id>:user` idempotency proof.
+    val provenIds =
+      messages
+        .mapNotNull { message ->
+          if (message.role.trim().lowercase() != "user") return@mapNotNull null
+          val key = message.idempotencyKey?.trim() ?: return@mapNotNull null
+          if (!key.endsWith(":user")) return@mapNotNull null
+          key.removeSuffix(":user").takeIf { it.isNotEmpty() }
+        }.toSet()
     return rows.filter { it.id in provenIds }.associate { it.id to it.attemptVersion }
   }
 
@@ -5948,7 +5643,7 @@ class ChatController internal constructor(
     status: ChatOutboxStatus,
     lastError: String?,
   ): Int? =
-    try {
+    runCatchingCancellable {
       commandOutbox.updateStatusIfAttempt(
         item.id,
         item.attemptVersion,
@@ -5957,24 +5652,16 @@ class ChatController internal constructor(
         lastError,
         expectedStatus = item.status,
       )
-    } catch (err: CancellationException) {
-      throw err
-    } catch (_: Throwable) {
-      null
-    }
+    }.getOrNull()
 
   private suspend fun claimOutboxRowOrNull(
     item: ChatOutboxItem,
     retryCount: Int = item.retryCount,
     lastError: String? = item.lastError,
   ): Int? =
-    try {
+    runCatchingCancellable {
       commandOutbox.claimForSendingIfAttempt(item.id, item.attemptVersion, retryCount, lastError)
-    } catch (err: CancellationException) {
-      throw err
-    } catch (_: Throwable) {
-      null
-    }
+    }.getOrNull()
 
   private suspend fun sendOutboxItem(
     queuedItem: ChatOutboxItem,
@@ -6019,11 +5706,9 @@ class ChatController internal constructor(
     // Bytes are loaded once per item; a storage failure here parks the row instead of sending
     // a message without the attachments the user staged with it.
     val attachments =
-      try {
+      runCatchingCancellable {
         loadOutboxAttachmentsForSend(item)
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
+      }.getOrElse {
         val parked = updateOutboxStatusOrNull(item, ChatOutboxStatus.Failed, "attachments unavailable")
         if (parked == null) rearmOutboxRecovery()
         publishOutbox()
@@ -6145,11 +5830,9 @@ class ChatController internal constructor(
         if (canonicalAgentId != null && canonicalAgentId != ownerAgentId) return OutboxSendResult.OwnerChanged
         if (sessionKey != item.sessionKey) {
           // A pre-hello alias resolves once; a failed durable pin must prevent dispatch.
-          try {
+          runCatchingCancellable {
             commandOutbox.pinSessionKey(item.id, sessionKey)
-          } catch (err: CancellationException) {
-            throw err
-          } catch (_: Throwable) {
+          }.getOrElse {
             return OutboxSendResult.NotDispatched("could not pin the delivery session")
           }
         }
@@ -6302,15 +5985,11 @@ class ChatController internal constructor(
   private suspend fun recoverInterruptedOutboxSends(): Boolean =
     outboxRecoveryMutex.withLock {
       if (outboxRecoveryComplete) return@withLock true
-      try {
+      runCatchingCancellable {
         commandOutbox.failSendingAfterRestart()
         outboxRecoveryComplete = true
         true
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
-        false
-      }
+      }.getOrDefault(false)
     }
 
   private suspend fun rearmOutboxRecovery() {
@@ -6699,12 +6378,8 @@ class ChatController internal constructor(
   // The gateway sends explicit JSON null for cleared display metadata on session
   // events; the merge must apply those clears instead of preserving stale values.
   private fun parseExplicitSessionClears(obj: JsonObject): Set<String> =
-    buildSet {
-      if (obj["label"] is JsonNull) add("label")
-      if (obj["autoLabel"] is JsonNull) add("autoLabel")
-      if (obj["displayName"] is JsonNull) add("displayName")
-      if (obj["category"] is JsonNull) add("category")
-    }
+    listOf("label", "autoLabel", "displayName", "subject", "category")
+      .filterTo(mutableSetOf()) { obj[it] is JsonNull }
 
   private fun isLocallyOwnedRun(runId: String): Boolean = synchronized(pendingRuns) { runId in pendingRuns } || unresolvedRepliesByRunId.containsKey(runId)
 
@@ -6791,10 +6466,11 @@ class ChatController internal constructor(
         val ts = payload["ts"].asLongOrNull() ?: System.currentTimeMillis()
         synchronized(gatewayScopeApplyLock) {
           val owner = liveRunOwner(runId)
-          when (phase) {
-            "start" -> {
-              val existing = turnToolCallsById[owner to toolCallId]
-              turnToolCallsById[owner to toolCallId] =
+          val key = owner to toolCallId
+          val existing = turnToolCallsById[key]
+          val updated =
+            when (phase) {
+              "start" -> {
                 ChatPendingToolCall(
                   toolCallId = toolCallId,
                   name = name,
@@ -6805,22 +6481,14 @@ class ChatController internal constructor(
                   activity = existing?.activity,
                   presentationId = existing?.presentationId ?: "${owner?.runId.orEmpty()}:$toolCallId",
                 )
-              publishPendingToolCalls()
-            }
-
-            "result" -> {
-              val existing = turnToolCallsById[owner to toolCallId]
-              if (existing != null) {
-                turnToolCallsById[owner to toolCallId] =
-                  existing.copy(isComplete = true, isError = data["isError"].asBooleanOrNull() ?: existing.isError)
               }
-              publishPendingToolCalls()
-            }
 
-            "input_delta" -> {
-              val diff = parseChatDiffStat(data["diff"], includeFiles = false) ?: return
-              val existing = turnToolCallsById[owner to toolCallId]
-              turnToolCallsById[owner to toolCallId] =
+              "result" -> {
+                existing?.copy(isComplete = true, isError = data["isError"].asBooleanOrNull() ?: existing.isError)
+              }
+
+              "input_delta" -> {
+                val diff = parseChatDiffStat(data["diff"]) ?: return
                 existing?.copy(name = name, liveDiff = diff)
                   ?: ChatPendingToolCall(
                     toolCallId = toolCallId,
@@ -6829,9 +6497,14 @@ class ChatController internal constructor(
                     liveDiff = diff,
                     presentationId = "${owner?.runId.orEmpty()}:$toolCallId",
                   )
-              publishPendingToolCalls()
+              }
+
+              else -> {
+                return
+              }
             }
-          }
+          if (updated != null) turnToolCallsById[key] = updated
+          publishPendingToolCalls()
         }
       }
 
@@ -6903,7 +6576,7 @@ class ChatController internal constructor(
     val eventSessionKey =
       when (normalizedSessionKey) {
         null -> return null
-        "main" -> appliedMainSessionKey.trim().takeIf(String::isNotEmpty) ?: return null
+        "main" -> appliedMainSessionKey
         else -> normalizedSessionKey
       }
     return resolveChatComposerRoutingOwner(
@@ -6944,98 +6617,6 @@ class ChatController internal constructor(
     }
   }
 
-  private fun handleTaskEvent(payloadJson: String) {
-    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
-    if (payload["action"].asStringOrNull() == "deleted") {
-      payload
-        .nonBlankString("taskId")
-        ?.let(::removeSubagentActivity)
-      return
-    }
-    val task = payload["task"].asObjectOrNull() ?: return
-    if (task["runtime"].asStringOrNull() != "subagent") return
-    if (task["sessionKey"].asStringOrNull()?.trim() != _sessionKey.value) return
-    val taskId = task.nonBlankString("id") ?: return
-    val status = task["status"].asStringOrNull()?.trim()?.lowercase() ?: return
-    if (status !in setOf("queued", "running", "completed", "failed", "cancelled", "timed_out")) return
-
-    val terminal = status != "queued" && status != "running"
-    val now = System.currentTimeMillis()
-    synchronized(subagentActivityLock) {
-      val existing = _subagentActivities.value[taskId]
-      if (terminal && existing == null && subagentActivityExpiryJobs.containsKey(taskId)) return@synchronized
-      val lastActivity = task.nonBlankString("lastActivity")
-      val fallback =
-        task.nonBlankString("progressSummary")
-          ?: task.nonBlankString("lastToolName")
-      val activity =
-        ChatSubagentActivity(
-          id = taskId,
-          status = status,
-          snippet =
-            lastActivity
-              ?: if (terminal) existing?.snippet ?: fallback else fallback ?: existing?.snippet,
-          diffStat = parseChatDiffStat(task["diffStat"], includeFiles = true) ?: existing?.diffStat,
-          terminalSummary =
-            task.nonBlankString("terminalSummary")
-              ?: existing?.terminalSummary,
-          error =
-            task.nonBlankString("error")
-              ?: existing?.error,
-          startedAtMs =
-            task["startedAt"]?.let(::parseTaskTimestampMs)
-              ?: existing?.startedAtMs
-              ?: task["createdAt"]?.let(::parseTaskTimestampMs)
-              ?: now,
-          endedAtMs =
-            if (terminal) {
-              task["endedAt"]?.let(::parseTaskTimestampMs) ?: existing?.endedAtMs ?: now
-            } else {
-              null
-            },
-          childSessionKey =
-            task.nonBlankString("childSessionKey")
-              ?: existing?.childSessionKey,
-        )
-      _subagentActivities.value = _subagentActivities.value + (taskId to activity)
-      if (activity.isWorking) {
-        subagentActivityExpiryJobs.remove(taskId)?.cancel()
-      } else if (terminal && existing?.isWorking != false) {
-        // Local receipt starts retention; remote endedAt may be old.
-        // Duplicate terminal updates must not extend that retention window.
-        subagentActivityExpiryJobs[taskId] =
-          scope.launch {
-            delay(SUBAGENT_ACTIVITY_RETENTION_MS)
-            synchronized(subagentActivityLock) {
-              if (subagentActivityExpiryJobs[taskId] !== coroutineContext[Job]) return@synchronized
-              _subagentActivities.value = _subagentActivities.value - taskId
-              subagentActivityExpiryJobs[taskId] = null
-              if (subagentActivityExpiryJobs.count { it.value == null } > MAX_RETAINED_TERMINAL_SUBAGENT_TASKS) {
-                subagentActivityExpiryJobs.entries.firstOrNull { it.value == null }?.let {
-                  subagentActivityExpiryJobs.remove(it.key)
-                }
-              }
-            }
-          }
-      }
-    }
-  }
-
-  private fun removeSubagentActivity(taskId: String) {
-    synchronized(subagentActivityLock) {
-      subagentActivityExpiryJobs.remove(taskId)?.cancel()
-      _subagentActivities.value = _subagentActivities.value - taskId
-    }
-  }
-
-  private fun clearSubagentActivities() {
-    synchronized(subagentActivityLock) {
-      subagentActivityExpiryJobs.values.forEach { it?.cancel() }
-      subagentActivityExpiryJobs.clear()
-      _subagentActivities.value = emptyMap()
-    }
-  }
-
   private fun liveRunOwner(runId: String?): ChatRunOwner? {
     // Older events may omit a run id. A sole pending run is attributable; a
     // multi-run event remains unowned until the existing whole-scope/idle reset.
@@ -7070,6 +6651,163 @@ class ChatController internal constructor(
         turnToolCallsById.keys.removeAll { it.first == retiringOwner }
       }
       publishPendingToolCalls()
+    }
+  }
+
+  fun setReactionAccess(access: ChatReactionAccess) {
+    synchronized(gatewayScopeApplyLock) {
+      if (reactionAccess.copy(viewerId = access.viewerId) != access) clearSessionReactions()
+      reactionAccess = access
+      _reactionViewerId.value = access.viewerId
+      publishReactionAccess()
+    }
+    syncSessionReactions()
+  }
+
+  fun setReactionViewerId(viewerId: String?) {
+    synchronized(gatewayScopeApplyLock) {
+      reactionAccess = reactionAccess.copy(viewerId = viewerId)
+      _reactionViewerId.value = viewerId
+    }
+  }
+
+  private fun publishReactionAccess() {
+    _canReact.value =
+      canReactToSession(
+        access = reactionAccess,
+        session = _sessions.value.firstOrNull { it.key == _sessionKey.value },
+        connected = reactionAccess.role != null,
+        methodAdvertised = gatewayAdvertisesMethod("session.reactions.set") == true,
+        catalog = isReactionCatalogSession(_sessionKey.value),
+      )
+  }
+
+  private fun clearSessionReactions() {
+    reactionTarget = null
+    reactionState.reset()
+    _canReact.value = false
+  }
+
+  private fun isCurrentReactionTarget(target: ReactionTarget): Boolean = target == reactionTarget && isCurrentSessionAction(target.selection) && target.sessionId == _sessionId.value
+
+  private fun syncSessionReactions(force: Boolean = false) {
+    val (target, generation) =
+      synchronized(gatewayScopeApplyLock) {
+        publishReactionAccess()
+        val selection = currentSessionActionSnapshot(_sessionKey.value)
+        val sessionId = _sessionId.value
+        val target =
+          if (
+            reactionAccess.role != null && selection != null && !sessionId.isNullOrBlank() &&
+            !isReactionCatalogSession(selection.sessionKey) && gatewayAdvertisesMethod("session.reactions.list") == true
+          ) {
+            ReactionTarget(selection, sessionId)
+          } else {
+            null
+          }
+        if (target == reactionTarget && !force) return
+        if (target != reactionTarget) clearSessionReactions()
+        reactionTarget = target
+        publishReactionAccess()
+        if (target == null) return
+        target to reactionState.beginRead()
+      }
+    scope.launch {
+      val lease = captureRequestLease(target.selection.gatewayScope) ?: return@launch
+
+      fun publishIfCurrent(block: () -> Unit) {
+        lease.commitIfCurrent {
+          synchronized(gatewayScopeApplyLock) {
+            if (isCurrentReactionTarget(target) && reactionState.isCurrentRead(generation)) block()
+          }
+        }
+      }
+      try {
+        val params = SessionReactionsListParams(sessionKey = target.selection.sessionKey, agentId = target.selection.ownerAgentId)
+        val response =
+          lease.request("session.reactions.list", json.encodeToString(params)) { enqueue ->
+            synchronized(gatewayScopeApplyLock) {
+              if (!isCurrentReactionTarget(target) || !reactionState.isCurrentRead(generation)) throw CancellationException("Reaction reader changed")
+              enqueue()
+            }
+          }
+        val result = json.decodeFromString<SessionReactionsListResult>(response)
+        if (result.sessionId != target.sessionId) return@launch
+        val reactions = result.reactions.mapValues { (_, values) -> values.map { it.toChatReactionSummary() } }
+        publishIfCurrent { reactionState.applyRead(generation, reactions) }
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        publishIfCurrent { updateErrorText(err.message) }
+      } finally {
+        publishIfCurrent { reactionState.finishRead(generation) }
+      }
+    }
+  }
+
+  fun setMessageReaction(
+    messageId: String,
+    emoji: String,
+    remove: Boolean,
+  ) {
+    if (!isReactionEmoji(emoji)) return
+    syncSessionReactions()
+    val (target, write) =
+      synchronized(gatewayScopeApplyLock) {
+        if (!_canReact.value || _messages.value.none { it.entryId == messageId && it.role in setOf("user", "assistant") }) return
+        val target = reactionTarget ?: return
+        target to reactionState.beginWrite(messageId, emoji)
+      }
+    scope
+      .launch {
+        write.awaitTurn()
+        val lease = captureRequestLease(target.selection.gatewayScope) ?: return@launch
+
+        fun isCurrent(): Boolean = isCurrentReactionTarget(target) && reactionState.isCurrent(write)
+
+        fun publishIfCurrent(block: () -> Unit) {
+          lease.commitIfCurrent { synchronized(gatewayScopeApplyLock) { if (isCurrent()) block() } }
+        }
+        runCatchingCancellable {
+          val params =
+            SessionReactionsSetParams(
+              sessionKey = target.selection.sessionKey,
+              agentId = target.selection.ownerAgentId,
+              messageId = messageId,
+              emoji = emoji,
+              remove = remove,
+            )
+          val response =
+            lease.request("session.reactions.set", json.encodeToString(params)) { enqueue ->
+              synchronized(gatewayScopeApplyLock) {
+                publishReactionAccess()
+                if (!isCurrentReactionTarget(target) || !_canReact.value || !reactionState.prepareWrite(write)) throw CancellationException("Reaction authority changed")
+                enqueue()
+              }
+            }
+          val result = json.decodeFromString<SessionReactionsSetResult>(response)
+          check(result.messageId == messageId) { "Reaction response belongs to another message" }
+          val reactions = result.reactions.map { it.toChatReactionSummary() }
+          publishIfCurrent { reactionState.applyWrite(write, reactions) }
+        }.onFailure { err ->
+          publishIfCurrent { updateErrorText(err.message) }
+        }
+      }.invokeOnCompletion {
+        synchronized(gatewayScopeApplyLock) { reactionState.finishWrite(write) }
+      }
+  }
+
+  private fun handleSessionReactionEvent(payloadJson: String) {
+    val event = runCatching { json.decodeFromString<SessionReactionEvent>(payloadJson) }.getOrNull() ?: return
+    synchronized(gatewayScopeApplyLock) {
+      val owner = resolveAgentIdForSessionKey(_sessionKey.value) ?: return
+      if (
+        reactionAccess.role == null || event.sessionId != _sessionId.value ||
+        !reactionEventMatchesSession(_sessionKey.value, owner, event.sessionKey, event.agentId, sessionRouting())
+      ) {
+        return
+      }
+      reactionState.applyEvent(event.messageId, event.reactions.map { it.toChatReactionSummary() })
     }
   }
 
@@ -7316,7 +7054,7 @@ class ChatController internal constructor(
         }
         pendingRuns.clear()
       }
-      if (clearRunTelemetry) clearAllRunTelemetry()
+      if (clearRunTelemetry) synchronized(liveRunTelemetryLock) { liveRunTelemetryByRunId.clear() }
       pendingRunProjectionsByRunId.keys
         .filterNot { runId -> synchronized(pendingRuns) { runId in pendingRuns } }
         .forEach(::armPendingRunProjectionDeadline)
@@ -7463,20 +7201,19 @@ class ChatController internal constructor(
     recoveryHistoryReconciliationGeneration = generation
     recoveryHistoryReconciliationJob =
       scope.launch {
-        delay(recoveryHistoryRetryDelayMs)
-        if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return@launch
-        if (!_healthOk.value) return@launch
-        refreshHistorySnapshotBestEffort(sessionKey, generation, reconciliationRunIds)
-        if (synchronized(pendingRuns) { reconciliationRunIds.any { it in pendingRuns } }) return@launch
+        suspend fun refreshAfter(delayMs: Long): Boolean {
+          delay(delayMs)
+          if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return false
+          if (!_healthOk.value) return false
+          refreshHistorySnapshotBestEffort(sessionKey, generation, reconciliationRunIds)
+          return synchronized(pendingRuns) { reconciliationRunIds.none { it in pendingRuns } }
+        }
+        if (!refreshAfter(recoveryHistoryRetryDelayMs)) return@launch
         if (reconciliationRunIds.none(unresolvedRepliesByRunId::containsKey)) return@launch
 
         // A persisted user row is not terminal proof: the assistant row can lag
         // behind it even after the run disappears from the history snapshot.
-        delay(pendingRunTimeoutMs - recoveryHistoryRetryDelayMs)
-        if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return@launch
-        if (!_healthOk.value) return@launch
-        refreshHistorySnapshotBestEffort(sessionKey, generation, reconciliationRunIds)
-        if (synchronized(pendingRuns) { reconciliationRunIds.any { it in pendingRuns } }) return@launch
+        if (!refreshAfter(pendingRunTimeoutMs - recoveryHistoryRetryDelayMs)) return@launch
         val unresolvedRunIds = reconciliationRunIds.filter(unresolvedRepliesByRunId::containsKey)
         if (unresolvedRunIds.isEmpty()) return@launch
         unresolvedRunIds.forEach(::removeOptimisticMessage)
@@ -7495,7 +7232,7 @@ class ChatController internal constructor(
     generation: Long,
     runIdsToReconcile: Set<String>,
   ): HistoryRefreshResult =
-    try {
+    runCatchingCancellable {
       fetchAndApplyHistory(
         sessionKey,
         generation,
@@ -7503,12 +7240,7 @@ class ChatController internal constructor(
         runIdsToReconcile = runIdsToReconcile,
         markCompletedTranscript = runIdsToReconcile.isNotEmpty(),
       )
-    } catch (err: CancellationException) {
-      throw err
-    } catch (_: Throwable) {
-      // The bounded expiry below remains the final reconciliation path.
-      HistoryRefreshResult.Failed
-    }
+    }.getOrDefault(HistoryRefreshResult.Failed)
 
   private fun refreshCurrentHistoryBestEffort(
     runIdsToReconcile: Set<String> = emptySet(),
@@ -7576,6 +7308,7 @@ class ChatController internal constructor(
     val sid = root["sessionId"].asStringOrNull()
     val thinkingLevel = root["thinkingLevel"].asStringOrNull()
     val sessionInfo = root["sessionInfo"].asObjectOrNull()?.let { parseSessionEntry(it, fallbackKey = sessionKey) }
+    val defaults = root["defaults"].asObjectOrNull()
     val array = root["messages"].asArrayOrNull() ?: JsonArray(emptyList())
 
     val activity = root["activity"]?.let { json.decodeFromJsonElement<List<ChatHistoryActivity>>(it) }?.associate { it.messageId to it.items }
@@ -7591,13 +7324,8 @@ class ChatController internal constructor(
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
       sessionInfo = sessionInfo,
       inFlightRun = parseInFlightRun(root),
-      defaultModelRef = parseDefaultModelRef(root),
+      defaultModelRef = providerQualifiedModelRef(defaults?.get("model").asStringOrNull(), defaults?.get("modelProvider").asStringOrNull()),
     )
-  }
-
-  private fun parseDefaultModelRef(root: JsonObject): String? {
-    val defaults = root["defaults"].asObjectOrNull() ?: return null
-    return providerQualifiedModelRef(defaults["model"].asStringOrNull(), defaults["modelProvider"].asStringOrNull())
   }
 
   private fun parseMessage(
@@ -7608,7 +7336,7 @@ class ChatController internal constructor(
     val metadata = obj["__openclaw"].asObjectOrNull()
     val content =
       if (role == "toolresult") {
-        listOfNotNull(parseTopLevelToolResult(obj))
+        listOfNotNull(parseToolActivityContent(obj, resultBlock = true, topLevel = true))
       } else {
         parseChatMessageContents(obj)
       }
@@ -7664,18 +7392,16 @@ class ChatController internal constructor(
 
   private fun parseChatMessageProvenance(element: JsonElement?): ChatMessageProvenance? {
     val obj = element.asObjectOrNull() ?: return null
-    val kind = obj["kind"].asJsonStringOrNull() ?: return null
     return ChatMessageProvenance(
-      kind = kind,
+      kind = obj["kind"].asJsonStringOrNull() ?: return null,
       sourceTool = obj["sourceTool"].asJsonStringOrNull(),
     )
   }
 
   private fun parseChatTranscriptMarker(element: JsonElement?): ChatTranscriptMarker? {
     val obj = element.asObjectOrNull() ?: return null
-    val kind = obj["kind"].asJsonStringOrNull() ?: return null
     return ChatTranscriptMarker(
-      kind = kind,
+      kind = obj["kind"].asJsonStringOrNull() ?: return null,
       id = obj["id"].asJsonStringOrNull(),
       tokensBefore = obj["tokensBefore"].asJsonNumberOrNull(),
       tokensAfter = obj["tokensAfter"].asJsonNumberOrNull(),
@@ -7736,17 +7462,15 @@ class ChatController internal constructor(
       sessionId = obj.nonBlankString("sessionId"),
       updatedAtMs = obj["updatedAt"].asLongOrNull(),
       ownerAgentId = obj.nonBlankString("agentId"),
+      createdActorType = obj["createdActor"].asObjectOrNull()?.nonBlankString("type"),
+      createdVia = obj.nonBlankString("createdVia"),
+      subject = obj["subject"].asStringOrNull()?.trim(),
       classification = obj.nonBlankString("classification"),
       accountId = obj.nonBlankString("accountId"),
       peerKind = obj.nonBlankString("peerKind"),
       isMain = obj["isMain"].asBooleanOrNull(),
       isBackground = obj["isBackground"].asBooleanOrNull(),
-      hasClassificationMetadata =
-        "classification" in obj ||
-          "accountId" in obj ||
-          "peerKind" in obj ||
-          "isMain" in obj ||
-          "isBackground" in obj,
+      hasClassificationMetadata = sessionClassificationFields.any(obj::containsKey),
       displayName = obj["displayName"].asStringOrNull()?.trim(),
       derivedTitle = obj["derivedTitle"].asStringOrNull()?.trim(),
       label = obj["label"].asStringOrNull()?.trim(),
@@ -7761,10 +7485,18 @@ class ChatController internal constructor(
       hasColorMetadata = "color" in obj,
       pinned = obj["pinned"].asBooleanOrNull(),
       archived = obj["archived"].asBooleanOrNull(),
+      sharingRole = obj.nonBlankString("sharingRole"),
+      visibility = obj.nonBlankString("visibility"),
+      hasSharingRoleMetadata = "sharingRole" in obj,
+      hasVisibilityMetadata = "visibility" in obj,
       unread = obj["unread"].asBooleanOrNull(),
       lastReadAt = obj["lastReadAt"].asLongOrNull(),
       markedUnreadAt = obj["markedUnreadAt"].asLongOrNull(),
       hasMarkedUnreadMetadata = "markedUnreadAt" in obj,
+      snoozedUntil = obj["snoozedUntil"].asLongOrNull(),
+      snoozedAt = obj["snoozedAt"].asLongOrNull(),
+      hasSnoozedUntilMetadata = "snoozedUntil" in obj,
+      hasSnoozedAtMetadata = "snoozedAt" in obj,
       agentStatus = parseSessionAgentStatus(obj["agentStatus"]),
       hasAgentStatusMetadata = "agentStatus" in obj,
       observerDigest =
@@ -7780,13 +7512,7 @@ class ChatController internal constructor(
       modelProvider = obj["modelProvider"].asStringOrNull()?.trim(),
       model = obj["model"].asStringOrNull()?.trim(),
       modelSelectionLocked = obj["modelSelectionLocked"].asBooleanOrNull(),
-      agentRuntimeId =
-        obj["agentRuntime"]
-          .asObjectOrNull()
-          ?.get("id")
-          .asStringOrNull()
-          ?.trim()
-          ?.takeIf(String::isNotEmpty),
+      agentRuntimeId = obj["agentRuntime"].asObjectOrNull().nonBlankString("id"),
       thinkingLevel = obj["thinkingLevel"].asStringOrNull()?.trim(),
       thinkingLevels = parseThinkingLevels(obj["thinkingLevels"]),
       thinkingDefault = obj["thinkingDefault"].asStringOrNull()?.trim(),
@@ -7799,10 +7525,7 @@ class ChatController internal constructor(
       hasEffectiveFastModeMetadata = "effectiveFastMode" in obj,
       contextTokens = obj["contextTokens"].asLongOrNull(),
       estimatedCostUsd = obj["estimatedCostUsd"].asJsonNumberOrNull()?.takeIf { it.isFinite() && it >= 0.0 },
-      hasContextUsageMetadata =
-        "totalTokens" in obj ||
-          "totalTokensFresh" in obj ||
-          "contextTokens" in obj,
+      hasContextUsageMetadata = sessionContextUsageFields.any(obj::containsKey),
       hasActiveRun = obj["hasActiveRun"].asBooleanOrNull(),
       activeRunIds =
         obj["activeRunIds"]
@@ -7811,6 +7534,10 @@ class ChatController internal constructor(
       hasActiveRunMetadata = "hasActiveRun" in obj || "activeRunIds" in obj,
       hasActiveRunIdsMetadata = "activeRunIds" in obj,
       parentSessionKey = obj["parentSessionKey"].asStringOrNull()?.trim(),
+      worktreeId = obj["worktree"].asObjectOrNull()?.nonBlankString("id"),
+      hasWorktreeMetadata = "worktree" in obj,
+      spawnDepth = obj["spawnDepth"].asLongOrNull()?.toInt(),
+      forkedFromParent = obj["forkedFromParent"].asBooleanOrNull(),
       spawnedBy = obj["spawnedBy"].asStringOrNull()?.trim(),
       hasActiveSubagentRun = obj["hasActiveSubagentRun"].asBooleanOrNull(),
       subagentRunState = obj["subagentRunState"].asStringOrNull()?.trim(),
@@ -7824,27 +7551,16 @@ class ChatController internal constructor(
       endedAt = obj["endedAt"].asLongOrNull(),
       runtimeMs = obj["runtimeMs"].asLongOrNull(),
       outputTokens = obj["outputTokens"].asLongOrNull(),
-      hasSessionUsageMetadata =
-        "inputTokens" in obj ||
-          "outputTokens" in obj ||
-          "estimatedCostUsd" in obj,
-      hasRunMetadata =
-        "status" in obj ||
-          "lastRunError" in obj ||
-          "startedAt" in obj ||
-          "endedAt" in obj ||
-          "runtimeMs" in obj ||
-          "outputTokens" in obj,
+      hasSessionUsageMetadata = sessionSessionUsageFields.any(obj::containsKey),
+      hasRunMetadata = sessionRunFields.any(obj::containsKey),
     )
   }
 
   private fun parseSessionAgentStatus(element: JsonElement?): ChatSessionAgentStatus? {
     val obj = element.asObjectOrNull() ?: return null
-    val note = obj.nonBlankString("note") ?: return null
-    val expiresAt = obj["expiresAt"].asLongOrNull() ?: return null
     return ChatSessionAgentStatus(
-      note = note,
-      expiresAt = expiresAt,
+      note = obj.nonBlankString("note") ?: return null,
+      expiresAt = obj["expiresAt"].asLongOrNull() ?: return null,
       attention = obj.nonBlankString("attention"),
     )
   }
@@ -7861,14 +7577,7 @@ class ChatController internal constructor(
       modelProvider = resolved?.get("modelProvider").asStringOrNull()?.trim(),
       model = resolved?.get("model").asStringOrNull()?.trim(),
       // The entry is stored state; the ACK's resolved runtime is the current owner.
-      agentRuntimeId =
-        resolved
-          ?.get("agentRuntime")
-          .asObjectOrNull()
-          ?.get("id")
-          .asStringOrNull()
-          ?.trim()
-          ?.takeIf(String::isNotEmpty),
+      agentRuntimeId = resolved?.get("agentRuntime").asObjectOrNull().nonBlankString("id"),
       thinkingLevel = resolved?.get("thinkingLevel").asStringOrNull()?.trim(),
       thinkingLevels = parseThinkingLevels(resolved?.get("thinkingLevels")),
       entry = parseSessionEntry(entry, fallbackKey = key),
@@ -8097,6 +7806,7 @@ class ChatController internal constructor(
           label = if ("label" in clearedFields) null else applied.label,
           autoLabel = if ("autoLabel" in clearedFields) null else applied.autoLabel,
           displayName = if ("displayName" in clearedFields) null else applied.displayName,
+          subject = if ("subject" in clearedFields) null else applied.subject,
           category = if ("category" in clearedFields) null else applied.category,
         )
     }
@@ -8156,10 +7866,12 @@ class ChatController internal constructor(
       // A failed read patch must unlatch the episode so later snapshots retry.
       if (
         !patchSession(
-          key = key,
-          ownerAgentId = entry.ownerAgentId,
-          unread = false,
-          unreadExpectation = unreadExpectation,
+          ChatSessionPatch(
+            key = key,
+            ownerAgentId = entry.ownerAgentId,
+            unread = false,
+            unreadExpectation = unreadExpectation,
+          ),
         ) &&
         unreadPatchSessionKey == key
       ) {
@@ -8226,8 +7938,7 @@ class ChatController internal constructor(
     sessionKey: String,
   ): JsonObject? {
     val params = buildJsonObject { put("key", JsonPrimitive(sessionKey)) }
-    val response = requestGatewayBound(gatewayId, "sessions.describe", params.toString())
-    val root = json.parseToJsonElement(response).asObjectOrNull() ?: error("invalid sessions.describe response")
+    val root = requestGatewayJson(gatewayId, "sessions.describe", params).asObjectOrNull() ?: error("invalid sessions.describe response")
     return when (val session = root["session"]) {
       is JsonObject -> session
       JsonNull -> null
@@ -8245,6 +7956,12 @@ class ChatController internal constructor(
     } else {
       requestGatewayForGateway(gatewayId, method, paramsJson)
     }
+
+  private suspend fun requestGatewayJson(
+    gatewayId: String?,
+    method: String,
+    params: JsonObject,
+  ): JsonElement = json.parseToJsonElement(requestGatewayBound(gatewayId, method, params.toString()))
 
   private suspend fun requestSessionCreate(
     gatewayScope: ChatCacheScope?,
@@ -8297,7 +8014,11 @@ class ChatController internal constructor(
     }
   }
 
-  private fun currentCacheScope(): ChatCacheScope? = normalizedChatCacheScope(cacheScope())
+  private fun currentCacheScope(): ChatCacheScope? {
+    val current = cacheScope() ?: return null
+    val gatewayId = current.gatewayId.trim().takeIf { it.isNotEmpty() } ?: return null
+    return if (gatewayId == current.gatewayId) current else current.copy(gatewayId = gatewayId)
+  }
 
   private fun isSessionModelSelectionLocked(key: SessionSettingsKey): Boolean =
     (
@@ -8328,14 +8049,29 @@ class ChatController internal constructor(
   private fun normalizeThinking(raw: String): String = raw.trim().lowercase(Locale.US).ifEmpty { "off" }
 }
 
-private enum class ChatMetadataLoadState {
-  Unloaded,
-  Loaded,
-}
-
 // Group mutations enumerate whole stores; far past any realistic session count.
 private const val GROUP_MEMBER_FETCH_LIMIT = 10_000
 private const val FULL_MESSAGE_TEXT_MAX_CHARS = 1_000_000
+
+internal inline fun <T> runCatchingCancellable(block: () -> T): Result<T> =
+  try {
+    Result.success(block())
+  } catch (err: CancellationException) {
+    throw err
+  } catch (err: Throwable) {
+    Result.failure(err)
+  }
+
+private fun sessionRequestParams(
+  sessionKey: String,
+  agentId: String,
+  configure: JsonObjectBuilder.() -> Unit = {},
+): JsonObject =
+  buildJsonObject {
+    put("sessionKey", JsonPrimitive(sessionKey))
+    put("agentId", JsonPrimitive(agentId))
+    configure()
+  }
 
 private fun sessionListParams(
   ownerAgentId: String,
@@ -8418,12 +8154,8 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
       )
     }
 
-    "toolCall" -> {
-      parseToolActivityContent(obj, resultBlock = false)
-    }
-
-    "toolResult" -> {
-      parseToolActivityContent(obj, resultBlock = true)
+    "toolCall", "toolResult" -> {
+      parseToolActivityContent(obj, resultBlock = type == "toolResult")
     }
 
     else -> {
@@ -8543,6 +8275,7 @@ private fun toolPresentationArguments(args: JsonObject?): JsonObject? {
 private fun parseToolActivityContent(
   obj: JsonObject,
   resultBlock: Boolean,
+  topLevel: Boolean = false,
 ): ChatMessageContent? {
   // Match the web transcript aliases. Result envelopes often carry toolName,
   // not name; losing it creates a spurious generic "Tool" row.
@@ -8551,33 +8284,26 @@ private fun parseToolActivityContent(
       .firstNotNullOfOrNull(obj::nonBlankString)
       .orEmpty()
   val id =
-    listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId", "id").firstNotNullOfOrNull(obj::nonBlankString)
+    listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId").firstNotNullOfOrNull(obj::nonBlankString)
+      ?: if (topLevel) null else obj.nonBlankString("id")
   if (name.isEmpty() && id == null) return null
-  val args = (obj["arguments"] ?: obj["input"] ?: obj["args"]).asObjectOrNull()
+  // Transcript envelopes carry their own identity and arguments, not tool block fields.
+  val args = if (topLevel) null else (obj["arguments"] ?: obj["input"] ?: obj["args"]).asObjectOrNull()
+  val displayCall = unwrapToolCallForDisplay(name, args)
   val result = if (resultBlock) boundedToolText(toolResultText(obj["content"] ?: obj["result"] ?: obj["text"]), CHAT_TOOL_RESULT_MAX_CHARS) else null
   return ChatMessageContent(
     type = if (resultBlock) "toolResult" else "toolCall",
     toolActivity =
       ChatToolActivity(
         toolCallId = id,
-        name = name.ifEmpty { "tool" },
-        detail = toolDetail(args),
+        name = displayCall.name.ifEmpty { "tool" },
+        detail = toolDetail(displayCall.args),
         result = result,
         isError = isChatToolError(obj),
-        arguments = toolPresentationArguments(args),
+        arguments = toolPresentationArguments(displayCall.args),
+        browserTab = if (resultBlock && name == "browser" && !isChatToolError(obj)) parseChatBrowserTab(obj["details"]) else null,
       ),
   )
-}
-
-private fun parseTopLevelToolResult(obj: JsonObject): ChatMessageContent? {
-  val synthetic =
-    buildMap<String, JsonElement> {
-      put("type", JsonPrimitive("toolResult"))
-      listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId", "name", "toolName", "tool_name", "isError", "is_error", "content", "result", "text").forEach { key ->
-        obj[key]?.let { put(key, it) }
-      }
-    }
-  return parseToolActivityContent(JsonObject(synthetic), resultBlock = true)
 }
 
 private fun parseChatMediaContent(
@@ -8605,15 +8331,9 @@ private fun parseChatMediaContent(
   )
 }
 
-internal fun managedImageArtifactId(rawUrl: String?): String? {
-  val attachmentId = managedMediaAttachmentId(rawUrl) ?: return null
-  return "artifact_managed_image_$attachmentId"
-}
+internal fun managedImageArtifactId(rawUrl: String?): String? = managedMediaAttachmentId(rawUrl)?.let { "artifact_managed_image_$it" }
 
-internal fun managedMediaArtifactId(rawUrl: String?): String? {
-  val attachmentId = managedMediaAttachmentId(rawUrl) ?: return null
-  return "artifact_managed_media_$attachmentId"
-}
+internal fun managedMediaArtifactId(rawUrl: String?): String? = managedMediaAttachmentId(rawUrl)?.let { "artifact_managed_media_$it" }
 
 private fun managedMediaAttachmentId(rawUrl: String?): String? {
   val match =
@@ -8710,57 +8430,33 @@ private fun parseCreatedSessionKey(
     }
 }
 
-internal fun parseChatCommands(
-  json: Json,
-  commandsJson: String,
-): List<ChatCommandEntry> {
-  val root = json.parseToJsonElement(commandsJson).asObjectOrNull() ?: return emptyList()
-  val commands = root["commands"].asArrayOrNull() ?: return emptyList()
-  return commands.mapNotNull { item -> parseChatCommandEntry(item.asObjectOrNull()) }
+internal fun parseChatCommands(root: JsonObject?): List<ChatCommandEntry> {
+  val commands = root?.get("commands").asArrayOrNull() ?: return emptyList()
+  return commands.mapNotNull { item ->
+    val obj = item.asObjectOrNull() ?: return@mapNotNull null
+    val aliases =
+      obj["textAliases"]
+        .asArrayOrNull()
+        ?.mapNotNull { alias -> alias.asStringOrNull()?.trim()?.takeIf { it.startsWith("/") && it.length > 1 } }
+        ?.distinct()
+        .orEmpty()
+    val name =
+      obj["name"]
+        .asStringOrNull()
+        ?.trim()
+        ?.removePrefix("/")
+        ?.takeIf { it.isNotEmpty() }
+        ?: aliases.firstOrNull()?.removePrefix("/")
+        ?: return@mapNotNull null
+    ChatCommandEntry(
+      name = name,
+      description = obj["description"].asStringOrNull()?.trim().orEmpty(),
+      category = obj.nonBlankString("category"),
+      textAliases = aliases,
+      acceptsArgs = obj["acceptsArgs"].asBooleanOrNull() ?: false,
+    )
+  }
 }
-
-private fun parseChatCommandEntry(obj: JsonObject?): ChatCommandEntry? {
-  if (obj == null) return null
-  val aliases =
-    obj["textAliases"]
-      .asArrayOrNull()
-      ?.mapNotNull { alias -> alias.asStringOrNull()?.trim()?.takeIf { it.startsWith("/") && it.length > 1 } }
-      ?.distinct()
-      .orEmpty()
-  val name =
-    obj["name"]
-      .asStringOrNull()
-      ?.trim()
-      ?.removePrefix("/")
-      ?.takeIf { it.isNotEmpty() }
-      ?: aliases.firstOrNull()?.removePrefix("/")
-      ?: return null
-  return ChatCommandEntry(
-    name = name,
-    description = obj["description"].asStringOrNull()?.trim().orEmpty(),
-    category = obj.nonBlankString("category"),
-    textAliases = aliases,
-    acceptsArgs = obj["acceptsArgs"].asBooleanOrNull() ?: false,
-  )
-}
-
-internal data class MainSessionState(
-  val currentSessionKey: String,
-  val appliedMainSessionKey: String,
-)
-
-/**
- * Rewrite only the active "main" alias when the gateway publishes a new canonical main session key.
- */
-internal fun applyMainSessionKey(
-  currentSessionKey: String,
-  appliedMainSessionKey: String,
-  nextMainSessionKey: String,
-): MainSessionState =
-  MainSessionState(
-    currentSessionKey = if (currentSessionKey == appliedMainSessionKey) nextMainSessionKey else currentSessionKey,
-    appliedMainSessionKey = nextMainSessionKey,
-  )
 
 /**
  * Keep Compose item identity stable across history refreshes by matching existing messages to incoming copies.
@@ -8780,7 +8476,7 @@ internal fun reconcileMessageIds(
   return incoming.map { message ->
     val key = messageIdentityKey(message) ?: return@map message
     val matches = messagesByKey[key] ?: return@map message
-    val previousMessage = matches.removeFirstOrNull() ?: return@map message
+    val previousMessage = matches.removeFirst()
     if (matches.isEmpty()) {
       messagesByKey.remove(key)
     }
@@ -8840,12 +8536,8 @@ internal fun retainUnmatchedOptimisticMessages(
       unmatchedIncoming.indexOfFirst { incomingMessage ->
         incomingMessageConsumesOptimistic(incomingMessage, message)
       }
-    if (matchIndex >= 0) {
-      unmatchedIncoming.removeAt(matchIndex)
-      false
-    } else {
-      true
-    }
+    if (matchIndex >= 0) unmatchedIncoming.removeAt(matchIndex)
+    matchIndex < 0
   }
 }
 
@@ -8903,8 +8595,6 @@ private fun messageContentIdentityKey(message: ChatMessage): String? {
   return listOf(role, contentFingerprint).joinToString(separator = "|")
 }
 
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
-
 private fun parseSessionEditorAttachments(value: JsonElement?): List<SessionEditorAttachment> =
   value.asArrayOrNull()?.mapNotNull { element ->
     val attachment = element.asObjectOrNull() ?: return@mapNotNull null
@@ -8929,22 +8619,11 @@ private fun parseSessionEditorAttachments(value: JsonElement?): List<SessionEdit
     SessionEditorAttachment(mimeType = mimeType, data = data)
   } ?: emptyList()
 
-private fun JsonElement?.asJsonStringOrNull(): String? =
-  (this as? JsonPrimitive)
-    ?.takeIf(JsonPrimitive::isString)
-    ?.content
-
 private fun JsonElement?.asJsonNumberOrNull(): Double? =
   (this as? JsonPrimitive)
     ?.takeUnless(JsonPrimitive::isString)
     ?.content
     ?.toDoubleOrNull()
-
-private fun JsonElement?.asLongOrNull(): Long? =
-  when (this) {
-    is JsonPrimitive -> content.toLongOrNull()
-    else -> null
-  }
 
 private fun JsonElement?.asPositiveJsonLongOrNull(): Long? =
   (this as? JsonPrimitive)
@@ -8952,16 +8631,7 @@ private fun JsonElement?.asPositiveJsonLongOrNull(): Long? =
     ?.asLongOrNull()
     ?.takeIf { it > 0L }
 
-private fun JsonElement?.asBooleanOrNull(): Boolean? =
-  when (this) {
-    is JsonPrimitive -> content.toBooleanStrictOrNull()
-    else -> null
-  }
-
-private fun parseChatDiffStat(
-  element: JsonElement?,
-  includeFiles: Boolean,
-): ChatDiffStat? {
+private fun parseChatDiffStat(element: JsonElement?): ChatDiffStat? {
   val value = element.asObjectOrNull() ?: return null
 
   fun count(key: String): Int? =
@@ -8970,11 +8640,9 @@ private fun parseChatDiffStat(
       ?.takeIf { it in 0..Int.MAX_VALUE.toLong() }
       ?.toInt()
 
-  val files = if (includeFiles) count("files") ?: return null else null
   return ChatDiffStat(
     added = count("added") ?: return null,
     removed = count("removed") ?: return null,
-    files = files,
   )
 }
 
@@ -9074,6 +8742,9 @@ internal fun mergeChatSessionEntry(
     sessionId = next.sessionId ?: existing.sessionId,
     updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
     ownerAgentId = next.ownerAgentId ?: existing.ownerAgentId,
+    createdActorType = next.createdActorType ?: existing.createdActorType,
+    createdVia = next.createdVia ?: existing.createdVia,
+    subject = next.subject ?: existing.subject,
     classification = if (next.hasClassificationMetadata) next.classification else existing.classification,
     accountId = if (next.hasClassificationMetadata) next.accountId else existing.accountId,
     peerKind = if (next.hasClassificationMetadata) next.peerKind else existing.peerKind,
@@ -9089,12 +8760,20 @@ internal fun mergeChatSessionEntry(
     hasColorMetadata = existing.hasColorMetadata || next.hasColorMetadata,
     pinned = next.pinned ?: existing.pinned,
     archived = next.archived ?: existing.archived,
+    sharingRole = if (next.hasSharingRoleMetadata) next.sharingRole else existing.sharingRole,
+    visibility = if (next.hasVisibilityMetadata) next.visibility else existing.visibility,
+    hasSharingRoleMetadata = existing.hasSharingRoleMetadata || next.hasSharingRoleMetadata,
+    hasVisibilityMetadata = existing.hasVisibilityMetadata || next.hasVisibilityMetadata,
     unread = next.unread ?: existing.unread,
     lastReadAt = next.lastReadAt ?: existing.lastReadAt,
     markedUnreadAt =
       if (next.hasMarkedUnreadMetadata) next.markedUnreadAt else existing.markedUnreadAt,
     hasMarkedUnreadMetadata =
       existing.hasMarkedUnreadMetadata || next.hasMarkedUnreadMetadata,
+    snoozedUntil = if (next.hasSnoozedUntilMetadata) next.snoozedUntil else existing.snoozedUntil,
+    snoozedAt = if (next.hasSnoozedAtMetadata) next.snoozedAt else existing.snoozedAt,
+    hasSnoozedUntilMetadata = existing.hasSnoozedUntilMetadata || next.hasSnoozedUntilMetadata,
+    hasSnoozedAtMetadata = existing.hasSnoozedAtMetadata || next.hasSnoozedAtMetadata,
     agentStatus = if (next.hasAgentStatusMetadata) next.agentStatus else existing.agentStatus,
     hasAgentStatusMetadata = existing.hasAgentStatusMetadata || next.hasAgentStatusMetadata,
     observerDigest = observerDigest,
@@ -9141,6 +8820,10 @@ internal fun mergeChatSessionEntry(
         existing.hasActiveRunIdsMetadata || next.hasActiveRunIdsMetadata
       },
     parentSessionKey = next.parentSessionKey ?: existing.parentSessionKey,
+    worktreeId = if (next.hasWorktreeMetadata) next.worktreeId else existing.worktreeId,
+    hasWorktreeMetadata = next.hasWorktreeMetadata || existing.hasWorktreeMetadata,
+    spawnDepth = next.spawnDepth ?: existing.spawnDepth,
+    forkedFromParent = next.forkedFromParent ?: existing.forkedFromParent,
     spawnedBy = next.spawnedBy ?: existing.spawnedBy,
     hasActiveSubagentRun = next.hasActiveSubagentRun ?: existing.hasActiveSubagentRun,
     subagentRunState = next.subagentRunState ?: existing.subagentRunState,
@@ -9288,11 +8971,10 @@ private fun ChatSessionEntry.carriesSessionSettings(): Boolean =
     hasEffectiveFastModeMetadata
 
 private fun sameSessionSettings(
-  previous: ChatSessionEntry?,
+  previous: ChatSessionEntry,
   next: ChatSessionEntry,
 ): Boolean =
-  previous != null &&
-    previous.modelProvider == next.modelProvider &&
+  previous.modelProvider == next.modelProvider &&
     previous.model == next.model &&
     (previous.modelSelectionLocked == true) == (next.modelSelectionLocked == true) &&
     previous.agentRuntimeId == next.agentRuntimeId &&

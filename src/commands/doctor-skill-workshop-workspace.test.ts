@@ -113,7 +113,7 @@ async function createLegacyWorkspace(userContent = false, skillsPath = "skills")
       draft,
     );
   }
-  seedLegacyV15ProposalRows(state.env, [
+  await seedLegacyV15ProposalRows(state.env, [
     { record: created, workspaceDir, claimReleasedTime: null },
     { record: pending, workspaceDir, claimReleasedTime: null },
   ]);

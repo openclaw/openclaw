@@ -17,7 +17,7 @@ import {
   type UpdateRestartSentinelMeta,
 } from "./update-restart-sentinel-payload.js";
 import { getUpdateRun } from "./update-run-ledger.js";
-import type { UpdateRunResult } from "./update-runner-types.js";
+import type { UpdateRunResult } from "./update-run-result.js";
 
 export const CONTROL_PLANE_UPDATE_SENTINEL_META_ENV = "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META";
 // Internal helper/orchestrator correlation; never persisted as an operator setting.

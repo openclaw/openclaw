@@ -5,12 +5,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
-import { createDeferred, withTestTimeout } from "../helpers/promise.js";
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createPreparedVitestCliFixture } from "./run-vitest-bounded-fixture.test-support.js";
@@ -32,8 +32,15 @@ const preparedCli = createPreparedVitestCliFixture(
   repoRoot,
   entrypoints.map(({ script }) => script),
 );
-beforeAll(() => preparedCli.prepare());
-afterAll(() => preparedCli.cleanup());
+let fixtureReceipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  await preparedCli.prepare();
+  fixtureReceipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await fixtureReceipts.close();
+  await preparedCli.cleanup();
+});
 
 describe("Vitest CLI final outcome ownership", () => {
   it.for(
@@ -203,7 +210,7 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
-  if (args.includes("scripts/run-node.mjs")) {
+  if (args.includes("scripts/prepare-vitest-runtime.mjs")) {
     return spawn(process.execPath, ["-e", ""], {
       ...options, env: { ...options.env, NODE_OPTIONS: "" },
     });
@@ -255,18 +262,24 @@ syncBuiltinESMExports();
     },
   );
 
-  it.each(["success", "runtime-failure", "ai-failure", "prebuilt", "skip", "custom", "cancel"])(
+  it.for(["success", "runtime-failure", "ai-failure", "prebuilt", "skip", "custom", "cancel"])(
     "prepares the direct E2E reader generation once: %s",
     { timeout: 60_000 },
-    async (outcome) => {
+    async (outcome, { signal }) => {
       const root = tempDirs.make("oc-vt-preparation-");
       const receiptsPath = path.join(root, "events.jsonl");
       const pidPath = path.join(root, "builder.pid");
       const executable = path.join(root, "command.mjs");
       const preload = path.join(root, "preload.mjs");
+      const aiDeclarations = path.join(root, "ai-declarations");
+      if (outcome === "prebuilt") {
+        // A complete prebuilt generation includes the typed AI package.
+        fs.writeFileSync(aiDeclarations, "");
+      }
       fs.writeFileSync(
         executable,
         `import fs from "node:fs";
+${fixtureReceiptClientSource(fixtureReceipts.endpoint)}
 const kind = process.argv[2];
 const record = (event) => fs.appendFileSync(${JSON.stringify(receiptsPath)}, JSON.stringify({
   kind, event, pid: process.pid, shard: process.argv[3],
@@ -276,22 +289,36 @@ const record = (event) => fs.appendFileSync(${JSON.stringify(receiptsPath)}, JSO
 record("start");
 if (kind === "runtime" && ${JSON.stringify(outcome)} === "cancel") {
   fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+  sendReceipt(${JSON.stringify(pidPath)}, "ready");
   setInterval(() => {}, 1000);
 } else {
+  const failed = ${JSON.stringify(outcome)} === kind + "-failure";
+  if (kind === "ai" && !failed) {
+    fs.writeFileSync(${JSON.stringify(aiDeclarations)}, "");
+  }
   record("end");
-  process.exit(${JSON.stringify(outcome)} === kind + "-failure" ? 7 : 0);
+  process.exit(failed ? 7 : 0);
 }
 `,
       );
       // Preserve the real CLI and managed process owners; replace only the
       // expensive executables so build/read admission remains observable.
+      // The stub AI build publishes its declarations as a fixture receipt, so
+      // the declaration check sees the stub's output, not the checkout's dist.
       fs.writeFileSync(
         preload,
         `import cp from "node:child_process";
+import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+const aiDist = ${JSON.stringify(path.join(repoRoot, "packages/ai/dist") + path.sep)};
+const existsSync = fs.existsSync;
+fs.existsSync = (entry) =>
+  typeof entry === "string" && entry.startsWith(aiDist) && entry.endsWith(".d.mts")
+    ? existsSync(${JSON.stringify(aiDeclarations)})
+    : existsSync(entry);
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
-  const kind = args.includes("scripts/run-node.mjs") ? "runtime"
+  const kind = args.includes("scripts/prepare-vitest-runtime.mjs") ? "runtime"
     : args.includes("scripts/tsdown-build.mts") ? "ai"
     : args.some(arg => arg === "vitest" || arg.endsWith("/vitest.mjs")) ? "reader" : null;
   return kind ? spawn(process.execPath, [${JSON.stringify(executable)}, kind,
@@ -333,17 +360,35 @@ syncBuiltinESMExports();
       child.stderr.on("data", (chunk) => {
         output += chunk;
       });
-      const closed = waitForChildClose(child, 15_000).catch((error: unknown) => error);
-      const stopped = createDeferred();
-      child.once("close", () => stopped.resolve());
+      const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          child.once("error", reject);
+          child.once("close", (code, childSignal) => resolve({ code, signal: childSignal }));
+        },
+      );
       let builderPid: number | undefined;
       try {
         if (outcome === "cancel") {
-          builderPid = await waitForPidFile(pidPath, 5_000);
+          // A receipt can trail CLI settlement; the complete PID was written before it.
+          await withinTest(
+            Promise.race([
+              fixtureReceipts.waitFor(pidPath, "ready"),
+              closed.then(() => {
+                if (!fs.existsSync(pidPath) || !fs.readFileSync(pidPath, "utf8").trim()) {
+                  throw new Error(`timeout waiting for pid in ${pidPath}`);
+                }
+              }),
+            ]),
+            signal,
+          );
+          builderPid = Number.parseInt(fs.readFileSync(pidPath, "utf8"), 10);
           child.kill("SIGTERM");
         }
         const failed = outcome.endsWith("-failure") || outcome === "cancel";
-        expect(await closed, output).toEqual({ code: failed ? 1 : 0, signal: null });
+        expect(await withinTest(closed, signal), output).toEqual({
+          code: failed ? 1 : 0,
+          signal: null,
+        });
         const events = fs
           .readFileSync(receiptsPath, "utf8")
           .trim()
@@ -382,15 +427,19 @@ syncBuiltinESMExports();
           expect(reader.skip).toBe(outcome === "skip" ? "1" : "");
         }
         for (const workerPid of new Set(events.map(({ pid }) => pid))) {
-          await waitForDead(workerPid, 5_000);
+          // CLI completion follows managed builder and reader child/group joins.
+          expect(isProcessAlive(workerPid)).toBe(false);
         }
       } finally {
         if (child.exitCode === null && child.signalCode === null) {
           child.kill("SIGTERM");
         }
-        await withTestTimeout(stopped.promise, 5_000, "E2E preparation CLI cleanup");
+        await closed;
+        builderPid ??= fs.existsSync(pidPath)
+          ? Number.parseInt(fs.readFileSync(pidPath, "utf8"), 10)
+          : undefined;
         if (builderPid) {
-          await waitForDead(builderPid, 5_000);
+          expect(isProcessAlive(builderPid)).toBe(false);
         }
       }
     },

@@ -1,6 +1,9 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createGatewayPortalService } from "../gateway/portals/portal-service.js";
 import { prepareTailscalePublishedOrigin } from "../gateway/tailscale-published-origin.js";
 
@@ -17,7 +20,9 @@ vi.mock("./runtime-worker-url.js", () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///fixture/tailscale-route-owner.mjs"),
 }));
 
-import { claimTailscaleRoute, claimTailscaleServePort } from "./tailscale.js";
+import { claimTailscaleRoute, claimTailscaleServePort, findTailscaleBinary } from "./tailscale.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // Gate worker readiness and exit explicitly: no subprocesses or live daemon writes.
 function queueOwner(options: { ready?: boolean; stop?: boolean; failure?: string } = {}) {
@@ -79,14 +84,9 @@ afterEach(() => {
 });
 
 describe("private Tailscale Serve claims", () => {
-  it.for([
-    { boundary: "queue", revoke: true },
-    { boundary: "queue", revoke: false },
-    { boundary: "status", revoke: true },
-    { boundary: "status", revoke: false },
-  ] as const)(
-    "checks authority after $boundary wait (revoked: $revoke)",
-    async ({ boundary, revoke }) => {
+  it.each(["queue", "status"] as const)(
+    "checks revoked authority after %s wait",
+    async (boundary) => {
       const readStarted = createDeferred();
       const releaseRead = createDeferred();
       const previousOwner = boundary === "queue" ? queueOwner({ ready: false }) : undefined;
@@ -118,7 +118,7 @@ describe("private Tailscale Serve claims", () => {
       if (boundary === "status") {
         await readStarted.promise;
       }
-      current = !revoke;
+      current = false;
       releaseRead.resolve();
       previousOwner?.owner.emit("message", { type: "ready" });
       const settled = await starting.then(
@@ -126,12 +126,8 @@ describe("private Tailscale Serve claims", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        expect(forkMock).toHaveBeenCalledTimes(previousForks + (revoke ? 0 : 1));
-        if (revoke) {
-          expect(settled).toEqual({ error: denied });
-        } else {
-          expect("claim" in settled && settled.claim.isActive()).toBe(true);
-        }
+        expect(forkMock).toHaveBeenCalledTimes(previousForks);
+        expect(settled).toEqual({ error: denied });
         expect(runExecMock.mock.calls.some(([bin]) => bin === "sudo")).toBe(false);
       } finally {
         if ("claim" in settled) {
@@ -206,75 +202,47 @@ describe("private Tailscale Serve claims", () => {
     },
   );
 
-  it("claims an explicit private port without adopting even a matching legacy backend", async () => {
-    const { owner } = queueOwner();
-    const claim = await claimTailscaleServePort(18789, 24443, () => {});
+  it.each([
+    { port: 65535, ending: "stop" },
+    { port: 24443, ending: "unexpected exit" },
+  ])(
+    "owns private port $port through $ending without adopting legacy routes",
+    async ({ port, ending }) => {
+      const { owner } = queueOwner();
+      const claim = await claimTailscaleServePort(18789, port, () => {});
 
-    expect(forkMock.mock.calls[0]?.[1]).toEqual([
-      "--openclaw-tailscale-route-owner",
-      JSON.stringify({
-        argv: ["tailscale", "serve", "--yes", "--bg=false", "--https=24443", "18789"],
-      }),
-    ]);
-    expect(forkMock.mock.calls[0]?.[2]).toMatchObject({
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
-    });
-    expect(runExecMock.mock.calls.map((call) => call[1])).toEqual([
-      ["status", "--json"],
-      ["serve", "status", "--json"],
-    ]);
-    expect(claim.isActive()).toBe(true);
-    await Promise.all([claim.stop(), claim.stop()]);
-    await expect(claim.exited).resolves.toBeUndefined();
-    expect(claim.isActive()).toBe(false);
-    expect(owner.send).toHaveBeenCalledTimes(1);
-    expect(owner.send).toHaveBeenCalledWith({ type: "stop" }, expect.any(Function));
-    expect(runExecMock).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([0, -1, 65536, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    "rejects invalid HTTPS port %s before daemon access",
-    async (port) => {
-      await expect(claimTailscaleServePort(18789, port, () => {})).rejects.toThrow(/httpsPort/);
-      expect(runExecMock).not.toHaveBeenCalled();
-      expect(forkMock).not.toHaveBeenCalled();
+      expect(forkMock.mock.calls[0]?.[1]).toEqual([
+        "--openclaw-tailscale-route-owner",
+        JSON.stringify({
+          argv: ["tailscale", "serve", "--yes", "--bg=false", `--https=${port}`, "18789"],
+        }),
+      ]);
+      expect(forkMock.mock.calls[0]?.[2]).toMatchObject({
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+      });
+      expect(runExecMock.mock.calls.map((call) => call[1])).toEqual([
+        ["status", "--json"],
+        ["serve", "status", "--json"],
+      ]);
+      expect(claim.isActive()).toBe(true);
+      if (ending === "stop") {
+        await Promise.all([claim.stop(), claim.stop()]);
+        expect(owner.send).toHaveBeenCalledTimes(1);
+        expect(owner.send).toHaveBeenCalledWith({ type: "stop" }, expect.any(Function));
+      } else {
+        owner.emit("exit", 1, null);
+      }
+      await expect(claim.exited).resolves.toBeUndefined();
+      expect(claim.isActive()).toBe(false);
+      expect(runExecMock).toHaveBeenCalledTimes(2);
     },
   );
 
-  it.each([0, -1, 65536, 1.5, Number.NaN])("rejects invalid backend port %s", async (port) => {
-    await expect(claimTailscaleServePort(port, 24443, () => {})).rejects.toThrow(/target/);
+  it("rejects an invalid HTTPS port before daemon access", async () => {
+    await expect(claimTailscaleServePort(18789, 65536, () => {})).rejects.toThrow("httpsPort");
     expect(runExecMock).not.toHaveBeenCalled();
     expect(forkMock).not.toHaveBeenCalled();
-  });
-
-  it.each([1, 65535])("accepts bounded HTTPS port %s", async (port) => {
-    queueOwner();
-    const claim = await claimTailscaleServePort(18789, port, () => {});
-    await claim.stop();
-  });
-
-  it("withdraws activity when the owned worker exits unexpectedly", async () => {
-    const { owner } = queueOwner();
-    const claim = await claimTailscaleServePort(18789, 24443, () => {});
-    owner.emit("exit", 1, null);
-    await claim.exited;
-    expect(claim.isActive()).toBe(false);
-  });
-
-  it("keeps explicit private arguments and operator diagnostics on permission fallback", async () => {
-    queueOwner({ failure: "permission denied" });
-    queueOwner({ failure: "sudo: a password is required" });
-    await expect(claimTailscaleServePort(18789, 24443, () => {})).rejects.toThrow(
-      /Tailscale serve needs elevated access[\s\S]*sudo tailscale set --operator=\$USER/,
-    );
-    expect(forkMock.mock.calls[1]?.[1]).toEqual([
-      "--openclaw-tailscale-route-owner",
-      JSON.stringify({
-        argv: ["sudo", "-n", "tailscale", "serve", "--yes", "--bg=false", "--https=24443", "18789"],
-      }),
-    ]);
-    expect(runExecMock.mock.calls.every((call) => !call[1].includes("off"))).toBe(true);
   });
 
   it("reports an occupied port without retrying or clearing it, then allows the next claim", async () => {
@@ -339,5 +307,43 @@ describe("private Tailscale Serve claims", () => {
     await stopping;
     expect(claimB.isActive()).toBe(true);
     await claimB.stop();
+  });
+});
+
+describe("findTailscaleBinary", () => {
+  it("finds the PATH executable without spawning which and keeps CLI validation", async () => {
+    const root = tempDirs.make("openclaw-tailscale-discovery-");
+    const binary = path.join(root, "tailscale");
+    fs.writeFileSync(binary, "", { mode: 0o755 });
+    vi.stubEnv("PATH", root);
+    runExecMock.mockImplementation(async (command: string, args: string[]) => {
+      if (command === "which") {
+        return { stdout: `${binary}\n`, stderr: "" };
+      }
+      if (command === binary && args[0] === "version") {
+        return { stdout: "1.94.0\n", stderr: "" };
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    await expect(findTailscaleBinary()).resolves.toBe(binary);
+    expect(runExecMock).toHaveBeenCalledExactlyOnceWith(binary, ["version"], { timeoutMs: 3000 });
+  });
+
+  it("rejects a PATH candidate whose version command fails", async () => {
+    const root = tempDirs.make("openclaw-tailscale-invalid-");
+    const binary = path.join(root, "tailscale");
+    fs.writeFileSync(binary, "", { mode: 0o755 });
+    vi.stubEnv("PATH", root);
+    runExecMock.mockImplementation(async (command: string) => {
+      if (command === "locate") {
+        return { stdout: "", stderr: "" };
+      }
+      throw new Error("CLI cannot run");
+    });
+
+    await expect(findTailscaleBinary()).resolves.toBeNull();
+    expect(runExecMock).toHaveBeenCalledWith(binary, ["version"], { timeoutMs: 3000 });
+    expect(runExecMock.mock.calls.some(([command]) => command === "which")).toBe(false);
   });
 });

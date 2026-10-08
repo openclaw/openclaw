@@ -27,24 +27,55 @@ type ChannelMediaContractApi = {
 };
 type ChannelMediaRootResolver = keyof ChannelMediaContractApi;
 
-function acceptsResolver(
-  loaded: ChannelMediaContractApi,
-  resolver: ChannelMediaRootResolver,
-): boolean {
-  return typeof loaded[resolver] === "function";
+function resolveInstalledChannelMediaContractOwners(params: {
+  channelId: string;
+  cfg: OpenClawConfig;
+}): PluginManifestRecord[] {
+  try {
+    // Read the current plugin metadata generation only. Attachment-root
+    // resolution must never start plugin discovery or index work of its own.
+    const snapshot = getCurrentPluginMetadataSnapshotRuntime({
+      config: params.cfg,
+      allowScopedSnapshot: true,
+      allowWorkspaceScopedSnapshot: true,
+    });
+    const normalizedConfig = normalizePluginsConfig(params.cfg.plugins);
+    // Only operator-enabled official npm installs may grant attachment-root authority.
+    return (snapshot?.manifestRegistry.plugins ?? [])
+      .filter(
+        (plugin) =>
+          plugin.origin === "global" &&
+          plugin.trustedOfficialInstall === true &&
+          plugin.channels.some(
+            (channel) => normalizeOptionalLowercaseString(channel) === params.channelId,
+          ) &&
+          resolveManifestOwnerBasePolicyBlock({ plugin, normalizedConfig }) === null,
+      )
+      .toSorted((left, right) => left.id.localeCompare(right.id));
+  } catch {
+    // Snapshot reads must never turn a missing channel artifact into a hard failure.
+    return [];
+  }
 }
 
-function loadBundledChannelMediaContractApi(
-  channelId: string,
-  resolver: ChannelMediaRootResolver,
-): ChannelMediaContractApi | undefined {
+function findChannelMediaContractApi(params: {
+  channelId: string | null | undefined;
+  cfg: OpenClawConfig;
+  resolver: ChannelMediaRootResolver;
+}): ChannelMediaContractApi | undefined {
+  const channelId = normalizeOptionalLowercaseString(params.channelId);
+  if (!channelId) {
+    return undefined;
+  }
   try {
-    // Media-root resolution must stay a narrow artifact load, not full channel bootstrap.
+    // Resolve only the narrow contract artifact, never the full channel bootstrap.
     const loaded = loadBundledPluginPublicArtifactModuleSync<ChannelMediaContractApi>({
       dirName: channelId,
       artifactBasename: CHANNEL_MEDIA_CONTRACT_ARTIFACT,
     });
-    return acceptsResolver(loaded, resolver) ? loaded : undefined;
+    if (typeof loaded[params.resolver] === "function") {
+      return loaded;
+    }
   } catch (error) {
     if (
       !(
@@ -55,118 +86,23 @@ function loadBundledChannelMediaContractApi(
       throw error;
     }
   }
-
-  return undefined;
-}
-
-function declaresChannel(plugin: PluginManifestRecord, channelId: string): boolean {
-  return plugin.channels.some(
-    (ownedChannelId) => normalizeOptionalLowercaseString(ownedChannelId) === channelId,
-  );
-}
-
-type ChannelMediaContractOwner = Pick<PluginManifestRecord, "id" | "rootDir">;
-
-/**
- * Lists installed official channel plugins that may own a channel's media contract.
- *
- * Bundled owners are resolved from the bundled plugin surface; workspace and
- * community installs never gain attachment-root authority, so only
- * host-verified official npm installs qualify. Current operator policy still
- * wins over install provenance: denylisted, explicitly disabled, and
- * out-of-allowlist plugins lose attachment-root authority before their artifact
- * executes or supplies file-access roots.
- */
-function listTrustedInstalledChannelMediaContractOwners(params: {
-  channelId: string;
-  cfg: OpenClawConfig;
-  plugins: readonly PluginManifestRecord[];
-}): ChannelMediaContractOwner[] {
-  const channelId = normalizeOptionalLowercaseString(params.channelId);
-  if (!channelId) {
-    return [];
-  }
-  const normalizedConfig = normalizePluginsConfig(params.cfg.plugins);
-  return params.plugins
-    .filter(
-      (plugin) =>
-        plugin.origin === "global" &&
-        plugin.trustedOfficialInstall === true &&
-        declaresChannel(plugin, channelId) &&
-        resolveManifestOwnerBasePolicyBlock({ plugin, normalizedConfig }) === null,
-    )
-    .map((plugin) => ({ id: plugin.id, rootDir: plugin.rootDir }))
-    .toSorted((left, right) => left.id.localeCompare(right.id));
-}
-
-function resolveInstalledChannelMediaContractOwners(params: {
-  channelId: string;
-  cfg: OpenClawConfig;
-}): ChannelMediaContractOwner[] {
-  try {
-    // Read the current plugin metadata generation only. Attachment-root
-    // resolution must never start plugin discovery or index work of its own.
-    const snapshot = getCurrentPluginMetadataSnapshotRuntime({
-      config: params.cfg,
-      allowScopedSnapshot: true,
-      allowWorkspaceScopedSnapshot: true,
-    });
-    if (!snapshot) {
-      return [];
-    }
-    return listTrustedInstalledChannelMediaContractOwners({
-      channelId: params.channelId,
-      cfg: params.cfg,
-      plugins: snapshot.manifestRegistry.plugins,
-    });
-  } catch {
-    // Snapshot reads must never turn a missing channel artifact into a hard failure.
-    return [];
-  }
-}
-
-function loadInstalledChannelMediaContractApi(params: {
-  channelId: string;
-  cfg: OpenClawConfig;
-  resolver: ChannelMediaRootResolver;
-}): ChannelMediaContractApi | undefined {
-  for (const owner of resolveInstalledChannelMediaContractOwners({
-    channelId: params.channelId,
-    cfg: params.cfg,
-  })) {
+  for (const owner of resolveInstalledChannelMediaContractOwners({ channelId, cfg: params.cfg })) {
     try {
       const loaded = loadPluginPublicArtifactModuleSync<ChannelMediaContractApi>({
         pluginRoot: owner.rootDir,
         artifactBasename: CHANNEL_MEDIA_CONTRACT_ARTIFACT,
         origin: "global",
       });
-      if (acceptsResolver(loaded, params.resolver)) {
+      if (typeof loaded[params.resolver] === "function") {
         return loaded;
       }
     } catch (error) {
-      if (error instanceof MissingPublicSurfaceError) {
-        continue;
+      if (!(error instanceof MissingPublicSurfaceError)) {
+        throw error;
       }
-      throw error;
     }
   }
   return undefined;
-}
-
-function findChannelMediaContractApi(params: {
-  channelId: string | null | undefined;
-  cfg: OpenClawConfig;
-  resolver: ChannelMediaRootResolver;
-}) {
-  const normalized = normalizeOptionalLowercaseString(params.channelId);
-  if (!normalized) {
-    return undefined;
-  }
-  return (
-    loadBundledChannelMediaContractApi(normalized, params.resolver) ??
-    // External official packages expose the contract from their installed root.
-    loadInstalledChannelMediaContractApi({ ...params, channelId: normalized })
-  );
 }
 
 /** Resolves local inbound attachment roots from the channel named in a message context. */
@@ -192,13 +128,10 @@ export function resolveChannelInboundAttachmentRootsForChannel(params: {
     cfg: params.cfg,
     resolver: "resolveInboundAttachmentRoots",
   });
-  if (contractApi?.resolveInboundAttachmentRoots) {
-    return contractApi.resolveInboundAttachmentRoots({
-      cfg: params.cfg,
-      accountId: params.accountId ?? undefined,
-    });
-  }
-  return undefined;
+  return contractApi?.resolveInboundAttachmentRoots?.({
+    cfg: params.cfg,
+    accountId: params.accountId ?? undefined,
+  });
 }
 
 /** Resolves remote staging roots for inbound channel attachments without loading full channel code. */
@@ -211,11 +144,8 @@ export function resolveChannelRemoteInboundAttachmentRoots(params: {
     cfg: params.cfg,
     resolver: "resolveRemoteInboundAttachmentRoots",
   });
-  if (contractApi?.resolveRemoteInboundAttachmentRoots) {
-    return contractApi.resolveRemoteInboundAttachmentRoots({
-      cfg: params.cfg,
-      accountId: params.ctx.AccountId,
-    });
-  }
-  return undefined;
+  return contractApi?.resolveRemoteInboundAttachmentRoots?.({
+    cfg: params.cfg,
+    accountId: params.ctx.AccountId,
+  });
 }

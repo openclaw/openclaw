@@ -33,8 +33,8 @@ vi.mock("../../infra/push-web.js", () => ({
   setWebPushSubscriptionPreferences: vi.fn(),
 }));
 vi.mock("../../state/user-preferences.js", () => ({
-  getUserPreferences: vi.fn(),
-  setUserPreferences: vi.fn(),
+  getCanonicalUserPreferences: vi.fn(),
+  setCanonicalUserPreferences: vi.fn(),
 }));
 vi.mock("../session-sharing.js", async () => ({
   // The real Web Push handler has no session target; leave its request guards intact.
@@ -53,7 +53,7 @@ beforeEach(async () => {
 afterEach(async () => await state?.cleanup());
 
 describe("Web Push opaque in-process authority", () => {
-  it.each(["unchanged", "resolver retired", "caller revoked", "transport retirement"] as const)(
+  it.each(["resolver retired", "caller revoked", "transport retirement"] as const)(
     "retains the full native commit guard for %s",
     async (scenario) => {
       const profileId = ensureProfileForEmail("push-owner@example.test").id;

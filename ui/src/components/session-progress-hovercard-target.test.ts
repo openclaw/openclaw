@@ -59,6 +59,7 @@ function mountHovercard(sessionKey = "global", holdProgress = false) {
       assistantAgentId: "main",
       client: { request },
       hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
         features: {
           methods: ["progressCard.get", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
         },

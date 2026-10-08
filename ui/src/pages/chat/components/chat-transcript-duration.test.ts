@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { render, type ReactiveControllerHost } from "lit";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatStateController } from "../chat-state-controller.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import {
@@ -59,13 +60,13 @@ describe("completed-work duration", () => {
         transcript.hostConnected();
         await flushDeferredRowPrune();
         const duration = () => container.querySelector(".chat-activity-group__label");
-        expect(duration()?.textContent).toBe("Worked for 27m 35s");
+        expect(duration()?.textContent).toBe("Worked for 27 minutes, 35 seconds");
         props.selectedSession.runtimeMs = 1_660_000;
         rerender();
-        expect(duration()?.textContent).toBe("Worked for 27m 40s");
+        expect(duration()?.textContent).toBe("Worked for 27 minutes, 40 seconds");
         props.messages = messages.slice(1);
         rerender();
-        expect(duration()?.textContent).toBe("Worked for 27m 40s");
+        expect(duration()?.textContent).toBe("Worked for 27 minutes, 40 seconds");
         props.messages = messages;
         props.selectedSession.lastRunId = "unrelated-run";
         rerender();
@@ -92,6 +93,69 @@ describe("completed-work duration", () => {
       }
     },
   );
+
+  it("refreshes the work disclosure callback when its render lifecycle is replaced", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(60_000);
+    const runId = "restored-work";
+    const props = threadProps("pane-redraw-owner", "agent:main:dashboard:redraw-owner", [
+      {
+        role: "user",
+        content: "Inspect",
+        timestamp: 1_000,
+        __openclaw: { idempotencyKey: `${runId}:user` },
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "read-owner",
+        content: "Read complete",
+        timestamp: 2_000,
+        runId,
+      },
+      { role: "assistant", content: "Inspection complete", timestamp: 3_000, runId },
+    ]);
+    props.showToolCalls = true;
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    const host: ReactiveControllerHost = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: rerender,
+      updateComplete: Promise.resolve(true),
+    };
+    const controller = new ChatStateController(host);
+    controller.hostConnected();
+    const original = controller.createRenderLifecycle();
+    props.onRequestUpdate = () => original.invalidate();
+    try {
+      rerender();
+      transcript.hostConnected();
+      await vi.advanceTimersByTimeAsync(0);
+      const replacement = controller.createRenderLifecycle();
+      props.onRequestUpdate = () => replacement.invalidate();
+      rerender();
+      const disclosure = container.querySelector<HTMLButtonElement>(".chat-work-group > button");
+      expect(disclosure).not.toBeNull();
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+      disclosure?.click();
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
+      expect(container.textContent).toContain("read");
+      disclosure?.click();
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+      expect(container.textContent).not.toContain("read");
+      expect(container.textContent).toContain("Inspection complete");
+    } finally {
+      controller.hostDisconnected();
+      transcript.hostDisconnected();
+      container.remove();
+      vi.useRealTimers();
+    }
+  });
 
   it.each([false, true])(
     "preserves independent and steered run ownership (steer=%s)",
@@ -152,7 +216,11 @@ describe("completed-work duration", () => {
           summaries.map(
             (summary) => summary.querySelector(".chat-activity-group__label")?.textContent ?? null,
           ),
-        ).toEqual(steer ? ["Worked for 20s", "Worked for 20s"] : ["Worked", "Worked for 20s"]);
+        ).toEqual(
+          steer
+            ? ["Worked for 20 seconds", "Worked for 20 seconds"]
+            : ["Worked", "Worked for 20 seconds"],
+        );
       } finally {
         transcript.hostDisconnected();
         container.remove();

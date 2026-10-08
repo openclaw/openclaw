@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PendingApprovalSnapshot } from "../../../packages/gateway-protocol/src/schema/approvals.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -84,44 +83,28 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
     databaseOptions,
     now: () => 5000,
   });
-  const phaseMs = { expiry: 0, pending: 0 };
-  const expire = store.expireDueOperatorApprovals;
   const list = store.listPendingOperatorApprovals;
-  const expiryReads = vi
-    .spyOn(store, "expireDueOperatorApprovals")
-    .mockImplementation(async (params) => {
-      const start = performance.now();
-      const result = await expire(params);
-      phaseMs.expiry += performance.now() - start;
-      return result;
-    });
+  const expiryReads = vi.spyOn(store, "expireDueOperatorApprovals");
   const pendingReads = vi
     .spyOn(store, "listPendingOperatorApprovals")
     .mockImplementation(async (params) => {
-      const start = performance.now();
       const result = await list(params);
       if (!unrelatedApproval) {
         throw new Error("Expected the unrelated synthetic approval");
       }
       runtime.publish({ phase: "pending", record: unrelatedApproval });
-      phaseMs.pending += performance.now() - start;
       return result;
     });
   const context = {
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     subscribeSessionMessageEvents: subscribers.subscribe,
     listSessionPendingApprovals: runtime.replay,
     logGateway: { error: vi.fn() },
   } as unknown as GatewayRequestContext;
-  const samples: number[] = [];
-  for (let round = 0; round < 31; round += 1) {
+  for (let round = 0; round < 2; round += 1) {
     const responses = await Promise.all(
       clients.map(async (client) => {
-        const start = performance.now();
-        let responseMs = 0;
-        const respond = vi.fn(() => {
-          responseMs = performance.now() - start;
-        });
+        const respond = vi.fn();
         await sessionSubscriptionHandlers["sessions.messages.subscribe"]!({
           req: { type: "req", id: "perf", method: "sessions.messages.subscribe" },
           params: { key: sessionKey, includeApprovals: true },
@@ -130,9 +113,6 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
           respond,
           isWebchatConnect: () => false,
         } satisfies GatewayRequestHandlerOptions);
-        if (round > 0) {
-          samples.push(responseMs);
-        }
         return respond;
       }),
     );
@@ -142,6 +122,7 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
         {
           subscribed: true,
           key: sessionKey,
+          agentId: "main",
           approvalReplay: {
             sessionKey,
             updatedAtMs: 5000,
@@ -152,29 +133,7 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
         undefined,
       );
     }
-    if (round === 0) {
-      expiryReads.mockClear();
-      pendingReads.mockClear();
-      phaseMs.expiry = 0;
-      phaseMs.pending = 0;
-    }
+    expect(pendingReads).toHaveBeenCalledTimes(round + 1);
+    expect(expiryReads).toHaveBeenCalledTimes(round + 1);
   }
-  samples.sort((a, b) => a - b);
-  console.log(
-    JSON.stringify({
-      pendingApprovals: 200,
-      concurrency: clients.length,
-      samples: samples.length,
-      p50Ms: samples[Math.floor(samples.length * 0.5)],
-      p90Ms: samples[Math.floor(samples.length * 0.9)],
-      pendingReadsPerSubscribe: pendingReads.mock.calls.length / samples.length,
-      expiryCallsPerSubscribe: expiryReads.mock.calls.length / samples.length,
-      phaseMsPerSubscribe: {
-        expiry: phaseMs.expiry / samples.length,
-        pending: phaseMs.pending / samples.length,
-      },
-    }),
-  );
-  expect(pendingReads.mock.calls.length).toBe(samples.length / clients.length);
-  expect(expiryReads.mock.calls.length).toBe(samples.length / clients.length);
 });

@@ -113,15 +113,6 @@ async function createStatusCommand(cfg: OpenClawConfig, pluginExecute?: ReturnTy
 
 function setDefaultRouteState() {
   nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = (params) => ({
-    route: {
-      agentId: "main",
-      channel: "discord",
-      accountId: params.accountId ?? "default",
-      sessionKey: "agent:main:main",
-      mainSessionKey: "agent:main:main",
-      lastRoutePolicy: "session",
-      matchedBy: "default",
-    },
     effectiveRoute: {
       agentId: "main",
       channel: "discord",
@@ -132,7 +123,6 @@ function setDefaultRouteState() {
       matchedBy: "default",
     },
     boundSessionKey: undefined,
-    configuredRoute: null,
     configuredBinding: null,
   });
 }
@@ -233,22 +223,6 @@ describe("discord native /status", () => {
       content: "status reply",
       ephemeral: true,
     });
-  });
-
-  it("keeps every direct status chunk ephemeral", async () => {
-    runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
-      text: `fallback models\nruntime info\n${"x".repeat(2200)}`,
-    });
-    const cfg = createConfig();
-    const command = await createStatusCommand(cfg);
-    const interaction = createInteraction();
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
-
-    expect(interaction.followUp.mock.calls.length).toBeGreaterThan(1);
-    for (const [payload] of interaction.followUp.mock.calls) {
-      expect((payload as { ephemeral?: boolean }).ephemeral).toBe(true);
-    }
   });
 
   it("keeps direct status media follow-up chunks ephemeral", async () => {

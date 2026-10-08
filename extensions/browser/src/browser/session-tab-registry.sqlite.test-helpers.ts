@@ -1,6 +1,8 @@
 // Shared shapes for the durable session tab registry tests. The registry module
 // is imported fresh per test, so its types are re-declared here rather than
 // exported from production code.
+import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { BrowserSessionTabAuthority } from "../browser-runtime-state.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { BrowserTabOwnership } from "./client.types.js";
 import type { ResolvedBrowserConfig } from "./config.js";
@@ -41,7 +43,7 @@ export type CloseTab = (tab: {
   profile?: string;
 }) => Promise<void>;
 
-type CleanupParams = {
+type CleanupParams = SessionEntryCurrentPreparation & {
   isCurrent?: () => boolean;
   closeTab?: CloseTab;
   closeDurableTab?: (
@@ -50,6 +52,7 @@ type CleanupParams = {
   ) => Promise<CloseTrackedCdpTargetResult>;
   getResolvedBrowserConfig?: () => ResolvedBrowserConfig | null;
   onWarn?: (message: string) => void;
+  onDebug?: (message: string) => void;
 };
 
 export type CloseOptions = {
@@ -59,6 +62,12 @@ export type CloseOptions = {
 };
 
 export type RegistryModule = {
+  filterTrackedSessionBrowserTabs<T extends { targetId: string; tabId?: string }>(
+    params: Pick<TabIdentity, "sessionKey" | "route" | "profile"> & {
+      tabs: readonly T[];
+      authority?: BrowserSessionTabAuthority;
+    },
+  ): Promise<T[]>;
   trackSessionBrowserTab(params: TabIdentity & { now?: number }): Promise<DurableTab | undefined>;
   touchSessionBrowserTab(params: TabIdentity & { now?: number }): Promise<void>;
   untrackSessionBrowserTab(params: TabIdentity): Promise<void>;

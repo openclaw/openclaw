@@ -66,6 +66,31 @@ export function discardStreamSegmentIndexes(
   );
 }
 
+// Published history arrays and messages are immutable. Keep only the latest run
+// per array, and let replaced histories be collected along with their derivation.
+const persistedAssistantRuns = new WeakMap<unknown[], { runId: string; messages: unknown[] }>();
+
+function persistedAssistantRunMessages(history: unknown[] | undefined, runId: string): unknown[] {
+  const cached = history && persistedAssistantRuns.get(history);
+  if (cached?.runId === runId) {
+    return cached.messages;
+  }
+  const messages = (history ?? []).filter((message) => {
+    const identity = readSessionMessageIdentity(message);
+    return (
+      identity?.role === "assistant" &&
+      identity.id &&
+      !identity.isImported &&
+      identity.runId === runId &&
+      !readAssistantStreamSegmentIdentity(message)
+    );
+  });
+  if (history) {
+    persistedAssistantRuns.set(history, { runId, messages });
+  }
+  return messages;
+}
+
 export function reconcilePersistedAssistantStream(state: ToolStreamReconciliationState): void {
   const runId = state.chatRunId;
   if (!runId) {
@@ -93,16 +118,7 @@ export function reconcilePersistedAssistantStream(state: ToolStreamReconciliatio
   if (!stream) {
     return;
   }
-  const messages = (state.chatMessages ?? []).filter((message) => {
-    const identity = readSessionMessageIdentity(message);
-    return (
-      identity?.role === "assistant" &&
-      identity.id &&
-      !identity.isImported &&
-      identity.runId === runId &&
-      !readAssistantStreamSegmentIdentity(message)
-    );
-  });
+  const messages = persistedAssistantRunMessages(state.chatMessages, runId);
   const tail = resolveCumulativeAssistantTail(messages, stream, runId);
   const prefix = stream.slice(0, stream.length - (tail?.length ?? 0));
   if (!prefix) {
@@ -270,16 +286,17 @@ export function retireCommentaryStream(
   // The preamble producer flattens whitespace. Keep the cumulative formatting
   // when that exact projection identifies the same complete occurrence.
   const projectedText = text.replace(/\s+/gu, " ").trim();
-  if (!text || (text !== commentary.text && projectedText !== commentary.text)) {
-    if (!projectedText || !commentary.text.startsWith(projectedText)) {
-      return null;
-    }
+  const pending = !text || (text !== commentary.text && projectedText !== commentary.text);
+  if (pending && (!projectedText || !commentary.text.startsWith(projectedText))) {
+    return null;
+  }
+  retireCumulativePrefix(state, commentary.runId, part.replacementText, commentary.timestamp, {
+    itemId: commentary.itemId,
+    segmentIndex: part.segmentIndex,
+  });
+  if (pending) {
     // Retire observed bytes immediately. Keep completion with the cumulative
     // owner so replacing the keyed display with history cannot lose the handoff.
-    retireCumulativePrefix(state, commentary.runId, part.replacementText, commentary.timestamp, {
-      itemId: commentary.itemId,
-      segmentIndex: part.segmentIndex,
-    });
     state.chatStreamSegments = state.chatStreamSegments?.map((segment) =>
       segment.runId === commentary.runId && segment.retiredItemId === commentary.itemId
         ? {
@@ -288,23 +305,22 @@ export function retireCommentaryStream(
           }
         : segment,
     );
-    return { text: commentary.text };
   }
-  retireCumulativePrefix(state, commentary.runId, part.replacementText, commentary.timestamp, {
-    itemId: commentary.itemId,
-    segmentIndex: part.segmentIndex,
-  });
-  return { text };
+  return { text: pending ? commentary.text : text };
 }
 
 /** A durable commentary row immediately replaces its keyed live projection.
  * Waiting for terminal cleanup renders both copies throughout the active run. */
 export function prunePersistedAssistantStreamSegments(
-  state: StreamCausalBoundaryState,
+  state: ToolStreamReconciliationState,
   message: unknown,
 ): void {
   const identity = readAssistantStreamSegmentIdentity(message);
-  if (!identity || !state.chatStreamSegments) {
+  if (!identity) {
+    return;
+  }
+  prunePersistedCurrentAssistantItem(state, identity);
+  if (!state.chatStreamSegments) {
     return;
   }
   const replacedIndexes = state.chatStreamSegments.flatMap((segment, index) => {
@@ -315,6 +331,45 @@ export function prunePersistedAssistantStreamSegments(
     return normalizeOptionalString(segment.itemId) === identity.itemId && sameRun ? [index] : [];
   });
   discardStreamSegmentIndexes(state, replacedIndexes);
+}
+
+export function prunePersistedCurrentAssistantItem(
+  state: ToolStreamReconciliationState,
+  identity: { runId?: string; itemId: string },
+): boolean {
+  const runId = identity.runId ?? state.chatRunId;
+  if (
+    !runId ||
+    runId !== state.chatRunId ||
+    identity.itemId !== state.chatStreamItemId ||
+    state.chatStream === null ||
+    state.chatStreamItemStartOffset === undefined ||
+    state.chatStreamItemStartOffset > state.chatStream.length
+  ) {
+    return false;
+  }
+  const stream = state.chatStream;
+  const prefix = stream.slice(0, state.chatStreamItemStartOffset);
+  const accumulated = accumulatedStreamText(state.chatStreamSegments ?? []);
+  if (prefix && advanceAccumulatedStreamText(accumulated, prefix) !== accumulated) {
+    state.chatStreamSegments = [
+      ...(state.chatStreamSegments ?? []),
+      {
+        text: prefix,
+        ts: state.chatStreamStartedAt ?? Date.now(),
+        runId,
+        pendingCommentaryPrefixFor: identity.itemId,
+      },
+    ];
+  }
+  // The durable row replaces this item's display, but later item snapshots are
+  // still cumulative. Retain the consumed bytes as a hidden baseline so they
+  // cannot reappear when the next identified item arrives.
+  retireCumulativePrefix(state, runId, stream, state.chatStreamStartedAt ?? Date.now(), {
+    itemId: identity.itemId,
+  });
+  state.chatStream = "";
+  return true;
 }
 
 export function pruneHistoryReplacedStreamSegments(

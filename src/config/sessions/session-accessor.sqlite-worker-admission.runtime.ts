@@ -13,6 +13,7 @@ export function withWorkerWriteAdmission<T>(
   operationId: number,
   databaseOptions: OpenClawAgentDatabaseOptions,
   operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
+  assertSourceCurrent?: () => void,
 ): Promise<T> {
   let admissionId = 0;
   let finalAdmission = false;
@@ -62,6 +63,7 @@ export function withWorkerWriteAdmission<T>(
           "SQLite reclamation database admission was revoked",
         );
       }
+      assertSourceCurrent?.();
     }, admission.validation);
     if (!finalAdmission) {
       port.postMessage({

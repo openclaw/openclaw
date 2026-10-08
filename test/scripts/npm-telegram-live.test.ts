@@ -521,6 +521,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
       "telegram-partial-failure-recovery",
       "telegram-empty-response-after-write-recovery",
+      "telegram-prepared-delivery-recovery",
       "telegram-progress-tool-visibility",
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
@@ -529,6 +530,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     writeOwner("extensions/telegram/src/draft-stream.ts", "waitForInFlight();");
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
       "telegram-empty-response-after-write-recovery",
+      "telegram-prepared-delivery-recovery",
       "telegram-progress-tool-visibility",
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
@@ -539,6 +541,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "id: telegram-empty-response-after-write-recovery\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
       "telegram-progress-tool-visibility",
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
@@ -549,6 +552,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "id: telegram-progress-tool-visibility\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
       "telegram-rich-inline-composition",
@@ -558,6 +562,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "id: telegram-provider-failure-before-output\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
       "telegram-queue-invalid-mode",
       "telegram-rich-inline-composition",
     ]);
@@ -566,11 +571,19 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "id: telegram-queue-invalid-mode\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
       "telegram-rich-inline-composition",
     ]);
     writeOwner(
       "qa/scenarios/channels/telegram-rich-inline-composition.yaml",
       "id: telegram-rich-inline-composition\n",
+    );
+    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
+    ]);
+    writeOwner(
+      "qa/scenarios/channels/telegram-prepared-delivery-recovery.yaml",
+      "id: telegram-prepared-delivery-recovery\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([]);
   });
@@ -583,7 +596,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     ).toThrow("OPENCLAW_NPM_TELEGRAM_RTT_CHECKS accepts at most one scenario id; got 2");
   });
 
-  it("builds a generic suite probe for the Telegram RTT lane", () => {
+  it("continues the selected scenario with the leased primary participant", () => {
     const probe = testing.createRoundTripProbe(testing.resolveRttOptions({}));
 
     expect(probe).toMatchObject({
@@ -594,7 +607,8 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       textPrefix: "@openclaw Telegram RTT check. Reply exactly: ",
       chainReplies: true,
       input: {
-        conversation: { id: "telegram-rtt-room", kind: "group" },
+        fromScenario: true,
+        senderId: "primary",
       },
     });
   });
@@ -662,7 +676,6 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
           },
           entries: {
             qa: {
-              default: true,
               model: "mock-openai/qa",
             },
           },
@@ -691,7 +704,6 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
           },
           list: [
             {
-              default: true,
               id: "qa",
               model: "mock-openai/qa",
             },
@@ -717,60 +729,6 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
           OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: packageVersion,
         }),
       ).toBeUndefined();
-    },
-  );
-
-  it.each(["2026.6.35", "2026.7.33", "2026.7.34", "2026.7.35"])(
-    "preserves the frozen %s package projection",
-    (version) => {
-      const mutateConfig = testing.resolvePackageConfigMutation({
-        OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: version,
-      });
-      const config = {
-        agents: {
-          defaults: {
-            mediaModels: {
-              image: "mock-openai/image",
-              audio: "mock-openai/audio",
-            },
-            modelPolicy: { allow: ["mock-openai/qa"] },
-            workspace: "/tmp/qa",
-          },
-          entries: {
-            qa: {
-              default: true,
-              model: "mock-openai/qa",
-            },
-          },
-        },
-        memory: {
-          search: { enabled: false },
-        },
-        plugins: {
-          enabled: true,
-        },
-      } as Parameters<NonNullable<typeof mutateConfig>>[0];
-
-      expect(mutateConfig?.(config)).toEqual({
-        agents: {
-          defaults: {
-            imageGenerationModel: "mock-openai/image",
-            workspace: "/tmp/qa",
-          },
-          list: [
-            {
-              default: true,
-              id: "qa",
-              model: "mock-openai/qa",
-            },
-          ],
-        },
-        memory: { backend: "builtin" },
-        plugins: {
-          bundledDiscovery: "compat",
-          enabled: true,
-        },
-      });
     },
   );
 

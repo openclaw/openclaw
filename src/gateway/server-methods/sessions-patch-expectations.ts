@@ -6,12 +6,12 @@ import type {
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { prepareSessionEntryMutationDatabases } from "../../config/sessions/session-accessor.entry-mutation.js";
+import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { prepareGatewaySessionLifecycleTargets } from "../session-lifecycle-preparation.js";
-import { sessionToolOverridesEqual } from "../session-tool-overrides.js";
 import {
   sessionChangedError,
   assertSessionPatchCommitAllowed,

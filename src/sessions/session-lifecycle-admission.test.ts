@@ -2,7 +2,7 @@
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
   resetGatewayWorkAdmission,
@@ -114,7 +114,7 @@ it("atomically hands admitted work across an interrupted RPC boundary", async ()
   const handoffId = admission.createHandoff();
   const mutationStarted = createDeferred();
   let mutationRan = false;
-  const mutation = runExclusiveSessionLifecycleMutation({
+  const mutation = runExclusiveSessionLifecycleMutation("patch", {
     scope,
     identities,
     prepare: async () => {
@@ -183,7 +183,7 @@ it("counts one multi-identity lifecycle mutation once across module instances", 
   );
   const mutationStarted = createDeferred();
   const releaseMutation = createDeferred();
-  const mutation = first.runExclusiveSessionLifecycleMutation({
+  const mutation = first.runExclusiveSessionLifecycleMutation("patch", {
     scope: "store-mutation-count",
     identities: ["agent:main:child", "session-mutation-count"],
     run: async () => {
@@ -208,7 +208,7 @@ it("keeps a same-identity mutation queued until finalization completes", async (
   const finalizeStarted = createDeferred();
   const releaseFinalize = createDeferred();
   let secondRan = false;
-  const first = runExclusiveSessionLifecycleMutation({
+  const first = runExclusiveSessionLifecycleMutation("patch", {
     ...target,
     run: async () => {},
     finalize: async () => {
@@ -218,7 +218,7 @@ it("keeps a same-identity mutation queued until finalization completes", async (
   });
   await finalizeStarted.promise;
 
-  const second = runExclusiveSessionLifecycleMutation({
+  const second = runExclusiveSessionLifecycleMutation("patch", {
     ...target,
     run: async () => {
       secondRan = true;
@@ -236,7 +236,7 @@ it("finalizes a lifecycle mutation when its run throws", async () => {
   const finalize = vi.fn(async () => {});
 
   await expect(
-    runExclusiveSessionLifecycleMutation({
+    runExclusiveSessionLifecycleMutation("patch", {
       scope: "store-finalize-run-error",
       identities: ["session-finalize-run-error"],
       run: async () => {
@@ -253,7 +253,7 @@ it("releases lifecycle state when finalization throws", async () => {
   const finalizeError = new Error("lifecycle finalizer failed");
 
   await expect(
-    runExclusiveSessionLifecycleMutation({
+    runExclusiveSessionLifecycleMutation("patch", {
       ...target,
       run: async () => {},
       finalize: async () => {
@@ -263,14 +263,14 @@ it("releases lifecycle state when finalization throws", async () => {
   ).rejects.toBe(finalizeError);
   expect(isSessionLifecycleMutationActive(target.scope, target.identities)).toBe(false);
   await expect(
-    runExclusiveSessionLifecycleMutation({ ...target, run: async () => "next" }),
+    runExclusiveSessionLifecycleMutation("patch", { ...target, run: async () => "next" }),
   ).resolves.toBe("next");
 });
 
 it("counts a cross-store lifecycle mutation once and fences every target", async () => {
   const mutationStarted = createDeferred();
   const releaseMutation = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation({
+  const mutation = runExclusiveSessionLifecycleMutation("patch", {
     targets: [
       {
         scope: "store-cross-count-b",
@@ -330,7 +330,7 @@ it("serializes opposite-direction cross-store lifecycle mutations", async () => 
 
   await Promise.all(
     Array.from({ length: 48 }, async (_, index) =>
-      runExclusiveSessionLifecycleMutation({
+      runExclusiveSessionLifecycleMutation("patch", {
         targets: index % 2 === 0 ? [main, work] : [work, main],
         run: async () => {
           activeMutations += 1;
@@ -381,7 +381,7 @@ it("interrupts admitted work in both stores before a cross-store mutation", asyn
   });
 
   try {
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("drain", {
       targets: [workTarget, mainTarget],
       prepare: async () => {
         const interrupted = await Promise.all([
@@ -414,7 +414,7 @@ it("cancels an opposite-direction cross-store mutation before activation", async
   };
   const mutationStarted = createDeferred();
   const releaseMutation = createDeferred();
-  const first = runExclusiveSessionLifecycleMutation({
+  const first = runExclusiveSessionLifecycleMutation("patch", {
     targets: [main, work],
     run: async () => {
       mutationStarted.resolve();
@@ -426,7 +426,7 @@ it("cancels an opposite-direction cross-store mutation before activation", async
   const controller = new AbortController();
   const abortError = new Error("cancel queued cross-store lifecycle mutation");
   let cancelledMutationRan = false;
-  const cancelled = runExclusiveSessionLifecycleMutation({
+  const cancelled = runExclusiveSessionLifecycleMutation("patch", {
     targets: [work, main],
     signal: controller.signal,
     run: async () => {
@@ -450,7 +450,7 @@ it("rejects an admission that resumes after suspension closes the async gap", as
   resetGatewayWorkAdmission();
   const mutationStarted = createDeferred();
   const releaseMutation = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation({
+  const mutation = runExclusiveSessionLifecycleMutation("patch", {
     scope: "store-suspend-race",
     identities: ["session-suspend-race", "backing-suspend-race"],
     run: async () => {
@@ -631,7 +631,79 @@ it("rejects and releases an admission invalidated by an earlier store writer", a
   expect(isSessionWorkAdmissionActive(storePath, ["session-writer-revalidation"])).toBe(false);
 });
 
-it("releases an admission aborted while waiting for the store writer barrier", async () => {
+it("admits an independent session while revalidating a conflicting writer's authority", async () => {
+  const scope = "store-keyed-admission";
+  const blockedKey = "agent:main:blocked";
+  const independentKey = "agent:main:independent";
+  const releaseWriter = createDeferred();
+  const initialValidation = createDeferred();
+  const independentEntered = createDeferred();
+  const releaseIndependent = createDeferred();
+  let allowed = true;
+  const validateBlocked = vi.fn(() => {
+    if (!allowed) {
+      throw new Error("session authority revoked");
+    }
+  });
+  const writer = runExclusiveSessionStoreWrite(
+    scope,
+    async () => {
+      await releaseWriter.promise;
+      allowed = false;
+    },
+    { identities: [blockedKey] },
+  );
+  const blocked = beginSessionWorkAdmission({
+    scope,
+    identities: [blockedKey, "blocked-id"],
+    storeWriterIdentities: [blockedKey],
+    assertAllowed: () => {
+      validateBlocked();
+      initialValidation.resolve();
+    },
+    revalidateAllowed: validateBlocked,
+  });
+  const blockedOutcome = expect(blocked).rejects.toThrow("session authority revoked");
+  await initialValidation.promise;
+  const independent = beginSessionWorkAdmission({
+    scope,
+    identities: [independentKey, "independent-id"],
+    storeWriterIdentities: [independentKey],
+    assertAllowed: () => {},
+    revalidateAllowed: async () => {
+      independentEntered.resolve();
+      await releaseIndependent.promise;
+    },
+  });
+
+  try {
+    await independentEntered.promise;
+    expect(validateBlocked).toHaveBeenCalledTimes(1);
+    releaseWriter.resolve();
+    await writer;
+    await blockedOutcome;
+    expect(validateBlocked).toHaveBeenCalledTimes(2);
+    expect(isSessionWorkAdmissionActive(scope, [blockedKey])).toBe(false);
+    expect(isSessionWorkAdmissionActive(scope, [independentKey])).toBe(true);
+    releaseIndependent.resolve();
+    const lease = await independent;
+    lease.release();
+  } finally {
+    releaseWriter.resolve();
+    releaseIndependent.resolve();
+    const results = await Promise.allSettled([blocked, independent]);
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        result.value.release();
+      }
+    }
+    await Promise.allSettled([writer, blockedOutcome]);
+  }
+});
+
+it("releases lifecycle locks when admission aborts behind the store writer barrier", async ({
+  signal,
+}) => {
   const storePath = "store-writer-abort";
   const writerStarted = createDeferred();
   const releaseWriter = createDeferred();
@@ -652,14 +724,26 @@ it("releases an admission aborted while waiting for the store writer barrier", a
       firstValidation.resolve();
     },
   });
-  await firstValidation.promise;
-  controller.abort(abortError);
+  let mutation: Promise<void> | undefined;
+  try {
+    await withinTest(firstValidation.promise, signal);
+    expect(isSessionWorkAdmissionActive(storePath, ["session-writer-abort"])).toBe(true);
+    controller.abort(abortError);
 
-  await expect(admission).rejects.toBe(abortError);
-  expect(isSessionWorkAdmissionActive(storePath, ["session-writer-abort"])).toBe(false);
+    await expect(admission).rejects.toBe(abortError);
+    expect(isSessionWorkAdmissionActive(storePath, ["session-writer-abort"])).toBe(false);
 
-  releaseWriter.resolve();
-  await writer;
+    mutation = runExclusiveSessionLifecycleMutation("patch", {
+      scope: storePath,
+      identities: ["session-writer-abort"],
+      run: async () => {},
+    });
+    // Cancellation must release the lifecycle lock before the unrelated writer finishes.
+    await withinTest(mutation, signal);
+  } finally {
+    releaseWriter.resolve();
+    await Promise.allSettled([writer, admission, mutation]);
+  }
 });
 
 it("revalidates without inheriting a released gateway root from the writer queue", async () => {
@@ -710,7 +794,7 @@ it("revalidates without inheriting a released gateway root from the writer queue
 it("serializes lifecycle mutation and work admission across identity aliases", async () => {
   const mutationStarted = createDeferred();
   const releaseMutation = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation({
+  const mutation = runExclusiveSessionLifecycleMutation("patch", {
     scope: "store-a",
     identities: ["agent:main:child", "session-1"],
     run: async () => {
@@ -746,7 +830,7 @@ it("serializes lifecycle mutation and work admission across identity aliases", a
 it("tracks the active lifecycle mutation kind across identity aliases", async () => {
   const mutationStarted = createDeferred();
   const releaseMutation = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation({
+  const mutation = runExclusiveSessionLifecycleMutation("compact", {
     scope: "store-kind",
     identities: ["agent:main:child", "session-kind"],
     kind: "compaction",
@@ -782,7 +866,7 @@ it("keeps identical session keys isolated by store", async () => {
     expect(isSessionWorkAdmissionActive("store-a", ["global"])).toBe(true);
     expect(isSessionWorkAdmissionActive("store-b", ["global"])).toBe(false);
     let storeBMutationRan = false;
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("patch", {
       scope: "store-b",
       identities: ["global"],
       run: async () => {
@@ -798,7 +882,7 @@ it("keeps identical session keys isolated by store", async () => {
 it("cancels work admission waiting behind a lifecycle mutation", async () => {
   const mutationPrepared = createDeferred();
   const releaseMutation = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation({
+  const mutation = runExclusiveSessionLifecycleMutation("patch", {
     scope: "store-a",
     identities: ["agent:main:child", "session-1"],
     prepare: async () => {
@@ -827,7 +911,7 @@ it("cancels work admission waiting behind a lifecycle mutation", async () => {
 it("cancels a queued lifecycle mutation before it becomes active", async () => {
   const firstStarted = createDeferred();
   const releaseFirst = createDeferred();
-  const first = runExclusiveSessionLifecycleMutation({
+  const first = runExclusiveSessionLifecycleMutation("patch", {
     scope: "store-a",
     identities: ["agent:main:child", "session-1"],
     run: async () => {
@@ -840,7 +924,7 @@ it("cancels a queued lifecycle mutation before it becomes active", async () => {
   const controller = new AbortController();
   const abortError = new Error("cancel queued lifecycle mutation");
   let cancelledMutationRan = false;
-  const cancelled = runExclusiveSessionLifecycleMutation({
+  const cancelled = runExclusiveSessionLifecycleMutation("patch", {
     scope: "store-a",
     identities: ["agent:main:child", "session-1"],
     signal: controller.signal,
@@ -853,7 +937,7 @@ it("cancels a queued lifecycle mutation before it becomes active", async () => {
   await expect(cancelled).rejects.toBe(abortError);
   releaseFirst.resolve();
   await first;
-  await runExclusiveSessionLifecycleMutation({
+  await runExclusiveSessionLifecycleMutation("patch", {
     scope: "store-a",
     identities: ["agent:main:child", "session-1"],
     run: async () => {},
@@ -873,7 +957,7 @@ it("preserves the initiating admission across a queued lifecycle mutation", asyn
   });
   const firstStarted = createDeferred();
   const releaseFirst = createDeferred();
-  const first = runExclusiveSessionLifecycleMutation({
+  const first = runExclusiveSessionLifecycleMutation("patch", {
     scope: "store-a",
     identities: ["agent:main:child", "session-1"],
     run: async () => {
@@ -886,7 +970,7 @@ it("preserves the initiating admission across a queued lifecycle mutation", asyn
   let initiatingAdmissionExcluded = false;
   const queued = admission.run(
     async () =>
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("drain", {
         scope: "store-a",
         identities: ["agent:main:child", "session-1"],
         prepare: async () => {

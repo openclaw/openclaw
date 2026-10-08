@@ -25,19 +25,6 @@ import {
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
 
-export {
-  ANTHROPIC_CONTEXT_1M_TOKENS,
-  ANTHROPIC_FABLE_CONTEXT_TOKENS,
-  ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS,
-  ANTHROPIC_OPUS_5_CONTEXT_TOKENS,
-  ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
-  ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
-} from "./context-resolution.js";
-export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
-export {
-  applyConfiguredContextWindows,
-  applyDiscoveredContextWindows,
-} from "./context-cache-projection.js";
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,

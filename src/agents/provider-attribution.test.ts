@@ -45,6 +45,7 @@ const providerEndpointPlugins = vi.hoisted(() => [
         baseUrls: ["https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1"],
       },
       { endpointClass: "openrouter", hostSuffixes: ["openrouter.ai"] },
+      { endpointClass: "vercel-ai-gateway", hosts: ["ai-gateway.vercel.sh"] },
       { endpointClass: "zai-native", hosts: ["api.z.ai"] },
       { endpointClass: "google-generative-ai", hosts: ["generativelanguage.googleapis.com"] },
       {
@@ -337,8 +338,7 @@ describe("provider attribution", () => {
     ).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories":
-        "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
+      "X-OpenRouter-Categories": "personal-agent,cli-agent",
     });
   });
 
@@ -684,7 +684,7 @@ describe("provider attribution", () => {
     });
   });
 
-  it("gates documented OpenRouter attribution to known OpenRouter endpoints", () => {
+  it("gates documented OpenRouter attribution to OpenRouter endpoints for any provider id", () => {
     expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "openrouter",
@@ -703,10 +703,67 @@ describe("provider attribution", () => {
 
     expect(
       resolveProviderRequestPolicy({
+        provider: "or",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        transport: "stream",
+        capability: "llm",
+      }).attributionHeaders,
+    ).toEqual({
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Categories": "personal-agent,cli-agent",
+    });
+
+    expect(
+      resolveProviderRequestPolicy({
         provider: "openrouter",
         baseUrl: "https://proxy.example.com/v1",
         transport: "stream",
         capability: "llm",
+      }).attributionHeaders,
+    ).toBeUndefined();
+  });
+
+  it("gates documented Vercel AI Gateway attribution to its endpoint for any provider id", () => {
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "my-gateway",
+        api: "anthropic-messages",
+        baseUrl: "https://ai-gateway.vercel.sh",
+        transport: "stream",
+        capability: "llm",
+      }).attributionHeaders,
+    ).toEqual({
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-Title": "OpenClaw",
+    });
+
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "vercel-ai-gateway",
+        api: "anthropic-messages",
+        baseUrl: "https://proxy.example.com",
+        transport: "stream",
+        capability: "llm",
+      }).attributionHeaders,
+    ).toBeUndefined();
+  });
+
+  it("gates documented Perplexity attribution to the direct Perplexity API", () => {
+    expect(
+      resolveProviderRequestPolicy(
+        { provider: "perplexity", transport: "http", capability: "other" },
+        { OPENCLAW_VERSION: "2026.3.22" },
+      ).attributionHeaders,
+    ).toEqual({ "X-Pplx-Integration": "openclaw/2026.3.22" });
+
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "perplexity",
+        baseUrl: "https://proxy.example.com/v1",
+        transport: "http",
+        capability: "other",
       }).attributionHeaders,
     ).toBeUndefined();
   });

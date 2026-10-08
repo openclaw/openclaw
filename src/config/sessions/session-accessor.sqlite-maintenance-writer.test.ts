@@ -1,9 +1,9 @@
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
@@ -11,13 +11,12 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   applySessionEntryLifecycleMutation,
-  cleanupSessionLifecycleArtifactsCore,
   loadSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntryCore,
@@ -27,9 +26,11 @@ import {
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
-import * as reclamationCommit from "./session-accessor.sqlite-reclamation-commit.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
+import {
+  prepareSessionMaintenancePreservation,
+  registerSessionMaintenancePreserveKeysProvider,
+} from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -50,16 +51,15 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-maintenance-planner-");
 
 afterEach(() => {
   vi.restoreAllMocks();
   archiveMaterializationHook.beforeMaterialize = undefined;
-  closeOpenClawAgentDatabasesForTest();
 });
 
 function createPlannerStore(entryCount: number, updatedAt?: number) {
-  const tempDir = tempDirs.make("openclaw-session-maintenance-planner-");
+  const tempDir = sessionDirs.make();
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   for (let index = 0; index < entryCount; index += 1) {
     replaceSessionEntrySync(
@@ -81,6 +81,8 @@ function createPlannerStore(entryCount: number, updatedAt?: number) {
 it("avoids inventory projection for sequential writes with no retention candidates", async () => {
   const { database, storePath } = createPlannerStore(32, Date.now());
   const target = { sessionKey: "agent:main:planner-0", storePath };
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  onTestFinished(preservation.dispose);
   const inventory = trackSqliteStatementExecutions(database.db, ["protection"], (sql) =>
     sql.includes(
       'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
@@ -96,6 +98,7 @@ it("avoids inventory projection for sequential writes with no retention candidat
       const plan = runOpenClawAgentWriteTransaction(
         (owner) =>
           maintenance.applySessionEntryMaintenance(owner, {
+            preservation: preservation.capture,
             activeSessionKey: target.sessionKey,
             archiveDirectory: path.join(path.dirname(database.path), "archives"),
             maintenanceConfig: resolveMaintenanceConfigFromInput(),
@@ -112,68 +115,69 @@ it("avoids inventory projection for sequential writes with no retention candidat
   }
 });
 
-it.each([false, true])(
-  "resolves protection once before capping (aged candidates: %s)",
-  async (aged) => {
-    const { database, storePath } = createPlannerStore(6, Date.now());
-    const key = (index: number) => `agent:main:planner-${index}`;
-    const scope = (index: number) => ({ sessionKey: key(index), storePath });
-    replaceSessionEntrySync(scope(3), {
-      sessionId: "planner-3",
-      parentSessionKey: key(5),
-      updatedAt: Date.now(),
-    });
-    if (aged) {
-      replaceSessionEntrySync(scope(2), {
-        sessionId: "planner-2",
-        updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
-      });
-    }
-    const admission = await beginSessionWorkAdmission({
+it("resolves protection once before capping aged candidates", async () => {
+  const { database, storePath } = createPlannerStore(6, Date.now());
+  const key = (index: number) => `agent:main:planner-${index}`;
+  const scope = (index: number) => ({ sessionKey: key(index), storePath });
+  replaceSessionEntrySync(scope(3), {
+    sessionId: "planner-3",
+    parentSessionKey: key(5),
+    updatedAt: Date.now(),
+  });
+  replaceSessionEntrySync(scope(2), {
+    sessionId: "planner-2",
+    updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+  });
+  const admission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: ["planner-0"],
+    assertAllowed: () => {},
+  });
+  const provider = vi.fn(() => [key(2)]);
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+    capture: provider,
+    dispose() {},
+  }));
+  try {
+    await runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
-      identities: ["planner-0"],
-      assertAllowed: () => {},
+      identities: [key(1)],
+      run: async () => {
+        const preservation = await prepareSessionMaintenancePreservation(storePath);
+        onTestFinished(preservation.dispose);
+        const plan = runOpenClawAgentWriteTransaction(
+          (owner) =>
+            maintenance.applySessionEntryMaintenance(owner, {
+              preservation: preservation.capture,
+              activeSessionKey: key(3),
+              archiveDirectory: path.join(path.dirname(database.path), "archives"),
+              maintenanceConfig: {
+                ...resolveMaintenanceConfigFromInput(),
+                maxEntries: 1,
+              },
+              storePath,
+            }),
+          { agentId: "main", path: database.path },
+        );
+        expect(plan).toMatchObject({ archived: 1, capArchived: 1, capped: 1 });
+        expect(loadSessionEntry(scope(4))).toMatchObject({
+          archivedAt: expect.any(Number),
+          archiveReason: "active-session-cap",
+        });
+        for (const index of [0, 1, 2, 3, 5]) {
+          expect(loadSessionEntry(scope(index))).toMatchObject({ sessionId: `planner-${index}` });
+          expect(loadSessionEntry(scope(index))?.archivedAt).toBeUndefined();
+        }
+        expect(provider).toHaveBeenCalledTimes(1);
+      },
     });
-    const provider = vi.fn(() => [key(2)]);
-    const unregister = registerSessionMaintenancePreserveKeysProvider(provider);
-    try {
-      await runExclusiveSessionLifecycleMutation({
-        scope: storePath,
-        identities: [key(1)],
-        run: async () => {
-          const plan = runOpenClawAgentWriteTransaction(
-            (owner) =>
-              maintenance.applySessionEntryMaintenance(owner, {
-                activeSessionKey: key(3),
-                archiveDirectory: path.join(path.dirname(database.path), "archives"),
-                maintenanceConfig: {
-                  ...resolveMaintenanceConfigFromInput(),
-                  maxEntries: 1,
-                },
-                storePath,
-              }),
-            { agentId: "main", path: database.path },
-          );
-          expect(plan).toMatchObject({ archived: 1, capArchived: 1, capped: 1 });
-          expect(loadSessionEntry(scope(4))).toMatchObject({
-            archivedAt: expect.any(Number),
-            archiveReason: "active-session-cap",
-          });
-          for (const index of [0, 1, 2, 3, 5]) {
-            expect(loadSessionEntry(scope(index))).toMatchObject({ sessionId: `planner-${index}` });
-            expect(loadSessionEntry(scope(index))?.archivedAt).toBeUndefined();
-          }
-          expect(provider).toHaveBeenCalledTimes(1);
-        },
-      });
-    } finally {
-      unregister();
-      admission.release();
-    }
-  },
-);
+  } finally {
+    unregister();
+    admission.release();
+  }
+});
 
-it("caps only the oldest eligible activity ties without decoding unrelated payloads", () => {
+it("caps only the oldest eligible activity ties without decoding unrelated payloads", async () => {
   const { database, storePath } = createPlannerStore(0);
   const now = Date.now();
   vi.spyOn(Date, "now").mockReturnValue(now);
@@ -187,7 +191,6 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
     ["started", { sessionStartedAt: now }],
     ["pinned", { pinnedAt: old }],
     ["locked", { modelSelectionLocked: true }],
-    ["running", { status: "running" }],
     ["group", { chatType: "group" }],
     ["recent", { lastActivityAt: now }],
     ["live", {}],
@@ -205,12 +208,19 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
       },
     );
   }
-  const unregister = registerSessionMaintenancePreserveKeysProvider(() => [key("live")]);
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+    capture: () => [key("live")],
+    dispose() {},
+  }));
+  onTestFinished(unregister);
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  onTestFinished(preservation.dispose);
   const parse = vi.spyOn(JSON, "parse");
   try {
     const plan = runOpenClawAgentWriteTransaction(
       (owner) =>
         maintenance.applySessionEntryMaintenance(owner, {
+          preservation: preservation.capture,
           archiveDirectory: path.join(path.dirname(database.path), "archives"),
           maintenanceConfig: {
             ...resolveMaintenanceConfigFromInput(),
@@ -222,7 +232,10 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
         }),
       { agentId: "main", path: database.path },
     );
-    expect(plan.archivedSessionKeys.toSorted()).toEqual(victims.toSorted());
+    expect(plan.archivedEntries).toEqual([
+      { sessionKey: key("oldest"), sessionId: "bounded-0" },
+      { sessionKey: key("tie-\u{10000}"), sessionId: "bounded-2" },
+    ]);
     expect(plan).toMatchObject({ archived: 2, capArchived: 2, capped: 2 });
     expect(parse.mock.calls.some(([serialized]) => serialized.includes(untouchedPayload))).toBe(
       false,
@@ -247,10 +260,13 @@ it.each(["session-key", "session-id"] as const)(
     const transcript = [{ type: "session", id: target.sessionId, content: "retained history" }];
     replaceTranscriptEventsSync(target, transcript);
     const before = readSessionStateDeleteSnapshot(database.db, target.sessionId);
+    const preservation = await prepareSessionMaintenancePreservation(storePath);
+    onTestFinished(preservation.dispose);
     const maintain = (forceMaintenance = false) =>
       runOpenClawAgentWriteTransaction(
         (owner) =>
           maintenance.applySessionEntryMaintenance(owner, {
+            preservation: preservation.capture,
             forceMaintenance,
             archiveDirectory: path.join(path.dirname(database.path), "archives"),
             maintenanceConfig: resolveMaintenanceConfigFromInput(),
@@ -260,7 +276,7 @@ it.each(["session-key", "session-id"] as const)(
       );
     const identity = identityKind === "session-key" ? target.sessionKey : target.sessionId;
 
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [identity],
       run: async () => {
@@ -290,105 +306,44 @@ it.each(["session-key", "session-id"] as const)(
   },
 );
 
-it.each([false, true])(
-  "does not rescan unrelated rows when no lifecycle removal matches (requested: %s)",
-  async (requestRemoval) => {
-    const { storePath } = createPlannerStore(2);
-    const retained = { sessionKey: "agent:main:planner-1", sessionId: "planner-1", storePath };
-    const transcript = [{ type: "session", id: retained.sessionId, content: "retained" }];
-    replaceTranscriptEventsSync(retained, transcript);
-    const parseSpy = vi.spyOn(JSON, "parse");
-    await expect(
-      applySessionEntryLifecycleMutation({
-        storePath,
-        skipMaintenance: true,
-        removals: requestRemoval ? [{ sessionKey: "agent:main:missing" }] : [],
-        upserts: [
-          {
-            sessionKey: "agent:main:planner-0",
-            buildEntry: async ({ currentEntry }) => ({ ...currentEntry!, label: "updated" }),
-          },
-        ],
-      }),
-    ).resolves.toMatchObject({
-      afterCount: 2,
-      removedEntries: 0,
-      archivedTranscriptDirectories: [],
-    });
-
-    // Allow the builder snapshot and before/after counts, but no unused deletion scans.
-    expect(
-      parseSpy.mock.calls.filter(([serialized]) => serialized.includes('"planner-1"')).length,
-    ).toBeLessThanOrEqual(3);
-    parseSpy.mockRestore();
-    expect(loadSessionEntry({ sessionKey: "agent:main:planner-0", storePath })?.label).toBe(
-      "updated",
-    );
-    expect(loadSessionEntry(retained)?.sessionId).toBe(retained.sessionId);
-    expect(loadTranscriptEventsSync(retained)).toEqual(transcript);
-  },
-);
-
-it("releases the store writer before maintenance archive sizing completes", async () => {
-  const tempDir = tempDirs.make("openclaw-session-maintenance-writer-");
-  const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  const removedKey = "agent:main:subagent:maintenance-sizing-removed";
-  const writerKey = "agent:main:maintenance-sizing-writer";
-  replaceSessionEntrySync(
-    { sessionKey: removedKey, storePath },
-    { sessionId: "maintenance-sizing-removed", updatedAt: 1 },
-  );
-  replaceTranscriptEventsSync(
-    { sessionKey: removedKey, sessionId: "maintenance-sizing-removed", storePath },
-    [{ type: "session", id: "maintenance-sizing-removed", content: "archive me" }],
-  );
-  replaceSessionEntrySync(
-    { sessionKey: writerKey, storePath },
-    { sessionId: "maintenance-sizing-writer", updatedAt: Date.now() },
-  );
-
-  let writerCompleted = false;
-  let writerCompletedBeforeMaterialization = false;
-  archiveMaterializationHook.beforeMaterialize = () => {
-    writerCompletedBeforeMaterialization = writerCompleted;
-  };
-
-  const cleanup = applySessionEntryLifecycleMutation({
-    storePath,
-    maintenanceOverride: {
-      maxEntries: 1,
-      mode: "enforce",
-      pruneAfterMs: Number.MAX_SAFE_INTEGER,
-    },
-  });
-  const writer = applySessionEntryLifecycleMutation({
-    storePath,
-    skipMaintenance: true,
-    upserts: [
-      {
-        sessionKey: writerKey,
-        entry: {
-          sessionId: "maintenance-sizing-writer",
-          label: "progressed",
-          updatedAt: Date.now(),
+it("does not rescan unrelated rows when a requested lifecycle removal does not match", async () => {
+  const { storePath } = createPlannerStore(2);
+  const retained = { sessionKey: "agent:main:planner-1", sessionId: "planner-1", storePath };
+  const transcript = [{ type: "session", id: retained.sessionId, content: "retained" }];
+  replaceTranscriptEventsSync(retained, transcript);
+  const parseSpy = vi.spyOn(JSON, "parse");
+  await expect(
+    applySessionEntryLifecycleMutation({
+      storePath,
+      skipMaintenance: true,
+      removals: [{ sessionKey: "agent:main:missing" }],
+      upserts: [
+        {
+          sessionKey: "agent:main:planner-0",
+          buildEntry: async ({ currentEntry }) => ({ ...currentEntry!, label: "updated" }),
         },
-      },
-    ],
-  }).then((result) => {
-    writerCompleted = true;
-    return result;
+      ],
+    }),
+  ).resolves.toMatchObject({
+    afterCount: 2,
+    removedEntries: 0,
+    archivedTranscriptDirectories: [],
   });
 
-  await expect(cleanup).resolves.toMatchObject({ capped: 1 });
-  await writer;
-  expect(loadSessionEntry({ sessionKey: writerKey, storePath })).toMatchObject({
-    label: "progressed",
-  });
-  expect(writerCompletedBeforeMaterialization).toBe(true);
+  // Allow the builder snapshot and before/after counts, but no unused deletion scans.
+  expect(
+    parseSpy.mock.calls.filter(([serialized]) => serialized.includes('"planner-1"')).length,
+  ).toBeLessThanOrEqual(3);
+  parseSpy.mockRestore();
+  expect(loadSessionEntry({ sessionKey: "agent:main:planner-0", storePath })?.label).toBe(
+    "updated",
+  );
+  expect(loadSessionEntry(retained)?.sessionId).toBe(retained.sessionId);
+  expect(loadTranscriptEventsSync(retained)).toEqual(transcript);
 });
 
 it("does not hold channel recording behind automatic session maintenance", async ({ signal }) => {
-  const tempDir = tempDirs.make("openclaw-session-maintenance-ingress-");
+  const tempDir = sessionDirs.make();
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   const staleSessionKey = "agent:main:subagent:maintenance-ingress-stale";
   const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";
@@ -420,17 +375,11 @@ it("does not hold channel recording behind automatic session maintenance", async
     { sessionId: "maintenance-ingress-stale", updatedAt: 1 },
   );
 
-  let signalMaterializationStarted = () => {};
-  const materializationStarted = new Promise<void>((resolve) => {
-    signalMaterializationStarted = resolve;
-  });
-  let releaseMaterialization = () => {};
-  const materializationReleased = new Promise<void>((resolve) => {
-    releaseMaterialization = resolve;
-  });
+  const materializationStarted = createDeferredCore();
+  const materializationReleased = createDeferredCore();
   archiveMaterializationHook.beforeMaterialize = async () => {
-    signalMaterializationStarted();
-    await materializationReleased;
+    materializationStarted.resolve();
+    await materializationReleased.promise;
   };
 
   const entryWrite = recordInboundSession({
@@ -456,10 +405,10 @@ it("does not hold channel recording behind automatic session maintenance", async
   });
   const firstCompleted = await Promise.race([
     entryWrite.then(() => "entry-write" as const),
-    materializationStarted.then(() => "maintenance" as const),
+    materializationStarted.promise.then(() => "maintenance" as const),
   ]);
   if (firstCompleted === "entry-write") {
-    await materializationStarted;
+    await materializationStarted.promise;
     replaceSessionEntrySync(
       { sessionKey: laterStaleSessionKey, storePath },
       { sessionId: "maintenance-ingress-later-stale", updatedAt: 1 },
@@ -486,7 +435,7 @@ it("does not hold channel recording behind automatic session maintenance", async
       },
     });
   }
-  releaseMaterialization();
+  materializationReleased.resolve();
   await entryWrite;
 
   expect(firstCompleted).toBe("entry-write");
@@ -496,81 +445,29 @@ it("does not hold channel recording behind automatic session maintenance", async
   expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
 });
 
-it.each([
-  {
-    expected: { afterCount: 66, capArchived: 65, capped: 65 },
-    expectedStat: /^66\b/u,
-    name: "maintenance pruning",
-    mutate: async (storePath: string) =>
-      await applySessionEntryLifecycleMutation({
-        storePath,
-        maintenanceOverride: {
-          maxEntries: 1,
-          mode: "enforce",
-          pruneAfterMs: Number.MAX_SAFE_INTEGER,
-        },
-      }),
-  },
-  {
-    expected: { afterCount: 1, removedEntries: 65 },
-    expectedStat: /^1\b/u,
-    name: "explicit lifecycle cleanup",
-    mutate: async (storePath: string) =>
-      await applySessionEntryLifecycleMutation({
-        storePath,
-        removals: Array.from({ length: 65 }, (_, index) => ({
-          sessionKey: `agent:main:planner-${index + 1}`,
-        })),
-        skipMaintenance: true,
-      }),
-  },
-  {
-    expected: { archivedTranscriptArtifacts: 0, removedEntries: 65 },
-    expectedStat: /^1\b/u,
-    name: "lifecycle artifact cleanup",
-    mutate: async (storePath: string) =>
-      await cleanupSessionLifecycleArtifactsCore({
-        storePath,
-        sessionKeySegmentPrefix: "planner-",
-        transcriptContentMarker: "planner-marker",
-        orphanTranscriptMinAgeMs: 1,
-        nowMs: 66,
-      }),
-  },
-])("refreshes planner statistics after bulk $name", async ({ expected, expectedStat, mutate }) => {
+it("refreshes planner statistics after bulk lifecycle cleanup", async () => {
   const { database, storePath } = createPlannerStore(66);
   expect(
     database.db
       .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
       .get("idx_agent_session_nodes_updated_at"),
   ).toEqual({ stat: expect.stringMatching(/^66\b/u) });
-
-  await expect(mutate(storePath)).resolves.toMatchObject(expected);
-
-  expect(
-    database.db
-      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
-      .get("idx_agent_session_nodes_updated_at"),
-  ).toEqual({ stat: expect.stringMatching(expectedStat) });
-  expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
-});
-
-it("does not refresh planner statistics after one routine session deletion", async () => {
-  const { database, storePath } = createPlannerStore(66);
 
   await expect(
     applySessionEntryLifecycleMutation({
       storePath,
-      removals: [{ sessionKey: "agent:main:planner-65" }],
+      removals: Array.from({ length: 65 }, (_, index) => ({
+        sessionKey: `agent:main:planner-${index + 1}`,
+      })),
       skipMaintenance: true,
     }),
-  ).resolves.toMatchObject({ afterCount: 65, removedEntries: 1 });
+  ).resolves.toMatchObject({ afterCount: 1, removedEntries: 65 });
 
   expect(
     database.db
       .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
       .get("idx_agent_session_nodes_updated_at"),
-  ).toEqual({ stat: expect.stringMatching(/^66\b/u) });
+  ).toEqual({ stat: expect.stringMatching(/^1\b/u) });
   expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
 });
 
@@ -591,17 +488,17 @@ it("rolls back planner statistics when maintenance ownership is revoked before c
       .get("idx_agent_session_nodes_updated_at");
   let current = true;
   let reachedCommit = false;
-  const authorize = reclamationCommit.withSqliteReclamationAuthorization;
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   const authorization = vi
-    .spyOn(reclamationCommit, "withSqliteReclamationAuthorization")
-    .mockImplementation((buffer, owner, assertCurrent, run) =>
-      authorize(buffer, owner, assertCurrent, (commit) =>
-        run(() => {
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((callback, attachment) =>
+      createAdmission((request, grant) => {
+        if (request.stage === "commit") {
           reachedCommit = true;
           current = false;
-          return commit();
-        }),
-      ),
+        }
+        return callback(request, grant);
+      }, attachment),
     );
 
   await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, {

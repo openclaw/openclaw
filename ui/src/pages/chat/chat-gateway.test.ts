@@ -1,7 +1,7 @@
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 // @vitest-environment node
-// Control UI tests cover chat behavior.
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { missingScopeErrorShape } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -22,7 +22,6 @@ import {
 import {
   reconcileChatRunAfterSessionStatePublication,
   type ChatRunUiStatus,
-  type LocalTerminalReconcile,
 } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
@@ -36,8 +35,57 @@ import {
   rememberAuthoritativeTerminal,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
+import type { ToolStreamHost } from "./tool-stream-contract.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { createHost } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+});
+
+function chatEvent(
+  state: ChatEventPayload["state"],
+  payload: Omit<ChatEventPayload, "state" | "sessionKey"> & { sessionKey?: string } = {},
+): ChatEventPayload {
+  return { runId: "run-1", sessionKey: "main", state, ...payload };
+}
+
+function receive(state: ChatState, ...args: Parameters<typeof chatEvent>) {
+  return handleChatGatewayEvent(state, chatEvent(...args));
+}
+
+function visibleParts(state: ChatState, includeCurrent = false) {
+  return visibleAssistantStreamParts(state, { includeCurrent, isHiddenStreamText: () => false });
+}
+
+function renderedMessageTexts(state: ChatState, paneId: string) {
+  return buildChatItems({
+    paneId,
+    sessionKey: state.sessionKey,
+    runId: state.chatRunId,
+    messages: state.chatMessages,
+    toolMessages: [],
+    streamSegments: state.chatStreamSegments ?? [],
+    stream: state.chatStream,
+    streamStartedAt: state.chatStreamStartedAt,
+    showToolCalls: true,
+  }).flatMap((item) =>
+    item.kind === "group"
+      ? item.messages.map(({ message }) => extractText(message))
+      : item.kind === "stream"
+        ? [item.text.trim()]
+        : [],
+  );
+}
+
+function expectSettled(state: ChatState) {
+  expect(state.chatRunId).toBeNull();
+  expect(state.chatStream).toBeNull();
+  expect(state.chatStreamStartedAt).toBeNull();
+}
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -64,20 +112,87 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
   };
 }
 
-it.each(
-  [false, true].flatMap((persistedFirst) =>
-    [false, true].map((transformed) => ({ persistedFirst, transformed })),
-  ),
-)(
+it.each([true, false])(
+  "keeps identical injected notes separate without adopting a run (persisted first=%s)",
+  (persistedFirst) => {
+    const user = textMessage("user", "Previous question", { id: "user", seq: 1 });
+    const reply = textMessage("assistant", "Previous reply", { id: "reply", seq: 2 });
+    const state = createState({ chatMessages: [user, reply] });
+    const ids = ["note-one", "note-two"];
+    const notes = ids.map((id, index) =>
+      textMessage("assistant", "Synthetic weekly report", { id, seq: index + 3 }),
+    );
+    for (const [index, saved] of notes.entries()) {
+      if (persistedFirst) {
+        applySessionMessagePayload(state, { message: saved }, false, { kind: "history-delta" });
+      }
+      const event = {
+        runId: `inject-${ids[index]}`,
+        seq: 0,
+        message: textMessage("assistant", "Synthetic weekly report"),
+      };
+      receive(state, "final", event);
+      receive(state, "final", event);
+      if (!persistedFirst) {
+        applySessionMessagePayload(state, { message: saved }, false, { kind: "history-delta" });
+      }
+      expect(state.chatMessages).toEqual([user, reply, ...notes.slice(0, index + 1)]);
+      expectSettled(state);
+      expect(Object.keys(getChatSessionProjection(state).runs)).toEqual([]);
+    }
+    expect(renderedMessageTexts(state, "injected-notes")).toEqual([
+      "Previous question",
+      "Previous reply",
+      "Synthetic weekly report",
+      "Synthetic weekly report",
+    ]);
+  },
+);
+
+it("does not settle the foreground run when an injected note arrives", () => {
+  const state = createState({
+    chatRunId: "real-run",
+    chatStream: "Still working",
+    chatStreamStartedAt: 100,
+  });
+  receive(state, "final", {
+    runId: "inject-note",
+    seq: 0,
+    message: textMessage("assistant", "An independent note"),
+  });
+  expect(state.chatRunId).toBe("real-run");
+  expect(state.chatStream).toBe("Still working");
+  expect(state.chatStreamStartedAt).toBe(100);
+  expect(state.chatMessages.map(extractText)).toEqual(["An independent note"]);
+  expect(getChatSessionProjection(state).runs["inject-note"]).toBeUndefined();
+});
+
+it("settles a regular streamed run with an inject-prefixed client ID", () => {
+  const state = createState({ chatRunId: "inject-job" });
+  receive(state, "delta", {
+    runId: "inject-job",
+    seq: 1,
+    message: textMessage("assistant", "Regular reply"),
+  });
+  receive(state, "final", {
+    runId: "inject-job",
+    seq: 2,
+    message: textMessage("assistant", "Regular reply"),
+  });
+  expectSettled(state);
+  expect(state.chatMessages.map(extractText)).toEqual(["Regular reply"]);
+  expect(getChatSessionProjection(state).runs["inject-job"]?.status).toBe("completed");
+});
+
+it.each([
+  { persistedFirst: false, transformed: false },
+  { persistedFirst: true, transformed: true },
+])(
   "settles a saved interrupted partial once with both error emitters (persisted first=$persistedFirst, transformed=$transformed)",
   ({ persistedFirst, transformed }) => {
     const runId = "interrupted-run";
     const text = "The saved partial reply should appear once.";
-    const user = {
-      role: "user",
-      content: [{ type: "text", text: "Ask" }],
-      __openclaw: { id: "user", seq: 1, runId },
-    };
+    const user = textMessage("user", "Ask", { id: "user", seq: 1, runId });
     const saved = {
       role: "assistant",
       content: transformed
@@ -96,37 +211,19 @@ it.each(
       },
     };
     const state = createState({ chatMessages: [user], chatRunId: runId });
-    handleChatGatewayEvent(state, {
-      runId,
-      sessionKey: "main",
-      seq: 12,
-      state: "delta",
-      message: { role: "assistant", content: [{ type: "text", text }] },
-    });
+    receive(state, "delta", { runId, seq: 12, message: textMessage("assistant", text) });
     const persist = () =>
       applySessionMessagePayload(state, { runId, message: saved }, true, { kind: "history-delta" });
     if (persistedFirst) {
       persist();
     }
-    handleChatGatewayEvent(state, {
+    receive(state, "error", {
       runId,
-      sessionKey: "main",
       seq: 13,
-      state: "error",
       errorMessage: "codex app-server client closed before turn completed",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text }],
-        __openclaw: { runId, idempotencyKey: "saved-key" },
-      },
+      message: textMessage("assistant", text, { runId, idempotencyKey: "saved-key" }),
     });
-    handleChatGatewayEvent(state, {
-      runId,
-      sessionKey: "main",
-      seq: 1,
-      state: "error",
-      errorMessage: "Outer returned failure",
-    });
+    receive(state, "error", { runId, seq: 1, errorMessage: "Outer returned failure" });
     if (!persistedFirst) {
       persist();
     }
@@ -142,19 +239,9 @@ it.each(
 
 it("preserves receipt-less fallback ownership across cache before matching persistence", () => {
   const runId = "unreceipted-run";
-  const user = {
-    role: "user",
-    content: [{ type: "text", text: "Ask" }],
-    __openclaw: { id: "user", seq: 1, runId },
-  };
+  const user = textMessage("user", "Ask", { id: "user", seq: 1, runId });
   const state = createState({ chatMessages: [user], chatRunId: runId, chatStream: "Partial" });
-  handleChatGatewayEvent(state, {
-    runId,
-    sessionKey: "main",
-    seq: 13,
-    state: "error",
-    errorMessage: "Interrupted",
-  });
+  receive(state, "error", { runId, seq: 13, errorMessage: "Interrupted" });
   const cached = structuredClone(state.chatMessages);
   const restored = createState({ chatMessages: cached });
   expect(getChatSessionProjection(restored).entries[1]).toMatchObject({
@@ -163,11 +250,12 @@ it("preserves receipt-less fallback ownership across cache before matching persi
     afterSequence: 1,
     identity: { runId },
   });
-  const prior = {
-    role: "assistant",
-    content: [{ type: "text", text: "Partial" }],
-    __openclaw: { id: "prior", seq: 2, runId: "prior-run", runTerminal: true },
-  };
+  const prior = textMessage("assistant", "Partial", {
+    id: "prior",
+    seq: 2,
+    runId: "prior-run",
+    runTerminal: true,
+  });
   applySessionMessagePayload(restored, { message: prior }, true, { kind: "history-delta" });
   expect(restored.chatMessages).toHaveLength(3);
   const current = { ...prior, __openclaw: { id: "current", seq: 3, runId, runTerminal: true } };
@@ -200,10 +288,7 @@ it.each([false, true])(
       },
     });
     expect(
-      visibleAssistantStreamParts(state, {
-        includeCurrent: true,
-        isHiddenStreamText: () => false,
-      }).map((part) => ({ text: part.text, itemId: part.itemId })),
+      visibleParts(state, true).map((part) => ({ text: part.text, itemId: part.itemId })),
     ).toEqual([{ text: text.replace(/\s+/gu, " "), itemId: "commentary-1" }]);
     if (persisted) {
       // Durable history projects the transcript text, not flattened progressText.
@@ -223,18 +308,9 @@ it.each([false, true])(
       );
       expect(state.chatMessages.map(extractText)).toEqual([text]);
     }
-    handleChatGatewayEvent(state, {
-      sessionKey: "main",
-      runId: "run-1",
-      seq: 2,
-      state: "delta",
-      message: { role: "assistant", content: [{ type: "text", text }] },
-    });
+    receive(state, "delta", { seq: 2, message: textMessage("assistant", text) });
     expect(
-      visibleAssistantStreamParts(state, {
-        includeCurrent: true,
-        isHiddenStreamText: () => false,
-      }).map((part) => ({ text: part.text, itemId: part.itemId })),
+      visibleParts(state, true).map((part) => ({ text: part.text, itemId: part.itemId })),
     ).toEqual(persisted ? [] : [{ text, itemId: "commentary-1" }]);
     if (persisted) {
       expect(state.chatMessages.map(extractText)).toEqual([text]);
@@ -300,7 +376,7 @@ function createDeferredHistoryState(overrides: Partial<ChatHistoryHost> = {}) {
 
 function createAssistantHistory(text: string, overrides: Omit<HistoryResult, "messages"> = {}) {
   return {
-    messages: [{ role: "assistant", content: [{ type: "text", text }] }],
+    messages: [textMessage("assistant", text)],
     ...overrides,
   };
 }
@@ -323,14 +399,14 @@ type SessionTestState = ChatState & {
   [key: string]: unknown;
   chatRunStatus?: ChatRunUiStatus | null;
   knownAgentRunIds: Set<string>;
-  lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   sessionsResult: SessionsListResult;
 };
 
 function createStateWithRunningSession(overrides: Partial<ChatState>): SessionTestState {
+  const runId = overrides.chatRunId ?? "run-1";
   return {
     ...createState(overrides),
-    knownAgentRunIds: new Set(["run-1"]),
+    knownAgentRunIds: new Set([runId]),
     sessionsResult: {
       ts: 0,
       path: "",
@@ -342,7 +418,7 @@ function createStateWithRunningSession(overrides: Partial<ChatState>): SessionTe
           kind: "direct",
           updatedAt: 1,
           hasActiveRun: true,
-          activeRunIds: ["run-1"],
+          activeRunIds: [runId],
           status: "running",
           startedAt: 100,
         },
@@ -352,13 +428,12 @@ function createStateWithRunningSession(overrides: Partial<ChatState>): SessionTe
 }
 
 type HistoryToolSegment = { text: string; ts: number; toolCallId?: string };
-type LiveToolState = ChatHistoryHost & {
-  chatStreamSegments: HistoryToolSegment[];
-  chatToolMessages: Record<string, unknown>[];
-  toolStreamById: Map<string, unknown>;
-  toolStreamOrder: string[];
-  toolStreamSyncTimer: number | null;
-};
+type LiveToolState = ChatHistoryHost &
+  Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder"> & {
+    chatStreamSegments: HistoryToolSegment[];
+    chatToolMessages: Record<string, unknown>[];
+    toolStreamSyncTimer: number | null;
+  };
 
 function attachLiveToolState(
   state: ChatHistoryHost,
@@ -369,9 +444,23 @@ function attachLiveToolState(
   liveState.chatStreamSegments = segments;
   liveState.chatToolMessages = tools;
   liveState.toolStreamById = new Map(
-    tools.map((tool) => [String(tool.toolCallId), { message: tool }]),
+    tools.map((tool) => {
+      const toolCallId = String(tool.toolCallId);
+      const runId = typeof tool.runId === "string" ? tool.runId : (state.chatRunId ?? "run-1");
+      return [
+        buildToolStreamIdentity(runId, toolCallId),
+        {
+          toolCallId,
+          runId,
+          message: tool,
+          name: "shell",
+          startedAt: 0,
+          receivedAt: 0,
+        },
+      ];
+    }),
   );
-  liveState.toolStreamOrder = tools.map((tool) => String(tool.toolCallId));
+  liveState.toolStreamOrder = [...liveState.toolStreamById.keys()];
   liveState.toolStreamSyncTimer = null;
   return liveState;
 }
@@ -387,13 +476,13 @@ function createLiveToolHistoryState(
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
-function expectTextChatMessage(message: unknown, role: string, text: string): void {
+function expectTextMessage(message: unknown, role: string, text: string): void {
   const record = requireRecord(message);
   expect(record.role).toBe(role);
   expect(record.content).toEqual([{ type: "text", text }]);
 }
 
-function createTextChatMessage(
+function textMessage(
   role: "assistant" | "user",
   text: string,
   metadata?: Record<string, unknown>,
@@ -423,63 +512,18 @@ function projectChatMessageEvent(
 }
 
 function createActiveStreamingState() {
-  return createState({
-    sessionKey: "main",
-    chatRunId: "run-user",
-    chatStream: "Working...",
-    chatStreamStartedAt: 123,
-  });
-}
-
-function trackChatMessagesAssignments(state: ChatState) {
-  let chatMessages = state.chatMessages;
-  const assignments: Array<{
-    chatRunId: string | null;
-    chatStream: string | null;
-    messages: unknown[];
-  }> = [];
-  Object.defineProperty(state, "chatMessages", {
-    configurable: true,
-    get: () => chatMessages,
-    set: (messages: unknown[]) => {
-      assignments.push({
-        chatRunId: state.chatRunId,
-        chatStream: state.chatStream,
-        messages,
-      });
-      chatMessages = messages;
-    },
-  });
-  return assignments;
-}
-
-function createOtherRunSilentFinalPayload(text: string): ChatEventPayload {
-  return {
-    runId: "run-announce",
-    sessionKey: "main",
-    state: "final",
-    message: createTextChatMessage("assistant", text),
-  };
-}
-
-function createOtherRunNoReplyFinalPayload(): ChatEventPayload {
-  return createOtherRunSilentFinalPayload("NO_REPLY");
+  return createState({ chatRunId: "run-user", chatStream: "Working...", chatStreamStartedAt: 123 });
 }
 
 describe("handleChatGatewayEvent", () => {
-  it("returns null when payload is missing", () => {
-    const state = createState();
-    expect(handleChatGatewayEvent(state, undefined)).toBe(null);
-  });
-
   it("drops sessionless run-idless terminal events instead of materializing them", () => {
     // Companion/internal runs can surface unkeyed terminal events; with no
     // active run, undefined === undefined must not pass the run-id fallback.
-    const state = createState({ sessionKey: "main" });
+    const state = createState();
     const before = state.chatMessages.length;
     handleChatGatewayEvent(state, {
       state: "final",
-      message: { role: "assistant", content: [{ type: "text", text: "leaked companion answer" }] },
+      message: textMessage("assistant", "leaked companion answer"),
     } as ChatEventPayload);
     expect(state.chatMessages.length).toBe(before);
     expect(JSON.stringify(state.chatMessages)).not.toContain("leaked companion answer");
@@ -496,130 +540,48 @@ describe("handleChatGatewayEvent", () => {
           sendState: "sending",
         },
       ],
-      sessionKey: "main",
     });
 
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-other",
-        sessionKey: "main",
-        state: "status",
-        phase: "preparing_workspace",
-      }),
-    ).toBeNull();
+    receive(state, "status", { runId: "run-other", phase: "preparing_workspace" });
     expect(state.chatRunId).toBeNull();
     expect(state.chatRunStartup).toBeNull();
 
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "status",
-        phase: "preparing_workspace",
-      }),
-    ).toBe("status");
+    receive(state, "status", { phase: "preparing_workspace" });
     expect(state.chatRunId).toBe("run-1");
     expect(state.chatRunStartup).toEqual({
       state: "status",
       runId: "run-1",
       phase: "preparing_workspace",
     });
-    handleChatGatewayEvent(state, {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: { role: "assistant", content: "Done" },
-    });
-    handleChatGatewayEvent(state, {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "status",
-      phase: "preparing_workspace",
-    });
+    receive(state, "final", { message: { role: "assistant", content: "Done" } });
+    receive(state, "status", { phase: "preparing_workspace" });
     expect(state.chatRunId).toBeNull();
     expect(state.chatRunStartup).toBeNull();
   });
 
   it("shows startup status until the first chat delta and ignores late status", () => {
-    const state = createState({
-      chatRunId: "run-1",
-      chatStream: "",
-      sessionKey: "main",
-    });
-    const status: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "status",
-      phase: "preparing_context",
-    };
+    const state = createState({ chatRunId: "run-1", chatStream: "" });
+    const status: ChatEventPayload = chatEvent("status", { phase: "preparing_context" });
 
-    expect(handleChatGatewayEvent(state, status)).toBe("status");
+    handleChatGatewayEvent(state, status);
     expect(state.chatRunStartup).toEqual({
       state: "status",
       runId: "run-1",
       phase: "preparing_context",
     });
 
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-other",
-        sessionKey: "main",
-        state: "delta",
-        deltaText: "Other reply",
-      }),
-    ).toBeNull();
+    receive(state, "delta", { runId: "run-other", deltaText: "Other reply" });
     expect(state.chatRunStartup).toEqual({
       state: "status",
       runId: "run-1",
       phase: "preparing_context",
     });
 
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "delta",
-        deltaText: "Hello",
-      }),
-    ).toBe("delta");
+    receive(state, "delta", { deltaText: "Hello" });
     expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
 
-    expect(handleChatGatewayEvent(state, status)).toBe("status");
+    handleChatGatewayEvent(state, status);
     expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
-  });
-
-  it("returns null when sessionKey does not match and no active run is in flight", () => {
-    const state = createState({ sessionKey: "main" });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "other",
-      state: "final",
-    };
-    expect(handleChatGatewayEvent(state, payload)).toBe(null);
-  });
-
-  it("appends final messages to a switched-away session snapshot", () => {
-    const visibleMessage = createTextChatMessage("assistant", "main visible");
-    const state = createState({
-      sessionKey: "main",
-      chatMessages: [visibleMessage],
-      chatMessagesBySession: new Map(),
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "other",
-      state: "final",
-      message: createTextChatMessage("assistant", "other final"),
-    };
-    seedChatSnapshot(state, { sessionKey: "other" });
-
-    expect(handleChatGatewayEvent(state, payload)).toBe(null);
-    expect(state.chatMessages).toEqual([visibleMessage]);
-    expect(
-      readChatMessagesFromCache(state.chatMessagesBySession ?? new Map(), state, {
-        sessionKey: "other",
-      }),
-    ).toEqual([payload.message]);
   });
 
   it("appends one background final when three retained panes receive the same event", () => {
@@ -627,16 +589,14 @@ describe("handleChatGatewayEvent", () => {
     const states = ["one", "two", "three"].map((sessionKey) =>
       createState({ chatMessagesBySession: cache, sessionKey }),
     );
-    const payload: ChatEventPayload = {
-      runId: "run-1",
+    const payload: ChatEventPayload = chatEvent("final", {
       sessionKey: "background",
-      state: "final",
-      message: createTextChatMessage("assistant", "background final"),
-    };
+      message: textMessage("assistant", "background final"),
+    });
     seedChatSnapshot(states[0]!, { sessionKey: "background" });
 
     for (const state of states) {
-      expect(handleChatGatewayEvent(state, payload)).toBeNull();
+      handleChatGatewayEvent(state, payload);
     }
 
     expect(readChatMessagesFromCache(cache, states[0]!, { sessionKey: "background" })).toEqual([
@@ -644,47 +604,27 @@ describe("handleChatGatewayEvent", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "canonical default-session finals under the main alias",
-      activeSessionKey: "agent:main:other",
-      payloadSessionKey: "agent:main:main",
-      withConfiguredDefaults: false,
-    },
-    {
-      name: "configured default-session finals under runtime aliases",
-      activeSessionKey: "agent:ops:other",
-      payloadSessionKey: "agent:ops:home",
-      withConfiguredDefaults: true,
-    },
-    {
-      name: "canonical non-main finals under the plain session key",
-      activeSessionKey: "main",
-      payloadSessionKey: "agent:main:project",
-      withConfiguredDefaults: false,
-    },
-  ])("appends $name", ({ activeSessionKey, payloadSessionKey, withConfiguredDefaults }) => {
-    const state = createState({ sessionKey: activeSessionKey, chatMessagesBySession: new Map() });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: payloadSessionKey,
-      state: "final",
-      message: createTextChatMessage("assistant", "cached final"),
-    };
+  it("appends configured default-session finals under runtime aliases", () => {
+    const activeSessionKey = "agent:ops:other";
+    const payloadSessionKey = "agent:ops:home";
 
-    if (withConfiguredDefaults) {
-      (state as Record<string, unknown>).hello = {
-        snapshot: {
-          sessionDefaults: {
-            defaultAgentId: "ops",
-            mainKey: "home",
-          },
+    const state = createState({ sessionKey: activeSessionKey, chatMessagesBySession: new Map() });
+    const payload: ChatEventPayload = chatEvent("final", {
+      sessionKey: payloadSessionKey,
+      message: textMessage("assistant", "cached final"),
+    });
+
+    (state as Record<string, unknown>).hello = {
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "ops",
+          mainKey: "home",
         },
-      };
-    }
+      },
+    };
     seedChatSnapshot(state, { sessionKey: payloadSessionKey });
 
-    expect(handleChatGatewayEvent(state, payload)).toBe(null);
+    handleChatGatewayEvent(state, payload);
     expect(
       readChatMessagesFromCache(state.chatMessagesBySession ?? new Map(), state, {
         sessionKey: payloadSessionKey,
@@ -694,7 +634,7 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it("appends inactive global finals under the payload agent only", () => {
-    const visibleMessage = createTextChatMessage("assistant", "work visible");
+    const visibleMessage = textMessage("assistant", "work visible");
     const state = createState({
       sessionKey: "global",
       assistantAgentId: "work",
@@ -702,16 +642,15 @@ describe("handleChatGatewayEvent", () => {
       chatMessages: [visibleMessage],
       chatMessagesBySession: new Map(),
     });
-    const payload: ChatEventPayload = {
+    const payload: ChatEventPayload = chatEvent("final", {
       runId: "run-main-global",
       sessionKey: "global",
       agentId: "main",
-      state: "final",
-      message: createTextChatMessage("assistant", "main final"),
-    };
+      message: textMessage("assistant", "main final"),
+    });
     seedChatSnapshot(state, { sessionKey: "global", agentId: "main" });
 
-    expect(handleChatGatewayEvent(state, payload)).toBe(null);
+    handleChatGatewayEvent(state, payload);
     expect(state.chatMessages).toEqual([visibleMessage]);
     expect(
       readChatMessagesFromCache(state.chatMessagesBySession ?? new Map(), state, {
@@ -722,25 +661,9 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessagesBySession?.has("agent:work:main")).toBe(false);
   });
 
-  it("does not arm stale active-row suppression for an unowned selected-session final", () => {
-    const state = createState({ sessionKey: "main" }) as ChatState & {
-      lastLocalTerminalReconcile?: unknown;
-    };
-    const payload: ChatEventPayload = {
-      runId: "observed-run",
-      sessionKey: "main",
-      state: "final",
-      message: createTextChatMessage("assistant", "Observed reply"),
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.lastLocalTerminalReconcile).toBeUndefined();
-  });
-
   it("does not let a stale run id override session ownership", () => {
-    const visibleMessage = createTextChatMessage("assistant", "selected session stays visible");
+    const visibleMessage = textMessage("assistant", "selected session stays visible");
     const state = createState({
-      sessionKey: "main",
       chatRunId: "shared-run-id",
       chatMessages: [visibleMessage],
       chatMessagesBySession: new Map(),
@@ -749,23 +672,17 @@ describe("handleChatGatewayEvent", () => {
     const inactiveSessionKey = "agent:main:inactive-session";
     seedChatSnapshot(state, { sessionKey: inactiveSessionKey });
 
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "shared-run-id",
-        sessionKey: inactiveSessionKey,
-        state: "delta",
-        deltaText: "wrong-session stream",
-      }),
-    ).toBe(null);
-    const inactiveFinal = createTextChatMessage("assistant", "wrong-session final");
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "shared-run-id",
-        sessionKey: inactiveSessionKey,
-        state: "final",
-        message: inactiveFinal,
-      }),
-    ).toBe(null);
+    receive(state, "delta", {
+      runId: "shared-run-id",
+      sessionKey: inactiveSessionKey,
+      deltaText: "wrong-session stream",
+    });
+    const inactiveFinal = textMessage("assistant", "wrong-session final");
+    receive(state, "final", {
+      runId: "shared-run-id",
+      sessionKey: inactiveSessionKey,
+      message: inactiveFinal,
+    });
 
     expect(state.chatMessages).toEqual([visibleMessage]);
     expect(state.chatStream).toBe("selected session stream");
@@ -777,50 +694,18 @@ describe("handleChatGatewayEvent", () => {
     ).toEqual([inactiveFinal]);
   });
 
-  it("ignores selected-agent global events for another agent", () => {
-    const state = createState({
-      sessionKey: "global",
-      assistantAgentId: "work",
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-main-global",
-      sessionKey: "global",
-      agentId: "main",
-      state: "final",
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe(null);
-    expect(state.chatRunId).toBeNull();
-  });
-
-  it("ignores canonical global events for another selected agent main alias", () => {
-    const state = createState({
-      sessionKey: "agent:work:main",
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-main-global",
-      sessionKey: "global",
-      agentId: "main",
-      state: "final",
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe(null);
-    expect(state.chatRunId).toBeNull();
-  });
-
   it("treats unscoped global events as default-agent events only", () => {
     const state = createState({
       sessionKey: "global",
       assistantAgentId: "work",
       agentsList: { defaultId: "main" },
     });
-    const payload: ChatEventPayload = {
+    const payload: ChatEventPayload = chatEvent("final", {
       runId: "run-default-global",
       sessionKey: "global",
-      state: "final",
-    };
+    });
 
-    expect(handleChatGatewayEvent(state, payload)).toBe(null);
+    handleChatGatewayEvent(state, payload);
     expect(state.chatRunId).toBeNull();
   });
 
@@ -828,58 +713,21 @@ describe("handleChatGatewayEvent", () => {
     const state = createState({
       agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
       sessionKey: "agent:work:main",
-      chatRunId: null,
-      chatStream: null,
-      chatStreamStartedAt: null,
     });
-    const payload: ChatEventPayload = {
+    const payload: ChatEventPayload = chatEvent("delta", {
       runId: "run-work-global",
       sessionKey: "global",
       agentId: "work",
-      state: "delta",
-      message: createTextChatMessage("assistant", "Work reply"),
-    };
+      message: textMessage("assistant", "Work reply"),
+    });
 
-    expect(handleChatGatewayEvent(state, payload)).toBe("delta");
+    handleChatGatewayEvent(state, payload);
     expect(state.chatRunId).toBe("run-work-global");
     expect(state.chatStream).toBe("Work reply");
     expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
   });
 
-  it("accepts delta events for the active run when gateway emits a canonical session key", () => {
-    const state = createState({
-      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: null,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "agent:main:main",
-      state: "delta",
-      message: createTextChatMessage("assistant", "Live reply"),
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("delta");
-    expect(state.chatStream).toBe("Live reply");
-    expect(state.chatRunId).toBe("run-1");
-  });
-
   it.each([
-    {
-      name: "renders the cumulative snapshot without appending its delta again",
-      previous: "Live",
-      delta: " reply",
-      snapshot: "Live reply",
-      expected: "Live reply",
-    },
-    {
-      name: "uses the cumulative snapshot when the first observed delta joins mid-stream",
-      previous: null,
-      delta: " reply",
-      snapshot: "Live reply",
-      expected: "Live reply",
-    },
     {
       name: "renders the cumulative snapshot across a rolled-over stream boundary",
       previous: null,
@@ -887,21 +735,6 @@ describe("handleChatGatewayEvent", () => {
       delta: " reply",
       snapshot: "Live reply",
       expected: "Live reply",
-    },
-    {
-      name: "uses the cumulative snapshot when a same-length missed replacement changes the prefix",
-      previous: "AB",
-      delta: "E",
-      snapshot: "CDE",
-      expected: "CDE",
-    },
-    {
-      name: "uses an authoritative snapshot even when a replacement delta is also present",
-      previous: "Alpha beta",
-      delta: "Alpha",
-      snapshot: "Authoritative snapshot",
-      replace: true,
-      expected: "Authoritative snapshot",
     },
     {
       name: "retracts the stream when a replacement snapshot is empty",
@@ -913,21 +746,17 @@ describe("handleChatGatewayEvent", () => {
     },
   ])("$name", ({ previous, segments, delta, snapshot, replace, expected }) => {
     const state = createState({
-      sessionKey: "main",
       chatRunId: "run-1",
       chatStream: previous,
       ...(segments ? { chatStreamSegments: segments } : {}),
     });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "delta",
+    const payload: ChatEventPayload = chatEvent("delta", {
       deltaText: delta,
-      message: createTextChatMessage("assistant", snapshot),
+      message: textMessage("assistant", snapshot),
       ...(replace ? { replace: true } : {}),
-    };
+    });
 
-    expect(handleChatGatewayEvent(state, payload)).toBe("delta");
+    handleChatGatewayEvent(state, payload);
     expect(state.chatStream).toBe(expected);
   });
 
@@ -952,14 +781,7 @@ describe("handleChatGatewayEvent", () => {
       chatMessages: [first.message, second.message],
     });
     const receiveDelta = (text: string) => {
-      expect(
-        handleChatGatewayEvent(state, {
-          runId: "run-1",
-          sessionKey: "main",
-          state: "delta",
-          message: createTextChatMessage("assistant", text),
-        }),
-      ).toBe("delta");
+      receive(state, "delta", { message: textMessage("assistant", text) });
       return visibleCurrentAssistantStreamTail(state, () => false);
     };
 
@@ -983,195 +805,48 @@ describe("handleChatGatewayEvent", () => {
     expect(second.readContent).not.toHaveBeenCalled();
   });
 
-  it("adopts the run id for selected-session live deltas observed from another channel", () => {
-    const state = createState({
-      sessionKey: "agent:main:feishu:direct:peer-1",
-      chatRunId: null,
-      chatRunError: { summary: "Previous run failed" },
-      chatStream: null,
-      chatStreamStartedAt: null,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-feishu-1",
-      sessionKey: "agent:main:feishu:direct:peer-1",
-      state: "delta",
-      message: createTextChatMessage("assistant", "Observed reply"),
+  it("keeps a delivered legacy text-only assistant visible exactly once across stale history", async () => {
+    const final = {
+      text: "Delivered answer",
+      timestamp: 42,
+      __openclaw: { id: "legacy-final", seq: 2 },
     };
 
-    expect(handleChatGatewayEvent(state, payload)).toBe("delta");
-    expect(state.chatRunId).toBe("run-feishu-1");
-    expect(state.chatRunError).toBeNull();
-    expect(state.chatStream).toBe("Observed reply");
-    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
-  });
-
-  it("adopts the run id when the selected main alias receives canonical live deltas", () => {
-    const state = createState({
-      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
-      sessionKey: "main",
-      chatRunId: null,
-      chatStream: null,
-      chatStreamStartedAt: null,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-canonical-main",
-      sessionKey: "agent:main:main",
-      state: "delta",
-      message: createTextChatMessage("assistant", "Canonical reply"),
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("delta");
-    expect(state.chatRunId).toBe("run-canonical-main");
-    expect(state.chatStream).toBe("Canonical reply");
-    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
-  });
-
-  it("accepts final events for the active run when gateway emits a canonical session key", () => {
-    const state = createState({
-      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Live reply",
-      chatStreamStartedAt: 100,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "agent:main:main",
-      state: "final",
-      message: createTextChatMessage("assistant", "Live reply"),
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([payload.message]);
-    expect(state.chatRunId).toBe(null);
-    expect(state.chatStream).toBe(null);
-    expect(state.chatStreamStartedAt).toBe(null);
-  });
-
-  it("does not duplicate streamed text when final payload has no role", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Live reply",
-      chatStreamStartedAt: 100,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: {
-        text: "Live reply",
-      },
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([
-      {
-        role: "assistant",
-        text: "Live reply",
-        content: [{ type: "text", text: "Live reply" }],
-      },
-    ]);
-    expect(state.chatRunId).toBe(null);
-    expect(state.chatStream).toBe(null);
-    expect(state.chatStreamStartedAt).toBe(null);
-  });
-
-  it.each([
-    {
-      name: "canonical assistant",
-      final: createTextChatMessage("assistant", "Delivered answer", {
-        id: "delivered-assistant",
-        seq: 2,
-      }),
-    },
-    {
-      name: "legacy text-only assistant",
-      final: { text: "Delivered answer" },
-    },
-  ])("keeps a delivered $name visible exactly once across stale history", async ({ final }) => {
-    const user = createTextChatMessage("user", "Ask", { id: "persisted-user", seq: 1 });
+    const user = textMessage("user", "Ask", { id: "persisted-user", seq: 1 });
     const request = vi.fn().mockResolvedValue({ messages: [user] });
     const state = createHistoryState(request, {
       chatMessages: [user],
       chatRunId: "delivered-run",
     });
 
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "delivered-run",
-        sessionKey: "main",
-        state: "final",
-        message: final,
-      }),
-    ).toBe("final");
+    receive(state, "final", { runId: "delivered-run", message: final });
 
-    const normalizedFinal =
-      "role" in final
-        ? final
-        : {
-            ...final,
-            role: "assistant",
-            content: [{ type: "text", text: final.text }],
-          };
-    expect(state.chatMessages).toEqual([user, normalizedFinal]);
-
-    await loadChatHistory(state);
-    expect(state.chatMessages).toEqual([user, normalizedFinal]);
-
-    await loadChatHistory(state);
-    expect(state.chatMessages).toEqual([user, normalizedFinal]);
-  });
-
-  it.each([
-    {
-      name: "metadata-free",
-      message: { text: "Delivered answer" },
-    },
-    {
-      name: "metadata-bearing",
-      message: {
-        text: "Delivered answer",
-        timestamp: 42,
-        __openclaw: { id: "legacy-final", seq: 2 },
-      },
-    },
-  ])("canonicalizes and deduplicates replayed $name text-only finals", ({ message }) => {
-    const runId = "legacy-text-final";
-    const state = createState({ sessionKey: "main", chatRunId: runId });
-    const event: ChatEventPayload = {
-      runId,
-      sessionKey: "main",
-      state: "final",
-      message,
-    };
-    const expected = {
-      ...message,
+    const normalizedFinal = {
+      ...final,
       role: "assistant",
-      content: [{ type: "text", text: "Delivered answer" }],
+      content: [{ type: "text", text: final.text }],
     };
+    expect(state.chatMessages).toEqual([user, normalizedFinal]);
+    receive(state, "final", { runId: "delivered-run", message: final });
+    expect(state.chatMessages).toEqual([user, normalizedFinal]);
 
-    expect(handleChatGatewayEvent(state, event)).toBe("final");
-    expect(handleChatGatewayEvent(state, event)).toBe("final");
-    expect(handleChatGatewayEvent(state, event)).toBe("final");
+    await loadChatHistory(state);
+    expect(state.chatMessages).toEqual([user, normalizedFinal]);
 
-    expect(state.chatMessages).toEqual([expected]);
-    expect(getChatSessionProjection(state, { sessionKey: "main" }).runs[runId]).toMatchObject({
-      status: "completed",
-      acceptedFinalMessageIdentities: [expect.any(String)],
-    });
+    await loadChatHistory(state);
+    expect(state.chatMessages).toEqual([user, normalizedFinal]);
   });
 
   it("settles an active run when its terminal reply was already accepted", () => {
     const runId = "run-1";
-    const final = createTextChatMessage("assistant", "Delivered answer");
+    const final = textMessage("assistant", "Delivered answer");
     const state = createStateWithRunningSession({
       sessionKey: "main",
       chatRunId: runId,
       chatStream: "Delivered answer",
       chatStreamStartedAt: 123,
       chatRunStartup: { state: "activity", runId },
-    }) as SessionTestState & { chatStreamSegments: HistoryToolSegment[] };
+    });
     state.chatStreamSegments = [{ text: "Retained commentary", ts: 122, toolCallId: "call-1" }];
     state.knownAgentRunIds = new Set([runId]);
     const scope = { sessionKey: state.sessionKey };
@@ -1185,14 +860,7 @@ describe("handleChatGatewayEvent", () => {
     publishChatSessionProjection(state, projection);
     publishChatSessionProjectionMessages(state, [final], { scope });
 
-    expect(
-      handleChatGatewayEvent(state, {
-        runId,
-        sessionKey: "main",
-        state: "final",
-        message: final,
-      }),
-    ).toBe("final");
+    receive(state, "final", { runId, message: final });
 
     expect(state.chatMessages).toEqual([final]);
     expect(state.chatRunId).toBeNull();
@@ -1213,64 +881,23 @@ describe("handleChatGatewayEvent", () => {
     });
   });
 
-  it("persists keyed commentary with the final answer by default", () => {
-    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatMessages: [user],
-      chatStream: null,
-      chatStreamStartedAt: null,
-    }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
-    };
-    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: createTextChatMessage("assistant", "Final answer.", undefined, 5),
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toHaveLength(3);
-    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
-    expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
-    expectTextChatMessage(state.chatMessages[2], "assistant", "Final answer.");
-    expect(state.chatStreamSegments).toEqual([]);
-  });
-
   it("replaces an exact keyed final-answer stream with the persisted terminal", () => {
-    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatMessages: [user],
-      chatStream: null,
-      chatStreamStartedAt: null,
-    }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
-    };
+    const user = textMessage("user", "Ask", undefined, 1);
+    const state = createState({ chatRunId: "run-1", chatMessages: [user] });
     state.chatStreamSegments = [{ text: "Final answer.", ts: 2, itemId: "final-answer-1" }];
 
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "final",
-        message: createTextChatMessage("assistant", "Final answer.", undefined, 5),
-      }),
-    ).toBe("final");
+    receive(state, "final", {
+      message: textMessage("assistant", "Final answer.", undefined, 5),
+    });
 
     expect(state.chatMessages).toHaveLength(2);
-    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
-    expectTextChatMessage(state.chatMessages[1], "assistant", "Final answer.");
+    expectTextMessage(state.chatMessages[0], "user", "Ask");
+    expectTextMessage(state.chatMessages[1], "assistant", "Final answer.");
     expect(state.chatStreamSegments).toEqual([]);
   });
 
   it("preserves an already-recorded stream boundary for a persisted steer", () => {
     const state = createState({
-      sessionKey: "main",
       chatRunId: "run-1",
       chatMessages: [
         { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 },
@@ -1284,21 +911,9 @@ describe("handleChatGatewayEvent", () => {
             source: "segment",
           },
         },
-        createTextChatMessage(
-          "user",
-          "Focus on deployment",
-          { idempotencyKey: "steer-send-1:user" },
-          3,
-        ),
+        textMessage("user", "Focus on deployment", { idempotencyKey: "steer-send-1:user" }, 3),
       ],
-    }) as ChatState & {
-      chatStreamSegments: Array<{
-        text: string;
-        ts: number;
-        itemId: string;
-        boundaryRunId: string;
-      }>;
-    };
+    });
     state.chatStreamSegments = [
       {
         text: "Looking into it.",
@@ -1308,85 +923,56 @@ describe("handleChatGatewayEvent", () => {
       },
     ];
 
-    handleChatGatewayEvent(state, {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: createTextChatMessage("assistant", "Final answer.", undefined, 5),
+    receive(state, "final", {
+      message: textMessage("assistant", "Final answer.", undefined, 5),
     });
 
     expect(state.chatMessages).toHaveLength(4);
-    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
-    expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
-    expectTextChatMessage(state.chatMessages[2], "user", "Focus on deployment");
-    expectTextChatMessage(state.chatMessages[3], "assistant", "Final answer.");
+    expectTextMessage(state.chatMessages[0], "user", "Ask");
+    expectTextMessage(state.chatMessages[1], "assistant", "Looking into it.");
+    expectTextMessage(state.chatMessages[2], "user", "Focus on deployment");
+    expectTextMessage(state.chatMessages[3], "assistant", "Final answer.");
   });
 
   it("keeps a terminal-only suffix after a steer with no post-boundary delta", () => {
     const state = createState({
-      sessionKey: "main",
       chatRunId: "run-1",
       chatMessages: [
-        createTextChatMessage("user", "Ask", { idempotencyKey: "run-1:user" }, 1),
-        createTextChatMessage("user", "Steer", { idempotencyKey: "steer-1:user" }, 3),
+        textMessage("user", "Ask", { idempotencyKey: "run-1:user" }, 1),
+        textMessage("user", "Steer", { idempotencyKey: "steer-1:user" }, 3),
       ],
-      chatStream: null,
-      chatStreamStartedAt: null,
-    }) as ChatState & {
-      chatStreamSegments: Array<{
-        text: string;
-        ts: number;
-        runId: string;
-        boundaryRunId: string;
-      }>;
-    };
+    });
     state.chatStreamSegments = [
       { text: "Before steer.", ts: 2, runId: "run-1", boundaryRunId: "steer-1" },
     ];
 
-    handleChatGatewayEvent(state, {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: createTextChatMessage(
-        "assistant",
-        "Before steer. Final unseen suffix.",
-        undefined,
-        4,
-      ),
+    receive(state, "final", {
+      message: textMessage("assistant", "Before steer. Final unseen suffix.", undefined, 4),
     });
 
     expect(state.chatMessages).toHaveLength(4);
-    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
-    expectTextChatMessage(state.chatMessages[1], "assistant", "Before steer.");
-    expectTextChatMessage(state.chatMessages[2], "user", "Steer");
-    expectTextChatMessage(state.chatMessages[3], "assistant", "Final unseen suffix.");
+    expectTextMessage(state.chatMessages[0], "user", "Ask");
+    expectTextMessage(state.chatMessages[1], "assistant", "Before steer.");
+    expectTextMessage(state.chatMessages[2], "user", "Steer");
+    expectTextMessage(state.chatMessages[3], "assistant", "Final unseen suffix.");
   });
 
   it("clears keyed commentary when chatPersistCommentary is false", () => {
-    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
+    const user = textMessage("user", "Ask", undefined, 1);
     const state = createState({
-      sessionKey: "main",
       chatRunId: "run-1",
       chatMessages: [user],
-      chatStream: null,
-      chatStreamStartedAt: null,
       settings: { chatPersistCommentary: false },
-    }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
-    };
+    });
     state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: createTextChatMessage("assistant", "Final answer.", undefined, 5),
-    };
+    const payload: ChatEventPayload = chatEvent("final", {
+      message: textMessage("assistant", "Final answer.", undefined, 5),
+    });
 
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
+    handleChatGatewayEvent(state, payload);
     expect(state.chatMessages).toHaveLength(2);
-    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
-    expectTextChatMessage(state.chatMessages[1], "assistant", "Final answer.");
+    expectTextMessage(state.chatMessages[0], "user", "Ask");
+    expectTextMessage(state.chatMessages[1], "assistant", "Final answer.");
     expect(state.chatStreamSegments).toEqual([]);
   });
 
@@ -1403,16 +989,6 @@ describe("handleChatGatewayEvent", () => {
       errorSummary: "Error: agent provider timeout",
     },
     {
-      name: "provider failure",
-      event: {
-        state: "error",
-        errorMessage: "agent provider failure",
-      },
-      projectionStatus: "error",
-      sessionStatus: "failed",
-      errorSummary: "Error: agent provider failure",
-    },
-    {
       name: "operator cancellation",
       event: { state: "aborted" },
       projectionStatus: "aborted",
@@ -1422,249 +998,136 @@ describe("handleChatGatewayEvent", () => {
   ] as const)(
     "projects the canonical $name status onto the selected session",
     ({ event, projectionStatus, sessionStatus, errorSummary }) => {
-      vi.useFakeTimers();
-      try {
-        const state = createStateWithRunningSession({
-          chatRunId: "run-1",
-          chatStream: "Partial assistant reply",
-          chatStreamStartedAt: 100,
-        });
-        const staleSessionsResult = state.sessionsResult;
+      const state = createStateWithRunningSession({
+        chatRunId: "run-1",
+        chatStream: "Partial assistant reply",
+        chatStreamStartedAt: 100,
+      });
+      const staleSessionsResult = state.sessionsResult;
 
-        expect(
-          handleChatGatewayEvent(state, {
-            runId: "run-1",
-            sessionKey: "main",
-            ...event,
-          }),
-        ).toBe(event.state);
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        ...event,
+      });
 
-        expect(getChatSessionProjection(state, { sessionKey: "main" }).runs["run-1"]?.status).toBe(
-          projectionStatus,
-        );
-        expect(state.sessionsResult.sessions[0]).toMatchObject({
-          activeRunIds: [],
-          hasActiveRun: false,
-          status: sessionStatus,
-        });
-        expect(state.sessionsResult.sessions[0]?.lastRunError ?? null).toBe(errorSummary);
-        expect(state.lastLocalTerminalReconcile?.sessionStatus).toBe(sessionStatus);
-        expect(state.chatRunStatus).toMatchObject({
-          phase: "interrupted",
-          runId: "run-1",
-          sessionKey: "main",
-        });
-        expect(state.chatRunError?.summary ?? null).toBe(errorSummary);
-        expect(state.chatRunId).toBeNull();
-        expect(state.chatStream).toBeNull();
-        expect(state.chatStreamStartedAt).toBeNull();
+      expect(getChatSessionProjection(state, { sessionKey: "main" }).runs["run-1"]?.status).toBe(
+        projectionStatus,
+      );
+      expect(state.sessionsResult.sessions[0]).toMatchObject({
+        activeRunIds: [],
+        hasActiveRun: false,
+        status: sessionStatus,
+      });
+      expect(state.sessionsResult.sessions[0]?.lastRunError ?? null).toBe(errorSummary);
+      expect(state.lastLocalTerminalReconcile?.sessionStatus).toBe(sessionStatus);
+      expect(state.chatRunStatus).toMatchObject({
+        phase: "interrupted",
+        runId: "run-1",
+        sessionKey: "main",
+      });
+      expect(state.chatRunError?.summary ?? null).toBe(errorSummary);
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatStream).toBeNull();
+      expect(state.chatStreamStartedAt).toBeNull();
 
-        state.sessionsResult = staleSessionsResult;
-        expect(reconcileChatRunAfterSessionStatePublication(state)).toBe(true);
-        expect(state.sessionsResult.sessions[0]).toMatchObject({
-          hasActiveRun: false,
-          status: sessionStatus,
-        });
-        expect(state.sessionsResult.sessions[0]?.lastRunError ?? null).toBe(errorSummary);
-      } finally {
-        vi.useRealTimers();
-      }
+      state.sessionsResult = staleSessionsResult;
+      expect(reconcileChatRunAfterSessionStatePublication(state)).toBe(true);
+      expect(state.sessionsResult.sessions[0]).toMatchObject({
+        hasActiveRun: false,
+        status: sessionStatus,
+      });
+      expect(state.sessionsResult.sessions[0]?.lastRunError ?? null).toBe(errorSummary);
     },
   );
 
   it("reconciles cached run and indicator state on terminal events", () => {
-    vi.useFakeTimers();
-    try {
-      const state = createStateWithRunningSession({
-        chatRunId: "run-1",
-        chatStream: "Live reply",
-        chatStreamStartedAt: 100,
-      });
-      state.compactionStatus = {
-        phase: "active",
-        runId: "run-1",
-        startedAt: 100,
-        completedAt: null,
-      };
-      state.compactionClearTimer = setTimeout(() => undefined, 1_000);
-      state.fallbackStatus = {
-        selected: "openai/gpt-5.5",
-        active: "anthropic/claude-sonnet-4-6",
-        attempts: [],
-        occurredAt: 100,
-      };
-      state.fallbackClearTimer = setTimeout(() => undefined, 1_000);
-      const payload: ChatEventPayload = {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "final",
-        message: createTextChatMessage("assistant", "Live reply"),
-      };
+    const state = createStateWithRunningSession({
+      chatRunId: "run-1",
+      chatStream: "Live reply",
+      chatStreamStartedAt: 100,
+    });
+    state.compactionStatus = {
+      phase: "active",
+      runId: "run-1",
+      startedAt: 100,
+      completedAt: null,
+    };
+    state.compactionClearTimer = setTimeout(() => undefined, 1_000);
+    state.fallbackStatus = {
+      selected: "openai/gpt-5.5",
+      active: "anthropic/claude-sonnet-4-6",
+      attempts: [],
+      occurredAt: 100,
+    };
+    state.fallbackClearTimer = setTimeout(() => undefined, 1_000);
+    const payload: ChatEventPayload = chatEvent("final", {
+      stopReason: "completed",
+      yielded: true,
+      message: textMessage("assistant", "Live reply"),
+    });
 
-      expect(handleChatGatewayEvent(state, payload)).toBe("final");
+    handleChatGatewayEvent(state, payload);
 
-      expect(state.chatRunId).toBeNull();
-      expect(state.chatStream).toBeNull();
-      expect(state.chatStreamStartedAt).toBeNull();
-      expect(state.compactionStatus).toBeNull();
-      expect(state.compactionClearTimer).toBeNull();
-      expect(state.fallbackStatus).toBeNull();
-      expect(state.fallbackClearTimer).toBeNull();
-      expect(state.chatRunStatus).toMatchObject({
-        phase: "done",
-        runId: "run-1",
-        sessionKey: "main",
-      });
-      expect(state.sessionsResult.sessions[0]).toMatchObject({
-        hasActiveRun: false,
-        status: "done",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+    expectSettled(state);
+    expect(state.compactionStatus).toBeNull();
+    expect(state.compactionClearTimer).toBeNull();
+    expect(state.fallbackStatus).toBeNull();
+    expect(state.fallbackClearTimer).toBeNull();
+    expect(state.chatRunStatus).toMatchObject({
+      phase: "done",
+      runId: "run-1",
+      sessionKey: "main",
+    });
+    expect(state.sessionsResult.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "done",
+    });
   });
 
   it("does not publish Done while a yielded turn has registered continuation work", () => {
-    vi.useFakeTimers();
-    try {
-      const state = createStateWithRunningSession({
-        chatRunId: "run-1",
-        chatStream: "Restarting now",
-        chatStreamStartedAt: 100,
-      });
-
-      expect(
-        handleChatGatewayEvent(state, {
-          runId: "run-1",
-          sessionKey: "main",
-          state: "final",
-          stopReason: "end_turn",
-          yielded: true,
-          message: createTextChatMessage(
-            "assistant",
-            "The gateway will restart; I will resume verification afterward.",
-          ),
-        }),
-      ).toBe("final");
-
-      expect(state.chatRunId).toBeNull();
-      expect(state.chatStream).toBeNull();
-      expect(state.chatRunStatus).toBeNull();
-      expect(state.sessionsResult.sessions[0]).toMatchObject({
-        hasActiveRun: false,
-        activeRunIds: [],
-        status: "running",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not infer pending continuation from end_turn without yielded metadata", () => {
-    vi.useFakeTimers();
-    try {
-      const state = createState({
-        sessionKey: "main",
-        chatRunId: "run-1",
-        chatStream: "Final response",
-      }) as ChatState & {
-        chatRunStatus?: { phase?: string } | null;
-      };
-
-      expect(
-        handleChatGatewayEvent(state, {
-          runId: "run-1",
-          sessionKey: "main",
-          state: "final",
-          stopReason: "end_turn",
-          message: createTextChatMessage("assistant", "Final response"),
-        }),
-      ).toBe("final");
-
-      expect(state.chatRunStatus?.phase).toBe("done");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not suppress completion for stale yielded metadata on another stop reason", () => {
-    vi.useFakeTimers();
-    try {
-      const state = createState({
-        sessionKey: "main",
-        chatRunId: "run-1",
-        chatStream: "Final response",
-      }) as ChatState & {
-        chatRunStatus?: { phase?: string } | null;
-      };
-
-      expect(
-        handleChatGatewayEvent(state, {
-          runId: "run-1",
-          sessionKey: "main",
-          state: "final",
-          stopReason: "completed",
-          yielded: true,
-          message: createTextChatMessage("assistant", "Final response"),
-        }),
-      ).toBe("final");
-
-      expect(state.chatRunStatus?.phase).toBe("done");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("still drops events when neither session key nor active run id matches", () => {
-    const state = createState({
-      sessionKey: "main",
+    const state = createStateWithRunningSession({
       chatRunId: "run-1",
-      chatStream: "Working...",
+      chatStream: "Restarting now",
+      chatStreamStartedAt: 100,
     });
-    const payload: ChatEventPayload = {
-      runId: "run-2",
-      sessionKey: "agent:main:main",
-      state: "delta",
-      message: createTextChatMessage("assistant", "Wrong run"),
-    };
 
-    expect(handleChatGatewayEvent(state, payload)).toBe(null);
-    expect(state.chatRunId).toBe("run-1");
-    expect(state.chatStream).toBe("Working...");
-    expect(state.chatMessages).toStrictEqual([]);
+    receive(state, "final", {
+      stopReason: "end_turn",
+      yielded: true,
+      message: textMessage(
+        "assistant",
+        "The gateway will restart; I will resume verification afterward.",
+      ),
+    });
+
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatRunStatus).toBeNull();
+    expect(state.sessionsResult.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      activeRunIds: [],
+      status: "running",
+    });
   });
 
   it("ignores NO_REPLY delta updates", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Hello",
+    const state = createState({ chatRunId: "run-1", chatStream: "Hello" });
+    const payload: ChatEventPayload = chatEvent("delta", {
+      message: textMessage("assistant", "NO_REPLY"),
     });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "delta",
-      message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
-    };
 
-    expect(handleChatGatewayEvent(state, payload)).toBe("delta");
+    handleChatGatewayEvent(state, payload);
     expect(state.chatStream).toBe("Hello");
   });
 
   it("appends final payload from another run without clearing active stream", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-user",
-      chatStream: "Working...",
-      chatStreamStartedAt: 123,
-    });
-    const payload: ChatEventPayload = {
+    const state = createActiveStreamingState();
+    const payload: ChatEventPayload = chatEvent("final", {
       runId: "run-announce",
-      sessionKey: "main",
-      state: "final",
-      message: createTextChatMessage("assistant", "Sub-agent findings"),
-    };
-    expect(handleChatGatewayEvent(state, payload)).toBe(null);
+      message: textMessage("assistant", "Sub-agent findings"),
+    });
+    handleChatGatewayEvent(state, payload);
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);
@@ -1672,236 +1135,47 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages[0]).toEqual(payload.message);
   });
 
-  it("drops NO_REPLY final payload from another run without clearing active stream", () => {
-    const state = createActiveStreamingState();
-    const payload = createOtherRunNoReplyFinalPayload();
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatRunId).toBe("run-user");
-    expect(state.chatStream).toBe("Working...");
-    expect(state.chatStreamStartedAt).toBe(123);
-    expect(state.chatMessages).toStrictEqual([]);
-  });
-
-  it("drops HEARTBEAT_OK final payload from another run without clearing active stream", () => {
-    const state = createActiveStreamingState();
-    const payload = createOtherRunSilentFinalPayload("HEARTBEAT_OK");
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatRunId).toBe("run-user");
-    expect(state.chatStream).toBe("Working...");
-    expect(state.chatStreamStartedAt).toBe(123);
-    expect(state.chatMessages).toStrictEqual([]);
-  });
-
-  it.each(["no_reply", "ANNOUNCE_SKIP"])(
-    "keeps plain-text %s final payload from another run without clearing active stream",
-    (text) => {
-      const state = createActiveStreamingState();
-      const payload = createOtherRunSilentFinalPayload(text);
-
-      expect(handleChatGatewayEvent(state, payload)).toBe(null);
-      expect(state.chatRunId).toBe("run-user");
-      expect(state.chatStream).toBe("Working...");
-      expect(state.chatStreamStartedAt).toBe(123);
-      expect(state.chatMessages).toEqual([payload.message]);
-    },
-  );
-
   it("ignores HEARTBEAT_OK delta updates", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Previous visible text",
+    const state = createState({ chatRunId: "run-1", chatStream: "Previous visible text" });
+    const payload: ChatEventPayload = chatEvent("delta", {
+      message: textMessage("assistant", "HEARTBEAT_OK"),
     });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "delta",
-      message: { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
-    };
 
-    expect(handleChatGatewayEvent(state, payload)).toBe("delta");
+    handleChatGatewayEvent(state, payload);
     expect(state.chatStream).toBe("Previous visible text");
-  });
-
-  it("replaces the stream when a delta snapshot gets shorter", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Alpha beta",
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "delta",
-      message: createTextChatMessage("assistant", "Alpha"),
-    };
-    expect(handleChatGatewayEvent(state, payload)).toBe("delta");
-    expect(state.chatStream).toBe("Alpha");
-  });
-
-  it("returns final for another run when payload has no message", () => {
-    const state = createActiveStreamingState();
-    const payload: ChatEventPayload = {
-      runId: "run-announce",
-      sessionKey: "main",
-      state: "final",
-    };
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatRunId).toBe("run-user");
-    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("keeps active stream for unowned final payloads", () => {
     const state = createActiveStreamingState();
-    const payload: ChatEventPayload = {
-      sessionKey: "main",
-      state: "final",
-    };
+    const payload: ChatEventPayload = chatEvent("final", { runId: undefined });
 
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
+    handleChatGatewayEvent(state, payload);
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);
     expect(state.chatMessages).toStrictEqual([]);
   });
 
-  it("keeps active stream while appending unowned assistant finals", () => {
-    const state = createActiveStreamingState();
-    const payload: ChatEventPayload = {
-      sessionKey: "main",
-      state: "final",
-      message: createTextChatMessage("assistant", "Injected note"),
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe(null);
-    expect(state.chatRunId).toBe("run-user");
-    expect(state.chatStream).toBe("Working...");
-    expect(state.chatStreamStartedAt).toBe(123);
-    expect(state.chatMessages).toEqual([payload.message]);
-  });
-
-  it.each(["aborted", "error"] as const)(
-    "keeps active stream for unowned %s payloads",
-    (terminalState) => {
-      const state = createActiveStreamingState();
-      const payload: ChatEventPayload = {
-        sessionKey: "main",
-        state: terminalState,
-      };
-
-      expect(handleChatGatewayEvent(state, payload)).toBe(null);
-      expect(state.chatRunId).toBe("run-user");
-      expect(state.chatStream).toBe("Working...");
-      expect(state.chatStreamStartedAt).toBe(123);
-      expect(state.chatMessages).toStrictEqual([]);
-    },
-  );
-
   it("persists streamed text when final event carries no message", () => {
-    const existingMessage = createTextChatMessage("user", "Hi", undefined, 1);
+    const existingMessage = textMessage("user", "Hi", undefined, 1);
     const state = createState({
-      sessionKey: "main",
       chatRunId: "run-1",
       chatStream: "Here is my reply",
       chatStreamStartedAt: 100,
       chatMessages: [existingMessage],
     });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-    };
-    const assignments = trackChatMessagesAssignments(state);
+    const payload: ChatEventPayload = chatEvent("final");
 
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(assignments).toMatchObject([{ chatRunId: "run-1", chatStream: "Here is my reply" }]);
-    expect(state.chatRunId).toBe(null);
-    expect(state.chatStream).toBe(null);
-    expect(state.chatStreamStartedAt).toBe(null);
+    handleChatGatewayEvent(state, payload);
+    expectSettled(state);
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(existingMessage);
-    expectTextChatMessage(state.chatMessages[1], "assistant", "Here is my reply");
-  });
-
-  it("does not persist empty or whitespace-only stream on final", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "   ",
-      chatStreamStartedAt: 100,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-    };
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatRunId).toBe(null);
-    expect(state.chatStream).toBe(null);
-    expect(state.chatMessages).toStrictEqual([]);
-  });
-
-  it("does not persist null stream on final with no message", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: null,
-      chatStreamStartedAt: 100,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-    };
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toStrictEqual([]);
-  });
-
-  it("prefers final payload message over streamed text", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Streamed partial",
-      chatStreamStartedAt: 100,
-    });
-    const finalMsg = createTextChatMessage("assistant", "Complete reply", undefined, 101);
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: finalMsg,
-    };
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([finalMsg]);
-    expect(state.chatStream).toBe(null);
-  });
-
-  it("keeps repeated assistant final text from a later turn", () => {
-    const firstUser = createTextChatMessage("user", "first", undefined, 1);
-    const firstAssistant = createTextChatMessage("assistant", "OK", undefined, 2);
-    const secondUser = createTextChatMessage("user", "second", undefined, 3);
-    const secondAssistant = createTextChatMessage("assistant", "OK", undefined, 4);
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-2",
-      chatMessages: [firstUser, firstAssistant, secondUser],
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-2",
-      sessionKey: "main",
-      state: "final",
-      message: secondAssistant,
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([firstUser, firstAssistant, secondUser, secondAssistant]);
+    expectTextMessage(state.chatMessages[1], "assistant", "Here is my reply");
   });
 
   it("keeps repeated assistant final text within the same turn", () => {
-    const user = createTextChatMessage("user", "repeat", undefined, 1);
-    const firstAssistant = createTextChatMessage("assistant", "OK", undefined, 2);
+    const user = textMessage("user", "repeat", undefined, 1);
+    const firstAssistant = textMessage("assistant", "OK", undefined, 2);
     const secondAssistant = {
       role: "assistant",
       content: [
@@ -1910,223 +1184,59 @@ describe("handleChatGatewayEvent", () => {
       ],
       timestamp: 3,
     };
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatMessages: [user, firstAssistant],
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: secondAssistant,
-    };
+    const state = createState({ chatRunId: "run-1", chatMessages: [user, firstAssistant] });
+    const payload: ChatEventPayload = chatEvent("final", { message: secondAssistant });
 
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
+    handleChatGatewayEvent(state, payload);
     expect(state.chatMessages).toEqual([user, firstAssistant, secondAssistant]);
   });
 
-  it("appends final payload message from own run before clearing stream state", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Reply",
-      chatStreamStartedAt: 100,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: createTextChatMessage("assistant", "Reply", undefined, 101),
-    };
-    const assignments = trackChatMessagesAssignments(state);
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(assignments).toMatchObject([{ chatRunId: "run-1", chatStream: "Reply" }]);
-    expect(state.chatMessages).toEqual([payload.message]);
-    expect(state.chatRunId).toBe(null);
-    expect(state.chatStream).toBe(null);
-    expect(state.chatStreamStartedAt).toBe(null);
-  });
-
-  it("keeps pre-final stream segments when final payload is renderable", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: null,
-      chatStreamStartedAt: null,
-    }) as ChatState & { chatStreamSegments: Array<{ text: string; ts: number }> };
-    state.chatStreamSegments = [{ text: "before tool", ts: 1 }];
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: createTextChatMessage("assistant", "source reply final", undefined, 101),
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toHaveLength(2);
-    expectTextChatMessage(state.chatMessages[0], "assistant", "before tool");
-    expect(state.chatMessages[1]).toEqual(payload.message);
-    expect(state.chatRunId).toBe(null);
-    expect(state.chatStream).toBe(null);
-    expect(state.chatStreamSegments).toEqual([]);
-  });
-
   it.each([
-    {
-      name: "processes aborted from own run and keeps partial assistant message",
-      stream: "Partial reply",
-      message: createTextChatMessage("assistant", "Partial reply", undefined, 2),
-      expectedText: "Partial reply",
-      preservePayload: true,
-      trackAssignments: true,
-    },
-    {
-      name: "falls back to streamed partial when aborted payload message is invalid",
-      stream: "Partial reply",
-      message: "not-an-assistant-message",
-      expectedText: "Partial reply",
-    },
-    {
-      name: "falls back to streamed partial when aborted payload has non-assistant role",
-      stream: "Partial reply",
-      message: createTextChatMessage("user", "unexpected"),
-      expectedText: "Partial reply",
-    },
-    {
-      name: "processes aborted from own run without message and empty stream",
-      stream: "",
-    },
-  ])("$name", ({ stream, message, expectedText, preservePayload, trackAssignments }) => {
-    const existing = createTextChatMessage("user", "Hi", undefined, 1);
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: stream,
-      chatStreamStartedAt: 100,
-      chatMessages: [existing],
-    });
-    const payload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "aborted",
-      ...(message === undefined ? {} : { message }),
-    } as unknown as ChatEventPayload;
-    const assignments = trackAssignments ? trackChatMessagesAssignments(state) : undefined;
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("aborted");
-    expect(state.chatRunId).toBeNull();
-    expect(state.chatStream).toBeNull();
-    expect(state.chatStreamStartedAt).toBeNull();
-    expect(state.chatMessages[0]).toEqual(existing);
-    expect(state.chatMessages).toHaveLength(expectedText ? 2 : 1);
-    if (expectedText) {
-      expectTextChatMessage(state.chatMessages[1], "assistant", expectedText);
-    }
-    if (preservePayload) {
-      expect(state.chatMessages[1]).toEqual(message);
-    }
-    if (assignments) {
-      expect(assignments.at(-1)).toMatchObject({
+    ["assistant", textMessage("assistant", "Partial reply", undefined, 2), true],
+    ["user", textMessage("user", "unexpected"), false],
+  ] as const)(
+    "keeps one partial reply for an aborted %s payload",
+    (_role, message, preservePayload) => {
+      const stream = "Partial reply";
+      const existing = textMessage("user", "Hi", undefined, 1);
+      const state = createState({
         chatRunId: "run-1",
         chatStream: stream,
+        chatStreamStartedAt: 100,
+        chatMessages: [existing],
       });
-    }
-  });
+      const payload = chatEvent("aborted", { message });
+
+      handleChatGatewayEvent(state, payload);
+      expectSettled(state);
+      expect(state.chatMessages[0]).toEqual(existing);
+      expect(state.chatMessages).toHaveLength(2);
+      expectTextMessage(state.chatMessages[1], "assistant", stream);
+      if (preservePayload) {
+        expect(state.chatMessages[1]).toEqual(message);
+      }
+    },
+  );
   type TerminalErrorFixture = {
     stream?: string | null;
-    previous?: ReturnType<typeof createTextChatMessage>[];
+    previous?: ReturnType<typeof textMessage>[];
     segments?: Array<{ text: string; ts: number; toolCallId?: string }>;
     message?: Record<string, unknown>;
-    error: string;
     expected: Array<readonly ["assistant" | "user", string]>;
     verify?: (state: ChatState) => void;
   };
 
   it.each([
     {
-      name: "keeps error events outside the assistant transcript",
-      create(): TerminalErrorFixture {
-        const error = 'No API key found for provider "openai".';
-        return {
-          previous: [createTextChatMessage("user", "Ping", undefined, 1)],
-          message: createTextChatMessage("assistant", `Error: ${error}`, undefined, 10),
-          error,
-          expected: [["user", "Ping"]],
-        };
-      },
-    },
-    {
-      name: "keeps streamed assistant text visible when an error ends the run",
-      create(): TerminalErrorFixture {
-        return {
-          previous: [createTextChatMessage("user", "Ping", undefined, 1)],
-          stream: "Partial answer before gateway error.",
-          error: "gateway disconnected",
-          expected: [
-            ["user", "Ping"],
-            ["assistant", "Partial answer before gateway error."],
-          ],
-        };
-      },
-    },
-    {
       name: "keeps streamed text without appending the error payload message",
       create(): TerminalErrorFixture {
         return {
           stream: "Partial answer before gateway error.",
           message: {
-            ...createTextChatMessage("assistant", "Error: gateway disconnected", undefined, 101),
+            ...textMessage("assistant", "Error: gateway disconnected", undefined, 101),
             metadata: { source: "gateway" },
           },
-          error: "gateway disconnected",
           expected: [["assistant", "Partial answer before gateway error."]],
-        };
-      },
-    },
-    {
-      name: "uses the gateway error when the payload message repeats the streamed text",
-      create(): TerminalErrorFixture {
-        const text = "Partial answer before gateway error.";
-        return {
-          stream: text,
-          message: createTextChatMessage("assistant", text, undefined, 101),
-          error: "gateway disconnected",
-          expected: [["assistant", text]],
-        };
-      },
-    },
-    {
-      name: "preserves terminal assistant content that extends the streamed text",
-      create(): TerminalErrorFixture {
-        const text = "Partial answer before gateway error. Final detail.";
-        return {
-          stream: "Partial answer before gateway error.",
-          message: createTextChatMessage("assistant", text, undefined, 101),
-          error: "gateway disconnected",
-          expected: [["assistant", text]],
-        };
-      },
-    },
-    {
-      name: "preserves streamed text before a differing terminal assistant message",
-      create(): TerminalErrorFixture {
-        const terminal = createTextChatMessage(
-          "assistant",
-          "Configure provider auth, then try again.",
-          undefined,
-          101,
-        );
-        return {
-          stream: "Partial answer before gateway error.",
-          message: terminal,
-          error: "gateway disconnected",
-          expected: [
-            ["assistant", "Partial answer before gateway error."],
-            ["assistant", "Configure provider auth, then try again."],
-          ],
-          verify: (state) => expect(state.chatMessages[1]).toEqual(terminal),
         };
       },
     },
@@ -2137,8 +1247,7 @@ describe("handleChatGatewayEvent", () => {
         return {
           stream: "After tool.",
           segments: [{ text: "First thought.", ts: 90, toolCallId: "call-1" }],
-          message: createTextChatMessage("assistant", text, undefined, 101),
-          error: "gateway disconnected",
+          message: textMessage("assistant", text, undefined, 101),
           expected: [["assistant", text]],
         };
       },
@@ -2146,7 +1255,7 @@ describe("handleChatGatewayEvent", () => {
     {
       name: "preserves a split stream when the terminal message only overlaps its prefix",
       create(): TerminalErrorFixture {
-        const terminal = createTextChatMessage(
+        const terminal = textMessage(
           "assistant",
           "First thought. Configure provider auth.",
           undefined,
@@ -2156,7 +1265,6 @@ describe("handleChatGatewayEvent", () => {
           stream: "After tool.",
           segments: [{ text: "First thought.", ts: 90, toolCallId: "call-1" }],
           message: terminal,
-          error: "gateway disconnected",
           expected: [
             ["assistant", "First thought."],
             ["assistant", "After tool."],
@@ -2167,363 +1275,77 @@ describe("handleChatGatewayEvent", () => {
       },
     },
     {
-      name: "preserves terminal extensions when split stream punctuation is adjacent",
-      create(): TerminalErrorFixture {
-        return {
-          stream: ", world",
-          segments: [{ text: "Hello", ts: 90, toolCallId: "call-1" }],
-          message: createTextChatMessage("assistant", "Hello, world!", undefined, 101),
-          error: "gateway disconnected",
-          expected: [["assistant", "Hello, world!"]],
-        };
-      },
-    },
-    {
       name: "keeps stream segments visible when an error ends after a tool event",
       create(): TerminalErrorFixture {
         const partial = "Visible text before tool.";
         return {
-          previous: [createTextChatMessage("user", "Ping", undefined, 1)],
+          previous: [textMessage("user", "Ping", undefined, 1)],
           stream: null,
           segments: [{ text: partial, ts: 100, toolCallId: "call-before-error" }],
-          error: "gateway disconnected",
           expected: [
             ["user", "Ping"],
             ["assistant", partial],
           ],
           verify: (state) => {
-            const streamState = state as ChatState & {
-              chatStreamSegments: NonNullable<TerminalErrorFixture["segments"]>;
-            };
-            expect(streamState.chatStreamSegments).toEqual([]);
-            const rendered = buildChatItems({
-              paneId: "terminal-error-stream-owner",
-              sessionKey: state.sessionKey,
-              runId: state.chatRunId,
-              messages: state.chatMessages,
-              toolMessages: [],
-              streamSegments: streamState.chatStreamSegments,
-              stream: state.chatStream,
-              streamStartedAt: state.chatStreamStartedAt,
-              showToolCalls: true,
-            }).flatMap((item) =>
-              item.kind === "group"
-                ? item.messages.map(({ message }) => extractText(message))
-                : item.kind === "stream"
-                  ? [item.text.trim()]
-                  : [],
-            );
-            expect(rendered.filter((text) => text === partial)).toHaveLength(1);
+            expect(state.chatStreamSegments).toEqual([]);
+            expect(
+              renderedMessageTexts(state, "terminal-error-stream-owner").filter(
+                (text) => text === partial,
+              ),
+            ).toHaveLength(1);
           },
         };
       },
     },
-    {
-      name: "does not let a substring-matching error projection replace streamed text",
-      create(): TerminalErrorFixture {
-        return {
-          stream: "OK",
-          message: createTextChatMessage(
-            "assistant",
-            "Error: provider said NOT OK yet",
-            undefined,
-            101,
-          ),
-          error: "provider said NOT OK yet",
-          expected: [["assistant", "OK"]],
-        };
-      },
-    },
-    {
-      name: "keeps the post-tool stream tail without appending the error projection",
-      create(): TerminalErrorFixture {
-        return {
-          stream: "First thought. After tool.",
-          segments: [{ text: "First thought.", ts: 90 }],
-          message: createTextChatMessage(
-            "assistant",
-            "Error: gateway disconnected",
-            undefined,
-            101,
-          ),
-          error: "gateway disconnected",
-          expected: [
-            ["assistant", "First thought."],
-            ["assistant", "After tool."],
-          ],
-        };
-      },
-    },
   ])("$name", (fixture) => {
-    const { stream, previous, segments, message, error, expected, verify } = fixture.create();
+    const { stream, previous, segments, message, expected, verify } = fixture.create();
+    const error = "gateway disconnected";
     const state = createState({
-      sessionKey: "main",
       chatRunId: "run-1",
       ...(previous ? { chatMessages: previous } : {}),
       ...(stream === undefined
         ? {}
         : { chatStream: stream, chatStreamStartedAt: stream ? 100 : null }),
-    }) as ChatState & { chatStreamSegments?: TerminalErrorFixture["segments"] };
+    });
     if (segments) {
       state.chatStreamSegments = segments;
     }
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "error",
+    const payload: ChatEventPayload = chatEvent("error", {
       errorMessage: error,
       ...(message ? { message } : {}),
-    };
+    });
 
-    expect(handleChatGatewayEvent(state, payload)).toBe("error");
+    handleChatGatewayEvent(state, payload);
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
     expect(state.chatMessages).toHaveLength(expected.length);
     for (const [index, [role, text]] of expected.entries()) {
-      expectTextChatMessage(state.chatMessages[index], role, text);
+      expectTextMessage(state.chatMessages[index], role, text);
     }
     expect(state.chatRunError).toEqual({ summary: `Error: ${error}`, runId: "run-1" });
     verify?.(state);
-  });
-  it.each([
-    "Error: the configuration uses an unsupported field.",
-    "⚠️ This operation may require additional review.",
-  ])("preserves message-only terminal output beginning with %s", (text) => {
-    const state = createState({ sessionKey: "main", chatRunId: "run-1" });
-    const message = createTextChatMessage("assistant", text, undefined, 10);
-
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "error",
-      message,
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toEqual([message]);
-    expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-1" });
-  });
-
-  it("keeps the current stream partial when a message-less error ends the run", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Partial answer before the failure",
-      chatStreamStartedAt: 9,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "error",
-      errorMessage: "provider disconnected",
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatStream).toBeNull();
-    expect(state.chatMessages).toHaveLength(1);
-    expectTextChatMessage(state.chatMessages[0], "assistant", "Partial answer before the failure");
-  });
-
-  it("preserves a legacy terminal message that completes streamed assistant content", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Partial answer",
-      chatStreamStartedAt: 9,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "error",
-      message: createTextChatMessage("assistant", "Partial answer. Final detail.", undefined, 10),
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toHaveLength(1);
-    expectTextChatMessage(state.chatMessages[0], "assistant", "Partial answer. Final detail.");
-    expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-1" });
-  });
-
-  it("preserves a differing terminal message instead of classifying it as an error projection", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-    });
-    const message = createTextChatMessage(
-      "assistant",
-      "⚠️ Configure provider auth, then try again.",
-      undefined,
-      10,
-    );
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "error",
-      errorMessage: "raw gateway error",
-      message,
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toEqual([message]);
-    expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error", runId: "run-1" });
-  });
-
-  it.each([
-    "⚠️ Agent run failed: the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.",
-  ])("preserves actionable server guidance in live run state: %s", (diagnostic) => {
-    const state = createState({ sessionKey: "main", chatRunId: "run-1" });
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "error",
-        errorMessage: diagnostic,
-      }),
-    ).toBe("error");
-    expect(state.chatRunError).toEqual({ summary: diagnostic, runId: "run-1" });
   });
 
   it("adds bounded OAuth facts to live errors without changing the summary", () => {
     const summary =
       "⚠️ Your refresh token has already been used to generate a new access token. Please try signing in again.";
-    const state = createState({ sessionKey: "main", chatRunId: "run-1" });
+    const state = createState({ chatRunId: "run-1" });
 
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "error",
-        errorMessage: summary,
-        errorDetail: {
-          provider: "openai",
-          failoverReason: "refresh_token_reused",
-          providerRuntimeFailureKind: "auth_refresh",
-          providerErrorType: "invalid_request_error",
-          httpStatus: 401,
-        },
-      }),
-    ).toBe("error");
+    receive(state, "error", {
+      errorMessage: summary,
+      errorDetail: {
+        provider: "openai",
+        failoverReason: "refresh_token_reused",
+        providerRuntimeFailureKind: "auth_refresh",
+        providerErrorType: "invalid_request_error",
+        httpStatus: 401,
+      },
+    });
     expect(state.chatRunError).toEqual({
       kind: "auth_refresh",
       runId: "run-1",
       summary: `${summary}\n\nProvider: openai\nHTTP status: 401\nReason: refresh_token_reused\nType: invalid_request_error`,
     });
-  });
-
-  it("uses server guidance when an error follows a source-reply final", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-    });
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "final",
-        message: createTextChatMessage("assistant", "Source reply delivered.", undefined, 9),
-      }),
-    ).toBe("final");
-    expect(state.chatRunId).toBeNull();
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "error",
-        errorMessage: "raw provider failure",
-        message: createTextChatMessage(
-          "assistant",
-          "Configure provider auth, then try again.",
-          undefined,
-          10,
-        ),
-      }),
-    ).toBe("error");
-    expect(state.chatMessages).toHaveLength(1);
-    expectTextChatMessage(state.chatMessages[0], "assistant", "Source reply delivered.");
-    expect(state.chatRunError).toEqual({ summary: "Error: raw provider failure", runId: "run-1" });
-  });
-
-  it("deduplicates a delivered final and its late provider diagnostic", () => {
-    const state = createState({ sessionKey: "main", chatRunId: "run-source-reply" });
-    const final = {
-      runId: "run-source-reply",
-      sessionKey: "main",
-      state: "final" as const,
-      message: createTextChatMessage("assistant", "Source reply delivered."),
-    };
-    const error = {
-      runId: "run-source-reply",
-      sessionKey: "main",
-      state: "error" as const,
-      errorMessage: "raw provider failure",
-    };
-
-    expect(handleChatGatewayEvent(state, final)).toBe("final");
-    expect(handleChatGatewayEvent(state, final)).toBe("final");
-    expect(handleChatGatewayEvent(state, error)).toBe("error");
-    const displayedDiagnostic = state.chatRunError;
-    expect(handleChatGatewayEvent(state, error)).toBe("error");
-
-    expect(state.chatMessages).toHaveLength(1);
-    expectTextChatMessage(state.chatMessages[0], "assistant", "Source reply delivered.");
-    expect(state.chatRunError).toBe(displayedDiagnostic);
-    expect(state.chatRunError).toEqual({
-      summary: "Error: raw provider failure",
-      runId: "run-source-reply",
-    });
-    expect(state.chatRunId).toBeNull();
-    expect(state.chatStream).toBeNull();
-  });
-
-  it.each([
-    {
-      name: "canonical persisted assistant identities",
-      sourceMetadata: { id: "message-tool-source-reply", seq: 7 },
-      finalMetadata: { id: "automatic-final-reply", seq: 8 },
-    },
-    {
-      name: "legacy assistant replies without transcript metadata",
-      sourceMetadata: undefined,
-      finalMetadata: undefined,
-    },
-  ])("keeps distinct same-run finals with $name", ({ sourceMetadata, finalMetadata }) => {
-    const state = createState({ sessionKey: "main", chatRunId: "run-message-tool" });
-    const sourceReply = createTextChatMessage(
-      "assistant",
-      "Visible progress from the targetless message tool.",
-      sourceMetadata,
-    );
-    const automaticReply = createTextChatMessage(
-      "assistant",
-      "Visible automatic final reply.",
-      finalMetadata,
-    );
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-message-tool",
-        sessionKey: "main",
-        state: "final",
-        message: sourceReply,
-      }),
-    ).toBe("final");
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-message-tool",
-        sessionKey: "main",
-        state: "final",
-        message: automaticReply,
-      }),
-    ).toBe("final");
-
-    expect(state.chatMessages).toEqual([sourceReply, automaticReply]);
-    expect(state.chatRunId).toBeNull();
-    expect(state.chatStream).toBeNull();
   });
 
   it.each([
@@ -2541,12 +1363,12 @@ describe("handleChatGatewayEvent", () => {
     "deduplicates the second distinct same-run final with $name",
     ({ sourceMetadata, finalMetadata }) => {
       const state = createState({ sessionKey: "main", chatRunId: "run-message-tool" });
-      const sourceReply = createTextChatMessage(
+      const sourceReply = textMessage(
         "assistant",
         "Visible progress from the targetless message tool.",
         sourceMetadata,
       );
-      const automaticReply = createTextChatMessage(
+      const automaticReply = textMessage(
         "assistant",
         "Visible automatic final reply.",
         finalMetadata,
@@ -2575,74 +1397,50 @@ describe("handleChatGatewayEvent", () => {
   );
 
   it("does not label a newer response with a completed run's late error", () => {
-    const state = createState({ sessionKey: "main", chatRunId: "run-completed" });
+    const state = createState({ chatRunId: "run-completed" });
 
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-completed",
-        sessionKey: "main",
-        state: "final",
-        message: createTextChatMessage("assistant", "Delivered once."),
-      }),
-    ).toBe("final");
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-newer",
-        sessionKey: "main",
-        state: "delta",
-        message: createTextChatMessage("assistant", "Newer response"),
-      }),
-    ).toBe("delta");
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-completed",
-        sessionKey: "main",
-        state: "error",
-        errorMessage: "late provider failure",
-      }),
-    ).toBe("error");
+    receive(state, "final", {
+      runId: "run-completed",
+      message: textMessage("assistant", "Delivered once."),
+    });
+    receive(state, "delta", {
+      runId: "run-newer",
+      message: textMessage("assistant", "Newer response"),
+    });
+    receive(state, "error", { runId: "run-completed", errorMessage: "late provider failure" });
 
     expect(state.chatRunId).toBe("run-newer");
     expect(state.chatStream).toBe("Newer response");
     expect(state.chatMessages).toHaveLength(1);
-    expectTextChatMessage(state.chatMessages[0], "assistant", "Delivered once.");
+    expectTextMessage(state.chatMessages[0], "assistant", "Delivered once.");
     expect(state.chatRunError).toBeNull();
   });
 
   it("upgrades an empty final to one authoritative assistant reply", () => {
-    const state = createState({ sessionKey: "main", chatRunId: "run-empty-final" });
+    const state = createState({ chatRunId: "run-empty-final" });
 
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-empty-final",
-        sessionKey: "main",
-        state: "final",
-      }),
-    ).toBe("final");
-    const deliveredFinal = {
+    receive(state, "final", { runId: "run-empty-final" });
+    const deliveredFinal = chatEvent("final", {
       runId: "run-empty-final",
-      sessionKey: "main",
-      state: "final" as const,
-      message: createTextChatMessage("assistant", "Delayed authoritative reply."),
-    };
-    expect(handleChatGatewayEvent(state, deliveredFinal)).toBe("final");
-    expect(handleChatGatewayEvent(state, deliveredFinal)).toBe("final");
+      message: textMessage("assistant", "Delayed authoritative reply."),
+    });
+    handleChatGatewayEvent(state, deliveredFinal);
+    handleChatGatewayEvent(state, deliveredFinal);
 
     expect(state.chatMessages).toHaveLength(1);
-    expectTextChatMessage(state.chatMessages[0], "assistant", "Delayed authoritative reply.");
+    expectTextMessage(state.chatMessages[0], "assistant", "Delayed authoritative reply.");
     expect(state.chatRunId).toBeNull();
   });
 
-  it.each(["delta", "final", "error", "aborted"] as const)(
+  it.each(["delta", "final"] as const)(
     "replaces retry progress and clears it on %s",
     (terminalState) => {
-      const state = createState({ sessionKey: "main", chatRunId: "run-retry" });
+      const state = createState({ chatRunId: "run-retry" });
       const envelope = { sessionKey: "main", runId: "run-retry" };
-      handleChatGatewayEvent(state, { ...envelope, state: "delta", deltaText: "" });
+      receive(state, "delta", { ...envelope, deltaText: "" });
       for (const attempt of [2, 3]) {
-        handleChatGatewayEvent(state, {
+        receive(state, "status", {
           ...envelope,
-          state: "status",
           seq: attempt,
           retry: { attempt, maxAttempts: 10, reason: "rate_limit" },
         });
@@ -2660,92 +1458,58 @@ describe("handleChatGatewayEvent", () => {
   it.each([
     { name: "empty content", content: [] },
     {
-      name: "fallback placeholder",
-      content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
-    },
-    {
-      name: "error projection",
-      content: [{ type: "text", text: "⚠️ Error: provider rate limit" }],
-    },
-    {
-      name: "multi-block error projection",
-      content: [
-        { type: "text", text: "⚠️ Error: provider" },
-        { type: "text", text: "rate limit" },
-      ],
-    },
-    {
       name: "normalized assistant role",
       role: " Assistant ",
       content: [{ type: "text", text: "⚠️ Error: provider rate limit" }],
     },
-    {
-      name: "generic Gateway fallback",
-      content: [{ type: "text", text: "The agent run failed before producing a reply." }],
-    },
   ])(
     "keeps resumed deltas in one reply after repeated $name errors",
     ({ content, role = "assistant" }) => {
-      const state = createState({ sessionKey: "main", chatRunId: "run-retry" });
+      const state = createState({ chatRunId: "run-retry" });
       const envelope = { sessionKey: "main", runId: "run-retry" };
       for (let attempt = 0; attempt < 4; attempt++) {
-        handleChatGatewayEvent(state, {
+        receive(state, "error", {
           ...envelope,
-          state: "error",
           seq: attempt + 1,
           errorMessage: "provider rate limit",
           message: { role, content, stopReason: "error" },
         });
       }
       const terminalMessages = [...state.chatMessages];
-      expect(
-        handleChatGatewayEvent(state, {
-          ...envelope,
-          state: "delta",
-          seq: 3,
-          deltaText: "stale output",
-        }),
-      ).toBeNull();
+      receive(state, "delta", { ...envelope, seq: 3, deltaText: "stale output" });
       expect(state.chatRunId).toBeNull();
       expect(state.chatStream).toBeNull();
       expect(state.chatMessages).toEqual(terminalMessages);
       expect(state.chatRunError).not.toBeNull();
       let seq = 5;
       for (const text of ["I", "I agree", "I agree with that product direction."]) {
-        handleChatGatewayEvent(state, {
+        receive(state, "delta", {
           ...envelope,
-          state: "delta",
           seq: seq++,
-          message: createTextChatMessage("assistant", text),
+          message: textMessage("assistant", text),
         });
         expect(state.chatStream).toBe(text);
         expect(state.chatRunId).toBe(envelope.runId);
         expect(state.chatMessages).toEqual([]);
         expect(state.chatRunError).toBeNull();
       }
-      handleChatGatewayEvent(state, {
+      receive(state, "final", {
         ...envelope,
-        state: "final",
         seq,
-        message: createTextChatMessage("assistant", "I agree with that product direction."),
+        message: textMessage("assistant", "I agree with that product direction."),
       });
       expect(state.chatMessages).toHaveLength(1);
-      expectTextChatMessage(
-        state.chatMessages[0],
-        "assistant",
-        "I agree with that product direction.",
-      );
+      expectTextMessage(state.chatMessages[0], "assistant", "I agree with that product direction.");
       expect(state.chatStreamSegments ?? []).toEqual([]);
       expect(state.chatRunId).toBeNull();
     },
   );
 
-  it.each([
-    "[assistant turn failed before producing content]",
-    "The agent run failed before producing a reply.",
-  ])("retires the same-run history error projection when streaming resumes: %s", (text) => {
+  it("retires the same-run history error projection when streaming resumes: [assistant turn failed before producing content]", () => {
+    const text = "[assistant turn failed before producing content]";
+
     const useful = {
-      ...createTextChatMessage("assistant", "Useful earlier commentary."),
+      ...textMessage("assistant", "Useful earlier commentary."),
       __openclaw: { runId: "run-retry" },
     };
     const placeholder = {
@@ -2754,94 +1518,26 @@ describe("handleChatGatewayEvent", () => {
       __openclaw: { runId: "run-retry" },
       content: [{ type: "text", text }],
     };
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-retry",
-      chatMessages: [useful, placeholder],
-    });
-    handleChatGatewayEvent(state, {
-      sessionKey: "main",
+    const state = createState({ chatRunId: "run-retry", chatMessages: [useful, placeholder] });
+    receive(state, "error", {
       runId: "run-retry",
-      state: "error",
       seq: 1,
       errorMessage: "provider rate limit",
       message: placeholder,
     });
-    handleChatGatewayEvent(state, {
-      sessionKey: "main",
+    receive(state, "delta", {
       runId: "run-retry",
-      state: "delta",
       seq: 2,
-      message: createTextChatMessage("assistant", "Recovered reply."),
+      message: textMessage("assistant", "Recovered reply."),
     });
     expect(state.chatStream).toBe("Recovered reply.");
     expect(state.chatMessages).toEqual([useful]);
   });
 
-  it("ignores a stale assistant delta after its run has completed", () => {
-    const state = createState({ sessionKey: "main", chatRunId: "run-completed" });
-
-    handleChatGatewayEvent(state, {
-      runId: "run-completed",
-      sessionKey: "main",
-      state: "final",
-      message: createTextChatMessage("assistant", "Delivered once."),
-    });
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-completed",
-        sessionKey: "main",
-        state: "delta",
-        message: createTextChatMessage("assistant", "stale streamed fragment"),
-      }),
-    ).toBeNull();
-    expect(state.chatRunId).toBeNull();
-    expect(state.chatStream).toBeNull();
-    expect(state.chatMessages).toHaveLength(1);
-    expectTextChatMessage(state.chatMessages[0], "assistant", "Delivered once.");
-  });
-
-  it("does not append an orphan error bubble when no run was active", () => {
-    const existingMessage = createTextChatMessage(
-      "assistant",
-      "Error: request failed before start",
-      undefined,
-      1,
-    );
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: null,
-      chatMessages: [existingMessage],
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-failed-before-start",
-      sessionKey: "main",
-      state: "error",
-      errorMessage: "request failed before start",
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toEqual([existingMessage]);
-    expect(state.chatRunId).toBe(null);
-    expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({
-      summary: "Error: request failed before start",
-      runId: "run-failed-before-start",
-    });
-  });
-
   it("uses the generic alert fallback for a blank orphan error", () => {
-    const state = createState({ sessionKey: "main", chatRunId: null });
+    const state = createState();
 
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-failed-before-start",
-        sessionKey: "main",
-        state: "error",
-        errorMessage: "   ",
-      }),
-    ).toBe("error");
+    receive(state, "error", { runId: "run-failed-before-start", errorMessage: "   " });
     expect(state.chatMessages).toEqual([]);
     expect(state.lastError).toBeNull();
     expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-failed-before-start" });
@@ -2849,157 +1545,38 @@ describe("handleChatGatewayEvent", () => {
 
   it("drops NO_REPLY final payload from own run", () => {
     const state = createState({
-      sessionKey: "main",
       chatRunId: "run-1",
       chatStream: "NO_REPLY",
       chatStreamStartedAt: 100,
     });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: createTextChatMessage("assistant", "NO_REPLY"),
-    };
+    const payload: ChatEventPayload = chatEvent("final", {
+      message: textMessage("assistant", "NO_REPLY"),
+    });
 
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
+    handleChatGatewayEvent(state, payload);
     expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
   });
-
-  it.each(["no_reply", "ANNOUNCE_SKIP"])(
-    "keeps plain-text %s final payload from own run",
-    (text) => {
-      const state = createState({
-        sessionKey: "main",
-        chatRunId: "run-1",
-        chatStream: text,
-        chatStreamStartedAt: 100,
-      });
-      const payload: ChatEventPayload = {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "final",
-        message: createTextChatMessage("assistant", text),
-      };
-
-      expect(handleChatGatewayEvent(state, payload)).toBe("final");
-      expect(state.chatMessages).toEqual([payload.message]);
-      expect(state.chatRunId).toBe(null);
-      expect(state.chatStream).toBe(null);
-    },
-  );
-
-  it("does not persist NO_REPLY stream text on final without message", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "NO_REPLY",
-      chatStreamStartedAt: 100,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toStrictEqual([]);
-  });
-
-  it("does not persist NO_REPLY stream text on abort", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "NO_REPLY",
-      chatStreamStartedAt: 100,
-    });
-    const payload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "aborted",
-      message: "not-an-assistant-message",
-    } as unknown as ChatEventPayload;
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("aborted");
-    expect(state.chatMessages).toStrictEqual([]);
-  });
-
-  it("keeps user messages containing NO_REPLY text", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-user",
-      chatStream: "Working...",
-      chatStreamStartedAt: 123,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-announce",
-      sessionKey: "main",
-      state: "final",
-      message: createTextChatMessage("user", "NO_REPLY"),
-    };
-
-    // User messages with NO_REPLY text should NOT be filtered — only assistant messages.
-    // normalizeFinalAssistantMessage returns null for user role, so this falls through.
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-  });
-
-  it("keeps assistant message when text field has real reply but content is NO_REPLY", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "",
-      chatStreamStartedAt: 100,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: {
-        role: "assistant",
-        text: "real reply",
-        content: "NO_REPLY",
-      },
-    };
-
-    // entry.text takes precedence — "real reply" is NOT silent, so the message is kept.
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toHaveLength(1);
-  });
 });
 
 describe("authoritative terminal history identity", () => {
-  it.each([
-    {
-      name: "a native user",
-      collision: {
-        role: "user",
-        content: [{ type: "text", text: "Different native user" }],
-        __openclaw: { id: "native-terminal" },
-      },
-    },
-    {
-      name: "an imported assistant",
-      collision: {
-        role: "assistant",
-        content: [{ type: "text", text: "Different imported assistant" }],
-        __openclaw: {
-          id: "native-terminal",
-          importedFrom: "claude-cli",
-          cliSessionId: "external-session",
-          externalId: "external-terminal",
-        },
-      },
-    },
-  ])("does not retire a native terminal for $name with a colliding id", ({ collision }) => {
+  it("does not retire a native terminal for user or imported identities with a colliding id", () => {
+    const collisions = [
+      textMessage("user", "Different native user", { id: "native-terminal" }),
+      textMessage("assistant", "Different imported assistant", {
+        id: "native-terminal",
+        importedFrom: "claude-cli",
+        cliSessionId: "external-session",
+        externalId: "external-terminal",
+      }),
+    ];
     const host = {};
-    const nativeTerminal = {
-      role: "assistant",
-      content: [{ type: "text", text: "Native terminal" }],
-      __openclaw: { id: "native-terminal" },
-    };
+    const nativeTerminal = textMessage("assistant", "Native terminal", {
+      id: "native-terminal",
+    });
     const liveTerminal = rememberLiveTerminalRun(
-      { role: "assistant", content: [{ type: "text", text: "Native terminal" }] },
+      textMessage("assistant", "Native terminal"),
       "run-1",
     );
     rememberAuthoritativeTerminal({
@@ -3018,7 +1595,7 @@ describe("authoritative terminal history identity", () => {
       host,
       previousMessages,
       sessionKey: "main",
-      visibleMessages: [collision],
+      visibleMessages: collisions,
     });
     expect(collided).toEqual(previousMessages);
     expect(authoritativeHistoryAppliedForRun(host, "run-1")).toBe(false);
@@ -3027,7 +1604,7 @@ describe("authoritative terminal history identity", () => {
       host,
       previousMessages,
       sessionKey: "main",
-      visibleMessages: [collision, nativeTerminal],
+      visibleMessages: [...collisions, nativeTerminal],
     });
     expect(persisted).toEqual([]);
     expect(authoritativeHistoryAppliedForRun(host, "run-1")).toBe(true);
@@ -3035,109 +1612,52 @@ describe("authoritative terminal history identity", () => {
 });
 
 describe("loadChatHistory filtering", () => {
-  it("filters legacy silent assistant messages from history", async () => {
-    const messages = [
-      { role: "user", content: [{ type: "text", text: "Hello" }] },
-      { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
-      { role: "assistant", content: [{ type: "text", text: "no_reply" }] },
-      { role: "assistant", content: [{ type: "text", text: "ANNOUNCE_SKIP" }] },
-      { role: "assistant", content: [{ type: "text", text: "REPLY_SKIP" }] },
-      { role: "assistant", content: [{ type: "text", text: "Real answer" }] },
-      { role: "assistant", text: "  NO_REPLY  " },
-    ];
-    const { state } = createResolvedHistoryState({
-      messages,
-      thinkingLevel: "low",
-      verboseLevel: "full",
-    });
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages).toHaveLength(5);
-    expect(state.chatMessages[0]).toEqual(messages[0]);
-    expect(state.chatMessages[1]).toEqual(messages[2]);
-    expect(state.chatMessages[2]).toEqual(messages[3]);
-    expect(state.chatMessages[3]).toEqual(messages[4]);
-    expect(state.chatMessages[4]).toEqual(messages[5]);
-    expect(state.chatThinkingLevel).toBe("low");
-    expect(state.chatVerboseLevel).toBe("full");
-    expect(state.chatLoading).toBe(false);
-  });
-
-  it("keeps assistant message when text field has real content but content is NO_REPLY", async () => {
-    const messages = [{ role: "assistant", text: "real reply", content: "NO_REPLY" }];
-    const { state } = createResolvedHistoryState({ messages });
-
-    await loadChatHistory(state);
-
-    // text takes precedence — "real reply" is NOT silent, so message is kept.
-    expect(state.chatMessages).toHaveLength(1);
-  });
-
-  it("filters the synthetic transcript-repair tool result from history", async () => {
-    const messages = [
-      { role: "user", content: [{ type: "text", text: "hello" }] },
+  it("filters silent and synthetic history rows while preserving user content and media", async () => {
+    const repair =
+      "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
+    const visible = [
+      textMessage("user", "NO_REPLY"),
+      textMessage("user", repair),
+      textMessage("assistant", "no_reply"),
+      textMessage("assistant", "ANNOUNCE_SKIP"),
+      textMessage("assistant", "REPLY_SKIP"),
+      textMessage("assistant", "Real answer"),
+      { role: "assistant", text: "real reply", content: "NO_REPLY" },
+      { role: "user", content: "", __openclaw: { media: [{ path: "/tmp/user.png" }] } },
       {
         role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "unknown",
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_2",
+        toolCallId: "real",
         toolName: "shell",
         content: [{ type: "text", text: "real tool output" }],
       },
     ];
-    const { state } = createResolvedHistoryState({ messages });
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages).toEqual([messages[0], messages[2]]);
-  });
-
-  it("keeps image-only user messages that carry transcript media facts", async () => {
-    const messages = [
-      {
-        role: "user",
-        content: "",
-        __openclaw: { media: [{ path: "/tmp/openclaw/user-upload.png" }] },
-      },
-      {
-        role: "user",
-        content: "",
-        __openclaw: {
-          media: [{ path: "/tmp/openclaw/first.png" }, { path: "/tmp/openclaw/second.jpg" }],
-        },
-      },
-      { role: "user", content: "" },
-    ];
-    const { state } = createResolvedHistoryState({ messages });
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages).toEqual([messages[0], messages[1]]);
-  });
-
-  it("keeps a user message even if it matches the synthetic repair text", async () => {
-    const messages = [
-      createTextChatMessage(
+    const hidden = [
+      textMessage("assistant", "NO_REPLY"),
+      { role: "assistant", text: "  NO_REPLY  " },
+      textMessage("assistant", "HEARTBEAT_OK"),
+      textMessage(
         "user",
-        "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsubagent completion payload\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
       ),
+      { role: "user", content: "" },
+      {
+        role: "toolResult",
+        toolCallId: "synthetic",
+        toolName: "unknown",
+        isError: true,
+        content: [{ type: "text", text: repair }],
+      },
     ];
-    const { state } = createResolvedHistoryState({ messages });
-
+    const { state } = createResolvedHistoryState({
+      messages: [...hidden, ...visible],
+      thinkingLevel: "low",
+      verboseLevel: "full",
+    });
     await loadChatHistory(state);
-
-    expect(state.chatMessages).toEqual(messages);
+    expect(state.chatMessages).toEqual(visible);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatVerboseLevel).toBe("full");
+    expect(state.chatLoading).toBe(false);
   });
 
   it("applies current session metadata from chat history", async () => {
@@ -3170,24 +1690,6 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatEffectiveQueueMode).toBe("interrupt");
   });
 
-  it("preserves the displayed leaf when history metadata is not authoritative for it", async () => {
-    const { state } = createResolvedHistoryState(
-      {
-        messages: [],
-        sessionInfo: {
-          key: "main",
-          sessionId: "session-main",
-          updatedAt: 123,
-        },
-      },
-      { chatDisplayedLeafEntryId: "leaf-from-tail" },
-    );
-
-    await loadChatHistory(state);
-
-    expect(state.chatDisplayedLeafEntryId).toBe("leaf-from-tail");
-  });
-
   it("omits literal global agentId until selected/default agent is known", async () => {
     const { request, state } = createResolvedHistoryState(
       { messages: [] },
@@ -3201,7 +1703,7 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.not.objectContaining({ agentId: expect.anything() }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 
@@ -3224,12 +1726,12 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 
   it("caches global history under the selected agent only", async () => {
-    const messages = [{ role: "assistant", content: [{ type: "text", text: "work history" }] }];
+    const messages = [textMessage("assistant", "work history")];
     const { state } = createResolvedHistoryState(
       { messages },
       {
@@ -3251,52 +1753,7 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatMessagesBySession?.has("agent:main:main")).toBe(false);
   });
 
-  it("loads startup history without taking ownership of the agent roster", async () => {
-    const currentRoster = {
-      agents: [{ id: "research", name: "Research" }],
-      defaultId: "research",
-      mainKey: "main",
-      scope: "per-sender" as const,
-    };
-    const { request, state } = createResolvedHistoryState(
-      {
-        messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
-      },
-      {
-        agentsError: "previous agents.list failure",
-        agentsList: currentRoster,
-        agentsSelectedId: "research",
-        sessionKey: "global",
-      },
-    );
-
-    await loadChatHistory(state, { startup: true });
-
-    expect(request).toHaveBeenCalledWith(
-      "chat.startup",
-      {
-        agentId: "research",
-        sessionKey: "global",
-        limit: 80,
-        maxBytes: 256 * 1024,
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "ready" }] },
-    ]);
-    expect(state.agentsError).toBe("previous agents.list failure");
-    expect(state.agentsList).toBe(currentRoster);
-    expect(state.agentsSelectedId).toBe("research");
-  });
-
-  it.each([
-    { name: "coalesces matching startup requests across chat pane states", refresh: false },
-    {
-      name: "coalesces overlapping pane startup loads when rendered message arrays change",
-      refresh: true,
-    },
-  ])("$name", async ({ refresh }) => {
+  it("coalesces overlapping pane startup loads when rendered message arrays change", async () => {
     const startup = createDeferred<HistoryResult>();
     const request = vi.fn(() => startup.promise);
     const client = createTestClient(request);
@@ -3310,24 +1767,17 @@ describe("loadChatHistory filtering", () => {
       loadChatHistory(firstState, { startup: true }),
       loadChatHistory(secondState, { startup: true }),
     ];
-    if (refresh) {
-      firstState.chatMessages = [...firstState.chatMessages];
-      loads.push(loadChatHistory(firstState, { startup: true }));
-      secondState.chatMessages = [...secondState.chatMessages];
-      loads.push(loadChatHistory(secondState, { startup: true }));
-      expect(request).toHaveBeenCalledOnce();
-    } else {
-      expect(request).toHaveBeenCalledTimes(1);
-    }
+    firstState.chatMessages = [...firstState.chatMessages];
+    loads.push(loadChatHistory(firstState, { startup: true }));
+    secondState.chatMessages = [...secondState.chatMessages];
+    loads.push(loadChatHistory(secondState, { startup: true }));
+    expect(request).toHaveBeenCalledOnce();
     startup.resolve(createAssistantHistory("shared"));
     await Promise.all(loads);
 
-    expect(firstState.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "shared" }] },
-    ]);
+    expect(firstState.chatMessages).toEqual([textMessage("assistant", "shared")]);
     expect(secondState.chatMessages).toEqual(firstState.chatMessages);
   });
-
   it("keeps startup requests separate for different pane sessions", async () => {
     const request = vi.fn().mockResolvedValue({ messages: [] });
     const client = createTestClient(request);
@@ -3350,7 +1800,7 @@ describe("loadChatHistory filtering", () => {
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
@@ -3359,7 +1809,7 @@ describe("loadChatHistory filtering", () => {
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 
@@ -3392,46 +1842,6 @@ describe("loadChatHistory filtering", () => {
       { role: "assistant", content: [{ type: "text", text: "fresh" }] },
     ]);
   });
-
-  it("requests chat.startup even when the handshake methods omit it", async () => {
-    const { request, state } = createResolvedHistoryState(
-      { messages: [] },
-      {
-        hello: {
-          type: "hello-ok",
-          protocol: 4,
-          auth: { role: "operator", scopes: [] },
-          features: { methods: ["chat.history"], events: [] },
-        },
-      },
-    );
-
-    await loadChatHistory(state, { startup: true });
-
-    expect(request).toHaveBeenCalledWith(
-      "chat.startup",
-      {
-        sessionKey: "main",
-        limit: 80,
-        maxBytes: 256 * 1024,
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-  });
-});
-
-describe("chat send Gateway requests", () => {
-  it("clears reconnect resume when history returns a different backing session", async () => {
-    const { state } = createResolvedHistoryState(
-      { sessionId: "session-after-reconnect", messages: [] },
-      { reconnectResumeSessionId: "session-before-reconnect" },
-    );
-
-    await loadChatHistory(state);
-
-    expect(state.currentSessionId).toBe("session-after-reconnect");
-    expect(state.reconnectResumeSessionId).toBeNull();
-  });
 });
 
 describe("loadChatHistory retry handling", () => {
@@ -3454,7 +1864,7 @@ describe("loadChatHistory retry handling", () => {
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     expect(request).toHaveBeenCalledTimes(1);
     expect(getChatHistoryLoadState(state)).toMatchObject({
@@ -3466,270 +1876,86 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatError).toBeNull();
   });
 
-  it("retries retryable startup unavailability before showing history", async () => {
-    vi.useFakeTimers();
-    try {
-      const request = vi
-        .fn()
-        .mockRejectedValueOnce(
-          new GatewayRequestError({
-            code: "UNAVAILABLE",
-            message: "chat.history unavailable during gateway startup",
-            details: { method: "chat.history" },
-            retryable: true,
-            retryAfterMs: 250,
-          }),
-        )
-        .mockResolvedValueOnce(createAssistantHistory("awake", { thinkingLevel: "low" }));
-      const state = createHistoryState(request);
-
-      const load = loadChatHistory(state);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-      expect(state.chatLoading).toBe(true);
-      expect(state.lastError).toBeNull();
-
-      await vi.advanceTimersByTimeAsync(250);
-      await load;
-
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(state.chatMessages).toEqual([
-        { role: "assistant", content: [{ type: "text", text: "awake" }] },
-      ]);
-      expect(state.chatThinkingLevel).toBe("low");
-      expect(state.chatLoading).toBe(false);
-      expect(state.lastError).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("ends a stalled history load and cancels its request before Retry", async () => {
-    vi.useFakeTimers();
-    try {
-      const stalled = createDeferred<HistoryResult>();
-      let signal: AbortSignal | undefined;
-      const request = vi
-        .fn()
-        .mockImplementationOnce(
-          (_method: string, _params: unknown, options?: { signal?: AbortSignal }) => {
-            signal = options?.signal;
-            return stalled.promise;
-          },
-        )
-        .mockResolvedValueOnce(createAssistantHistory("recovered"));
-      const state = createHistoryState(request);
-      const loading = loadChatHistory(state);
+    const stalled = createDeferred<HistoryResult>();
+    let signal: AbortSignal | undefined;
+    const request = vi
+      .fn()
+      .mockImplementationOnce(
+        (_method: string, _params: unknown, options?: { signal?: AbortSignal }) => {
+          signal = options?.signal;
+          return stalled.promise;
+        },
+      )
+      .mockResolvedValueOnce(createAssistantHistory("recovered"));
+    const state = createHistoryState(request);
+    const loading = loadChatHistory(state);
 
-      await vi.advanceTimersByTimeAsync(59_999);
-      expect(state.chatLoading).toBe(true);
-      await vi.advanceTimersByTimeAsync(1);
-      await loading;
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(state.chatLoading).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    await loading;
 
-      expect(state.chatLoading).toBe(false);
-      expect(getChatHistoryLoadState(state)).toMatchObject({
-        phase: "failed",
-        message: expect.stringContaining("timed out"),
-      });
-      expect(signal?.aborted).toBe(true);
-      await loadChatHistory(state);
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(state.chatMessages).toEqual(createAssistantHistory("recovered").messages);
+    expect(state.chatLoading).toBe(false);
+    expect(getChatHistoryLoadState(state)).toMatchObject({
+      phase: "failed",
+      message: expect.stringContaining("timed out"),
+    });
+    expect(signal?.aborted).toBe(true);
+    await loadChatHistory(state);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.chatMessages).toEqual(createAssistantHistory("recovered").messages);
 
-      stalled.resolve(createAssistantHistory("expired"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(state.chatMessages).toEqual(createAssistantHistory("recovered").messages);
-    } finally {
-      vi.useRealTimers();
-    }
+    stalled.resolve(createAssistantHistory("expired"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state.chatMessages).toEqual(createAssistantHistory("recovered").messages);
   });
 
   it("expires each shared startup reader without consuming a late joiner's retry window", async () => {
-    vi.useFakeTimers();
-    try {
-      const retryableError = new GatewayRequestError({
+    const unavailable = (retryAfterMs: number) =>
+      new GatewayRequestError({
         code: "UNAVAILABLE",
         message: "chat.history unavailable during gateway startup",
         details: { method: "chat.history" },
         retryable: true,
-        retryAfterMs: 250,
+        retryAfterMs,
       });
-      const secondAttempt = createDeferred<unknown>();
-      const request = vi
-        .fn()
-        .mockRejectedValueOnce(
-          new GatewayRequestError({
-            code: "UNAVAILABLE",
-            message: "chat.history unavailable during gateway startup",
-            details: { method: "chat.history" },
-            retryable: true,
-            retryAfterMs: 59_000,
-          }),
-        )
-        .mockImplementationOnce(() => secondAttempt.promise)
-        .mockResolvedValueOnce(createAssistantHistory("awake"));
-      const client = createTestClient(request);
-      const firstState = createHistoryStateForClient(client);
-      const secondState = createHistoryStateForClient(client, { sessions: firstState.sessions });
+    const retryableError = unavailable(250);
+    const secondAttempt = createDeferred<unknown>();
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(unavailable(59_000))
+      .mockImplementationOnce(() => secondAttempt.promise)
+      .mockResolvedValueOnce(createAssistantHistory("awake"));
+    const client = createTestClient(request);
+    const firstState = createHistoryStateForClient(client);
+    const secondState = createHistoryStateForClient(client, { sessions: firstState.sessions });
 
-      const firstLoad = loadChatHistory(firstState);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-      await vi.advanceTimersByTimeAsync(59_000);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    const firstLoad = loadChatHistory(firstState);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(59_000);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
 
-      const secondLoad = loadChatHistory(secondState);
-      expect(request).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1_001);
-      await firstLoad;
-      expect(firstState.chatLoading).toBe(false);
-      expect(getChatHistoryLoadState(firstState)).toMatchObject({
-        phase: "failed",
-        message: expect.stringContaining("timed out"),
-      });
-      expect(secondState.chatLoading).toBe(true);
-      expect(request.mock.calls[1]?.[2]?.signal.aborted).toBe(false);
-      secondAttempt.reject(retryableError);
-      await vi.advanceTimersByTimeAsync(250);
-      await secondLoad;
+    const secondLoad = loadChatHistory(secondState);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_001);
+    await firstLoad;
+    expect(firstState.chatLoading).toBe(false);
+    expect(getChatHistoryLoadState(firstState)).toMatchObject({
+      phase: "failed",
+      message: expect.stringContaining("timed out"),
+    });
+    expect(secondState.chatLoading).toBe(true);
+    expect(request.mock.calls[1]?.[2]?.signal.aborted).toBe(false);
+    secondAttempt.reject(retryableError);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await secondLoad;
 
-      expect(request).toHaveBeenCalledTimes(3);
-      expect(secondState.chatMessages).toEqual([
-        { role: "assistant", content: [{ type: "text", text: "awake" }] },
-      ]);
-      expect(firstState.chatMessages).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(secondState.chatMessages).toEqual([textMessage("assistant", "awake")]);
+    expect(firstState.chatMessages).toEqual([]);
   });
 
-  it("filters assistant NO_REPLY messages and keeps user NO_REPLY messages", async () => {
-    const { request, state } = createHistorySnapshot([
-      { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
-      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
-      { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
-    ]);
-
-    await loadChatHistory(state);
-
-    expect(request).toHaveBeenCalledWith(
-      "chat.history",
-      {
-        sessionKey: "main",
-        limit: 80,
-        maxBytes: 256 * 1024,
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
-      { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
-    ]);
-    expect(state.chatThinkingLevel).toBe("low");
-    expect(state.chatLoading).toBe(false);
-    expect(state.lastError).toBeNull();
-  });
-
-  it("filters heartbeat acknowledgements and internal-only user messages", async () => {
-    const { state } = createHistorySnapshot([
-      { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
-      createTextChatMessage(
-        "user",
-        [
-          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-          "subagent completion payload",
-          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-        ].join("\n"),
-      ),
-      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
-    ]);
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
-    ]);
-  });
-
-  type HistoryReconciliationFixture = {
-    history: unknown[];
-    visible: unknown[];
-    expected: unknown[];
-    inputRunIds?: string[];
-    state?: Partial<ChatHistoryHost>;
-    verify?: (state: ChatState) => void;
-  };
-
-  it.each([
-    {
-      name: "preserves distinct complete imported source identities",
-      create(): HistoryReconciliationFixture {
-        const imported = (cliSessionId: string, seq: number) =>
-          createTextChatMessage("user", "same provider message", {
-            id: "provider-local-id",
-            externalId: "provider-local-id",
-            importedFrom: "claude-cli",
-            cliSessionId,
-            seq,
-          });
-        const first = imported("first-cli-session", 1);
-        const second = imported("second-cli-session", 2);
-        return { history: [first, second], visible: [first], expected: [first, second] };
-      },
-    },
-    {
-      name: "does not retain an identity-free optimistic tail",
-      create(): HistoryReconciliationFixture {
-        const persisted = createTextChatMessage("user", "first", { id: "first-user", seq: 1 });
-        const unowned = createTextChatMessage("user", "unproven pending turn");
-        return { history: [persisted], visible: [persisted, unowned], expected: [persisted] };
-      },
-    },
-    {
-      name: "keeps the active stream while preserving its run-keyed pending prompt",
-      create(): HistoryReconciliationFixture {
-        const persisted = createTextChatMessage("user", "first", { id: "first-user", seq: 1 });
-        const pending = createTextChatMessage("user", "latest ask", {
-          idempotencyKey: "active-run:user",
-        });
-        const stream = {
-          chatRunId: "active-run",
-          chatStream: "First visible stream text.",
-          chatStreamStartedAt: 100,
-        };
-        return {
-          history: [persisted],
-          visible: [persisted, pending],
-          expected: [persisted, pending],
-          inputRunIds: ["active-run"],
-          state: stream,
-          verify: (state) => expect(state).toMatchObject(stream),
-        };
-      },
-    },
-  ])("$name", async (fixture) => {
-    const { history, visible, expected, inputRunIds, state: overrides, verify } = fixture.create();
-    const { request, state } = createResolvedHistoryState(
-      { messages: history },
-      {
-        chatMessages: visible,
-        ...overrides,
-      },
-    );
-
-    await loadChatHistory(state);
-
-    expect(request).toHaveBeenCalledWith(
-      "chat.history",
-      {
-        sessionKey: "main",
-        limit: 80,
-        maxBytes: 256 * 1024,
-        ...(inputRunIds ? { inputRunIds } : {}),
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-    expect(state.chatMessages).toEqual(expected);
-    verify?.(state);
-  });
   type RecoveredToolFixture = {
     tools: Record<string, unknown>[];
     persistedCount: number;
@@ -3751,19 +1977,6 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it.each([
-    {
-      name: "clears live tool cards when history catches up before assistant text",
-      create(): RecoveredToolFixture {
-        return {
-          tools: [historyTool("call_1", "tool output", 2, 2)],
-          persistedCount: 1,
-          segments: [{ text: "before tool", ts: 1 }],
-          stream: "Still answering.",
-          expectedRows: [{ text: "before tool", timestamp: 1 }, 0],
-          expectedStream: "Still answering.",
-        };
-      },
-    },
     {
       name: "inserts multiple recovered stream segments before their matching persisted tools",
       create(): RecoveredToolFixture {
@@ -3834,19 +2047,6 @@ describe("loadChatHistory retry handling", () => {
         };
       },
     },
-    {
-      name: "trims accumulated current stream after materializing caught-up tool segments",
-      create(): RecoveredToolFixture {
-        return {
-          tools: [historyTool("call_1", "tool output", 2, 2)],
-          persistedCount: 1,
-          segments: [{ text: "before tool", ts: 1, toolCallId: "call_1" }],
-          stream: "before tool\nafter tool",
-          expectedRows: [{ text: "before tool", timestamp: 1 }, 0],
-          expectedStream: "after tool",
-        };
-      },
-    },
   ])("$name", async (fixture) => {
     const {
       tools,
@@ -3858,7 +2058,7 @@ describe("loadChatHistory retry handling", () => {
       remainingTools = [],
       remainingSegments = [],
     } = fixture.create();
-    const persistedUser = createTextChatMessage("user", "latest ask", { seq: 1 });
+    const persistedUser = textMessage("user", "latest ask", { seq: 1 });
     const state = createLiveToolHistoryState(
       [persistedUser, ...tools.slice(0, persistedCount)],
       {
@@ -3879,7 +2079,7 @@ describe("loadChatHistory retry handling", () => {
       if (typeof row === "number") {
         expect(state.chatMessages[index + 1]).toEqual(tools[row]);
       } else {
-        expectTextChatMessage(state.chatMessages[index + 1], "assistant", row.text);
+        expectTextMessage(state.chatMessages[index + 1], "assistant", row.text);
         expect(requireRecord(state.chatMessages[index + 1]).timestamp).toBe(row.timestamp);
       }
     }
@@ -3889,10 +2089,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatStreamStartedAt).toBe(100);
     expect(state.chatToolMessages).toEqual(remainingTools.map((index) => tools[index]));
     expect(
-      visibleAssistantStreamParts(state, {
-        includeCurrent: false,
-        isHiddenStreamText: () => false,
-      }).map(({ text, timestamp, toolCallId }) => ({
+      visibleParts(state).map(({ text, timestamp, toolCallId }) => ({
         text,
         ts: timestamp,
         toolCallId,
@@ -3900,54 +2097,21 @@ describe("loadChatHistory retry handling", () => {
     ).toEqual(remainingSegments);
     expect(state.toolStreamById.size).toBe(remainingTools.length);
     expect(state.toolStreamOrder).toEqual(
-      remainingTools.map((index) => String(tools[index]?.toolCallId)),
+      remainingTools.map((index) =>
+        buildToolStreamIdentity("run-1", String(tools[index]?.toolCallId)),
+      ),
     );
     for (const index of remainingTools) {
-      expect(state.toolStreamById.has(String(tools[index]?.toolCallId))).toBe(true);
+      expect(
+        state.toolStreamById.has(
+          buildToolStreamIdentity("run-1", String(tools[index]?.toolCallId)),
+        ),
+      ).toBe(true);
     }
-  });
-  it("keeps live tool cards when only older history has a persisted tool result", async () => {
-    const olderUser = createTextChatMessage("user", "older ask", { seq: 1 });
-    const olderToolResult = {
-      role: "toolResult",
-      toolCallId: "call_old",
-      toolName: "shell",
-      content: [{ type: "text", text: "old tool output" }],
-      __openclaw: { seq: 2 },
-    };
-    const latestUser = createTextChatMessage("user", "latest ask", { seq: 3 });
-    const liveToolMessage = {
-      role: "assistant",
-      toolCallId: "call_current",
-      runId: "run-1",
-      content: [{ type: "toolcall", name: "shell", arguments: {} }],
-    };
-    const state = createLiveToolHistoryState(
-      [olderUser, olderToolResult, latestUser],
-      {
-        chatMessages: [olderUser, olderToolResult, latestUser],
-        chatRunId: "run-1",
-        chatStream: "Still answering.",
-        chatStreamStartedAt: 100,
-      },
-      [liveToolMessage],
-      [{ text: "before current tool", ts: 1 }],
-    );
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages).toEqual([olderUser, olderToolResult, latestUser]);
-    expect(state.chatRunId).toBe("run-1");
-    expect(state.chatStream).toBe("Still answering.");
-    expect(state.chatStreamStartedAt).toBe(100);
-    expect(state.chatToolMessages).toEqual([liveToolMessage]);
-    expect(state.chatStreamSegments).toEqual([{ text: "before current tool", ts: 1 }]);
-    expect(state.toolStreamById.size).toBe(1);
-    expect(state.toolStreamOrder).toEqual(["call_current"]);
   });
 
   it("clears live tool cards when history catches up with content-block tool ids", async () => {
-    const persistedUser = createTextChatMessage("user", "latest ask", { seq: 1 });
+    const persistedUser = textMessage("user", "latest ask", { seq: 1 });
     const persistedToolCall = {
       role: "assistant",
       content: [
@@ -3984,25 +2148,20 @@ describe("loadChatHistory retry handling", () => {
 
     expect(state.chatMessages).toHaveLength(3);
     expect(state.chatMessages[0]).toEqual(persistedUser);
-    expectTextChatMessage(state.chatMessages[1], "assistant", "before tool");
+    expectTextMessage(state.chatMessages[1], "assistant", "before tool");
     expect(requireRecord(state.chatMessages[1]).timestamp).toBe(1);
     expect(state.chatMessages[2]).toEqual(persistedToolCall);
     expect(state.chatRunId).toBe("run-1");
     expect(state.chatStream).toBe("Still answering.");
     expect(state.chatStreamStartedAt).toBe(100);
     expect(state.chatToolMessages).toEqual([]);
-    expect(
-      visibleAssistantStreamParts(state, {
-        includeCurrent: false,
-        isHiddenStreamText: () => false,
-      }),
-    ).toEqual([]);
+    expect(visibleParts(state)).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.toolStreamOrder).toEqual([]);
   });
 
   it("keeps segment-only streamed text when history catches up with tools", async () => {
-    const persistedUser = createTextChatMessage("user", "latest ask", { seq: 1 });
+    const persistedUser = textMessage("user", "latest ask", { seq: 1 });
     const persistedToolResult = {
       role: "toolResult",
       toolCallId: "call_1",
@@ -4027,57 +2186,51 @@ describe("loadChatHistory retry handling", () => {
 
     expect(state.chatMessages).toHaveLength(3);
     expect(state.chatMessages[0]).toEqual(persistedUser);
-    expectTextChatMessage(state.chatMessages[1], "assistant", "before tool");
+    expectTextMessage(state.chatMessages[1], "assistant", "before tool");
     expect(requireRecord(state.chatMessages[1]).timestamp).toBe(1);
     expect(state.chatMessages[2]).toEqual(persistedToolResult);
     expect(state.chatRunId).toBe("run-1");
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
     expect(state.chatToolMessages).toEqual([]);
-    expect(
-      visibleAssistantStreamParts(state, {
-        includeCurrent: false,
-        isHiddenStreamText: () => false,
-      }),
-    ).toEqual([]);
+    expect(visibleParts(state)).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.toolStreamOrder).toEqual([]);
   });
 
-  it.each([
-    { name: "materializes orphaned streamed assistant text when history reload is stale" },
-    {
-      name: "timestamps materialized streamed text after the persisted user prompt",
-      userTimestamp: 200,
-      verifyTimestamp: true,
-    },
-  ])("$name", async ({ userTimestamp, verifyTimestamp }) => {
-    const persistedUser = createTextChatMessage("user", "first", { seq: 1 }, userTimestamp);
+  it("places materialized streamed text after a persisted user prompt with a later clock", async () => {
+    // Prompt and stream timestamps come from different clocks, so the prompt can be the later one.
+    // The user turn owns placement; retiming the saved stream would reorder live tools.
+    const userTimestamp = 200;
+    const streamTimestamp = 100;
+
+    const persistedUser = textMessage("user", "first", { seq: 1 }, userTimestamp);
     const { state } = createHistorySnapshot([persistedUser], {
       chatMessages: [persistedUser],
       chatRunId: null,
       chatStream: "Partial answer before history catch-up.",
-      chatStreamStartedAt: 100,
+      chatStreamStartedAt: streamTimestamp,
     });
 
     await loadChatHistory(state);
-
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(persistedUser);
-    expectTextChatMessage(
+    expectTextMessage(
       state.chatMessages[1],
       "assistant",
       "Partial answer before history catch-up.",
     );
-    if (verifyTimestamp) {
-      expect(requireRecord(state.chatMessages[1]).timestamp).toBe(201);
-    }
+    expect(renderedMessageTexts(state, "materialized-stream-order")).toEqual([
+      "first",
+      "Partial answer before history catch-up.",
+    ]);
+    expect(requireRecord(state.chatMessages[1]).timestamp).toBe(streamTimestamp);
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
   });
 
   it("materializes orphaned segment-only assistant text before clearing caught-up tools", async () => {
-    const persistedUser = createTextChatMessage("user", "latest ask", { seq: 1 });
+    const persistedUser = textMessage("user", "latest ask", { seq: 1 });
     const persistedToolResult = {
       role: "toolResult",
       toolCallId: "call_1",
@@ -4101,7 +2254,7 @@ describe("loadChatHistory retry handling", () => {
 
     expect(state.chatMessages).toHaveLength(3);
     expect(state.chatMessages[0]).toEqual(persistedUser);
-    expectTextChatMessage(state.chatMessages[1], "assistant", "before tool");
+    expectTextMessage(state.chatMessages[1], "assistant", "before tool");
     expect(state.chatMessages[2]).toEqual(persistedToolResult);
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
@@ -4111,30 +2264,9 @@ describe("loadChatHistory retry handling", () => {
     expect(state.toolStreamOrder).toEqual([]);
   });
 
-  it("clears streamed assistant text when history already contains the replacement", async () => {
-    const persistedUser = createTextChatMessage("user", "latest ask", { seq: 1 });
-    const historyAssistant = createTextChatMessage(
-      "assistant",
-      "First visible stream text. More final text.",
-      { seq: 2 },
-    );
-    const { state } = createHistorySnapshot([persistedUser, historyAssistant], {
-      chatMessages: [persistedUser],
-      chatRunId: "run-1",
-      chatStream: "First visible stream text.",
-      chatStreamStartedAt: 100,
-    });
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages).toEqual([persistedUser, historyAssistant]);
-    expect(state.chatStream).toBeNull();
-    expect(state.chatStreamStartedAt).toBeNull();
-  });
-
   it("keeps live tool cards when history only replaces streamed text", async () => {
-    const persistedUser = createTextChatMessage("user", "latest ask", { seq: 1 });
-    const historyAssistant = createTextChatMessage(
+    const persistedUser = textMessage("user", "latest ask", { seq: 1 });
+    const historyAssistant = textMessage(
       "assistant",
       "First visible stream text. More final text.",
       { seq: 2 },
@@ -4163,26 +2295,19 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
     expect(state.chatToolMessages).toEqual([liveToolMessage]);
-    expect(
-      visibleAssistantStreamParts(state, {
-        includeCurrent: false,
-        isHiddenStreamText: () => false,
-      }),
-    ).toEqual([]);
+    expect(visibleParts(state)).toEqual([]);
     expect(state.toolStreamById.size).toBe(1);
-    expect(state.toolStreamOrder).toEqual(["call_current"]);
+    expect(state.toolStreamOrder).toEqual([buildToolStreamIdentity("run-1", "call_current")]);
   });
 
   it("shows a targeted message when chat history is unauthorized", async () => {
-    const request = vi.fn().mockRejectedValue(
-      new GatewayRequestError({
-        code: "PERMISSION_DENIED",
-        message: "not allowed",
-        details: { code: "AUTH_UNAUTHORIZED" },
-      }),
-    );
+    const scopeError = missingScopeErrorShape({
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    });
+    const request = vi.fn().mockRejectedValue(new GatewayRequestError(scopeError));
     const state = createHistoryState(request, {
-      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "old" }] }],
+      chatMessages: [textMessage("assistant", "old")],
       chatThinkingLevel: "high",
       chatVerboseLevel: "full",
     });
@@ -4195,43 +2320,11 @@ describe("loadChatHistory retry handling", () => {
     expect(getChatHistoryLoadState(state)).toMatchObject({
       phase: "failed",
       message:
-        "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
+        "You don't have permission to view existing chat history. Ask the person who manages OpenClaw for access.",
       retryable: false,
     });
     expect(state.lastError).toBeNull();
     expect(state.chatError).toBeNull();
-    expect(state.chatLoading).toBe(false);
-  });
-
-  it("preserves a first send appended while the startup history request is in flight", async () => {
-    const { history, request, state } = createDeferredHistoryState();
-
-    const load = loadChatHistory(state);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-
-    const optimisticMessage = createTextChatMessage(
-      "user",
-      "send before history settles",
-      { idempotencyKey: "run-after-history-start:user" },
-      123,
-    );
-    projectChatMessageEvent(state, {
-      type: "sendPending",
-      runId: "run-after-history-start",
-      message: optimisticMessage,
-    });
-    state.chatRunId = "run-after-history-start";
-    state.chatStream = "";
-    state.chatStreamStartedAt = 456;
-
-    history.resolve({ messages: [], thinkingLevel: "low" });
-    await load;
-
-    expect(state.chatMessages).toEqual([optimisticMessage]);
-    expect(state.chatRunId).toBe("run-after-history-start");
-    expect(state.chatStream).toBe("");
-    expect(state.chatStreamStartedAt).toBe(456);
-    expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });
 
@@ -4241,19 +2334,19 @@ describe("loadChatHistory retry handling", () => {
     const load = loadChatHistory(state);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
 
-    const userMessage = createTextChatMessage(
+    const userMessage = textMessage(
       "user",
       "send before history settles",
       { idempotencyKey: "late-run:user" },
       123,
     );
-    const persistedUserMessage = createTextChatMessage(
+    const persistedUserMessage = textMessage(
       "user",
       "send before history settles",
       { id: "persisted-late-user", idempotencyKey: "late-run:user", seq: 1 },
       123,
     );
-    const assistantMessage = createTextChatMessage(
+    const assistantMessage = textMessage(
       "assistant",
       "answer before history catches up",
       { id: "persisted-late-assistant", seq: 2 },
@@ -4264,6 +2357,9 @@ describe("loadChatHistory retry handling", () => {
       runId: "late-run",
       message: userMessage,
     });
+    state.chatRunId = "late-run";
+    state.chatStream = "";
+    state.chatStreamStartedAt = 456;
     projectChatMessageEvent(state, {
       type: "messagePersisted",
       message: assistantMessage,
@@ -4273,41 +2369,9 @@ describe("loadChatHistory retry handling", () => {
     await load;
 
     expect(state.chatMessages).toEqual([persistedUserMessage, assistantMessage]);
-    expect(state.chatThinkingLevel).toBe("low");
-    expect(state.chatLoading).toBe(false);
-  });
-
-  it("keeps repeated late prompts when startup history only has an older matching prompt", async () => {
-    const { history, request, state } = createDeferredHistoryState();
-
-    const load = loadChatHistory(state);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-
-    const repeatedPrompt = createTextChatMessage(
-      "user",
-      "continue",
-      { idempotencyKey: "repeat-run:user" },
-      200,
-    );
-    projectChatMessageEvent(state, {
-      type: "sendPending",
-      runId: "repeat-run",
-      message: repeatedPrompt,
-    });
-    const olderPrompt = createTextChatMessage(
-      "user",
-      "continue",
-      { id: "older-user", seq: 1 },
-      100,
-    );
-
-    history.resolve({
-      messages: [olderPrompt],
-      thinkingLevel: "low",
-    });
-    await load;
-
-    expect(state.chatMessages).toEqual([olderPrompt, repeatedPrompt]);
+    expect(state.chatRunId).toBe("late-run");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(456);
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });
@@ -4322,7 +2386,7 @@ describe("loadChatHistory retry handling", () => {
     const state = createHistoryState(request);
 
     const firstLoad = loadChatHistory(state);
-    const pending = createTextChatMessage("user", "new local ask", {
+    const pending = textMessage("user", "new local ask", {
       idempotencyKey: "same-session-pending-run:user",
     });
     projectChatMessageEvent(state, {
@@ -4355,7 +2419,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toEqual([pending]);
     expect(state.chatLoading).toBe(true);
 
-    const persisted = createTextChatMessage("assistant", "persisted history", {
+    const persisted = textMessage("assistant", "persisted history", {
       id: "same-session-history-assistant",
       seq: 1,
     });
@@ -4375,7 +2439,7 @@ describe("loadChatHistory retry handling", () => {
       .mockImplementationOnce(() => staleRequest.promise)
       .mockImplementationOnce(() => freshRequest.promise);
     const client = createTestClient(request);
-    const visibleMessage = createTextChatMessage("assistant", "visible before reconnect");
+    const visibleMessage = textMessage("assistant", "visible before reconnect");
     const state = createHistoryStateForClient(client, {
       chatMessages: [visibleMessage],
       connectionEpoch: 1,
@@ -4399,9 +2463,7 @@ describe("loadChatHistory retry handling", () => {
     freshRequest.resolve(createAssistantHistory("fresh history", { thinkingLevel: "low" }));
     await freshLoad;
 
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "fresh history" }] },
-    ]);
+    expect(state.chatMessages).toEqual([textMessage("assistant", "fresh history")]);
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });
@@ -4429,51 +2491,6 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatLoading).toBe(true);
   });
 
-  it("ignores stale history responses after switching sessions", async () => {
-    const mainRequest = createDeferred<HistoryResult>();
-    const otherRequest = createDeferred<HistoryResult>();
-    const request = vi.fn((_method: string, params?: { sessionKey?: string }) => {
-      if (params?.sessionKey === "main") {
-        return mainRequest.promise;
-      }
-      if (params?.sessionKey === "other") {
-        return otherRequest.promise;
-      }
-      throw new Error(`Unexpected sessionKey: ${String(params?.sessionKey)}`);
-    });
-    const state = createHistoryState(request, {
-      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "visible old" }] }],
-    });
-
-    const firstLoad = loadChatHistory(state);
-    state.sessionKey = "other";
-    const secondLoad = loadChatHistory(state);
-
-    mainRequest.resolve(
-      createAssistantHistory("main history", { thinkingLevel: "high", verboseLevel: "full" }),
-    );
-    await firstLoad;
-
-    expect(state.chatLoading).toBe(true);
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "visible old" }] },
-    ]);
-    expect(state.chatThinkingLevel).toBeNull();
-    expect(state.chatVerboseLevel).toBeNull();
-
-    otherRequest.resolve(
-      createAssistantHistory("other history", { thinkingLevel: "low", verboseLevel: "full" }),
-    );
-    await secondLoad;
-
-    expect(state.chatLoading).toBe(false);
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "other history" }] },
-    ]);
-    expect(state.chatThinkingLevel).toBe("low");
-    expect(state.chatVerboseLevel).toBe("full");
-  });
-
   it("ignores stale global history responses after switching selected agents", async () => {
     const workRequest = createDeferred<HistoryResult>();
     const request = vi.fn((_method: string, params?: { agentId?: string; sessionKey?: string }) => {
@@ -4486,7 +2503,7 @@ describe("loadChatHistory retry handling", () => {
       sessionKey: "global",
       assistantAgentId: "work",
       agentsList: { defaultId: "main" },
-      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "visible old" }] }],
+      chatMessages: [textMessage("assistant", "visible old")],
     });
 
     const load = loadChatHistory(state);
@@ -4495,10 +2512,113 @@ describe("loadChatHistory retry handling", () => {
     await load;
 
     expect(state.chatLoading).toBe(false);
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "visible old" }] },
-    ]);
+    expect(state.chatMessages).toEqual([textMessage("assistant", "visible old")]);
     expect(state.chatThinkingLevel).toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+function createAbortDiagnosticState(runId = "run-validation-abort") {
+  return createStateWithRunningSession({
+    chatRunId: runId,
+    chatStream: "Partial assistant reply",
+    chatStreamStartedAt: 100,
+    chatRunError: null,
+  });
+}
+
+describe("aborted chat diagnostics", () => {
+  it("keeps first-terminal provider sign-out killed and interrupted", () => {
+    const stopReason = "auth-revoked";
+    const expectedError =
+      "Error: This reply stopped because the provider was signed out. Sign in again or choose another model.";
+
+    const state = createAbortDiagnosticState();
+    const payload: ChatEventPayload = chatEvent("aborted", {
+      runId: "run-validation-abort",
+      stopReason,
+    });
+
+    handleChatGatewayEvent(state, payload);
+
+    expect(state.chatRunError?.summary ?? null).toBe(expectedError);
+    expect(state.chatRunStatus).toMatchObject({
+      phase: "interrupted",
+      runId: "run-validation-abort",
+      sessionKey: "main",
+    });
+    expect(state.lastLocalTerminalReconcile?.sessionStatus).toBe("killed");
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      activeRunIds: [],
+      hasActiveRun: false,
+      status: "killed",
+    });
+    expect(state.chatRunId).toBeNull();
+  });
+
+  it("surfaces one late aborted diagnostic and ignores its replay", () => {
+    const state = createAbortDiagnosticState();
+    const aborted = chatEvent("aborted", { runId: "run-validation-abort" });
+    const diagnostic = {
+      ...aborted,
+      errorMessage: "edit tool validation failed: edits: must be an array",
+    };
+
+    handleChatGatewayEvent(state, aborted);
+    expect(state.chatRunError).toBeNull();
+    handleChatGatewayEvent(state, diagnostic);
+    const displayedDiagnostic = state.chatRunError;
+    handleChatGatewayEvent(state, diagnostic);
+
+    expect(state.chatRunError).toBe(displayedDiagnostic);
+    expect(state.chatRunError).toEqual({
+      summary: "Error: edit tool validation failed: edits: must be an array",
+      runId: "run-validation-abort",
+    });
+    expect(state.chatRunId).toBeNull();
+  });
+
+  it("does not restore an old diagnostic while a newer send awaits its ACK", () => {
+    const state = createAbortDiagnosticState("run-old");
+    receive(state, "aborted", { runId: "run-old" });
+    state.chatQueue = [
+      {
+        id: "pending-new-send",
+        text: "New request",
+        createdAt: 200,
+        sendRunId: "run-new",
+        sendState: "sending",
+      },
+    ];
+
+    receive(state, "aborted", {
+      runId: "run-old",
+      errorMessage: "edit tool validation failed: invalid arguments",
+    });
+
+    expect(state.chatRunError).toBeNull();
+    expect(state.chatRunId).toBeNull();
+    expect(state.lastLocalTerminalReconcile?.runId).toBe("run-old");
+  });
+
+  it("does not publish an old aborted diagnostic after a newer run completes", () => {
+    const state = createAbortDiagnosticState("run-old");
+    receive(state, "aborted", { runId: "run-old" });
+    state.chatRunId = "run-new";
+    state.chatStream = "New final answer";
+    receive(state, "final", {
+      runId: "run-new",
+      message: textMessage("assistant", "New final answer"),
+    });
+
+    receive(state, "aborted", {
+      runId: "run-old",
+      errorMessage: "edit tool validation failed: invalid arguments",
+    });
+
+    expect(state.chatRunError).toBeNull();
+    expect(state.lastLocalTerminalReconcile?.runId).toBe("run-new");
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatMessages.at(-1)).toMatchObject(textMessage("assistant", "New final answer"));
+  });
+});

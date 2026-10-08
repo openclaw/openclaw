@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
+import { notifyGatewayWorkMetricsChanged } from "../../../infra/gateway-work-metrics-events.js";
 import { hasRetainedPluginRuntimeCloseError } from "../../../plugins/runtime-close-error.js";
 import { SWARM_LANE_PREFIX, type CommandLaneConfiguration } from "../../../process/lanes.js";
 import {
@@ -22,14 +23,21 @@ type SwarmLaunch = {
   signal?: AbortSignal;
 };
 
+type SwarmPreparation = {
+  onRemoved: Promise<SwarmLaunch["onRemoved"]>;
+  lifecycleOwner?: object;
+};
+
 type QueuedSwarmRun = {
   runId: string;
   owner?: object;
   onCapacityChange?: () => void;
   reportedCapacityWait?: boolean;
   launch?: SwarmLaunch;
+  preparation?: SwarmPreparation;
   pendingLaunch?: Promise<void>;
-  removal?: Promise<void>;
+  removal?: Promise<boolean>;
+  removalReason?: SwarmRemovalReason;
   callbackWork?: AsyncWorkScope;
   removeAbortListener?: () => void;
   holds: number;
@@ -78,6 +86,8 @@ const lanes = new Map<string, SwarmGroupLane>();
 const pendingRemovals = new Set<QueuedSwarmRun>();
 // Releasing capacity does not settle an admission or its failure cleanup.
 const pendingLaunches = new Set<QueuedSwarmRun>();
+// Holds retain cancellation identity after removal, but never across reuse of the run ID.
+const heldReservations = new Map<string, QueuedSwarmRun>();
 const runLocations = new Map<
   string,
   | { lane: SwarmGroupLane; state: "active"; item?: QueuedSwarmRun }
@@ -85,13 +95,14 @@ const runLocations = new Map<
 >();
 
 function publishCapacityChange(item: QueuedSwarmRun) {
-  if (!item.owner || !item.onCapacityChange) {
+  if (!item.owner) {
     return;
   }
   const waiting = isSwarmRunWaitingForCapacity(item.runId, item.owner);
   if (waiting !== (item.reportedCapacityWait === true)) {
     item.reportedCapacityWait = waiting;
-    item.onCapacityChange();
+    notifyGatewayWorkMetricsChanged();
+    item.onCapacityChange?.();
   }
 }
 
@@ -106,18 +117,31 @@ function publishLaneCapacityChange(lane: SwarmGroupLane, previouslyFull: boolean
 function finalizeRemovedRun(
   item: QueuedSwarmRun,
   reason: SwarmRemovalReason = "cancelled",
-): Promise<void> {
+): Promise<boolean> {
   item.removeAbortListener?.();
   item.removeAbortListener = undefined;
-  const onRemoved = item.launch?.onRemoved;
-  if (item.launch && !item.removal) {
+  if (reason === "shutdown") {
+    item.removalReason = reason;
+  }
+  if ((item.launch || item.preparation) && !item.removal) {
+    item.removalReason = reason;
     pendingRemovals.add(item);
     const cleanup = async () => {
-      const [launch] = await Promise.allSettled([item.pendingLaunch]);
-      await onRemoved?.(reason);
+      const [preparation, launch] = await Promise.allSettled([
+        item.preparation?.onRemoved,
+        item.pendingLaunch,
+      ]);
+      const onRemoved =
+        item.launch?.onRemoved ??
+        (preparation.status === "fulfilled" ? preparation.value : undefined);
+      await onRemoved?.(item.removalReason ?? reason);
+      if (preparation.status === "rejected") {
+        throw preparation.reason;
+      }
       if (launch.status === "rejected") {
         throw launch.reason;
       }
+      return onRemoved !== undefined;
     };
     // A retained launch can finish after its triggering request's work scope closes.
     item.removal = getAsyncWorkSignal()?.aborted ? cleanup() : trackAsyncWork(cleanup);
@@ -130,7 +154,7 @@ function finalizeRemovedRun(
       },
     );
   }
-  return item.removal ?? Promise.resolve();
+  return item.removal ?? Promise.resolve(false);
 }
 
 async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch: SwarmLaunch) {
@@ -147,7 +171,12 @@ async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch
     let failurePersisted = false;
     try {
       failurePersisted = await launch.onStartFailure(error);
-    } catch {
+    } catch (cleanupError) {
+      if (hasRetainedPluginRuntimeCloseError(cleanupError)) {
+        // Native custody cannot be healed by replaying a memoized failed launch.
+        void finalizeRemovedRun(item);
+        return;
+      }
       // A durable queued row still owns this work; retry after a short backoff.
     }
     const location = runLocations.get(item.runId);
@@ -247,6 +276,7 @@ function ensureLane(params: {
       continue;
     }
     lane.active.add(runId);
+    heldReservations.delete(runId);
     runLocations.set(runId, { lane, state: "active" });
   }
   publishLaneCapacityChange(lane, previouslyFull);
@@ -273,6 +303,7 @@ export function reserveSwarmRun(params: {
   }
   const item: QueuedSwarmRun = { runId: params.runId, holds: 0, retryReady: true };
   lane.queue.push(item);
+  heldReservations.delete(params.runId);
   runLocations.set(params.runId, { lane, state: "queued", item });
   return true;
 }
@@ -287,6 +318,7 @@ export function bindSwarmRunReservation(
   if (item && item.owner === undefined) {
     item.owner = owner;
     item.onCapacityChange = onCapacityChange;
+    notifyGatewayWorkMetricsChanged();
     publishCapacityChange(item);
   }
 }
@@ -294,6 +326,10 @@ export function bindSwarmRunReservation(
 /** Includes held/preactivation work and the launch awaiting Gateway acceptance. */
 export function ownsSwarmRunReservation(runId: string, owner: object): boolean {
   return runLocations.get(runId)?.item?.owner === owner;
+}
+
+export function listSwarmRunReservationIds(): string[] {
+  return [...runLocations.keys()];
 }
 
 /** Preparation, cancellation holds, and already-admitted launches are not slot waits. */
@@ -357,13 +393,14 @@ export function releaseSwarmRun(runId: string): boolean {
   const previouslyFull = location.lane.active.size >= location.lane.limit;
   location.lane.active.delete(runId);
   runLocations.delete(runId);
+  notifyGatewayWorkMetricsChanged();
   publishLaneCapacityChange(location.lane, previouslyFull);
   pumpLane(location.lane);
   deleteLaneIfIdle(location.lane);
   return true;
 }
 
-export function removeQueuedSwarmRun(runId: string): boolean {
+function removeQueuedSwarmRun(runId: string): boolean {
   const location = runLocations.get(runId);
   if (!location || location.state !== "queued") {
     return false;
@@ -371,6 +408,7 @@ export function removeQueuedSwarmRun(runId: string): boolean {
   const index = location.lane.queue.indexOf(location.item);
   location.lane.queue.splice(index, 1);
   runLocations.delete(runId);
+  notifyGatewayWorkMetricsChanged();
   void finalizeRemovedRun(location.item);
   publishCapacityChange(location.item);
   pumpLane(location.lane);
@@ -382,11 +420,13 @@ export function removeQueuedSwarmRun(runId: string): boolean {
 export async function closeSwarmScheduler(lifecycleOwner?: object): Promise<void> {
   const items = new Set([...pendingRemovals, ...pendingLaunches]);
   for (const location of runLocations.values()) {
-    if (location.item?.launch) {
+    if (location.item?.launch || location.item?.preparation) {
       items.add(location.item);
     }
   }
-  const owned = [...items].filter((item) => item.launch?.lifecycleOwner === lifecycleOwner);
+  const owned = [...items].filter(
+    (item) => (item.launch ?? item.preparation)?.lifecycleOwner === lifecycleOwner,
+  );
   const removal = owned.map((item) => finalizeRemovedRun(item, "shutdown"));
   for (const item of owned) {
     if (runLocations.get(item.runId)?.item === item && !removeQueuedSwarmRun(item.runId)) {
@@ -435,14 +475,36 @@ export function holdQueuedSwarmRun(runId: string) {
   }
   const { lane, item } = location;
   item.holds += 1;
+  heldReservations.set(runId, item);
   publishCapacityChange(item);
   let released = false;
+  const isCurrent = () => !released && runLocations.get(runId) === location;
   return {
-    isCurrent: () => !released && runLocations.get(runId) === location,
+    isCurrent,
+    bindPreparation(preparation: SwarmPreparation): boolean {
+      if (!isCurrent()) {
+        return false;
+      }
+      if (item.preparation) {
+        throw new Error("Swarm reservation already owns preparation");
+      }
+      item.preparation = {
+        ...preparation,
+        onRemoved: preparation.onRemoved.then((onRemoved) =>
+          onRemoved ? bindSwarmLaunchWork(onRemoved) : undefined,
+        ),
+      };
+      // Retain rejection for removal without an unhandled rejection before withdrawal.
+      void item.preparation.onRemoved.catch(() => {});
+      return true;
+    },
     async release() {
       if (!released) {
         released = true;
         item.holds -= 1;
+        if (item.holds === 0 && heldReservations.get(runId) === item) {
+          heldReservations.delete(runId);
+        }
         if (runLocations.get(runId) === location) {
           publishCapacityChange(item);
         }
@@ -453,7 +515,22 @@ export function holdQueuedSwarmRun(runId: string) {
     withdraw() {
       // A retained durable kill may withdraw only its never-started reservation.
       // Reused IDs and lanes must not inherit an older cancellation scope.
-      return !released && runLocations.get(runId) === location && removeQueuedSwarmRun(runId);
+      return isCurrent() && removeQueuedSwarmRun(runId);
+    },
+    async settleCancellation() {
+      const removal = item.removal;
+      if (released || !removal || item.pendingLaunch || item.removalReason !== "cancelled") {
+        return false;
+      }
+      const cleaned = await removal;
+      return (
+        cleaned &&
+        !released &&
+        !item.pendingLaunch &&
+        item.removalReason === "cancelled" &&
+        heldReservations.get(runId) === item &&
+        !runLocations.has(runId)
+      );
     },
   };
 }
@@ -464,7 +541,9 @@ const testing = {
       location.item?.removeAbortListener?.();
     }
     lanes.clear();
+    heldReservations.clear();
     runLocations.clear();
+    notifyGatewayWorkMetricsChanged();
     pendingRemovals.clear();
     pendingLaunches.clear();
   },

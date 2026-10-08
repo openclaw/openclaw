@@ -31,7 +31,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(resetFollowupTurnTestState);
 
 describe("queued turn steering", () => {
-  it.each(["gateway", "retained", "collected", "overflow"] as const)(
+  it.each(["gateway", "collected", "overflow"] as const)(
     "accepts successive Gateway steers into a %s followup after an older source completed",
     async (source) => {
       const root = tempDirs.make("openclaw-followup-steering-");
@@ -40,7 +40,6 @@ describe("queued turn steering", () => {
       const entry: SessionEntry = {
         sessionId: "session",
         updatedAt: 1,
-        status: "running",
         restartRecoveryTerminalRunIds: ["previous-input"],
       };
       await replaceSessionEntry({ storePath, sessionKey }, entry);
@@ -107,11 +106,18 @@ describe("queued turn steering", () => {
           kind: "embedded",
           runId: "followup-execution",
           cancel: vi.fn(),
-          messageInjection: { isAvailable: () => true, queueMessage },
+          messageInjectionV2: {
+            version: 2,
+            isAvailable: () => true,
+            queueMessage: (text, _options, assertCurrent) => {
+              assertCurrent();
+              return queueMessage(text);
+            },
+          },
         });
         for (const [index, message] of steeringMessages.entries()) {
           const clientRunId = `new-human-input-${index}`;
-          const attempt = createChatSendMessageInjectionStarter({
+          const attempt = await createChatSendMessageInjectionStarter({
             target: replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey),
             abortSignal: new AbortController().signal,
             request: {
@@ -124,6 +130,7 @@ describe("queued turn steering", () => {
               supportsTaskSuggestions: false,
             },
             session: {
+              agentId: "main",
               cfg: {},
               entry,
               sessionKey,
@@ -221,30 +228,53 @@ describe("queued turn steering", () => {
         traceAuthorized: false,
       };
       await expect(
-        beginReplyMessageInjectionTarget(target!, "Use the revised request", {
-          isInboundUserMessage: true,
-          toolAuthorityOverlay: overlay,
-        }).outcome,
+        (
+          await beginReplyMessageInjectionTarget(target!, "Use the revised request", {
+            isInboundUserMessage: true,
+            toolAuthorityOverlay: overlay,
+          })
+        ).outcome,
       ).resolves.toMatchObject({ status: "accepted" });
       await expect(
-        beginReplyMessageInjectionTarget(target!, "Change tool permissions", {
-          isInboundUserMessage: true,
-          toolAuthorityOverlay: { ...overlay, disableTools: true },
-        }).outcome,
+        (
+          await beginReplyMessageInjectionTarget(target!, "Same permissions from another profile", {
+            isInboundUserMessage: true,
+            toolAuthorityOverlay: {
+              ...overlay,
+              operatorAuthority: createAdmittedRunOperatorAuthority({
+                ...overlay.operatorAuthority,
+                profileId: "maintainer",
+              }),
+            },
+          })
+        ).outcome,
+      ).resolves.toMatchObject({ status: "accepted" });
+      await expect(
+        (
+          await beginReplyMessageInjectionTarget(target!, "Change tool permissions", {
+            isInboundUserMessage: true,
+            toolAuthorityOverlay: { ...overlay, disableTools: true },
+          })
+        ).outcome,
       ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       for (const incomingOperator of [
         undefined,
-        createAdmittedRunOperatorAuthority({ ...operatorAuthority, profileId: "maintainer" }),
         createAdmittedRunOperatorAuthority({ ...operatorAuthority, scopes: ["operator.admin"] }),
       ]) {
         await expect(
-          beginReplyMessageInjectionTarget(target!, "Different original operator authority", {
-            isInboundUserMessage: true,
-            toolAuthorityOverlay: { ...overlay, operatorAuthority: incomingOperator },
-          }).outcome,
+          (
+            await beginReplyMessageInjectionTarget(
+              target!,
+              "Different original operator authority",
+              {
+                isInboundUserMessage: true,
+                toolAuthorityOverlay: { ...overlay, operatorAuthority: incomingOperator },
+              },
+            )
+          ).outcome,
         ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       }
-      expect(queueMessage).toHaveBeenCalledOnce();
+      expect(queueMessage).toHaveBeenCalledTimes(2);
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
     try {

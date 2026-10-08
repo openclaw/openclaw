@@ -6,11 +6,10 @@ import {
   resolvePluginConfigContractsById,
 } from "../plugins/config-contracts.js";
 import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
-import type { PluginManifestSecretInputPath } from "../plugins/manifest-types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import {
-  collectSecretInputAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
@@ -55,40 +54,22 @@ export function collectPluginConfigAssignments(params: {
     : [...(params.loadablePluginOrigins?.entries() ?? [])]
         .filter(([, origin]) => origin === "bundled")
         .map(([pluginId]) => pluginId);
-  const pluginSecretInputs = new Map(
-    [
-      ...resolvePluginConfigContractsById({
-        config: params.config,
-        env: params.context.env,
-        fallbackToBundledMetadata: true,
-        fallbackToBundledMetadataForResolvedBundled: !params.context.manifestRegistry,
-        fallbackBundledPluginIds: bundledLoadablePluginIds,
-        pluginIds: Object.keys(entries),
-        manifestRegistry,
-      }).entries(),
-    ].flatMap(([pluginId, metadata]) => {
-      const secretInputs = metadata.configContracts.secretInputs;
-      if (!secretInputs?.paths.length) {
-        return [];
-      }
-      return [
-        [
-          pluginId,
-          {
-            origin: metadata.origin,
-            bundledDefaultEnabled: secretInputs.bundledDefaultEnabled,
-            paths: secretInputs.paths,
-          },
-        ] as const,
-      ];
-    }),
-  );
+  const pluginContracts = resolvePluginConfigContractsById({
+    config: params.config,
+    env: params.context.env,
+    fallbackToBundledMetadata: true,
+    fallbackToBundledMetadataForResolvedBundled: !params.context.manifestRegistry,
+    fallbackBundledPluginIds: bundledLoadablePluginIds,
+    pluginIds: Object.keys(entries),
+    manifestRegistry,
+  });
 
   for (const [pluginId, entry] of Object.entries(entries)) {
-    const secretInputs = pluginSecretInputs.get(pluginId);
-    if (!secretInputs) {
+    const metadata = pluginContracts.get(pluginId);
+    if (!metadata?.configContracts.secretInputs?.paths.length) {
       continue;
     }
+    const secretInputs = metadata.configContracts.secretInputs;
     if (!isRecord(entry)) {
       continue;
     }
@@ -98,95 +79,61 @@ export function collectPluginConfigAssignments(params: {
     }
 
     const pluginOrigin = params.loadablePluginOrigins?.get(pluginId);
-    if (params.loadablePluginOrigins && !pluginOrigin) {
-      collectConfiguredPluginSecretAssignments({
-        pluginId,
-        pluginConfig,
-        secretPaths: secretInputs.paths,
-        active: false,
-        inactiveReason: "plugin is not loadable (stale config entry).",
-        defaults: params.defaults,
-        context: params.context,
-      });
-      continue;
-    }
+    const resolvedOrigin = pluginOrigin ?? metadata.origin;
+    const enableState =
+      params.loadablePluginOrigins && !pluginOrigin
+        ? { enabled: false, reason: "plugin is not loadable (stale config entry)." }
+        : resolveEnableState(
+            pluginId,
+            resolvedOrigin,
+            normalizedConfig,
+            resolvedOrigin === "bundled" ? secretInputs.bundledDefaultEnabled : undefined,
+          );
+    const inactiveReason = enableState.reason ?? "plugin is disabled.";
+    const pluginConfigPath = formatConcreteConfigPath(["plugins", "entries", pluginId, "config"]);
+    const seenPaths = new Set<string>();
+    for (const secretPath of secretInputs.paths) {
+      for (const match of collectPluginConfigContractMatches({
+        root: pluginConfig,
+        pathPattern: secretPath.path,
+      })) {
+        const relativePath = match.path.startsWith("[") ? match.path : `.${match.path}`;
+        const fullPath = `${pluginConfigPath}${relativePath}`;
+        if (seenPaths.has(fullPath)) {
+          continue;
+        }
+        seenPaths.add(fullPath);
+        // Routes may retain an unchanged secret during a transient outage.
+        // Tool capabilities become unavailable so a stale API key cannot remain active.
+        const ownerContract = secretPath.ownerKind === "route" ? pluginConfig : undefined;
 
-    const resolvedOrigin = pluginOrigin ?? secretInputs.origin;
-    const enableState = resolveEnableState(
-      pluginId,
-      resolvedOrigin,
-      normalizedConfig,
-      resolvedOrigin === "bundled" ? secretInputs.bundledDefaultEnabled : undefined,
-    );
-    collectConfiguredPluginSecretAssignments({
-      pluginId,
-      pluginConfig,
-      secretPaths: secretInputs.paths,
-      active: enableState.enabled,
-      inactiveReason: enableState.reason ?? "plugin is disabled.",
-      defaults: params.defaults,
-      context: params.context,
-    });
-  }
-}
-
-function collectConfiguredPluginSecretAssignments(params: {
-  pluginId: string;
-  pluginConfig: Record<string, unknown>;
-  secretPaths: readonly PluginManifestSecretInputPath[];
-  active: boolean;
-  inactiveReason: string;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  const pluginConfigPath = formatConcreteConfigPath([
-    "plugins",
-    "entries",
-    params.pluginId,
-    "config",
-  ]);
-  const seenPaths = new Set<string>();
-  for (const secretPath of params.secretPaths) {
-    for (const match of collectPluginConfigContractMatches({
-      root: params.pluginConfig,
-      pathPattern: secretPath.path,
-    })) {
-      const relativePath = match.path.startsWith("[") ? match.path : `.${match.path}`;
-      const fullPath = `${pluginConfigPath}${relativePath}`;
-      if (seenPaths.has(fullPath)) {
-        continue;
+        // SecretInput allows both explicit objects and inline env-template refs
+        // like `${MCP_API_KEY}`. Non-ref strings remain untouched because
+        // collectSecretInputAssignment ignores them.
+        collectSecretInputAssignment({
+          value: match.value,
+          path: fullPath,
+          expected: secretPath.expected ?? "string",
+          defaults: params.defaults,
+          context: params.context,
+          active: enableState.enabled,
+          inactiveReason: `plugin "${pluginId}": ${inactiveReason}`,
+          ...(secretPath.ownerKind
+            ? {
+                owner: {
+                  ownerKind: secretPath.ownerKind,
+                  ownerId: fullPath,
+                  requiredForGateway: false,
+                  disposition: "isolate" as const,
+                  ...(ownerContract ? { contract: ownerContract } : {}),
+                },
+              }
+            : {}),
+          apply: (value) => {
+            Reflect.set(match.parent, match.key, value);
+          },
+        });
       }
-      seenPaths.add(fullPath);
-      // Routes may retain an unchanged secret during a transient outage.
-      // Tool capabilities become unavailable so a stale API key cannot remain active.
-      const ownerContract = secretPath.ownerKind === "route" ? params.pluginConfig : undefined;
-
-      // SecretInput allows both explicit objects and inline env-template refs
-      // like `${MCP_API_KEY}`. Non-ref strings remain untouched because
-      // collectSecretInputAssignment ignores them.
-      collectSecretInputAssignment({
-        value: match.value,
-        path: fullPath,
-        expected: secretPath.expected ?? "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: params.active,
-        inactiveReason: `plugin "${params.pluginId}": ${params.inactiveReason}`,
-        ...(secretPath.ownerKind
-          ? {
-              owner: {
-                ownerKind: secretPath.ownerKind,
-                ownerId: fullPath,
-                requiredForGateway: false,
-                disposition: "isolate" as const,
-                ...(ownerContract ? { contract: ownerContract } : {}),
-              },
-            }
-          : {}),
-        apply: (value) => {
-          Reflect.set(match.parent, match.key, value);
-        },
-      });
     }
   }
 }

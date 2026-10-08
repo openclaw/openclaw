@@ -12,6 +12,7 @@ const restartFailureReasons: Partial<Record<GatewayRestartWaitOutcome, string>> 
   "build-id-mismatch": "the running Gateway build did not match the expected build",
   "stale-pids": "stale Gateway processes remained",
   "generation-changed": "the Gateway process generation changed before readiness was confirmed",
+  "service-definition-refused": "the service definition refused startup",
 };
 
 function formatGatewayStillStarting(snapshot: GatewayRestartSnapshot): string {
@@ -29,13 +30,17 @@ export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSn
     lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
   }
   if (snapshot.probeError) {
-    lines.push(`Gateway probe failed: ${snapshot.probeError}`);
+    lines.push(`Gateway check failed: ${snapshot.probeError}`);
   }
   return lines;
 }
 
 export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): string[] {
   const lines: string[] = [];
+  const refusal = snapshot.runtime?.systemd?.startRefusal;
+  if (refusal) {
+    lines.push(`SERVICE-DEFINITION: ${refusal.message}`);
+  }
   if (snapshot.waitOutcome === "still-starting") {
     lines.push(formatGatewayStillStarting(snapshot));
   }
@@ -47,28 +52,26 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   if (snapshot.waitOutcome === "generation-changed") {
     lines.push("Gateway process generation changed before readiness could be confirmed.");
   }
-  if (snapshot.versionMismatch) {
-    const actual = snapshot.versionMismatch.actual ?? "unavailable";
-    lines.push(
-      `Gateway version mismatch: expected ${snapshot.versionMismatch.expected}, running gateway reported ${actual}.`,
-    );
-  }
-  if (snapshot.buildIdMismatch) {
-    const actual = snapshot.buildIdMismatch.actual ?? "unavailable";
-    lines.push(
-      `Gateway build mismatch: expected ${snapshot.buildIdMismatch.expected}, running gateway reported ${actual}.`,
-    );
-  }
-  if (snapshot.activatedPluginErrors?.length) {
-    lines.push("Activated plugin load errors:");
-    for (const plugin of snapshot.activatedPluginErrors) {
-      lines.push(`- ${plugin.id}: ${plugin.error}`);
+  for (const [kind, mismatch] of [
+    ["version", snapshot.versionMismatch],
+    ["build", snapshot.buildIdMismatch],
+  ] as const) {
+    if (mismatch) {
+      lines.push(
+        `Gateway ${kind} mismatch: expected ${mismatch.expected}, running gateway reported ${mismatch.actual ?? "unavailable"}.`,
+      );
     }
   }
-  if (snapshot.channelProbeErrors?.length) {
-    lines.push("Channel health probe errors:");
-    for (const channel of snapshot.channelProbeErrors) {
-      lines.push(`- ${channel.id}: ${channel.error}`);
+  for (const [heading, errors] of [
+    ["Activated plugin load errors:", snapshot.activatedPluginErrors],
+    ["Channel health check errors:", snapshot.channelProbeErrors],
+    ["Channel health collection warnings:", snapshot.channelProbeTimeouts],
+  ] as const) {
+    if (errors?.length) {
+      lines.push(heading);
+      for (const { id, error } of errors) {
+        lines.push(`- ${id}: ${error}`);
+      }
     }
   }
   const runtimeSummary = [
@@ -91,6 +94,11 @@ export function formatGatewayRestartFailure(params: {
   port: number;
   defaultTimeoutSeconds: number;
 }): { statusLine: string; failMessage: string } {
+  const refusal = params.health.runtime?.systemd?.startRefusal;
+  if (params.health.waitOutcome === "service-definition-refused" && refusal) {
+    const message = `SERVICE-DEFINITION: ${refusal.message}`;
+    return { statusLine: message, failMessage: message };
+  }
   if (params.health.waitOutcome === "still-starting") {
     const message = formatGatewayStillStarting(params.health);
     return { statusLine: message, failMessage: message };

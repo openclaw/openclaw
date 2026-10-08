@@ -33,6 +33,8 @@ export type SkillRootInstallFiles = {
   timeoutMs?: number;
   logger?: ArchiveLogger;
   rootMarkers?: readonly string[];
+  /** Revalidate the caller at the workspace host's final filesystem publication. */
+  beforePersistentApply?: () => void;
   /** Undefined skips the native update guard; null means the install was absent. */
   expectedClawHubState?: ClawHubSkillFileState | null;
 };

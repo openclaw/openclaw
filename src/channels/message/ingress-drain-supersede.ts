@@ -1,4 +1,8 @@
-import { activeClaimKey, type ActiveHandlerState } from "./ingress-drain-state.js";
+import {
+  activeClaimKey,
+  isPreAdoptionState,
+  type ActiveHandlerState,
+} from "./ingress-drain-state.js";
 import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.types.js";
 
 export type IngressSupersedeDecision = boolean | (() => boolean);
@@ -19,16 +23,6 @@ type SupersedeActiveStatesParams<TPayload, TMetadata> = {
   formatError: (error: unknown) => string;
   log: (message: string) => void;
 };
-
-function isPreAdoptionState<TPayload, TMetadata>(
-  state: ActiveHandlerState<TPayload, TMetadata>,
-): boolean {
-  return (
-    (state.phase === "dispatching" || state.phase === "deferred") &&
-    !state.guillotined &&
-    !state.superseded
-  );
-}
 
 /** Supersede every accepted pre-adoption claim on one lane, including released deferrals. */
 export async function supersedeActiveStatesIfNeeded<TPayload, TMetadata>(
@@ -63,9 +57,7 @@ export async function supersedeActiveStatesIfNeeded<TPayload, TMetadata>(
     params.clearStallTimer(pending);
     pending.abortController.abort(new Error("ingress-superseded"));
     try {
-      await pending.settleOnce(async () => {
-        await params.completeClaim(pending.claim);
-      });
+      await pending.settleOnce(() => params.completeClaim(pending.claim));
     } catch (error) {
       params.log(
         `ingress drain: failed to tombstone superseded event ${pending.eventId}: ${params.formatError(error)}`,

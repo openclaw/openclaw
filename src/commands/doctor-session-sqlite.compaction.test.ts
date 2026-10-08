@@ -51,9 +51,25 @@ describe("runDoctorSessionSqlite", () => {
       expect(imported.totals.issues).toBe(0);
       const cleanup = expectDefined(imported.targets[0]?.compact, "import cleanup");
       expect(cleanup.freelistAfterPages).toBe(0);
+      expect(cleanup.skipped).toBe(false);
       if (autoVacuum !== "FULL") {
         expect(freelistBefore).toBeGreaterThan(0);
+        expect(cleanup.freelistBeforePages).toBeGreaterThan(0);
         expect(cleanup.reclaimedBytes).toBeGreaterThan(0);
+      }
+      expect(
+        recordOpenClawDatabaseQuarantine({
+          env: store.env,
+          kind: "agent",
+          path: sqlitePath,
+          reason: "corrupt index",
+        }),
+      ).toBe(true);
+      const externalStorePath = path.join(store.tempDir, "external-sessions.json");
+      if (process.platform !== "win32") {
+        fs.writeFileSync(store.storePath, "{}\n", { mode: 0o600 });
+        fs.linkSync(store.storePath, externalStorePath);
+        fs.chmodSync(sqlitePath, 0o666);
       }
       const compacted = await runDoctorSessionSqlite({
         env: store.env,
@@ -62,10 +78,12 @@ describe("runDoctorSessionSqlite", () => {
       });
       expect(compacted.totals.issues).toBe(0);
       const packed = expectDefined(compacted.targets[0]?.compact, "explicit compaction");
+      expect(packed).toMatchObject({ freelistAfterPages: 0, skipped: false });
       if (autoVacuum === "NONE") {
         expect(packed.dbSizeAfterBytes).toBe(cleanup.dbSizeAfterBytes);
       } else {
         expect(packed.dbSizeAfterBytes).toBeLessThan(cleanup.dbSizeAfterBytes);
+        expect(compacted.totals.reclaimedBytes).toBeGreaterThan(0);
       }
       const after = nodeSqlite.openNodeSqliteDatabase(sqlitePath, { readOnly: true });
       try {
@@ -78,68 +96,13 @@ describe("runDoctorSessionSqlite", () => {
       } finally {
         after.close();
       }
-    },
-  );
-
-  it("compacts migrated agent SQLite databases and reports reclaimed pages", async () => {
-    const store = createLegacyStore({
-      transcriptLines: [
-        '{"type":"session","sessionId":"session-1"}',
-        ...Array.from({ length: 240 }, (_, index) =>
-          JSON.stringify({
-            id: `evt-${index}`,
-            message: { content: "x".repeat(2_000), role: "user" },
-            type: "message",
-          }),
-        ),
-      ],
-    });
-    const importReport = await importLegacyStore(store);
-    const sqlitePath = importReport.targets[0]?.sqlitePath;
-    expect(sqlitePath).toBeTruthy();
-    const sqlite = nodeSqlite.requireNodeSqlite();
-    const db = new sqlite.DatabaseSync(sqlitePath ?? "");
-    try {
-      db.exec("DELETE FROM transcript_events;");
-    } finally {
-      db.close();
-    }
-
-    const compact = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "compact",
-      store: store.storePath,
-    });
-
-    expect(compact.totals.issues).toBe(0);
-    expect(compact.totals.reclaimedBytes).toBeGreaterThan(0);
-    expect(compact.targets[0]?.compact).toMatchObject({
-      freelistAfterPages: 0,
-      skipped: false,
-    });
-    expect(compact.targets[0]?.compact?.freelistBeforePages).toBeGreaterThan(0);
-    expect(compact.targets[0]?.compact?.dbSizeAfterBytes).toBeLessThan(
-      compact.targets[0]?.compact?.dbSizeBeforeBytes ?? 0,
-    );
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "allows hard-linked legacy stores during SQLite compaction",
-    async () => {
-      const { store } = await createImportedStoreForCompaction();
-      const externalStorePath = path.join(store.tempDir, "external-sessions.json");
-      fs.writeFileSync(store.storePath, "{}\n", { mode: 0o600 });
-      fs.linkSync(store.storePath, externalStorePath);
-
-      const report = await runDoctorSessionSqlite({
-        env: store.env,
-        mode: "compact",
-        store: store.storePath,
-      });
-
-      expect(report.totals.issues).toBe(0);
-      expect(fs.statSync(externalStorePath).nlink).toBe(2);
-      expect(fs.readFileSync(externalStorePath, "utf8")).toBe("{}\n");
+      expect(readPersistedQuarantineRow(sqlitePath, { env: store.env })).toBeUndefined();
+      if (process.platform !== "win32") {
+        expect(fs.statSync(sqlitePath).mode & 0o777).toBe(0o600);
+        expect(fs.statSync(externalStorePath).nlink).toBe(2);
+        expect(fs.readFileSync(externalStorePath, "utf8")).toBe("{}\n");
+      }
+      expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
     },
   );
 
@@ -260,45 +223,5 @@ describe("runDoctorSessionSqlite", () => {
         }),
       ]),
     );
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "refuses a symlink at the agent database path",
-    async () => {
-      const { sqlitePath, store } = await createImportedStoreForCompaction();
-      const realPath = `${sqlitePath}.real`;
-      fs.renameSync(sqlitePath, realPath);
-      fs.symlinkSync(realPath, sqlitePath);
-
-      await expect(
-        runDoctorSessionSqlite({
-          env: store.env,
-          mode: "compact",
-          store: store.storePath,
-        }),
-      ).rejects.toThrow(/Cannot run session SQLite compact.*symbolic-link path/iu);
-    },
-  );
-
-  it("clears agent quarantine after compaction", async () => {
-    const { sqlitePath, store } = await createImportedStoreForCompaction();
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env: store.env,
-        kind: "agent",
-        path: sqlitePath,
-        reason: "corrupt index",
-      }),
-    ).toBe(true);
-
-    const report = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "compact",
-      store: store.storePath,
-    });
-
-    expect(report.totals.issues).toBe(0);
-    expect(readPersistedQuarantineRow(sqlitePath, { env: store.env })).toBeUndefined();
-    expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
   });
 });

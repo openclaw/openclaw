@@ -2,7 +2,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -15,32 +14,24 @@ import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import {
   resolveApprovalRequestKind,
   type ApprovalRequestChannelRouteClass,
+  type ApprovalRequestInput,
 } from "./approval-types.js";
-import type { ExecApprovalRequest } from "./exec-approvals.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
-import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
 
-export type ApprovalRequestLike = {
-  id: string;
-  request:
-    | ExecApprovalRequest["request"]
-    | PluginApprovalRequest["request"]
-    | SystemAgentApprovalRequest["request"];
-  createdAtMs: number;
-  expiresAtMs: number;
-};
+export type ApprovalRequestLike = Pick<
+  ApprovalRequestInput,
+  "id" | "request" | "createdAtMs" | "expiresAtMs"
+>;
 
-function resolveApprovalForwardAccountIds(params: {
+function resolveApprovalForwardTargets(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
   channel?: string | null;
-  defaultAccountId?: string | null;
-}): string[] {
+}) {
   const forwarding =
     resolveApprovalRequestKind(params.request) === "exec"
       ? params.cfg.approvals?.exec
       : params.cfg.approvals?.plugin;
-  const channel = normalizeOptionalChannel(params.channel);
+  const channel = normalizeMessageChannel(params.channel);
   if (!forwarding?.enabled || (forwarding.mode !== "targets" && forwarding.mode !== "both")) {
     return [];
   }
@@ -53,40 +44,21 @@ function resolveApprovalForwardAccountIds(params: {
   ) {
     return [];
   }
-  const accountIds = (forwarding.targets ?? []).flatMap((target) => {
-    if (normalizeOptionalChannel(target.channel) !== channel) {
-      return [];
-    }
-    const accountId = normalizeOptionalAccountId(target.accountId ?? params.defaultAccountId);
-    return accountId ? [accountId] : [];
-  });
-  return accountIds;
+  return (forwarding.targets ?? []).filter(
+    (target) => normalizeMessageChannel(target.channel) === channel,
+  );
 }
 
-function hasApprovalForwardTarget(params: {
+function resolveApprovalForwardAccountIds(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
   channel?: string | null;
-}): boolean {
-  const forwarding =
-    resolveApprovalRequestKind(params.request) === "exec"
-      ? params.cfg.approvals?.exec
-      : params.cfg.approvals?.plugin;
-  if (
-    !forwarding?.enabled ||
-    (forwarding.mode !== "targets" && forwarding.mode !== "both") ||
-    !matchesApprovalRequestFilters({
-      request: params.request.request,
-      agentFilter: forwarding.agentFilter,
-      sessionFilter: forwarding.sessionFilter,
-    })
-  ) {
-    return false;
-  }
-  const channel = normalizeOptionalChannel(params.channel);
-  return (forwarding.targets ?? []).some(
-    (target) => normalizeOptionalChannel(target.channel) === channel,
-  );
+  defaultAccountId?: string | null;
+}): string[] {
+  return resolveApprovalForwardTargets(params).flatMap((target) => {
+    const accountId = normalizeOptionalAccountId(target.accountId ?? params.defaultAccountId);
+    return accountId ? [accountId] : [];
+  });
 }
 
 /** Classifies whether native delivery has named channel-account owners. */
@@ -96,38 +68,24 @@ export function classifyApprovalRequestChannelRoute(params: {
   channel: string;
   defaultAccountId?: string | null;
 }): ApprovalRequestChannelRouteClass {
-  const expectedChannel = normalizeOptionalChannel(params.channel);
+  const expectedChannel = normalizeMessageChannel(params.channel);
   if (!expectedChannel) {
     return "unbound";
   }
   if (resolveApprovalRequestChannelAccountId(params)) {
     return "bound-or-explicit";
   }
-  if (hasApprovalForwardTarget(params)) {
+  if (resolveApprovalForwardTargets(params).length > 0) {
     return "bound-or-explicit";
   }
   return "unbound";
-}
-
-type ApprovalRequestSessionBinding = {
-  channel?: string;
-  accountId?: string;
-};
-
-type PersistedApprovalRequestSessionEntry = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
-
-function normalizeOptionalChannel(value?: string | null): string | undefined {
-  return normalizeMessageChannel(value);
 }
 
 /** Loads the persisted session entry referenced by an approval request, if still present. */
 export function resolvePersistedApprovalRequestSessionEntry(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
-}): PersistedApprovalRequestSessionEntry | null {
+}) {
   const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
   if (!sessionKey) {
     return null;
@@ -149,7 +107,7 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
 function resolvePersistedApprovalRequestSessionBinding(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
-}): ApprovalRequestSessionBinding | null {
+}) {
   const persisted = resolvePersistedApprovalRequestSessionEntry(params);
   if (!persisted) {
     return null;
@@ -157,7 +115,7 @@ function resolvePersistedApprovalRequestSessionBinding(params: {
   const { entry } = persisted;
   const origin = sessionDeliveryOrigin(entry);
   const context = deliveryContextFromSession(entry);
-  const channel = normalizeOptionalChannel(context?.channel ?? origin?.provider);
+  const channel = normalizeMessageChannel(context?.channel ?? origin?.provider);
   const accountId = normalizeOptionalAccountId(context?.accountId ?? origin?.accountId);
   return channel || accountId ? { channel, accountId } : null;
 }
@@ -168,8 +126,8 @@ export function resolveApprovalRequestAccountId(params: {
   request: ApprovalRequestLike;
   channel?: string | null;
 }): string | null {
-  const expectedChannel = normalizeOptionalChannel(params.channel);
-  const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
+  const expectedChannel = normalizeMessageChannel(params.channel);
+  const turnSourceChannel = normalizeMessageChannel(params.request.request.turnSourceChannel);
   if (expectedChannel && turnSourceChannel && turnSourceChannel !== expectedChannel) {
     return null;
   }
@@ -196,11 +154,11 @@ export function resolveApprovalRequestChannelAccountId(params: {
   request: ApprovalRequestLike;
   channel: string;
 }): string | null {
-  const expectedChannel = normalizeOptionalChannel(params.channel);
+  const expectedChannel = normalizeMessageChannel(params.channel);
   if (!expectedChannel) {
     return null;
   }
-  const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
+  const turnSourceChannel = normalizeMessageChannel(params.request.request.turnSourceChannel);
   if (!turnSourceChannel || turnSourceChannel === expectedChannel) {
     return resolveApprovalRequestAccountId(params);
   }
@@ -218,12 +176,12 @@ export function doesApprovalRequestMatchChannelAccount(params: {
   channel: string;
   accountId?: string | null;
 }): boolean {
-  const expectedChannel = normalizeOptionalChannel(params.channel);
+  const expectedChannel = normalizeMessageChannel(params.channel);
   if (!expectedChannel) {
     return false;
   }
 
-  const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
+  const turnSourceChannel = normalizeMessageChannel(params.request.request.turnSourceChannel);
   if (turnSourceChannel && turnSourceChannel !== expectedChannel) {
     return false;
   }
@@ -272,8 +230,8 @@ export function doesApprovalRequestSelectChannelAccount(params: {
   if (boundAccountId || forwardAccountIds.length > 0) {
     return false;
   }
-  const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
-  if (turnSourceChannel && turnSourceChannel !== normalizeOptionalChannel(params.channel)) {
+  const turnSourceChannel = normalizeMessageChannel(params.request.request.turnSourceChannel);
+  if (turnSourceChannel && turnSourceChannel !== normalizeMessageChannel(params.channel)) {
     return false;
   }
   const eligibleAccountIds = params.eligibleAccountIds

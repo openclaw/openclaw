@@ -1,11 +1,15 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReactiveControllerHost } from "lit";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
 import { requestPlaceCatalog } from "./cloud-target.ts";
@@ -14,7 +18,6 @@ import {
   DraftPreferenceState,
   type SubmittedWorktreePreference,
 } from "./draft-preference-state.ts";
-import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import {
   acquirePaletteIdentityPreferences,
@@ -117,14 +120,35 @@ export class DraftGatewayState {
     this.gatewayNameTask = new Task(host, {
       args: () =>
         [
-          this.read().isConnected && this.gatewayConnectedValue ? this.gatewayClientValue : null,
-          isGatewayMethodAdvertised(this.read().context?.gateway.snapshot ?? {}, "system.info") ===
-            true,
+          this.read().isConnected && this.gatewayConnectedValue ? this.gatewaySource : null,
+          canReadSystemInfo(this.read().context?.gateway.snapshot) &&
+            document.visibilityState !== "hidden",
           this.gatewayConnectionEpochValue,
         ] as const,
-      task: ([client, advertised, _connectionEpoch], { signal }) =>
-        discoverGatewayName(client, advertised, signal),
+      task: async ([gateway, available, _connectionEpoch], { signal }) => {
+        if (!gateway || !available) {
+          return "";
+        }
+        try {
+          const { value: result } = await readSystemInfo(gateway, signal, { fresh: true });
+          return (
+            normalizeOptionalString(result.machineName) ??
+            normalizeOptionalString(result.hostname)?.split(".", 1)[0] ??
+            ""
+          );
+        } catch {
+          return "";
+        }
+      },
     });
+    // Shared system reads pause in background tabs; visibility must wake this one-shot task.
+    new SubscriptionsController(host).watch(
+      () => document,
+      (source, notify) => {
+        source.addEventListener("visibilitychange", notify);
+        return () => source.removeEventListener("visibilitychange", notify);
+      },
+    );
     this.cloudProfileTask = new Task(host, {
       args: () =>
         [
@@ -277,7 +301,7 @@ export class DraftGatewayState {
     // Delaying this binding revokes live starts and lets reconnects replay under the old scope.
     const recoveryScope = connected
       ? (snapshot.hello?.auth?.recoveryScope ?? "")
-      : this.gatewayRecoveryScopeValue;
+      : (readOfflineStorageScope({ client: snapshot.client }) ?? "");
     const recoveryScopeChanged = !firstBind && this.gatewayRecoveryScopeValue !== recoveryScope;
     this.gatewaySource = gateway;
     this.gatewayClientValue = snapshot.client;
@@ -321,7 +345,7 @@ export class DraftGatewayState {
       ) {
         this.callbacks.onPendingPlacementReset();
       }
-      if (connected && snapshot.client?.recoveryScopeReady) {
+      if (recoveryScope && (!connected || snapshot.client?.recoveryScopeReady)) {
         this.callbacks.onRecoveryReady(this.gatewayUrlValue, this.gatewayRecoveryScopeValue);
       }
     }

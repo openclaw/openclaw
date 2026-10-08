@@ -1,7 +1,8 @@
 import { VirtualizerController } from "@tanstack/lit-virtual";
+import { TranscriptEndAnchor } from "../pages/chat/components/chat-transcript-end-anchor.ts";
 import {
-  createTranscriptOffsetState,
   observeTranscriptOffset,
+  TranscriptOffsetState,
 } from "../pages/chat/components/chat-transcript-offset-observer.ts";
 import { TranscriptPrependAnchor } from "../pages/chat/components/chat-transcript-prepend-anchor.ts";
 
@@ -12,24 +13,25 @@ export function observeTranscript(container: HTMLElement, cleanups: Array<() => 
     clientHeight: { value: 200, configurable: true },
     scrollHeight: { value: 20_000, configurable: true },
   });
-  const state = createTranscriptOffsetState();
+  const state = new TranscriptOffsetState();
   const owner = {
     state,
     getScrollElement: () => (thread.isConnected ? thread : null),
     prependAnchor: new TranscriptPrependAnchor(),
+    endAnchor: new TranscriptEndAnchor(),
+    canFollowEnd: () => true,
     isProgrammaticScroll: () => false,
     cancelScroll() {
       state.scrollCommand = null;
       state.pendingScrollOffset = null;
     },
+    onLayoutCorrection() {},
     requestUpdate() {},
     onOffset() {
       return false;
     },
     onReaderScroll() {},
-    onComposerInput() {},
     onComposerLayout() {},
-    cancelComposerResize() {},
   };
   const virtualizer = new VirtualizerController<HTMLDivElement, HTMLElement>(
     {

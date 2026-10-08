@@ -22,12 +22,15 @@ import {
 } from "./tui-formatters.js";
 import { extractTuiImageSources } from "./tui-images.js";
 import {
+  captureTuiSessionIncarnation,
+  captureTuiSessionSelection,
   matchesTuiSessionMetadata,
   matchesTuiSessionSelection,
   readTuiSessionUserMessage,
 } from "./tui-session-events.js";
 import { readTuiSessionHistory } from "./tui-session-history.js";
 import {
+  copyDefinedSessionInfo,
   sessionInfoUiEquals,
   type SessionInfoDefaults,
   type SessionInfoEntry,
@@ -86,17 +89,12 @@ export function createSessionActions(context: SessionActionContext) {
   let historyLoadGeneration = 0;
   let lastSessionDefaults: SessionInfoDefaults | null = null;
 
-  const captureSessionSelection = () => ({
-    sessionKey: state.currentSessionKey,
-    agentId: state.currentAgentId,
-  });
-
-  const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
-    matchesTuiSessionSelection(state, selection);
-
   const applySessionSelection = (nextSelection: { key: string; agentId: string }) => {
     if (
-      isCurrentSessionSelection({ sessionKey: nextSelection.key, agentId: nextSelection.agentId })
+      matchesTuiSessionSelection(state, {
+        sessionKey: nextSelection.key,
+        agentId: nextSelection.agentId,
+      })
     ) {
       return false;
     }
@@ -242,38 +240,22 @@ export function createSessionActions(context: SessionActionContext) {
     }
 
     const next = { ...state.sessionInfo };
-    if (entry?.thinkingLevel !== undefined) {
-      next.thinkingLevel = entry.thinkingLevel;
-    }
+    copyDefinedSessionInfo(next, entry, [
+      "thinkingLevel",
+      "agentRuntime",
+      "fastMode",
+      "verboseLevel",
+      "traceLevel",
+      "reasoningLevel",
+      "responseUsage",
+      "effectiveResponseUsage",
+      "inputTokens",
+      "outputTokens",
+      "displayName",
+      "updatedAt",
+    ]);
     if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
       next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
-    }
-    if (entry?.agentRuntime !== undefined) {
-      next.agentRuntime = entry.agentRuntime;
-    }
-    if (entry?.fastMode !== undefined) {
-      next.fastMode = entry.fastMode;
-    }
-    if (entry?.verboseLevel !== undefined) {
-      next.verboseLevel = entry.verboseLevel;
-    }
-    if (entry?.traceLevel !== undefined) {
-      next.traceLevel = entry.traceLevel;
-    }
-    if (entry?.reasoningLevel !== undefined) {
-      next.reasoningLevel = entry.reasoningLevel;
-    }
-    if (entry?.responseUsage !== undefined) {
-      next.responseUsage = entry.responseUsage;
-    }
-    if (entry?.effectiveResponseUsage !== undefined) {
-      next.effectiveResponseUsage = entry.effectiveResponseUsage;
-    }
-    if (entry?.inputTokens !== undefined) {
-      next.inputTokens = entry.inputTokens;
-    }
-    if (entry?.outputTokens !== undefined) {
-      next.outputTokens = entry.outputTokens;
     }
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
@@ -304,20 +286,8 @@ export function createSessionActions(context: SessionActionContext) {
       next.contextTokens =
         entry?.contextTokens ?? defaults?.contextTokens ?? state.sessionInfo.contextTokens;
     }
-    if (entry?.displayName !== undefined) {
-      next.displayName = entry.displayName;
-    }
-    if (entry?.updatedAt !== undefined) {
-      next.updatedAt = entry.updatedAt;
-    }
 
-    const selection = resolveModelSelection(entry);
-    if (selection.modelProvider !== undefined) {
-      next.modelProvider = selection.modelProvider;
-    }
-    if (selection.model !== undefined) {
-      next.model = selection.model;
-    }
+    copyDefinedSessionInfo(next, resolveModelSelection(entry), ["modelProvider", "model"]);
 
     const previous = state.sessionInfo;
     const uiChanged = !sessionInfoUiEquals(previous, next);
@@ -333,13 +303,13 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const runRefreshSessionInfo = async () => {
-    const selection = captureSessionSelection();
+    const selection = captureTuiSessionSelection(state);
     const historyGeneration = historyLoadGeneration;
     const sessionGeneration = state.sessionGeneration ?? 0;
     const isCurrentRefresh = () =>
       historyGeneration === historyLoadGeneration &&
       sessionGeneration === (state.sessionGeneration ?? 0) &&
-      isCurrentSessionSelection(selection);
+      matchesTuiSessionSelection(state, selection);
     try {
       const result = await client.describeSession({
         sessionKey: selection.sessionKey,
@@ -404,11 +374,11 @@ export function createSessionActions(context: SessionActionContext) {
 
   const applySessionMutationResult = (
     result?: TuiSessionMutationResult | null,
-    requestSelection = captureSessionSelection(),
+    requestSelection = captureTuiSessionSelection(state),
   ): boolean => {
     // A reset can legitimately return a replacement key. Reject results using
     // the request's original selection, not the key the response must adopt.
-    if (!result?.entry || !isCurrentSessionSelection(requestSelection)) {
+    if (!result?.entry || !matchesTuiSessionSelection(state, requestSelection)) {
       return false;
     }
     // Invalidate same-key history/session-info readers before adopting the replacement epoch.
@@ -440,11 +410,11 @@ export function createSessionActions(context: SessionActionContext) {
     // latest request may render, or a slow reload can replace a newer selection.
     const generation = ++historyLoadGeneration;
     const sessionGeneration = state.sessionGeneration ?? 0;
-    const selection = captureSessionSelection();
+    const selection = captureTuiSessionSelection(state);
     const isCurrentLoad = () =>
       generation === historyLoadGeneration &&
       (state.sessionGeneration ?? 0) === sessionGeneration &&
-      isCurrentSessionSelection(selection);
+      matchesTuiSessionSelection(state, selection);
     try {
       const read = await readTuiSessionHistory({
         client,
@@ -555,12 +525,7 @@ export function createSessionActions(context: SessionActionContext) {
                 ...(liveUserMessage.images ? { images: liveUserMessage.images } : {}),
               });
             } else {
-              const images = extractTuiImageSources(message);
-              if (images.length > 0) {
-                chatLog.addUser(text, { images });
-              } else {
-                chatLog.addUser(text);
-              }
+              chatLog.addUser(text, { images: extractTuiImageSources(message) });
             }
           }
           continue;
@@ -570,12 +535,7 @@ export function createSessionActions(context: SessionActionContext) {
             includeThinking: state.showThinking,
           });
           if (text) {
-            const images = extractTuiImageSources(message);
-            if (images.length > 0) {
-              chatLog.finalizeAssistant(text, undefined, images);
-            } else {
-              chatLog.finalizeAssistant(text);
-            }
+            chatLog.finalizeAssistant(text, undefined, extractTuiImageSources(message));
           }
           continue;
         }
@@ -666,15 +626,9 @@ export function createSessionActions(context: SessionActionContext) {
       tui.requestRender();
       return;
     }
-    const selection = captureSessionSelection();
-    const sessionId = state.currentSessionId;
-    const sessionGeneration = state.sessionGeneration ?? 0;
+    const { selection, isCurrent: isCurrentAbort } = captureTuiSessionIncarnation(state);
     const pendingRunId = submit.getPendingSubmitAcceptedRunId(state);
     const activeRunId = state.activeChatRunId;
-    const isCurrentAbort = () =>
-      isCurrentSessionSelection(selection) &&
-      (state.sessionGeneration ?? 0) === sessionGeneration &&
-      (sessionId === null || state.currentSessionId === sessionId);
     const dropPendingRun = (runId: string) => {
       reduceTuiSessionProjection(state, {
         type: "sendFailed",
@@ -728,7 +682,6 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   return {
-    applyAgentsResult,
     refreshAgents,
     refreshSessionInfo,
     applySessionInfoFromPatch,

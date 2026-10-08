@@ -23,13 +23,12 @@ async function ensureDmComponentAuthorized(params: {
   interaction: AgentComponentInteraction;
   user: DiscordUser;
   componentLabel: string;
-  replyOpts: { ephemeral?: boolean };
 }) {
-  const { ctx, interaction, user, componentLabel, replyOpts } = params;
+  const { ctx, interaction, user, componentLabel } = params;
   const dmPolicy = ctx.dmPolicy ?? "pairing";
   if (ctx.discordConfig?.dm?.enabled === false || dmPolicy === "disabled") {
     logVerbose(`agent ${componentLabel}: blocked (DM policy disabled)`);
-    await replySilently(interaction, { content: "DM interactions are disabled.", ...replyOpts });
+    await replySilently(interaction, { content: "DM interactions are disabled.", ephemeral: true });
     return false;
   }
   const access = await resolveDiscordDmCommandAccess({
@@ -55,7 +54,7 @@ async function ensureDmComponentAuthorized(params: {
   if (ctx.isPolicyCurrent?.() === false) {
     await replySilently(interaction, {
       content: "Access policy changed. Try this interaction again.",
-      ...replyOpts,
+      ephemeral: true,
     });
     return false;
   }
@@ -66,21 +65,20 @@ async function ensureDmComponentAuthorized(params: {
     logVerbose(`agent ${componentLabel}: blocked DM user ${user.id} (not in allowFrom)`);
     await replySilently(interaction, {
       content: `You are not authorized to use this ${componentLabel}.`,
-      ...replyOpts,
+      ephemeral: true,
     });
     return false;
   }
   const pairingResult = await createChannelPairingChallengeIssuer({
     channel: "discord",
     accountId: ctx.accountId,
-    upsertPairingRequest: async ({ id, meta }) => {
-      return await upsertChannelPairingRequest({
+    upsertPairingRequest: ({ id, meta }) =>
+      upsertChannelPairingRequest({
         channel: "discord",
         id,
         accountId: ctx.accountId,
         meta,
-      });
-    },
+      }),
   })({
     senderId: user.id,
     senderIdLine: `Your Discord user id: ${user.id}`,
@@ -91,14 +89,14 @@ async function ensureDmComponentAuthorized(params: {
     sendPairingReply: async (text) => {
       await interaction.reply({
         content: text,
-        ...replyOpts,
+        ephemeral: true,
       });
     },
   });
   if (!pairingResult.created) {
     await replySilently(interaction, {
       content: "Pairing already requested. Ask the bot owner to approve your code.",
-      ...replyOpts,
+      ephemeral: true,
     });
   }
   return false;
@@ -109,15 +107,14 @@ async function ensureGroupDmComponentAuthorized(params: {
   interaction: AgentComponentInteraction;
   channelId: string;
   componentLabel: string;
-  replyOpts: { ephemeral?: boolean };
 }) {
-  const { ctx, interaction, channelId, componentLabel, replyOpts } = params;
+  const { ctx, interaction, channelId, componentLabel } = params;
   const groupDmEnabled = ctx.discordConfig?.dm?.groupEnabled ?? false;
   if (!groupDmEnabled) {
     logVerbose(`agent ${componentLabel}: blocked group dm ${channelId} (group DMs disabled)`);
     await replySilently(interaction, {
       content: "Group DM interactions are disabled.",
-      ...replyOpts,
+      ephemeral: true,
     });
     return false;
   }
@@ -136,7 +133,7 @@ async function ensureGroupDmComponentAuthorized(params: {
   logVerbose(`agent ${componentLabel}: blocked group dm ${channelId} (not allowlisted)`);
   await replySilently(interaction, {
     content: `You are not authorized to use this ${componentLabel}.`,
-    ...replyOpts,
+    ephemeral: true,
   });
   return false;
 }
@@ -146,7 +143,6 @@ export async function resolveInteractionContextWithDmAuth(params: {
   interaction: AgentComponentInteraction;
   label: string;
   componentLabel: string;
-  defer?: boolean;
 }) {
   const ctx = await resolveAgentComponentPolicyContext(params);
   if (!ctx) {
@@ -155,7 +151,6 @@ export async function resolveInteractionContextWithDmAuth(params: {
   const interactionCtx = await resolveComponentInteractionContext({
     interaction: params.interaction,
     label: params.label,
-    defer: params.defer,
   });
   if (!interactionCtx) {
     return null;
@@ -163,33 +158,17 @@ export async function resolveInteractionContextWithDmAuth(params: {
   if (ctx.isPolicyCurrent?.() === false) {
     await replySilently(params.interaction, {
       content: "Access policy changed. Try this interaction again.",
-      ...interactionCtx.replyOpts,
+      ephemeral: true,
     });
     return null;
   }
-  if (interactionCtx.isDirectMessage) {
-    const authorized = await ensureDmComponentAuthorized({
-      ctx,
-      interaction: params.interaction,
-      user: interactionCtx.user,
-      componentLabel: params.componentLabel,
-      replyOpts: interactionCtx.replyOpts,
-    });
-    if (!authorized) {
-      return null;
-    }
-  }
-  if (interactionCtx.isGroupDm) {
-    const authorized = await ensureGroupDmComponentAuthorized({
-      ctx,
-      interaction: params.interaction,
-      channelId: interactionCtx.channelId,
-      componentLabel: params.componentLabel,
-      replyOpts: interactionCtx.replyOpts,
-    });
-    if (!authorized) {
-      return null;
-    }
+  const authorize = interactionCtx.isDirectMessage
+    ? ensureDmComponentAuthorized
+    : interactionCtx.isGroupDm
+      ? ensureGroupDmComponentAuthorized
+      : undefined;
+  if (authorize && !(await authorize({ ...params, ...interactionCtx, ctx }))) {
+    return null;
   }
   return interactionCtx;
 }

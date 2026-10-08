@@ -16,7 +16,7 @@ describe("Anthropic plugin manifest", () => {
     expect(models.length).toBeGreaterThan(0);
     for (const model of models) {
       expect(model.compat?.codeMode, model.id).toBe(
-        model.id === "claude-haiku-4-5" ? "capable" : "preferred",
+        model.id.startsWith("claude-haiku-") ? "capable" : "preferred",
       );
     }
   });
@@ -33,6 +33,12 @@ describe("Anthropic plugin manifest", () => {
       name: "Claude Opus 5",
       cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    },
+    {
+      id: "claude-sonnet-5-5",
+      name: "Claude Sonnet 5.5",
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
     },
     {
       id: "claude-sonnet-5",

@@ -2,7 +2,7 @@
 export type SqliteWorkerOperationSettlement =
   | { kind: "completed" }
   | { kind: "not-entered"; error: unknown }
-  | { kind: "unknown"; error: unknown };
+  | { kind: "unknown"; error: unknown; nativeStopped?: true };
 
 /** Private operation receipts describe completed work; they never grant write authority. */
 export type SqliteWorkerNativeSettlement =

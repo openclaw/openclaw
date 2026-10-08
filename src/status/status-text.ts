@@ -30,8 +30,10 @@ import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveSessionLifecycleTimestampsAsync } from "../config/sessions/lifecycle-read.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import {
   formatUsageWindowSummary,
@@ -42,13 +44,6 @@ import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinki
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
-import { readTaskStatusSnapshots } from "../tasks/task-status-access.js";
-import {
-  type buildTaskStatusSnapshot,
-  formatTaskStatus,
-  formatTaskStatusDetail,
-  formatTaskStatusTitle,
-} from "../tasks/task-status.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
@@ -73,37 +68,6 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "openai",
 ]);
 
-function resolveStatusChannelFeatureLine(params: {
-  cfg: OpenClawConfig;
-  statusChannel: string;
-  statusAccountId?: string;
-  sessionEntry?: SessionEntry;
-}): string | undefined {
-  const channel = normalizeOptionalLowercaseString(params.statusChannel);
-  if (channel !== "telegram") {
-    return undefined;
-  }
-  const telegramConfig = params.cfg.channels?.telegram;
-  const accountId = normalizeAccountId(
-    params.statusAccountId ??
-      deliveryContextFromSession(params.sessionEntry)?.accountId ??
-      sessionDeliveryOrigin(params.sessionEntry)?.accountId ??
-      telegramConfig?.defaultAccount,
-  );
-  const accountConfig = resolveNormalizedAccountEntry(
-    telegramConfig?.accounts,
-    accountId,
-    normalizeAccountId,
-  );
-  const richMessagesSetting = accountConfig?.richMessages ?? telegramConfig?.richMessages;
-  if (richMessagesSetting === true) {
-    return "Telegram rich messages: on · Bot API 10.3 sendRichMessage enabled";
-  }
-  return accountConfig?.richMessages === false
-    ? "Telegram rich messages: off · enable richMessages for this Telegram account"
-    : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
-}
-
 // Status loaders keep the lazy-promise eviction default: a transient module-load
 // failure on one /status request self-heals on the next instead of poisoning
 // every reply. Deliberately not createLazyRuntimeModule, whose sticky rejection
@@ -120,28 +84,6 @@ const loadStatusQueueRuntime = createLazyPromise(() => import("./status-queue.ru
 const loadStatusPluginHealthRuntime = createLazyPromise(
   () => import("./status-plugin-health.runtime.js"),
 );
-
-function shouldLoadUsageSummary(params: {
-  provider?: string;
-  selectedModelAuth?: string;
-  credentialType?: string;
-}): boolean {
-  if (!params.provider) {
-    return false;
-  }
-  if (!USAGE_OAUTH_ONLY_PROVIDERS.has(params.provider)) {
-    return true;
-  }
-  // OAuth/token usage endpoints are meaningful only for providers authenticated
-  // through those modes; skip API-key sessions to avoid slow unavailable calls.
-  const auth = normalizeOptionalLowercaseString(params.selectedModelAuth);
-  return Boolean(
-    params.credentialType === "oauth" ||
-    params.credentialType === "token" ||
-    auth?.startsWith("oauth") ||
-    auth?.startsWith("token"),
-  );
-}
 
 function resolveCodexSyntheticUsageAuthProfileId(params: {
   profileId: string | undefined;
@@ -169,26 +111,6 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
   } catch {
     return undefined;
   }
-}
-
-function formatSessionTaskLine(
-  snapshot: ReturnType<typeof buildTaskStatusSnapshot>,
-): string | undefined {
-  const task = snapshot.focus;
-  if (!task) {
-    return undefined;
-  }
-  const headline =
-    snapshot.activeCount > 0
-      ? `${snapshot.activeCount} active · ${snapshot.totalCount} total`
-      : snapshot.recentFailureCount > 0
-        ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
-        : "recently finished";
-  const title = formatTaskStatusTitle(task);
-  const detail = formatTaskStatusDetail(task);
-  const blocked = formatTaskStatus(task) === "blocked" ? "blocked" : undefined;
-  const parts = [headline, blocked, task.runtime, title, detail].filter(Boolean);
-  return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 
 async function resolveStatusHarnessId(params: {
@@ -258,19 +180,10 @@ function resolveStatusRuntimeProvider(params: {
   return params.provider;
 }
 
-function formatAgentTaskCountsLine(
-  snapshot: ReturnType<typeof buildTaskStatusSnapshot> | undefined,
-): string | undefined {
-  if (!snapshot || snapshot.totalCount === 0) {
-    return undefined;
-  }
-  return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
-}
-
 async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
   try {
     const { collectRuntimePluginHealthSnapshot } = await loadStatusPluginHealthRuntime();
-    return formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot());
+    return formatCompactPluginHealthLine(await collectRuntimePluginHealthSnapshot());
   } catch {
     return "⚠️ Plugins: health unavailable";
   }
@@ -318,11 +231,18 @@ export async function buildStatusReplyParts(
     sessionEntry?.modelOverride?.trim() && !sessionEntry?.providerOverride?.trim(),
   );
   const modelParams = { selectedProvider, selectedModel, sessionEntry, parseSelectedProvider };
-  const activeModel = readSessionFallbackModel({
-    ...modelParams,
-    config: cfg,
-    sessionScope: { agentId: statusAgentId, sessionKey, storePath },
-  });
+  const activeModel =
+    resolveProjectedAgentRunProgressState({
+      agentId: statusAgentId,
+      sessionId: sessionEntry?.sessionId,
+      sessionKeys: sessionKey ? [sessionKey] : [],
+    }) === undefined
+      ? readSessionFallbackModel({
+          ...modelParams,
+          config: cfg,
+          sessionScope: { agentId: statusAgentId, sessionKey, storePath },
+        })
+      : undefined;
   const modelRefs = resolveSelectedAndActiveModel({
     ...modelParams,
     sessionEntry: activeModel ?? sessionEntry,
@@ -348,11 +268,6 @@ export async function buildStatusReplyParts(
     workspaceDir: statusWorkspaceDir,
     readOnly: true,
   });
-  // Capacity is bound to the displayed session's own admitted owner (agent + spawned
-  // workspace) before any value is chosen; another owner's inventory is never consulted.
-  const { createSessionContextCapacityResolver } =
-    await import("../agents/session-context-capacity.js");
-  const resolveOwnerContextCapacity = createSessionContextCapacityResolver(preparedOwner);
   // This lookup borrows existing facts; status never starts inventory discovery.
   const resolveModel = createStatusModelResolver({
     cfg,
@@ -391,18 +306,32 @@ export async function buildStatusReplyParts(
       : {}),
   });
   let selectedModelAuth = selectedResolution.authLabel;
+  const activeResolution = modelRefs.activeDiffers
+    ? await resolveModel({
+        provider: activeStatusProvider,
+        model: modelRefs.active.model || model,
+        runtimeId: effectiveHarness,
+        acceptedProviderIds: activeAuthProviders,
+      })
+    : selectedResolution;
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
-    : modelRefs.activeDiffers
-      ? (
-          await resolveModel({
-            provider: activeStatusProvider,
-            model: modelRefs.active.model || model,
-            runtimeId: effectiveHarness,
-            acceptedProviderIds: activeAuthProviders,
-          })
-        ).authLabel
-      : selectedModelAuth;
+    : activeResolution.authLabel;
+  const resolveOwnerContextCapacity = (
+    capacityProvider: string | undefined,
+    capacityModel: string | undefined,
+  ) => {
+    if (capacityProvider === selectedLookupProvider && capacityModel === selectedLookupModel) {
+      return selectedResolution.ownerCapacity ?? { state: "unavailable" as const };
+    }
+    if (
+      capacityProvider === activeProvider &&
+      capacityModel === (modelRefs.active.model || model)
+    ) {
+      return activeResolution.ownerCapacity ?? { state: "unavailable" as const };
+    }
+    return { state: "unavailable" as const };
+  };
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
     modelRefs.selected.label,
     modelRefs.active.label,
@@ -456,13 +385,15 @@ export async function buildStatusReplyParts(
     resolveUsageProviderId(usageStatusProvider, { credentialType: usageCredentialType }) ??
     resolveUsageProviderId(usageProvider, { credentialType: usageCredentialType });
   let usageLine: string | null = null;
+  const normalizedUsageAuth = normalizeOptionalLowercaseString(usageAuthLabel);
+  // OAuth-only endpoints cannot report usage for API-key sessions.
   if (
     currentUsageProvider &&
-    shouldLoadUsageSummary({
-      provider: currentUsageProvider,
-      selectedModelAuth: usageAuthLabel,
-      credentialType: usageCredentialType,
-    })
+    (!USAGE_OAUTH_ONLY_PROVIDERS.has(currentUsageProvider) ||
+      usageCredentialType === "oauth" ||
+      usageCredentialType === "token" ||
+      normalizedUsageAuth?.startsWith("oauth") ||
+      normalizedUsageAuth?.startsWith("token"))
   ) {
     try {
       // Usage summary is optional operator context. Bound it tightly so a slow
@@ -517,22 +448,9 @@ export async function buildStatusReplyParts(
   );
 
   let subagentsLine: string | undefined;
-  let taskLine: string | undefined;
   if (sessionKey) {
-    const { mainKey, alias } = resolveMainSessionAlias(cfg);
-    const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
-    // Task/subagent status should follow the internal session key alias used by
-    // runtime registries, not necessarily the external key passed to the command.
-    taskLine = params.taskLineOverride;
-    if (!params.skipDefaultTaskLookup && !taskLine) {
-      const snapshots = await readTaskStatusSnapshots({
-        sessionKey: taskLine === undefined ? requesterKey : undefined,
-        agentId: statusAgentId,
-      });
-      snapshots.assertCurrent();
-      taskLine ??= formatSessionTaskLine(snapshots.session);
-      taskLine ||= formatAgentTaskCountsLine(snapshots.agent);
-    }
+    const { alias } = resolveMainSessionAlias(cfg);
+    const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias });
     const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
     const subagentReadContext = await buildControlledSubagentRunsReadContext(
@@ -570,12 +488,28 @@ export async function buildStatusReplyParts(
   const pluginHealthLine = Object.hasOwn(params, "pluginHealthLineOverride")
     ? params.pluginHealthLineOverride
     : await resolveRuntimePluginHealthLine();
-  const channelFeatureLine = resolveStatusChannelFeatureLine({
-    cfg,
-    statusChannel,
-    statusAccountId: params.statusAccountId,
-    sessionEntry,
-  });
+  let channelFeatureLine: string | undefined;
+  if (normalizeOptionalLowercaseString(statusChannel) === "telegram") {
+    const telegramConfig = cfg.channels?.telegram;
+    const accountId = normalizeAccountId(
+      params.statusAccountId ??
+        deliveryContextFromSession(sessionEntry)?.accountId ??
+        sessionDeliveryOrigin(sessionEntry)?.accountId ??
+        telegramConfig?.defaultAccount,
+    );
+    const accountConfig = resolveNormalizedAccountEntry(
+      telegramConfig?.accounts,
+      accountId,
+      normalizeAccountId,
+    );
+    const richMessagesSetting = accountConfig?.richMessages ?? telegramConfig?.richMessages;
+    channelFeatureLine =
+      richMessagesSetting === true
+        ? "Telegram rich messages: on · Bot API 10.3 sendRichMessage enabled"
+        : accountConfig?.richMessages === false
+          ? "Telegram rich messages: off · enable richMessages for this Telegram account"
+          : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
+  }
   const { buildStatusMessageParts } = await loadStatusMessageRuntime();
   await waitForContextWindowCacheLoad();
   const configuredThinkingDefault = resolveConfiguredThinkingDefault({
@@ -641,6 +575,12 @@ export async function buildStatusReplyParts(
               ? "active-or-bundled"
               : "active",
         });
+  const lifecycleTimestamps = await resolveSessionLifecycleTimestampsAsync({
+    entry: sessionEntry,
+    agentId: statusAgentId,
+    sessionKey,
+    storePath,
+  });
   return buildStatusMessageParts({
     config: cfg,
     agent: {
@@ -677,6 +617,7 @@ export async function buildStatusReplyParts(
     parentSessionKey,
     sessionScope,
     sessionStorePath: storePath,
+    sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
     groupActivation,
     resolvedThink: effectiveThinkLevel,
     resolvedFast: effectiveFastMode,
@@ -698,7 +639,6 @@ export async function buildStatusReplyParts(
       showDetails: queueOverrides,
     },
     subagentsLine,
-    taskLine,
     pluginHealthLine,
     channelFeatureLine,
     mediaDecisions: params.mediaDecisions,

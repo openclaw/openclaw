@@ -244,7 +244,7 @@ export function createAttemptTranscriptJournal(params: {
       ...(write.eventId ? { eventId: write.eventId } : {}),
       idempotencyLookup: "scan",
       message: write.message,
-      prepareMessageAfterIdempotencyCheck: () => prepare(write, { singleton: true }),
+      prepareMessageAfterIdempotencyCheckAsync: async () => prepare(write, { singleton: true }),
     });
     if (outcome.kind === "suppressed") {
       write.recorder?.markBlocked();

@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
+import { publishedNativeAssignments } from "./native-assignment-summary.mjs";
 import { publishedPluginPolicy } from "./plugin-policy-summary.mjs";
 
 // Capture and snapshot validation stay plain Node. The host entrypoint owns
@@ -45,6 +46,23 @@ const backupRollbackLogs = [
   "backup-rollback-restore.json",
   "backup-rollback-restore.json.err",
 ];
+const nativeAssignmentLogs = [
+  "native-assignment-eligibility.json",
+  "native-assignment-baseline.json",
+  "native-assignment-first-hop.json",
+  "native-assignment-inventory-after-first-hop.json",
+  "native-assignment-inventory-before-recovery.json",
+  "native-assignment-inventory-after-recovery.json",
+  "native-assignment-inventory-live-final.json",
+  "native-assignment-proof.json",
+  "native-assignment-messages.jsonl",
+  "native-assignment-server.log",
+  "native-recover.out",
+  "native-recover.err",
+  "native-recover-wait.out",
+  "native-recover-wait.err",
+];
+
 const pluginPolicyLogs = [
   "webhooks-only-policy/result.json",
   "webhooks-only-policy/update.json",
@@ -95,16 +113,22 @@ const logNames = [
   "physical-candidate-repair.json",
   "legacy-operator-cron-history-proof.json",
   ...pluginPolicyLogs,
+  ...nativeAssignmentLogs,
   "webhooks-only-policy/update.err",
   "webhooks-only-policy/gateway.log",
   "webhooks-only-policy/baseline-gateway.log",
   "legacy-operator-post-update-cron-history.json",
   "legacy-operator-candidate-cron-history.json",
   "dreaming-cron-proof.json",
+  "cron-owner-proof.json",
   "legacy-operator-baseline-turn.out",
   "legacy-operator-baseline-turn.err",
   "legacy-operator-candidate-turn.out",
   "legacy-operator-candidate-turn.err",
+  "legacy-operator-add-survivor-default-owner.out",
+  "legacy-operator-add-survivor-default-owner.err",
+  "legacy-operator-add-survivor-ops-owner.out",
+  "legacy-operator-add-survivor-ops-owner.err",
   "legacy-operator-run-survivor-default-owner.out",
   "legacy-operator-run-survivor-default-owner.err",
   "legacy-operator-run-survivor-ops-owner.out",
@@ -956,11 +980,21 @@ function publishedSessionMigration(snapshot, sanitize) {
   return report;
 }
 
+function isPostCoreProcess() {
+  return (
+    process.env.OPENCLAW_UPDATE_POST_CORE === "1" &&
+    (process.argv[2] === "update" ||
+      (process.argv[2] === "--post-core" &&
+        path.basename(process.argv[1] ?? "") === "update-migrated-finalize.worker.js"))
+  );
+}
+
 function armUpgradeProcessCapture() {
   const delegatedDoctor =
     process.argv[2] === "--doctor" &&
     path.basename(process.argv[1] ?? "") === "update-migrated-finalize.worker.js";
-  const command = delegatedDoctor ? "doctor" : process.argv[2];
+  const postCore = isPostCoreProcess();
+  const command = delegatedDoctor ? "doctor" : postCore ? "update" : process.argv[2];
   const artifactRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
   if (!isMainThread || !artifactRoot || !["update", "doctor"].includes(command)) {
     return;
@@ -989,10 +1023,7 @@ function armUpgradeProcessCapture() {
       return;
     }
     const identity = {
-      role:
-        command === "update" && process.env.OPENCLAW_UPDATE_POST_CORE === "1"
-          ? "post-core"
-          : command,
+      role: postCore ? "post-core" : command,
       packageVersion: version,
       pid: process.pid,
       parentPid: process.ppid,
@@ -1035,11 +1066,7 @@ function armUpgradeProcessCapture() {
 }
 
 function armPostCoreCapture() {
-  if (
-    !isMainThread ||
-    process.argv[2] !== "update" ||
-    process.env.OPENCLAW_UPDATE_POST_CORE !== "1"
-  ) {
+  if (!isMainThread || !isPostCoreProcess()) {
     return;
   }
   try {
@@ -1653,6 +1680,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     throw new Error();
   }
   const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
+  const nativeAssignments = publishedNativeAssignments(snapshot);
   for (const value of [
     snapshot.baseline?.spec,
     snapshot.baseline?.version,
@@ -1745,6 +1773,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     firstHopPostCore: publishedPostCore(snapshot.firstHopPostCore, sanitize),
     backupRollback: publishedBackupRollback(snapshot, { sanitize, boundedList, textFields }),
     ...(pluginPolicy ? { pluginPolicy } : {}),
+    ...(nativeAssignments ? { nativeAssignments } : {}),
     timings,
     phases: boundedList(snapshot.phases).map((event) => {
       if (
@@ -1766,6 +1795,11 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
         ...(snapshot.scenario === "custom-plugin-siblings" ? siblingRefusalLogs : []),
         ...(snapshot.scenario === "legacy-operator-state" ? backupRollbackLogs : []),
         ...(pluginPolicy ? pluginPolicyLogs : []),
+        ...(nativeAssignments?.status === "not-applicable"
+          ? ["native-assignment-eligibility.json"]
+          : nativeAssignments
+            ? nativeAssignmentLogs
+            : []),
         ...(snapshot.scenario === "workshop-doctor-recovery"
           ? [
               "workshop-doctor-recovery.json",
@@ -1789,6 +1823,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
             ]
           : []),
         ...(snapshot.scenario === "dreaming-cron-doctor" ? ["dreaming-cron-proof.json"] : []),
+        ...(snapshot.scenario === "cron-owner-doctor" ? ["cron-owner-proof.json"] : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)
@@ -1812,6 +1847,57 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     ),
     omissions,
   };
+}
+
+function failedUpdateContext(text, label) {
+  if (label !== "update.json" && label !== "recovery-update.json") {
+    return "";
+  }
+  try {
+    // Match the warning-prefixed updater JSON accepted by assertions.readUpdateJson.
+    const result = JSON.parse(text.slice(text.indexOf("{")));
+    if (result?.status !== "error" || !Array.isArray(result.steps)) {
+      return "";
+    }
+    const index = result.steps.findIndex(
+      (step) =>
+        step &&
+        typeof step.name === "string" &&
+        !step.advisory &&
+        // Serialized UpdateStepResult follows infra/update-run-step.isFailedUpdateStep:
+        // physical process success does not erase a failed inspection.
+        (step.exitCode !== 0 ||
+          Boolean(step.failureFacts?.length || step.killed || step.outputLimitExceeded) ||
+          (step.termination !== undefined && step.termination !== "exit")),
+    );
+    if (index < 0) {
+      return "";
+    }
+    const step = result.steps[index];
+    return [
+      `Reported failing update step ${index + 1} of ${result.steps.length}: ${JSON.stringify(step.name)}`,
+      JSON.stringify(
+        {
+          exitCode: step.exitCode,
+          signal: step.signal,
+          termination: step.termination,
+          killed: step.killed,
+          outputLimitExceeded: step.outputLimitExceeded,
+          durationMs: step.durationMs,
+          failureFacts: step.failureFacts,
+        },
+        null,
+        2,
+      ),
+      typeof step.stderrTail === "string" ? `stderrTail:\n${step.stderrTail}` : "",
+      typeof step.stdoutTail === "string" ? `stdoutTail:\n${step.stdoutTail}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  } catch {
+    // Incomplete or non-JSON output keeps the existing bounded log representation.
+    return "";
+  }
 }
 
 export function publishDiagnostics(
@@ -1885,9 +1971,18 @@ export function publishDiagnostics(
     if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
       throw new Error();
     }
-    const redacted = redactSensitiveText(text, { mode: "tools" });
-    // Keep the last completed startup spans, after redacting the whole input.
-    const tail = label === "missing-load-path/baseline-gateway.log";
+    let redacted = redactSensitiveText(text, { mode: "tools" });
+    if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
+      const context = failedUpdateContext(text, label);
+      if (context) {
+        // Keep execution order explicit; this is a diagnostic prelude, not reordered steps.
+        redacted = `${redactSensitiveText(context, { mode: "tools" })}\n\nCaptured update output (original order):\n${redacted}`;
+      }
+    }
+    // Keep the latest startup/native events after redacting the whole input.
+    const tail =
+      label === "missing-load-path/baseline-gateway.log" ||
+      label === "native-assignment-messages.jsonl";
     const lines = redacted.split(/(?<=\n)/u);
     if (tail) {
       lines.reverse();

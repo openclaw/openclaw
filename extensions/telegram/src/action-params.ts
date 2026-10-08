@@ -12,6 +12,10 @@ const TELEGRAM_FORUM_TOPIC_ICON_COLORS = [
 ] as const;
 type TelegramForumTopicIconColor = (typeof TELEGRAM_FORUM_TOPIC_ICON_COLORS)[number];
 
+export function readTelegramPositiveIntegerParam(params: Record<string, unknown>, key: string) {
+  return readPositiveIntegerParam(params, key, { message: `${key} must be a positive integer.` });
+}
+
 export function readTelegramForumTopicIconColor(
   params: Record<string, unknown>,
 ): TelegramForumTopicIconColor | undefined {
@@ -38,23 +42,15 @@ export function readTelegramChatId(params: Record<string, unknown>) {
 
 export function readTelegramThreadId(params: Record<string, unknown>) {
   return (
-    readPositiveIntegerParam(params, "messageThreadId", {
-      message: "messageThreadId must be a positive integer.",
-    }) ??
-    readPositiveIntegerParam(params, "threadId", {
-      message: "threadId must be a positive integer.",
-    })
+    readTelegramPositiveIntegerParam(params, "messageThreadId") ??
+    readTelegramPositiveIntegerParam(params, "threadId")
   );
 }
 
 export function readTelegramReplyToMessageId(params: Record<string, unknown>) {
   return (
-    readPositiveIntegerParam(params, "replyToMessageId", {
-      message: "replyToMessageId must be a positive integer.",
-    }) ??
-    readPositiveIntegerParam(params, "replyTo", {
-      message: "replyTo must be a positive integer.",
-    })
+    readTelegramPositiveIntegerParam(params, "replyToMessageId") ??
+    readTelegramPositiveIntegerParam(params, "replyTo")
   );
 }
 

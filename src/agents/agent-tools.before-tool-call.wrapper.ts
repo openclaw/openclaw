@@ -180,7 +180,6 @@ function tagBeforeToolCallFailure(
   return tagged;
 }
 
-/** Return the closed terminal disposition carried by a before-tool failure. */
 export function getBeforeToolCallFailureDisposition(
   error: unknown,
 ): BeforeToolCallFailureDisposition | undefined {
@@ -237,7 +236,6 @@ export function isPreExecutionBlockedToolResult(result: unknown): boolean {
   );
 }
 
-/** Build the standard terminal result for vetoed tool calls. */
 export function buildBlockedToolResult(params: {
   reason: string;
   deniedReason?: HookBlockedReason;
@@ -273,6 +271,7 @@ export function wrapToolWithBeforeToolCallHook(
     return tool;
   }
   const toolName = tool.name || "tool";
+  const toolOwnerPluginId = getPluginToolMeta(tool)?.pluginId;
   const admitExecution = captureAgentToolExecutionBudget();
   const diagnosticIdentity = resolveToolDiagnosticIdentity(tool);
   const hookOptions: BeforeToolCallDiagnosticOptions = {
@@ -416,7 +415,11 @@ export function wrapToolWithBeforeToolCallHook(
           params: hookParams,
           ...hookMetadata,
           toolCallId,
-          ctx,
+          ctx: ctx
+            ? { ...ctx, toolOwnerPluginId }
+            : toolOwnerPluginId
+              ? { toolOwnerPluginId }
+              : undefined,
           signal,
           approvalMode: hookOptions.approvalMode,
         });

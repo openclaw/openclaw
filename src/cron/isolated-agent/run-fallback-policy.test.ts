@@ -74,14 +74,13 @@ describe("resolveCronFallbacksOverride", () => {
                 },
               },
             },
-            list: [
-              {
-                id: "research",
+            entries: {
+              research: {
                 model: {
                   primary: "anthropic/claude-opus-4-6",
                 },
               },
-            ],
+            },
           },
         },
         agentId: "research",
@@ -106,14 +105,13 @@ describe("resolveCronFallbacksOverride", () => {
                 },
               },
             },
-            list: [
-              {
-                id: "research",
+            entries: {
+              research: {
                 model: {
                   primary: "anthropic/claude-opus-4-6",
                 },
               },
-            ],
+            },
           },
         },
         agentId: "research",
@@ -194,12 +192,11 @@ describe("resolveCronFallbacksOverride", () => {
                 fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
               },
             },
-            list: [
-              {
-                id: "main",
+            entries: {
+              main: {
                 model: "deepseek/deepseek-v4-pro",
               },
-            ],
+            },
           },
         },
         agentId: "main",
@@ -223,12 +220,11 @@ describe("resolveCronFallbacksOverride", () => {
                 fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
               },
             },
-            list: [
-              {
-                id: "main",
+            entries: {
+              main: {
                 model: "anthropic/claude-sonnet-4-6",
               },
-            ],
+            },
           },
         },
         agentId: "main",

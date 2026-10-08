@@ -56,6 +56,7 @@ function fixture() {
         packageDir: "extensions/meta",
         publishTag: "beta",
         bootstrapMode: "publish",
+        family: "",
         requiresManualOverride: false,
       },
       {
@@ -64,6 +65,7 @@ function fixture() {
         packageDir: "extensions/existing",
         publishTag: "beta",
         bootstrapMode: "configure-only",
+        family: "",
         requiresManualOverride: true,
       },
     ]),
@@ -159,6 +161,23 @@ function writeClawPack(
     sha256: createHash("sha256").update(bytes).digest("hex"),
   };
 }
+
+it.each([{ version: "2026.7.1-alpha.3" }, { publishTag: "alpha" }])(
+  "rejects retired alpha bootstrap %j",
+  async (override) => {
+    const paths = fixture();
+    const matrix = JSON.parse(readFileSync(paths.matrixPath, "utf8"));
+    Object.assign(matrix[0], override);
+    writeFileSync(paths.matrixPath, JSON.stringify(matrix));
+    await expect(
+      createClawHubBootstrapArtifactManifest({
+        ...common(paths),
+        matrixPath: paths.matrixPath,
+        outputPath: paths.manifestPath,
+      }),
+    ).rejects.toThrow("Alpha releases are retired;");
+  },
+);
 
 describe("ClawHub bootstrap artifact manifest", () => {
   it("binds the exact package set and packed file identity", async () => {

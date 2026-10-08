@@ -4,12 +4,12 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { CustodianTurnAdmission } from "../../components/custodian-alert-contract.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { initialWizardValue } from "../model-setup/state.ts";
 import { CustodianInputDrafts } from "./custodian-input-drafts.ts";
 import {
   navigateFromCustodianSetup,
   performCustodianAgentHandoff,
 } from "./custodian-navigation.ts";
-import * as nudgeActions from "./custodian-nudge-actions.ts";
 import {
   createCustodianSessionId,
   loadCustodianSessionId,
@@ -22,7 +22,6 @@ import {
 } from "./custodian-session-variant.ts";
 import {
   custodianWizardSubmission,
-  initialCustodianWizardValue,
   isCustodianWizardCancelAvailable,
 } from "./custodian-wizard-step.ts";
 import * as eventNudgeState from "./event-nudge.ts";
@@ -43,8 +42,6 @@ import {
 } from "./transcript.ts";
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
-
-type StoreListener = () => void;
 
 /** One process-local conversation owner shared by the full page and dock surface. */
 export class CustodianSessionStore {
@@ -94,9 +91,9 @@ export class CustodianSessionStore {
   private gatewayCleanup: (() => void) | null = null;
   private agentCleanup: (() => void) | null = null;
   private eventCleanup: (() => void) | null = null;
-  private readonly listeners = new Set<StoreListener>();
+  private readonly listeners = new Set<() => void>();
 
-  subscribe(listener: StoreListener): () => void {
+  subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
@@ -123,9 +120,15 @@ export class CustodianSessionStore {
         this.synchronizeClient();
         this.emit();
       });
-      this.eventCleanup = context.gateway.subscribeEvents((event) =>
-        nudgeActions.receiveEventNudge(this, event),
-      );
+      this.eventCleanup = context.gateway.subscribeEvents((event) => {
+        if (this.variant !== "caretaker" || this.eventNudgeClosed) {
+          return;
+        }
+        if (event.event === "health") {
+          this.eventNudge = eventNudgeState.classifyCustodianHealthNudge(event.payload);
+        }
+        this.emit();
+      });
     }
     this.variant = variant;
     this.synchronizeClient();
@@ -298,28 +301,26 @@ export class CustodianSessionStore {
     return outcome;
   }
 
-  requestNudgeUpdate(): void {
-    this.emit();
-  }
-
   sendEventNudge(): Promise<void> {
-    return nudgeActions.sendEventNudge(this);
+    return eventNudgeState.sendCustodianEventNudge(this, () => this.emit());
   }
 
   dismissEventNudge(): void {
-    nudgeActions.dismissEventNudge(this);
+    [this.eventNudge, this.eventNudgeClosed] = [null, true];
+    this.emit();
   }
 
   dismissChannelOnboardingNudge(): void {
-    nudgeActions.dismissChannelOnboardingNudge(this, () => this.context?.replace("custodian"));
+    this.channelOnboardingNudgeClosed = true;
+    this.emit();
+    this.context?.replace("custodian");
   }
 
   openChannelsFromOnboarding(): void {
-    nudgeActions.openChannelsFromOnboarding(
-      this,
-      () => this.revokeNavigationAuthority(),
-      () => this.context?.navigate("channels"),
-    );
+    this.channelOnboardingNudgeClosed = true;
+    this.revokeNavigationAuthority();
+    this.emit();
+    this.context?.navigate("channels");
   }
 
   async dismissQuestion(message: CustodianMessage): Promise<void> {
@@ -608,11 +609,7 @@ export class CustodianSessionStore {
     client: GatewayBrowserClient,
     epoch: number,
   ): Promise<boolean> {
-    const context = this.context;
-    if (
-      !context ||
-      isGatewayMethodAdvertised(context.gateway.snapshot, "openclaw.chat.history") !== true
-    ) {
+    if (!this.transcript.available) {
       return false;
     }
     const isCurrent = () => epoch === this.requestEpoch && client === this.activeClient;
@@ -712,7 +709,7 @@ export class CustodianSessionStore {
           return "sent";
         }
       }
-      this.wizardValue = result.step ? initialCustodianWizardValue(result.step) : undefined;
+      this.wizardValue = result.step ? initialWizardValue(result.step) : undefined;
       const message = createCustodianReplyMessage(this.nextMessageId, result);
       if (message) {
         this.nextMessageId += 1;

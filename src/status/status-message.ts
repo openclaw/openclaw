@@ -1,5 +1,8 @@
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   type FastMode,
   normalizeLowercaseStringOrEmpty,
@@ -31,7 +34,6 @@ import type {
 } from "../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
-  resolveMainSessionKey,
   resolveFreshSessionTotalTokens,
   resolveProjectedSessionContextTokens,
   resolveProjectedSessionContextBudgetStatus,
@@ -40,7 +42,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
+import { resolveTimestamp } from "../config/sessions/lifecycle-timestamps.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
@@ -113,6 +115,7 @@ type StatusArgs = {
   parentSessionKey?: string;
   sessionScope?: SessionScope;
   sessionStorePath?: string;
+  sessionStartedAt?: number;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedFast?: FastMode;
@@ -130,23 +133,13 @@ type StatusArgs = {
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
-  taskLine?: string;
   pluginHealthLine?: string;
   channelFeatureLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
 
-type NormalizedAuthMode =
-  | "api-key"
-  | "oauth"
-  | "token"
-  | "aws-sdk"
-  | "native"
-  | "mixed"
-  | "unknown";
-
-function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
+function normalizeAuthMode(value?: string) {
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return undefined;
@@ -184,10 +177,10 @@ function resolveConfiguredTextVerbosity(params: {
 }
 
 function resolveExecutionLabel(
-  args: Pick<StatusArgs, "config" | "agent" | "agentId" | "sessionKey" | "sessionScope">,
+  args: Pick<StatusArgs, "config" | "agent" | "agentId" | "sessionKey">,
 ): string {
   const sessionKey = args.sessionKey?.trim();
-  if (args.config && sessionKey) {
+  if (sessionKey) {
     const runtimeStatus = resolveSandboxRuntimeStatus({
       cfg: args.config,
       sessionKey,
@@ -202,24 +195,7 @@ function resolveExecutionLabel(
   }
 
   const sandboxMode = args.agent?.sandbox?.mode ?? "off";
-  if (sandboxMode === "off") {
-    return "direct";
-  }
-  const sandboxed = (() => {
-    if (!sessionKey) {
-      return false;
-    }
-    if (sandboxMode === "all") {
-      return true;
-    }
-    const sessionScope = args.sessionScope ?? "per-sender";
-    const mainKey = resolveMainSessionKey({
-      session: { scope: sessionScope },
-    });
-    return sessionKey !== mainKey.trim();
-  })();
-  const runtime = sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
-  return `${runtime}/${sandboxMode}`;
+  return sandboxMode === "off" ? "direct" : `unknown/${sandboxMode}`;
 }
 
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
@@ -240,23 +216,13 @@ const formatEstimatedContextBudgetTokens = (
   if (!status || status.source !== "pre-prompt-estimate") {
     return null;
   }
-  const estimatedPromptTokens =
-    typeof status.estimatedPromptTokens === "number" &&
-    Number.isFinite(status.estimatedPromptTokens) &&
-    status.estimatedPromptTokens >= 0
-      ? Math.floor(status.estimatedPromptTokens)
-      : undefined;
-  if (estimatedPromptTokens === undefined) {
+  const estimate = asNonNegativeFiniteNumber(status.estimatedPromptTokens);
+  if (estimate === undefined) {
     return null;
   }
+  const estimatedPromptTokens = Math.floor(estimate);
   const ctx =
-    typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0
-      ? contextTokens
-      : typeof status.contextTokenBudget === "number" &&
-          Number.isFinite(status.contextTokenBudget) &&
-          status.contextTokenBudget > 0
-        ? status.contextTokenBudget
-        : undefined;
+    asPositiveFiniteNumber(contextTokens) ?? asPositiveFiniteNumber(status.contextTokenBudget);
   const pct = ctx ? Math.min(999, Math.round((estimatedPromptTokens / ctx) * 100)) : null;
   const totalLabel = formatTokenCount(estimatedPromptTokens);
   const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
@@ -539,13 +505,9 @@ function resolveChannelModelNote(params: {
   return "channel override";
 }
 
-export type StatusMessageParts = {
-  text: string;
-  /** Structured mirror of the text body for channels with native table rendering. */
-  presentation: MessagePresentation;
-};
+export type StatusMessageParts = ReturnType<typeof buildStatusMessageParts>;
 
-export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
+export function buildStatusMessageParts(args: StatusArgs) {
   const now = args.now ?? Date.now();
   // Derive the live wall clock here so both /status and session_status expose
   // the same configured timezone without duplicating formatting at each caller.
@@ -584,9 +546,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     const fallbackMatchesRuntimeModel =
       initialFallbackState.active &&
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
-        normalizeLowercaseStringOrEmpty(
-          normalizeOptionalString(entry?.fallbackNotice?.activeModel ?? "") ?? "",
-        );
+        normalizeLowercaseStringOrEmpty(entry?.fallbackNotice?.activeModel);
     const runtimeMatchesSelectedModel =
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
       normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
@@ -634,7 +594,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         allowTranscriptContextUsage &&
         candidate !== undefined &&
         candidate > 0 &&
-        (!totalTokens || totalTokens === 0 || candidate > totalTokens)
+        (!totalTokens || candidate > totalTokens)
       ) {
         totalTokens = candidate;
       }
@@ -660,10 +620,10 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
           contextLookupModel = logUsage.model;
         }
       }
-      if (!inputTokens || inputTokens === 0) {
+      if (!inputTokens) {
         inputTokens = logUsage.input;
       }
-      if (!outputTokens || outputTokens === 0) {
+      if (!outputTokens) {
         outputTokens = logUsage.output;
       }
       if (typeof cacheRead !== "number" || cacheRead <= 0) {
@@ -788,7 +748,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     args.agent?.elevatedDefault ??
     "on";
 
-  const execution = { label: resolveExecutionLabel(args) };
+  const execution = resolveExecutionLabel(args);
   const agentRuntimeLabel = resolveAgentRuntimeLabel({
     config: args.config,
     sessionEntry: args.sessionEntry,
@@ -797,12 +757,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   });
 
   const updatedAt = entry?.updatedAt;
-  const sessionStartedAt = resolveSessionLifecycleTimestamps({
-    entry,
-    agentId: args.agentId,
-    sessionKey: args.sessionKey,
-    storePath: args.sessionStorePath,
-  }).sessionStartedAt;
+  const sessionStartedAt = resolveTimestamp(args.sessionStartedAt ?? entry?.sessionStartedAt);
   const sessionDuration =
     typeof sessionStartedAt === "number"
       ? formatDurationCompact(now - sessionStartedAt, { spaced: true })
@@ -955,15 +910,11 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   // A user-driven live switch that no completed turn has applied yet: surface
   // it so /status does not imply the new selection is already running.
   const liveSwitchNote = entry?.liveModelSwitchPending ? " · ⏳ live switch pending" : "";
-  // Auth gets its own line below; keeping it inline here duplicated the value.
-  const modelLines = [
-    `🧠 Model: ${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`,
-  ];
+  const modelValue = `${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`;
 
   const selectedEndpoint = args.selectedEndpoint
     ? formatModelEndpointUrl(args.selectedEndpoint)
     : undefined;
-  // Show configured fallback models (from agent model config)
   const configuredFallbacks = (() => {
     const modelConfig = args.agent?.model;
     if (typeof modelConfig === "object" && modelConfig && Array.isArray(modelConfig.fallbacks)) {
@@ -1007,14 +958,10 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
 
-  // One fact per line: chat clients wrap long lines mid-fact, so joining
-  // several facts with separators reads as a wall rather than a summary.
-  // Grouped sections with blank lines between them: a flat list of ~15 facts
-  // reads as a wall, and chat clients give no other visual grouping.
   const text = [
     [versionLine, timeLine, uptimeLine],
     [
-      ...modelLines,
+      `🧠 Model: ${modelValue}`,
       `🌐 Endpoint: ${selectedEndpoint ?? "unknown"}`,
       selectedAuthLabelValue ? `🔑 Auth: ${selectedAuthLabelValue}` : null,
       configuredFallbacksLine,
@@ -1029,9 +976,9 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       mediaLine,
       args.usageLine,
     ],
-    [`🧵 Session: ${sessionValue}`, args.subagentsLine, args.taskLine],
+    [`🧵 Session: ${sessionValue}`, args.subagentsLine],
     [
-      `⚙️ Execution: ${execution.label}`,
+      `⚙️ Execution: ${execution}`,
       `🤖 Runtime: ${agentRuntimeLabel}`,
       modesValue ? `🎛️ Modes: ${modesValue}` : null,
       groupActivationValue ? `👥 Activation: ${groupActivationValue}` : null,
@@ -1055,7 +1002,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       statusRows.push([label, cell]);
     }
   };
-  pushStatusRow("🧠 Model", `${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`);
+  pushStatusRow("🧠 Model", modelValue);
   pushStatusRow("🌐 Endpoint", selectedEndpoint ?? "unknown");
   pushStatusRow("🔑 Auth", selectedAuthLabelValue);
   pushStatusRow("🔄 Fallbacks", configuredFallbacks?.join(", "));
@@ -1066,7 +1013,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   pushStatusRow("📚 Context", `${contextMeter}${contextUsageLabel}`);
   pushStatusRow("🧹 Compactions", compactionCount > 0 ? compactionCount : null);
   pushStatusRow("🧵 Session", sessionValue);
-  pushStatusRow("⚙️ Execution", execution.label);
+  pushStatusRow("⚙️ Execution", execution);
   pushStatusRow("Runtime", agentRuntimeLabel);
   pushStatusRow("🎛️ Modes", modesValue);
   pushStatusRow("👥 Activation", groupActivationValue);
@@ -1108,7 +1055,6 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       ...contextBlock(mediaLine),
       ...contextBlock(args.usageLine),
       ...contextBlock(args.subagentsLine),
-      ...contextBlock(args.taskLine),
       ...contextBlock(args.pluginHealthLine),
       ...contextBlock(pluginStatusLine ? `🧩 ${pluginStatusLine}` : null),
       ...contextBlock(voiceLine),

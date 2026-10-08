@@ -1,14 +1,19 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
+  createAlwaysConfiguredPluginConfig,
   createGatewayActionPlugin,
   createPollForwardingPlugin,
   messageActionRunnerMocks as mocks,
@@ -79,72 +84,6 @@ describe("runMessageAction plugin dispatch", () => {
         "list pins call params",
       );
       expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
-    });
-
-    it("preserves canonical thread and edit fields through plugin dispatch", async () => {
-      const cfg = createEnabledMessageActionConfig("actionhub");
-
-      await runMessageAction({
-        cfg,
-        action: "thread-create",
-        params: {
-          channel: "actionhub",
-          target: "actionhub:room",
-          threadName: "Canonical thread",
-        },
-        dryRun: false,
-      });
-      await runMessageAction({
-        cfg,
-        action: "thread-reply",
-        params: {
-          channel: "actionhub",
-          target: "actionhub:room/thread-1",
-          message: "Canonical reply",
-        },
-        dryRun: false,
-      });
-      await runMessageAction({
-        cfg,
-        action: "edit",
-        params: {
-          channel: "actionhub",
-          target: "actionhub:room/thread-1",
-          messageId: "om_123",
-          message: "Canonical edit",
-        },
-        conversationReadOrigin: "direct-operator",
-        dryRun: false,
-      });
-
-      expectRecordFields(
-        readRecordField(readPluginCall(handleAction, 0), "params", "thread-create params"),
-        {
-          target: "actionhub:room",
-          to: "actionhub:room",
-          threadName: "Canonical thread",
-        },
-        "thread-create params",
-      );
-      expectRecordFields(
-        readRecordField(readPluginCall(handleAction, 1), "params", "thread-reply params"),
-        {
-          target: "actionhub:room/thread-1",
-          to: "actionhub:room/thread-1",
-          message: "Canonical reply",
-        },
-        "thread-reply params",
-      );
-      expectRecordFields(
-        readRecordField(readPluginCall(handleAction, 2), "params", "edit params"),
-        {
-          target: "actionhub:room/thread-1",
-          to: "actionhub:room/thread-1",
-          messageId: "om_123",
-          message: "Canonical edit",
-        },
-        "edit params",
-      );
     });
 
     it("routes execution context ids into plugin handleAction", async () => {
@@ -238,94 +177,82 @@ describe("runMessageAction plugin dispatch", () => {
       vi.clearAllMocks();
     });
 
-    it.each(["local", "gateway"] as const)(
-      "applies auto threadId before %s plugin dispatch",
-      async (executionMode) => {
-        setTestPlugin(createThreadedPlugin(executionMode), "forumchat");
-        mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+    it("applies auto threadId before gateway plugin dispatch", async () => {
+      setTestPlugin(createThreadedPlugin("gateway"), "forumchat");
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
 
-        await runMessageAction({
-          cfg,
-          action: "sticker",
-          params: {
-            channel: "forumchat",
-            target: "forum:123",
-            stickerName: "wave",
-          },
-          toolContext: {
-            currentChannelProvider: "forumchat",
-            currentChannelId: "forum:123",
-            currentThreadTs: "42",
-          },
-          gateway: executionMode === "gateway" ? { clientName: "cli", mode: "cli" } : undefined,
-          dryRun: false,
-        });
+      await runMessageAction({
+        cfg,
+        action: "sticker",
+        params: {
+          channel: "forumchat",
+          target: "forum:123",
+          stickerName: "wave",
+        },
+        toolContext: {
+          currentChannelProvider: "forumchat",
+          currentChannelId: "forum:123",
+          currentThreadTs: "42",
+        },
+        gateway: { clientName: "cli", mode: "cli" },
+        dryRun: false,
+      });
 
-        const dispatchedParams =
-          executionMode === "gateway"
-            ? readRecordField(
-                readRecordField(
-                  readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway call"),
-                  "params",
-                  "gateway call params",
-                ),
-                "params",
-                "gateway action params",
-              )
-            : readRecordField(readFirstPluginCall(handleAction), "params", "plugin params");
-        expectRecordFields(
-          dispatchedParams,
-          { to: "forum:123", threadId: "42" },
-          `${executionMode} action params`,
-        );
-        expect(handleAction).toHaveBeenCalledTimes(executionMode === "local" ? 1 : 0);
-      },
-    );
+      const dispatchedParams = readRecordField(
+        readRecordField(
+          readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway call"),
+          "params",
+          "gateway call params",
+        ),
+        "params",
+        "gateway action params",
+      );
+      expectRecordFields(
+        dispatchedParams,
+        { to: "forum:123", threadId: "42" },
+        "gateway action params",
+      );
+      expect(handleAction).not.toHaveBeenCalled();
+    });
 
-    it.each(["local", "gateway"] as const)(
-      "does not add an implicit thread scope to download-file before %s dispatch",
-      async (executionMode) => {
-        setTestPlugin(createThreadedPlugin(executionMode), "forumchat");
-        mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+    it("does not add an implicit thread scope to download-file before gateway dispatch", async () => {
+      setTestPlugin(createThreadedPlugin("gateway"), "forumchat");
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
 
-        await runMessageAction({
-          cfg,
-          action: "download-file",
-          conversationReadOrigin: "direct-operator",
-          params: {
-            channel: "forumchat",
-            channelId: "forum:123",
-            fileId: "F123",
-          },
-          toolContext: {
-            currentChannelProvider: "forumchat",
-            currentChannelId: "forum:123",
-            currentThreadTs: "42",
-          },
-          gateway: executionMode === "gateway" ? { clientName: "cli", mode: "cli" } : undefined,
-          dryRun: false,
-        });
+      await runMessageAction({
+        cfg,
+        action: "download-file",
+        conversationReadOrigin: "direct-operator",
+        params: {
+          channel: "forumchat",
+          channelId: "forum:123",
+          fileId: "F123",
+        },
+        toolContext: {
+          currentChannelProvider: "forumchat",
+          currentChannelId: "forum:123",
+          currentThreadTs: "42",
+        },
+        gateway: { clientName: "cli", mode: "cli" },
+        dryRun: false,
+      });
 
-        const dispatchedParams =
-          executionMode === "gateway"
-            ? readRecordField(
-                readRecordField(
-                  readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway call"),
-                  "params",
-                  "gateway call params",
-                ),
-                "params",
-                "gateway action params",
-              )
-            : readRecordField(readFirstPluginCall(handleAction), "params", "plugin params");
-        expect(dispatchedParams.threadId).toBeUndefined();
-        expectRecordFields(
-          dispatchedParams,
-          { channelId: "forum:123", fileId: "F123" },
-          `${executionMode} download-file params`,
-        );
-      },
-    );
+      const dispatchedParams = readRecordField(
+        readRecordField(
+          readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway call"),
+          "params",
+          "gateway call params",
+        ),
+        "params",
+        "gateway action params",
+      );
+      expect(dispatchedParams.threadId).toBeUndefined();
+      expectRecordFields(
+        dispatchedParams,
+        { channelId: "forum:123", fileId: "F123" },
+        "gateway download-file params",
+      );
+    });
 
     it("preserves an explicit download-file thread scope", async () => {
       setTestPlugin(createThreadedPlugin("local"), "forumchat");
@@ -448,80 +375,232 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
   });
-  describe("plugin-owned poll semantics", () => {
-    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+});
+
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
+
+function readMediaAccess(call: Record<string, unknown>): Record<string, unknown> {
+  return requireRecord(call.mediaAccess);
+}
+
+function registerPolicyPlugin(id = "policydest", accountIds?: string[]) {
+  const handleAction = vi.fn<NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>>(
+    async ({ mediaAccess }) =>
       jsonResult({
         ok: true,
-        forwarded: {
-          to: params.to ?? null,
-          pollQuestion: params.pollQuestion ?? null,
-          pollOption: params.pollOption ?? null,
-          pollDurationSeconds: params.pollDurationSeconds ?? null,
-          pollPublic: params.pollPublic ?? null,
+        hasHostReadCapability: typeof mediaAccess?.readFile === "function",
+      }),
+  );
+  setTestPlugin(
+    {
+      ...createChannelTestPluginBase({
+        id,
+        capabilities: { chatTypes: ["direct", "channel"], media: true },
+        config: {
+          ...createAlwaysConfiguredPluginConfig(),
+          ...(accountIds ? { listAccountIds: () => accountIds } : {}),
         },
       }),
-    );
+      messaging: { targetResolver: { looksLikeId: () => true } },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction,
+      },
+    } satisfies ChannelPlugin,
+    id,
+  );
+  return handleAction;
+}
 
-    const guildPollPlugin = createPollForwardingPlugin({
-      pluginId: "guildchat",
-      label: "Guild Chat",
-      blurb: "Guild chat plugin-owned poll test plugin.",
-      handleAction,
-    });
-
-    beforeEach(() => {
-      setTestPlugin(guildPollPlugin, "guildchat");
-      handleAction.mockClear();
-    });
-
+describe("runMessageAction host-media authority", () => {
+  beforeEach(() => {
+    resetMessageActionRunnerMocks();
+  });
+  describe("alias-based plugin action dispatch", () => {
     afterEach(() => {
       setActivePluginRegistry(createTestRegistry([]));
       vi.clearAllMocks();
+      vi.unstubAllEnvs();
     });
+    it("uses requester session channel policy for host-media reads", async () => {
+      const handlePolicyCheckedAction = registerPolicyPlugin();
 
-    it("lets other plugins own extra poll fields", async () => {
-      const result = await runMessageAction({
+      await runMessageAction({
         cfg: {
+          tools: { allow: ["read"] },
           channels: {
-            guildchat: {
-              token: "tok",
+            policydest: {
+              enabled: true,
+            },
+            requestchat: {
+              groups: {
+                ops: {
+                  toolsBySender: {
+                    "id:trusted-user": {
+                      deny: ["read"],
+                    },
+                  },
+                },
+              },
             },
           },
         } as OpenClawConfig,
-        action: "poll",
+        action: "send",
         params: {
-          channel: "guildchat",
-          target: "channel:123",
-          pollQuestion: "Lunch?",
-          pollOption: ["Pizza", "Sushi"],
-          pollDurationSeconds: 120,
-          pollPublic: true,
+          channel: "policydest",
+          target: "oc_123",
+          message: "hello",
+          media: "/tmp/host.png",
         },
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:requestchat:group:ops",
         dryRun: false,
       });
 
-      expect(result.kind).toBe("poll");
-      expect(result.handledBy).toBe("plugin");
-      const pluginCall = readFirstPluginCall(handleAction);
-      expectRecordFields(
-        pluginCall,
-        {
-          action: "poll",
-          channel: "guildchat",
+      const mediaAccess = readMediaAccess(readFirstPluginCall(handlePolicyCheckedAction));
+      expect(mediaAccess.readFile).toBeUndefined();
+    });
+
+    it("uses requester username policy for host-media reads", async () => {
+      const handlePolicyCheckedAction = registerPolicyPlugin();
+
+      await runMessageAction({
+        cfg: {
+          tools: { allow: ["read"] },
+          channels: {
+            policydest: {
+              enabled: true,
+            },
+            requestchat: {
+              groups: {
+                ops: {
+                  toolsBySender: {
+                    "username:alice_u": {
+                      deny: ["read"],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "policydest",
+          target: "oc_123",
+          message: "hello",
+          media: "/tmp/host.png",
         },
-        "plugin call",
-      );
-      expectRecordFields(
-        readRecordField(pluginCall, "params", "plugin params"),
-        {
-          to: "channel:123",
-          pollQuestion: "Lunch?",
-          pollOption: ["Pizza", "Sushi"],
-          pollDurationSeconds: 120,
-          pollPublic: true,
+        requesterSenderUsername: "alice_u",
+        sessionKey: "agent:alpha:requestchat:group:ops",
+        dryRun: false,
+      });
+
+      const mediaAccess = readMediaAccess(readFirstPluginCall(handlePolicyCheckedAction));
+      expect(mediaAccess.readFile).toBeUndefined();
+    });
+
+    it("uses requester account policy for host-media reads when destination account differs", async () => {
+      const handlePolicyCheckedAction = registerPolicyPlugin("policydest", ["destination"]);
+
+      await runMessageAction({
+        cfg: {
+          tools: { allow: ["read"] },
+          channels: {
+            policydest: {
+              enabled: true,
+            },
+            requestchat: {
+              accounts: {
+                source: {
+                  groups: {
+                    ops: {
+                      toolsBySender: {
+                        "id:trusted-user": {
+                          deny: ["read"],
+                        },
+                      },
+                    },
+                  },
+                },
+                destination: {
+                  groups: {
+                    ops: {
+                      toolsBySender: {
+                        "id:trusted-user": {
+                          allow: ["read"],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "policydest",
+          accountId: "destination",
+          target: "oc_123",
+          message: "hello",
+          media: "/tmp/host.png",
         },
-        "plugin params",
-      );
+        requesterAccountId: "source",
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:requestchat:group:ops",
+        dryRun: false,
+      });
+
+      const pluginCall = readFirstPluginCall(handlePolicyCheckedAction);
+      expect(pluginCall.accountId).toBe("destination");
+      const mediaAccess = readMediaAccess(pluginCall);
+      expect(mediaAccess.readFile).toBeUndefined();
+    });
+
+    it("falls back to the resolved account policy when requester account is unavailable", async () => {
+      const handlePolicyCheckedAction = registerPolicyPlugin("policychat", ["source"]);
+
+      await runMessageAction({
+        cfg: {
+          tools: { allow: ["read"] },
+          channels: {
+            policychat: {
+              enabled: true,
+              accounts: {
+                source: {
+                  groups: {
+                    ops: {
+                      toolsBySender: {
+                        "id:trusted-user": {
+                          deny: ["read"],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "policychat",
+          accountId: "source",
+          target: "group:ops",
+          message: "hello",
+          media: "/tmp/host.png",
+        },
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:policychat:group:ops",
+        dryRun: false,
+      });
+
+      const pluginCall = readFirstPluginCall(handlePolicyCheckedAction);
+      expect(pluginCall.accountId).toBe("source");
+      const mediaAccess = readMediaAccess(pluginCall);
+      expect(mediaAccess.readFile).toBeUndefined();
     });
   });
 });

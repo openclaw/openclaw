@@ -25,22 +25,15 @@ import {
 
 /** Parsed standalone plain-text tool call block with source offsets for repair. */
 export type PlainTextToolCallBlock = {
-  /** Parsed JSON arguments object. */
   arguments: Record<string, unknown>;
   /** Exclusive end offset of the parsed block. */
   end: number;
   /** Tool name parsed from bracket, Harmony, or XML-ish syntax. */
   name: string;
-  /** Original text slice that produced this block. */
   raw: string;
   /** Inclusive start offset of the parsed block. */
   start: number;
 };
-
-type NormalizedPlainTextToolCallParseOptions = Omit<
-  PlainTextToolCallParseOptions,
-  "allowedToolNames"
-> & { allowedToolNames?: ReadonlySet<string> };
 
 const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
 const MAX_PLAIN_TEXT_TOOL_NAME_CHARS = 120;
@@ -96,21 +89,6 @@ export type PlainTextToolCallScan = PlainTextToolCallScanBranches &
         payloadStart?: number;
       }
   );
-
-type PlainTextToolCallScanCandidate = {
-  name: PlainTextJsonToolCallSpan;
-  nameComplete: boolean;
-  payload?: PlainTextJsonToolCallSpan;
-};
-
-type PlainTextToolCallScanBranch =
-  | ({
-      end: number;
-      kind: "complete";
-      payload: PlainTextJsonToolCallSpan;
-    } & PlainTextToolCallScanCandidate)
-  | { candidate?: PlainTextToolCallScanCandidate; kind: "prefix" }
-  | { at: number; candidate?: PlainTextToolCallScanCandidate; kind: "invalid" };
 
 type PlainTextJsonToolCallOpening = {
   cursor: number;
@@ -330,11 +308,10 @@ export function scanPlainTextToolCall(
   const json = scanPlainTextJsonToolCall(text, start, options?.structuralLineBreaks);
   const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
   const allowed = (
-    scan: PlainTextToolCallScanBranch,
+    scan: PlainTextToolCallScanBranches["json" | "xmlish"],
   ): {
     accepted: boolean;
     payload?: PlainTextJsonToolCallSpan;
-    value?: PlainTextToolCallScanCandidate;
   } => {
     const value = scan.kind === "complete" ? scan : scan.candidate;
     if (!value) {
@@ -345,7 +322,7 @@ export function scanPlainTextToolCall(
       ? (options?.matcher?.hasExactName(name) ?? true)
       : (options?.matcher?.hasNamePrefix(name) ?? true);
     return matches
-      ? { accepted: true, value, ...(value.payload ? { payload: value.payload } : {}) }
+      ? { accepted: true, ...(value.payload ? { payload: value.payload } : {}) }
       : { accepted: false };
   };
   const xml = allowed(xmlish);
@@ -476,75 +453,59 @@ function extractXmlishParameterValue(
   return value.slice(payloadStart).replace(/(?:\r\n|[\r\n])$/u, "");
 }
 
-function parsePlainTextToolCallBlockAtAnySyntax(
-  text: string,
-  start: number,
-  options?: NormalizedPlainTextToolCallParseOptions,
-  structuralLineBreaks?: StructuralLineBreakOptions,
-): PlainTextToolCallBlock | null {
-  for (const scanCall of [scanPlainTextJsonToolCall, scanXmlishToolCall]) {
-    const scan = scanCall(text, start, structuralLineBreaks);
-    if (scan.kind !== "complete") {
-      continue;
-    }
-    const name = text.slice(scan.name.start, scan.name.end);
-    if (options?.allowedToolNames && !options.allowedToolNames.has(name)) {
-      continue;
-    }
-    const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
-    if (
-      utf8ByteLengthWithinLimit(text, scan.payload.start, scan.payload.end, maxPayloadBytes) ===
-      null
-    ) {
-      continue;
-    }
-    const args =
-      "parameters" in scan
-        ? Object.fromEntries(
-            scan.parameters.map((parameter) => [
-              text.slice(parameter.name.start, parameter.name.end),
-              extractXmlishParameterValue(
-                text,
-                parameter.value.start,
-                parameter.value.end,
-                structuralLineBreaks,
-              ),
-            ]),
-          )
-        : parseJsonArguments(text, scan.payload);
-    if (args) {
-      return { arguments: args, end: scan.end, name, raw: text.slice(start, scan.end), start };
-    }
-  }
-  return null;
-}
-
-function normalizeParseOptions(
-  options?: PlainTextToolCallParseOptions,
-): NormalizedPlainTextToolCallParseOptions | undefined {
-  return options
-    ? {
-        ...options,
-        allowedToolNames: options.allowedToolNames ? new Set(options.allowedToolNames) : undefined,
-      }
-    : undefined;
-}
-
 export function parseStandalonePlainTextToolCallBlocks(
   text: string,
   options?: PlainTextToolCallParseOptions,
   structuralLineBreaks?: StructuralLineBreakOptions,
 ): PlainTextToolCallBlock[] | null {
   const blocks: PlainTextToolCallBlock[] = [];
-  const normalizedOptions = normalizeParseOptions(options);
+  const allowedToolNames = options?.allowedToolNames
+    ? new Set(options.allowedToolNames)
+    : undefined;
+  const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
   let cursor = skipWhitespace(text, 0);
   while (cursor < text.length) {
-    const block = parsePlainTextToolCallBlockAtAnySyntax(
-      text,
-      cursor,
-      normalizedOptions,
-      structuralLineBreaks,
-    );
+    let block: PlainTextToolCallBlock | undefined;
+    for (const scanCall of [scanPlainTextJsonToolCall, scanXmlishToolCall]) {
+      const scan = scanCall(text, cursor, structuralLineBreaks);
+      if (scan.kind !== "complete") {
+        continue;
+      }
+      const name = text.slice(scan.name.start, scan.name.end);
+      if (allowedToolNames && !allowedToolNames.has(name)) {
+        continue;
+      }
+      if (
+        utf8ByteLengthWithinLimit(text, scan.payload.start, scan.payload.end, maxPayloadBytes) ===
+        null
+      ) {
+        continue;
+      }
+      const args =
+        "parameters" in scan
+          ? Object.fromEntries(
+              scan.parameters.map((parameter) => [
+                text.slice(parameter.name.start, parameter.name.end),
+                extractXmlishParameterValue(
+                  text,
+                  parameter.value.start,
+                  parameter.value.end,
+                  structuralLineBreaks,
+                ),
+              ]),
+            )
+          : parseJsonArguments(text, scan.payload);
+      if (args) {
+        block = {
+          arguments: args,
+          end: scan.end,
+          name,
+          raw: text.slice(cursor, scan.end),
+          start: cursor,
+        };
+        break;
+      }
+    }
     if (!block) {
       return null;
     }
@@ -585,9 +546,6 @@ export function stripPlainTextToolCallBlocks(
       continue;
     }
     const scan = scanPlainTextToolCall(text, blockStart);
-    if (scan.kind === "prefix" && scan.completeEnd === undefined) {
-      return result + text.slice(cursor);
-    }
     if (scan.kind === "invalid") {
       // The scanner owns everything before `at` as one malformed candidate. Honor that
       // progress so nested line starts inside its payload are not rescanned quadratically.

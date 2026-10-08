@@ -48,11 +48,8 @@ function pendingMatches(sessionKey: string, data: SessionChatRouteData): boolean
 
 export class RouteDraftComposerFocus {
   private timer: number | undefined;
-  private readonly host: HTMLElement;
 
-  constructor(host: HTMLElement) {
-    this.host = host;
-  }
+  constructor(private readonly host: HTMLElement) {}
 
   rendered(
     data: SessionChatRouteData | undefined,

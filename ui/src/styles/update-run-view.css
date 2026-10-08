@@ -24,6 +24,11 @@
   line-height: 1.5;
 }
 
+.update-run-view__headline-mark {
+  display: inline-block;
+  margin-inline-end: 0.3em;
+}
+
 .update-run-view__progress,
 .update-run-view__connection,
 .update-run-view__step-status,

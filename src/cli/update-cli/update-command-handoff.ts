@@ -53,21 +53,22 @@ const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
 const GATEWAY_ANCESTRY_SHELL_GUIDANCE =
   "Run this command from a shell outside the gateway service.";
 
+function servicePreflightFailure(code: Parameters<typeof createUpdatePreflightFailure>[0]) {
+  return createUpdatePreflightFailure(code, undefined, "managed-service-preflight");
+}
+
 export function gatewayServiceMembershipBlock(
   pid: unknown,
   ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true }),
   systemdControlGroup?: string,
+  onAbsentSource?: () => void,
 ) {
   const gatewayPid = parsePositivePid(pid);
   if (gatewayPid === null) {
     // Scheduled Tasks retain the ancestry fallback until their owner exposes Job membership.
     return process.platform === "win32"
       ? undefined
-      : createUpdatePreflightFailure(
-          "service-membership-unverified",
-          undefined,
-          "managed-service-preflight",
-        );
+      : servicePreflightFailure("service-membership-unverified");
   }
   if (!ancestry.pids.has(gatewayPid)) {
     const membership =
@@ -75,18 +76,10 @@ export function gatewayServiceMembershipBlock(
         ? "outside"
         : inspectServiceProcessMembershipSync(gatewayPid, process.platform, systemdControlGroup);
     if (membership === "inside") {
-      return createUpdatePreflightFailure(
-        "inside-gateway-service",
-        undefined,
-        "managed-service-preflight",
-      );
+      return servicePreflightFailure("inside-gateway-service");
     }
     if (membership === "unknown") {
-      return createUpdatePreflightFailure(
-        "service-membership-unverified",
-        undefined,
-        "managed-service-preflight",
-      );
+      return servicePreflightFailure("service-membership-unverified");
     }
     const unverified =
       !ancestry.complete &&
@@ -94,22 +87,15 @@ export function gatewayServiceMembershipBlock(
         (isGatewayServiceEnv(process.env) &&
           parsePositivePid(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]) === gatewayPid &&
           isPidAlive(gatewayPid)));
-    return unverified
-      ? createUpdatePreflightFailure(
-          "service-ancestry-unverified",
-          undefined,
-          "managed-service-preflight",
-        )
-      : undefined;
+    if (!unverified && membership === "absent") {
+      onAbsentSource?.();
+    }
+    return unverified ? servicePreflightFailure("service-ancestry-unverified") : undefined;
   }
   // Shared by doctor and update: never advise stopping the service from here,
   // because the stop would kill the caller and nothing restarts the gateway.
   return {
-    ...createUpdatePreflightFailure(
-      "inside-gateway-process-tree",
-      undefined,
-      "managed-service-preflight",
-    ),
+    ...servicePreflightFailure("inside-gateway-process-tree"),
     message: `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).
 Stopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.
 ${GATEWAY_ANCESTRY_SHELL_GUIDANCE}`,
@@ -138,6 +124,7 @@ export function gatewayMaintenanceBlock(
   state: GatewayServiceState,
   root: string,
   operation: "stop" | "handoff" = "stop",
+  onAbsentSource?: () => void,
 ) {
   const ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
   const store = createManagedHandoffLeaseStore();
@@ -159,11 +146,7 @@ export function gatewayMaintenanceBlock(
         store.readProcessStartIdentity(owner.pid) === owner.startIdentity,
     )
   ) {
-    return createUpdatePreflightFailure(
-      "inside-triage-process-tree",
-      undefined,
-      "managed-service-preflight",
-    );
+    return servicePreflightFailure("inside-triage-process-tree");
   }
   return operation === "handoff" ||
     (!state.running && parsePositivePid(state.runtime?.pid) === null)
@@ -172,6 +155,7 @@ export function gatewayMaintenanceBlock(
         state.runtime?.pid,
         ancestry,
         state.runtime?.systemd?.controlGroup,
+        onAbsentSource,
       );
 }
 
@@ -355,11 +339,7 @@ export async function resolveForegroundUpdateAdmission(params: {
     throw new UpdatePreMutationError(
       "managed-service-preflight",
       "The update handoff metadata or this Gateway's current ownership could not be verified. Retry the update from its current owner.",
-      createUpdatePreflightFailure(
-        "foreground-handoff-unverified",
-        undefined,
-        "managed-service-preflight",
-      ),
+      servicePreflightFailure("foreground-handoff-unverified"),
     );
   }
   return true;

@@ -1,18 +1,8 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ConversationTurnReply } from "../../packages/gateway-protocol/src/schema/agent.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-
-type ConversationTurnReply = {
-  conversationRef: string;
-  messageId: string;
-  replyToId?: string;
-  threadId?: string;
-  text: string;
-  timestamp: number;
-  transcriptArtifactId?: string;
-  transcriptMessageId?: string;
-};
 
 type PendingConversationTurn = {
   key: string;
@@ -27,22 +17,6 @@ type PendingConversationTurn = {
   markCorrelationReady: () => void;
   claimed: boolean;
   settle: (reply: ConversationTurnReply | undefined) => void;
-};
-
-type PendingConversationTurnHandle = {
-  id: string;
-  setOutboundMessageId: (messageId: string | undefined) => void;
-  markReady: () => void;
-  wait: () => Promise<ConversationTurnReply | undefined>;
-  cancel: () => void;
-};
-
-type ConversationTurnReplyClaim = {
-  turnId: string;
-  sessionId: string;
-  assertCurrent: () => void;
-  complete: (params?: { transcriptArtifactId?: string; transcriptMessageId?: string }) => void;
-  release: () => void;
 };
 
 // Gateway RPC execution and inbound dispatch can live in different bundled chunks.
@@ -65,15 +39,11 @@ function pendingTurnKey(agentId: string, id: string): string {
   return JSON.stringify([agentId, id]);
 }
 
-function outboundMessageKey(agentId: string, outboundMessageId: string): string {
-  return JSON.stringify([agentId, outboundMessageId]);
-}
-
 function removePendingOutboundMembership(pending: PendingConversationTurn): void {
   if (!pending.outboundMessageId) {
     return;
   }
-  const key = outboundMessageKey(pending.agentId, pending.outboundMessageId);
+  const key = pendingTurnKey(pending.agentId, pending.outboundMessageId);
   const bucket = pendingTurnsByOutboundId.get(key);
   bucket?.delete(pending);
   if (bucket?.size === 0) {
@@ -90,7 +60,7 @@ export function registerPendingConversationTurn(params: {
   threadId?: string;
   timeoutMs: number;
   signal?: AbortSignal;
-}): PendingConversationTurnHandle {
+}) {
   const agentId = normalizeOptionalString(params.agentId);
   if (!agentId) {
     throw new Error("conversation turn requires an agent id");
@@ -151,7 +121,7 @@ export function registerPendingConversationTurn(params: {
   }
   return {
     id,
-    setOutboundMessageId: (messageId) => {
+    setOutboundMessageId: (messageId: string | undefined) => {
       if (pendingTurns.get(key) !== pending) {
         return;
       }
@@ -161,7 +131,7 @@ export function registerPendingConversationTurn(params: {
         pending.settle(undefined);
         return;
       }
-      const outboundKey = outboundMessageKey(pending.agentId, pending.outboundMessageId);
+      const outboundKey = pendingTurnKey(pending.agentId, pending.outboundMessageId);
       const bucket = pendingTurnsByOutboundId.get(outboundKey) ?? new Set();
       bucket.add(pending);
       pendingTurnsByOutboundId.set(outboundKey, bucket);
@@ -204,7 +174,7 @@ export async function claimPendingConversationTurnReply(params: {
   threadId?: string;
   text: string;
   timestamp?: number;
-}): Promise<ConversationTurnReplyClaim | undefined> {
+}) {
   const replyToId = normalizeOptionalString(params.replyToId);
   if (!replyToId) {
     return undefined;
@@ -216,7 +186,7 @@ export async function claimPendingConversationTurnReply(params: {
     return undefined;
   }
   let pending: PendingConversationTurn | undefined;
-  const candidates = pendingTurnsByOutboundId.get(outboundMessageKey(agentId, replyToId));
+  const candidates = pendingTurnsByOutboundId.get(pendingTurnKey(agentId, replyToId));
   for (const candidate of candidates ?? []) {
     if (
       candidate.claimed ||
@@ -255,7 +225,7 @@ export async function claimPendingConversationTurnReply(params: {
   const reply: ConversationTurnReply = {
     conversationRef: params.conversationRef,
     messageId: params.messageId,
-    ...(replyToId ? { replyToId } : {}),
+    replyToId,
     ...(threadId ? { threadId } : {}),
     text: params.text,
     timestamp: params.timestamp ?? Date.now(),
@@ -268,7 +238,9 @@ export async function claimPendingConversationTurnReply(params: {
         throw new Error("conversation turn reply claim is no longer active");
       }
     },
-    complete: (completion = {}) => {
+    complete: (
+      completion: Pick<ConversationTurnReply, "transcriptArtifactId" | "transcriptMessageId"> = {},
+    ) => {
       if (!isCurrent()) {
         return;
       }

@@ -17,7 +17,7 @@ import type {
 import { proposalFromActionRecord, proposalFromEvaluation } from "./proposal-records.ts";
 import {
   invalidateSkillWorkshopReads,
-  loadedSkillWorkshopAgentParams,
+  loadedSkillWorkshopAgentId,
   loadSkillWorkshopProposalDetail,
   loadSkillWorkshopProposals,
   mergeProposal,
@@ -121,7 +121,7 @@ export async function runSkillWorkshopLifecycleAction(
   if (!client || snapshot.phase !== "connected" || state.skillWorkshopActionBusy) {
     return;
   }
-  const requestAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
+  const requestAgentId = loadedSkillWorkshopAgentId(state, context);
   const isCurrentAction = () =>
     options?.isCurrent?.() !== false &&
     context.gateway.snapshot.client === client &&
@@ -215,10 +215,8 @@ export async function runSkillWorkshopEvaluation(
   if (!previous || previous.status !== "pending") {
     return false;
   }
-  const requestAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
-  if (state.skillWorkshopAgentId === null) {
-    state.skillWorkshopAgentId = requestAgentId;
-  }
+  const requestAgentId = loadedSkillWorkshopAgentId(state, context);
+  state.skillWorkshopAgentId ??= requestAgentId;
   state.skillWorkshopActionBusy = { key: proposalId, action: "evaluate" };
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;
@@ -310,10 +308,8 @@ export async function requestSkillWorkshopRevision(
     state.skillWorkshopError = t("skillWorkshop.detail.draftMissing");
     return null;
   }
-  const proposalAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
-  if (state.skillWorkshopAgentId === null) {
-    state.skillWorkshopAgentId = proposalAgentId;
-  }
+  const proposalAgentId = loadedSkillWorkshopAgentId(state, context);
+  state.skillWorkshopAgentId ??= proposalAgentId;
   state.skillWorkshopActionBusy = { key: proposalId, action: "revise" };
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;

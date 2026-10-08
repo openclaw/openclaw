@@ -76,13 +76,7 @@ function classifyJsonValue(value: unknown): ToolCallShapedTextDetection | null {
 }
 
 function findBalancedJsonEnd(text: string, start: number): number | null {
-  const opening = text[start];
-  const closing = opening === "{" ? "}" : opening === "[" ? "]" : "";
-  if (!closing) {
-    return null;
-  }
-
-  const stack = [closing];
+  const stack = [text[start] === "{" ? "}" : "]"];
   let inString = false;
   let escaped = false;
   for (let index = start + 1; index < text.length; index += 1) {

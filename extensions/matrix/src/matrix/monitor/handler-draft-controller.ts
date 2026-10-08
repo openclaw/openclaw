@@ -135,15 +135,11 @@ export async function createMatrixDraftController(params: {
     };
   };
 
-  const getDisplayableDraftText = () => {
+  const updateDraftFromLatestFullText = () => {
     const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
       (boundary) => boundary.messageGeneration === currentDraftMessageGeneration,
     )?.endOffset;
-    return latestDraftFullText.slice(currentDraftBlockOffset, nextDraftBoundaryOffset);
-  };
-
-  const updateDraftFromLatestFullText = () => {
-    const blockText = getDisplayableDraftText();
+    const blockText = latestDraftFullText.slice(currentDraftBlockOffset, nextDraftBoundaryOffset);
     if (blockText) {
       draftStream?.update(blockText);
     }

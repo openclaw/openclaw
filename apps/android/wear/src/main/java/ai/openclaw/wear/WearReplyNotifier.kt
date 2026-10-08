@@ -204,26 +204,17 @@ class WearReplyReceiver : BroadcastReceiver() {
               idempotencyKey = notificationReplyIdempotencyKey(sessionKey, notificationTag, reply),
               phoneNodeId = phoneNodeId,
             ),
-            requirePreferredPhone = true,
           )
         }
         NotificationManagerCompat.from(context).cancel(notificationTag, NOTIFICATION_ID)
-      } catch (err: TimeoutCancellationException) {
-        Log.w(LOG_TAG, "Wear notification reply timed out", err)
-        WearReplyNotifier(context.applicationContext).showReplyFailure(sessionKey, notificationTag, phoneNodeId)
-      } catch (err: CancellationException) {
-        throw err
       } catch (err: Throwable) {
-        Log.w(LOG_TAG, "Wear notification reply failed", err)
+        if (err is CancellationException && err !is TimeoutCancellationException) throw err
+        val message = if (err is TimeoutCancellationException) "Wear notification reply timed out" else "Wear notification reply failed"
+        Log.w(LOG_TAG, message, err)
         val notifier = WearReplyNotifier(context.applicationContext)
         when (notificationReplyFailureAction(err)) {
-          NotificationReplyFailureAction.RetrySamePhone -> {
-            notifier.showReplyFailure(sessionKey, notificationTag, phoneNodeId)
-          }
-
-          NotificationReplyFailureAction.OpenApp -> {
-            notifier.showPreferredPhoneChanged(notificationTag)
-          }
+          NotificationReplyFailureAction.RetrySamePhone -> notifier.showReplyFailure(sessionKey, notificationTag, phoneNodeId)
+          NotificationReplyFailureAction.OpenApp -> notifier.showPreferredPhoneChanged(notificationTag)
         }
       } finally {
         pendingResult.finish()

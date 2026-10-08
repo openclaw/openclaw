@@ -21,29 +21,13 @@ function completedWaitReceipt(message: string, id = "wait"): CodexServerNotifica
   };
 }
 
-describe("native subagent delivery receipt restoration", () => {
-  it("restores the whole ordered snapshot before matching an existing successor's receipt", () => {
-    const receipts = new CodexNativeSubagentDeliveryReceipts();
-    receipts.track("second-run", ["unresolved-alias"]);
-    expect(receipts.observe(completedWaitReceipt("second result"))).toEqual([]);
-    expect(
-      receipts.restore([
-        { runId: "first-run", paths: ["child-thread"] },
-        { runId: "second-run", paths: ["child-thread"], result: "second result" },
-      ]),
-    ).toEqual([]);
-    expect(receipts.record("first-run", ["child-thread"], "first result")).toEqual(["second-run"]);
-    expect(receipts.track("first-run", ["child-thread"])).toEqual([]);
-  });
-
+describe("native subagent delivery receipts", () => {
   it.each([
-    { received: false, predecessorResult: "same", order: "before" },
-    { received: false, predecessorResult: "different", order: "after" },
-    { received: true, predecessorResult: "same", order: "after" },
-    { received: true, predecessorResult: "different", order: "before" },
+    { received: false, predecessorResult: "same" },
+    { received: true, predecessorResult: "different" },
   ])(
-    "defers successor acknowledgment behind unresolved evidence (received=$received, predecessor=$predecessorResult, receipt=$order)",
-    ({ received, predecessorResult, order }) => {
+    "defers successor acknowledgment behind unresolved evidence (received=$received, predecessor=$predecessorResult)",
+    ({ received, predecessorResult }) => {
       const receipts = new CodexNativeSubagentDeliveryReceipts();
       receipts.track("first-run", ["child-thread"]);
       if (received) {
@@ -52,15 +36,8 @@ describe("native subagent delivery receipt restoration", () => {
         ]);
       }
       receipts.track("second-run", ["child-thread"]);
-      const acknowledged: string[] = [];
-      if (order === "before") {
-        acknowledged.push(...receipts.observe(completedWaitReceipt("shared result")));
-      }
-      acknowledged.push(...receipts.record("second-run", ["child-thread"], "shared result"));
-      if (order === "after") {
-        acknowledged.push(...receipts.observe(completedWaitReceipt("shared result")));
-      }
-      expect(acknowledged).toEqual([]);
+      expect(receipts.observe(completedWaitReceipt("shared result"))).toEqual([]);
+      expect(receipts.record("second-run", ["child-thread"], "shared result")).toEqual([]);
       receipts.record(
         "first-run",
         ["child-thread"],
@@ -90,7 +67,7 @@ describe("native subagent delivery receipt restoration", () => {
     },
   );
 
-  it("remembers accepted renderings across restoration", () => {
+  it("remembers accepted native renderings", () => {
     const receipts = new CodexNativeSubagentDeliveryReceipts();
     receipts.track("first-run", ["child-thread"]);
     expect(receipts.observe(completedWaitReceipt("first rendering", "first"))).toEqual([
@@ -98,40 +75,25 @@ describe("native subagent delivery receipt restoration", () => {
     ]);
     expect(receipts.observe(completedWaitReceipt("other rendering", "other"))).toEqual([]);
     receipts.record("first-run", ["child-thread"], "canonical result");
-    expect(
-      receipts.restore([
-        { runId: "first-run", paths: ["child-thread"] },
-        { runId: "second-run", paths: ["child-thread"], result: "other rendering" },
-      ]),
-    ).toEqual(["first-run"]);
+    receipts.record("second-run", ["child-thread"], "other rendering");
     expect(receipts.observe(completedWaitReceipt("other rendering", "duplicate"))).toEqual([]);
     expect(receipts.track("second-run", ["child-thread"])).toEqual([]);
   });
 
-  it("does not acknowledge a known different result even when only one outcome is restored", () => {
+  it("does not acknowledge a known different result even when only one outcome is known", () => {
     const receipts = new CodexNativeSubagentDeliveryReceipts();
     receipts.record("first-run", ["child-thread"], "first result");
     expect(receipts.observe(completedWaitReceipt("second result"))).toEqual([]);
     expect(receipts.track("first-run", ["child-thread"])).toEqual([]);
   });
 
-  it.each(["before", "after"])(
-    "preserves a restored multiline predecessor when its receipt arrives %s the successor result",
-    (order) => {
-      const receipts = new CodexNativeSubagentDeliveryReceipts();
-      const multilineResult = "First line\n  Second line\tvalue";
-      receipts.record("first-run", ["child-thread"], "First line Second line value");
-      receipts.track("second-run", ["child-thread"]);
-      const acknowledged: string[] = [];
-      if (order === "before") {
-        acknowledged.push(...receipts.observe(completedWaitReceipt(multilineResult)));
-      }
-      acknowledged.push(...receipts.record("second-run", ["child-thread"], multilineResult));
-      if (order === "after") {
-        acknowledged.push(...receipts.observe(completedWaitReceipt(multilineResult)));
-      }
-      expect(acknowledged).toEqual(["first-run"]);
-      expect(receipts.track("second-run", ["child-thread"])).toEqual([]);
-    },
-  );
+  it("attributes a multiline receipt to its predecessor after an equivalent successor result", () => {
+    const receipts = new CodexNativeSubagentDeliveryReceipts();
+    const multilineResult = "First line\n  Second line\tvalue";
+    receipts.record("first-run", ["child-thread"], "First line Second line value");
+    receipts.track("second-run", ["child-thread"]);
+    expect(receipts.record("second-run", ["child-thread"], multilineResult)).toEqual([]);
+    expect(receipts.observe(completedWaitReceipt(multilineResult))).toEqual(["first-run"]);
+    expect(receipts.track("second-run", ["child-thread"])).toEqual([]);
+  });
 });

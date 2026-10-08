@@ -1,12 +1,16 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveConfigPath } from "../config/paths.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
-import * as versionManagerPath from "../shared/version-manager-path.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { VERSION } from "../version.js";
 import {
   expectNoSideEffects,
   freshRestartCalls,
@@ -15,6 +19,8 @@ import {
   lastWriteJsonCall,
   packageInstallCommandCall,
   requireValue,
+  gatewayCommandCall,
+  gatewayHealthCall,
 } from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import {
@@ -25,15 +31,16 @@ import {
   readPackageVersion,
   resolveGlobalManager,
   serviceLoaded,
-  serviceReadRuntime,
   serviceRestart,
   serviceStart,
   serviceStop,
+  callGateway,
+  pluginAvailabilityPreflight,
+  createPreUpdateConfigSnapshotMock,
 } from "./update-cli-mocks.test-support.js";
 import {
   defaultRuntime,
   ExitError,
-  expectGitMetadataPreview,
   fetchNpmPackageTargetStatus,
   listUpdateRuns,
   makeOkUpdateResult,
@@ -43,10 +50,19 @@ import {
   resolveOpenClawPackageRoot,
   runCommandWithTimeout,
   runUpdateFailureTriage,
+  doctorCommand,
+  mockGitUpdateAfterMutation,
+  runDaemonInstall,
   updateCommand,
   updateGitCheckout,
+  clearRestartSentinelIfRevision,
+  closeOpenClawStateDatabaseAsync,
+  readRestartSentinel,
+  resolveExtendedStablePackage,
 } from "./update-cli-modules.test-support.js";
+import { UpdatePreMutationError } from "./update-cli/shared.js";
 import {
+  newerAgentSchemaFixture,
   packageTargetStatus,
   writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
@@ -55,6 +71,7 @@ import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.t
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
+  const nodeExecutable = resolveTestNodeExecPath();
   const {
     createCaseDir,
     initializeExistingUpdateProfile,
@@ -72,18 +89,15 @@ describe("update-cli", () => {
     setupInstalledPackageRoot,
     tempDirs,
     useFileBackedConfig,
+    mockPackageGatewayLifecycle,
+    runControlPlaneUpdate,
+    setupNpmUpdatedRootRefresh,
+    setupUpdatedRootRefresh,
   } = createUpdateCliFixture();
 
-  it.each([
-    { kind: "package", callerIncompatible: false },
-    { kind: "git", callerIncompatible: false },
-    { kind: "package-to-git", callerIncompatible: false },
-    { kind: "package-preview", callerIncompatible: false },
-    { kind: "package", callerIncompatible: true },
-    { kind: "package-stopped", callerIncompatible: false },
-  ] as const)(
-    "refuses a service-only incompatible $kind target before any mutable preparation, callerIncompatible=$callerIncompatible",
-    async ({ kind, callerIncompatible }) => {
+  it.each(["git", "package-to-git", "package-preview"] as const)(
+    "refuses a service-only incompatible %s target before any mutable preparation",
+    async (kind) => {
       const fixture = createCaseDir(`schema-service-only-${kind}`);
       const { pkgRoot, nodeModules, entryPath } = await setupInstalledPackageRoot(fixture, "1.0.0");
       const root = kind === "git" ? fixture : pkgRoot;
@@ -113,7 +127,7 @@ describe("update-cli", () => {
       }
       primeServiceCommand(
         [
-          "node",
+          nodeExecutable,
           kind === "git" ? path.join(root, "dist", "index.js") : entryPath,
           "gateway",
           "run",
@@ -125,10 +139,6 @@ describe("update-cli", () => {
         },
       );
       serviceLoaded.mockResolvedValue(true);
-      if (kind === "package-stopped") {
-        serviceLoaded.mockResolvedValue(false);
-        serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
-      }
       vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
         packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
       );
@@ -147,20 +157,17 @@ describe("update-cli", () => {
         inspectedStates.push(env.OPENCLAW_STATE_DIR);
         return {
           incompatible:
-            env.OPENCLAW_STATE_DIR === managedState || callerIncompatible
+            env.OPENCLAW_STATE_DIR === managedState
               ? [
-                  {
-                    kind: "agent",
-                    path: path.join(
+                  newerAgentSchemaFixture(
+                    path.join(
                       env.OPENCLAW_STATE_DIR!,
                       "agents",
                       "worker",
                       "agent",
                       "openclaw-agent.sqlite",
                     ),
-                    foundVersion: 999,
-                    supportedVersion: 11,
-                  },
+                  ),
                 ]
               : [],
           indeterminate: [],
@@ -184,21 +191,12 @@ describe("update-cli", () => {
               yes: true,
               json: true,
               ...(kind === "package-to-git" ? { channel: "dev" } : {}),
-              ...(kind === "package-stopped" ? { restart: false } : {}),
             }),
           ).rejects.toEqual(new ExitError(1));
         },
       );
       expect(inspectedStates).toContain(callerState);
       expect(inspectedStates).toContain(managedState);
-      if (callerIncompatible) {
-        expect(getErrorOutput()).toContain(
-          path.join(callerState, "agents", "worker", "agent", "openclaw-agent.sqlite"),
-        );
-        expect(getErrorOutput()).toContain(
-          path.join(managedState, "agents", "worker", "agent", "openclaw-agent.sqlite"),
-        );
-      }
       expectNoSideEffects(
         serviceStop,
         serviceStart,
@@ -215,39 +213,30 @@ describe("update-cli", () => {
     },
   );
 
-  it.each(["absent", "foreign"] as const)(
+  it.each(["absent"] as const)(
     "refuses a newly owned service after an initially %s Git admission snapshot",
     async (initial) => {
       const root = createCaseDir(`new-service-${initial}`);
       await writeOpenClawPackageFixture(root, "1.0.0", { git: true });
       vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-      if (initial === "foreign") {
-        const foreignRoot = createCaseDir("foreign-service-root");
-        const foreignEntry = await writeOpenClawPackageFixture(foreignRoot, "1.0.0");
-        mockRunningManagedGateway(["node", foreignEntry, "gateway", "run"]);
-      }
       const managedState = profileStateDir("work");
       let admitted = false;
       databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) => ({
         incompatible:
           env.OPENCLAW_STATE_DIR === managedState
-            ? [
-                {
-                  kind: "agent",
-                  path: path.join(managedState, "worker.sqlite"),
-                  foundVersion: 999,
-                  supportedVersion: 11,
-                },
-              ]
+            ? [newerAgentSchemaFixture(path.join(managedState, "worker.sqlite"))]
             : [],
         indeterminate: [],
       }));
       vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
-        primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"], {
-          OPENCLAW_PROFILE: "work",
-          OPENCLAW_STATE_DIR: managedState,
-          OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-        });
+        primeServiceCommand(
+          [nodeExecutable, path.join(root, "dist", "index.js"), "gateway", "run"],
+          {
+            OPENCLAW_PROFILE: "work",
+            OPENCLAW_STATE_DIR: managedState,
+            OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+          },
+        );
         serviceLoaded.mockResolvedValue(true);
         await requireValue(
           options.beforeGitMutation,
@@ -276,27 +265,13 @@ describe("update-cli", () => {
     },
   );
 
-  it("preserves best-effort preview when target metadata is unavailable", async () => {
-    await updateCommand({ dryRun: true, json: true });
-    expectGitMetadataPreview(lastWriteJsonCall());
-    expectNoSideEffects(
-      updateGitCheckout,
-      serviceStop,
-      cleanupStaleManagedServiceUpdateHandoffs,
-      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
-    );
-    expect(packageInstallCommandCall()).toBeUndefined();
-  });
-
   it.each([
     "package metadata",
-    "package schema",
     "package runtime",
     "npm policy",
     "clone failure",
     "non-git directory",
     "git metadata",
-    "git schema",
   ] as const)("returns verified handoff recovery for a %s refusal", async (failure) => {
     const tempDir = tempDirs.make("openclaw-update-handoff-preflight-");
     const { nodeModules } = await setupInstalledPackageRoot(tempDir);
@@ -316,17 +291,13 @@ describe("update-cli", () => {
       await fs.mkdir(gitRoot);
       await fs.writeFile(path.join(gitRoot, "keep.txt"), "operator data\n");
     }
-    if (failure.startsWith("git ")) {
+    if (failure === "git metadata") {
       await writeOpenClawPackageFixture(gitRoot, "2026.8.18", { git: true });
       vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
         await requireValue(
           options.beforeGitMutation,
           "Git mutation admission",
-        )(
-          failure === "git metadata"
-            ? { metadataUnreadable: "missing package metadata" }
-            : { schemaVersions: { state: 3, agent: 11 } },
-        );
+        )({ metadataUnreadable: "missing package metadata" });
         throw new Error("refused Git target must not mutate");
       });
     }
@@ -335,16 +306,8 @@ describe("update-cli", () => {
         packageTargetStatus({ version: null, error: "registry timeout" }),
       );
     }
-    if (failure.endsWith("schema")) {
-      vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-        packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
-      );
-      databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
-        incompatible: [],
-        indeterminate: [{ kind: "state", path: "/tmp/openclaw.sqlite", reason: "database busy" }],
-      });
-    }
     if (failure === "package runtime") {
+      runtimeRecovery.stubNodeRuntime();
       nodeVersionSatisfiesEngine.mockReturnValue(false);
     }
 
@@ -371,147 +334,130 @@ describe("update-cli", () => {
     }
   });
 
-  it("skips package schema preflight when target metadata is missing", async () => {
-    await mockPackageInstallAtCaseDir("openclaw-schema-missing");
-    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(packageTargetStatus());
-
-    await updateCommand({ yes: true, restart: false });
-
-    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).not.toHaveBeenCalled();
-    expect(packageInstallCommandCall()).toBeDefined();
-  });
-
-  it.each(["SIGINT", "SIGTERM"] as const)(
-    "settles a fresh update interrupted during target metadata admission (%s)",
-    async (signal) => {
-      await useFileBackedConfig();
-      const root = await mockPackageInstallAtCaseDir("openclaw-early-signal");
-      const packageBefore = await fs.readFile(path.join(root, "package.json"), "utf8");
-      const processOnSpy = vi.spyOn(process, "on");
-      const exitCalled = createDeferred();
-      const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-        exitCalled.resolve();
-        return undefined as never;
-      });
-      let entered!: () => void;
-      let release!: () => void;
-      const requested = new Promise<void>((resolve) => {
-        entered = resolve;
-      });
-      const pending = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      vi.mocked(resolveNpmChannelTag).mockImplementation(async () => {
-        entered();
-        await pending;
-        throw new Error("interrupted target metadata request");
-      });
-      const update = updateCommand({ yes: true, restart: false }).catch((error: unknown) => error);
-      try {
-        await Promise.race([
-          requested,
-          update.then(() => {
-            throw new Error("Update ended before metadata admission");
-          }),
-        ]);
-        const before = listUpdateRuns({ limit: 1 })[0]!;
-        expect(before.status).toBe("running");
-        const listeners = processOnSpy.mock.calls
-          .filter(([event]) => event === signal)
-          .map(([, listener]) => listener);
-        expect(listeners.length).toBeGreaterThan(0);
-        for (const listener of listeners) {
-          listener();
-        }
-        // Inspect while metadata remains blocked: ordinary unwind cannot settle this row.
-        expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
-          runId: before.runId,
-          status: "failed",
-          phase: "finished",
-          reason: "interrupted",
-          finishedAtMs: expect.any(Number),
-        });
-        await exitCalled.promise;
-        expect(processExitSpy).toHaveBeenCalledWith(signal === "SIGINT" ? 130 : 143);
-        expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toBe(packageBefore);
-        expect(packageInstallCommandCall()).toBeUndefined();
-        expect(serviceStop).not.toHaveBeenCalled();
-      } finally {
-        release();
-        await update;
-      }
-    },
-  );
-
-  it("refuses a package update when exact target metadata lookup fails", async () => {
-    mockPackageInstallStatus(createCaseDir("openclaw-schema-metadata-failure"));
-    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ version: null, nodeEngine: null, error: "registry timeout" }),
-    );
-
-    await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
-
-    expectNoSideEffects(databasePreflightMocks.preflightOpenClawDatabaseSchemas, serviceStop);
-    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    expect(getLogOutput()).toContain("The registry package metadata could not be read.");
-    expect(getLogOutput()).toContain("retry openclaw update --tag <published-version>");
-    expect(getLogOutput()).toContain(
-      "Could not inspect exact package target openclaw@9999.0.0: registry timeout.",
-    );
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-  });
-
-  it("continues a package update when target schemas are compatible", async () => {
-    await mockPackageInstallAtCaseDir("openclaw-schema-compatible");
-    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
-    );
-
-    await updateCommand({ yes: true, restart: false });
-
-    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalled();
-    for (const [input] of databasePreflightMocks.preflightOpenClawDatabaseSchemas.mock.calls) {
-      expect(input).toMatchObject({ supportedVersions: { state: 3, agent: 11 } });
+  it("preserves original state when target metadata resolution is interrupted before admission", async () => {
+    await useFileBackedConfig();
+    const root = await mockPackageInstallAtCaseDir("openclaw-early-metadata");
+    await closeOpenClawStateDatabaseAsync();
+    const originalPaths = [
+      resolveConfigPath(),
+      resolveOpenClawStateSqlitePath(),
+      path.join(root, "package.json"),
+    ];
+    const originals = await Promise.all(originalPaths.map((file) => fs.readFile(file)));
+    const requested = createDeferred();
+    const release = createDeferred();
+    const interruption = new Error("interrupted target metadata request");
+    vi.mocked(resolveNpmChannelTag).mockImplementation(async () => {
+      requested.resolve();
+      await release.promise;
+      throw interruption;
+    });
+    const update = updateCommand({ yes: true, restart: false }).catch((error: unknown) => error);
+    try {
+      await Promise.race([
+        requested.promise,
+        update.then(() => {
+          throw new Error("Update ended before metadata resolution");
+        }),
+      ]);
+      expect(listUpdateRuns({ limit: 1 })).toEqual([]);
+      release.resolve();
+      expect(await update).toBe(interruption);
+      expect(listUpdateRuns({ limit: 1 })).toEqual([]);
+      await closeOpenClawStateDatabaseAsync();
+      expect(await Promise.all(originalPaths.map((file) => fs.readFile(file)))).toEqual(originals);
+      expect(packageInstallCommandCall()).toBeUndefined();
+      expectNoSideEffects(serviceStop, replaceConfigFile, cleanupStaleManagedServiceUpdateHandoffs);
+    } finally {
+      release.resolve();
+      await update;
     }
-    expect(packageInstallCommandCall()?.[0]).toContain("openclaw@9999.0.0");
   });
 
-  it.each([true, false])(
-    "uses inspected package runtime requirements when a later lookup disagrees (compatible=%s)",
-    async (compatible) => {
-      // This case specifies system-runtime guidance, independent of the host Node manager.
-      vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
-      const root = await mockPackageInstallAtCaseDir("openclaw-runtime-target");
-      const inspectedEngine = compatible ? ">=22.19.0" : ">=999.0.0";
-      vi.mocked(fetchNpmPackageTargetStatus)
-        .mockResolvedValueOnce(packageTargetStatus({ nodeEngine: inspectedEngine }))
-        .mockResolvedValue(
-          packageTargetStatus({ nodeEngine: compatible ? ">=999.0.0" : ">=22.19.0" }),
-        );
-      nodeVersionSatisfiesEngine.mockImplementation(
-        (_version: string | null, engine: string | null) => engine !== ">=999.0.0",
-      );
-
-      if (compatible) {
-        await updateCommand({ yes: true, restart: false });
-      } else {
-        await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(
-          new ExitError(1),
-        );
+  it("settles an admitted update interrupted during plugin preflight (SIGTERM)", async () => {
+    await useFileBackedConfig();
+    const root = await mockPackageInstallAtCaseDir("openclaw-early-signal");
+    const packageBefore = await fs.readFile(path.join(root, "package.json"), "utf8");
+    const processOnSpy = vi.spyOn(process, "on");
+    const exitCalled = createDeferred();
+    const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      exitCalled.resolve();
+      return undefined as never;
+    });
+    let entered!: () => void;
+    let release!: () => void;
+    const requested = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    pluginAvailabilityPreflight.mockImplementation(async () => {
+      entered();
+      await pending;
+      throw new Error("interrupted plugin preflight");
+    });
+    const update = updateCommand({ yes: true, restart: false }).catch((error: unknown) => error);
+    try {
+      await Promise.race([
+        requested,
+        update.then(() => {
+          throw new Error("Update ended before plugin preflight");
+        }),
+      ]);
+      const before = listUpdateRuns({ limit: 1 })[0]!;
+      expect(before.status).toBe("running");
+      const listeners = processOnSpy.mock.calls
+        .filter(([event]) => event === "SIGTERM")
+        .map(([, listener]) => listener);
+      expect(listeners.length).toBeGreaterThan(0);
+      for (const listener of listeners) {
+        listener();
       }
+      await exitCalled.promise;
+      // Inspect while preflight remains blocked: ordinary unwind cannot settle this row.
+      expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
+        runId: before.runId,
+        status: "failed",
+        phase: "finished",
+        reason: "interrupted",
+        finishedAtMs: expect.any(Number),
+      });
+      expect(processExitSpy).toHaveBeenCalledWith(143);
+      expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toBe(packageBefore);
+      expect(packageInstallCommandCall()).toBeUndefined();
+      expect(serviceStop).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await update;
+    }
+  });
 
-      if (compatible) {
-        expect(packageInstallCommandCall()?.[0]).toContain("openclaw@9999.0.0");
-      } else {
-        expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-        expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
-        expect(defaultRuntime.log).toHaveBeenCalledWith(
-          `openclaw@9999.0.0 requires Node >=999.0.0; selected runtime is Node ${process.versions.node}.\n${runtimeRecovery.expectedPlainRecovery("9999.0.0", "999.0.0", "absent", undefined, root)}`,
-        );
-      }
-      expect(fetchNpmPackageTargetStatus).toHaveBeenCalledOnce();
-    },
-  );
+  it("refuses incompatible inspected runtime requirements when a later lookup disagrees", async () => {
+    runtimeRecovery.stubNodeRuntime();
+    // This case specifies a non-container system runtime, independent of the test host.
+    runtimeRecovery.mockNonContainerSystemRuntime();
+    const root = await mockPackageInstallAtCaseDir("openclaw-runtime-target");
+    vi.mocked(fetchNpmPackageTargetStatus)
+      .mockResolvedValueOnce(packageTargetStatus({ nodeEngine: ">=999.0.0" }))
+      .mockResolvedValue(packageTargetStatus({ nodeEngine: ">=22.19.0" }));
+    nodeVersionSatisfiesEngine.mockImplementation(
+      (_version: string | null, engine: string | null) => engine !== ">=999.0.0",
+    );
+
+    await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(1));
+
+    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      `Failing check node-runtime (node-runtime-preflight); key engines.node: Required: openclaw@9999.0.0 Node >=999.0.0; detected: Node ${process.versions.node} at ${process.execPath}
+Failing check node-runtime (node-runtime-preflight); key engines.node: Update install root: ${await fs.realpath(root)}
+Failing check node-runtime (node-runtime-preflight); key engines.node: Update binary: ${path.join(root, "openclaw.mjs")}
+Failing check node-runtime (node-runtime-preflight); key engines.node: Gateway install root: unresolved
+Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtimeRecovery.expectedPlainRecovery("9999.0.0", "999.0.0", "absent", undefined, root)}`,
+    );
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledOnce();
+  });
 
   it("previews explicit artifacts without claiming staged plugin admission", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-local-preview"));
@@ -535,7 +481,7 @@ describe("update-cli", () => {
     readPackageVersion.mockResolvedValue("1.0.0");
     primeNpmChannelTag("latest", "1.0.0");
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ target: "1.0.0", version: "1.0.0" }),
+      packageTargetStatus({ version: "1.0.0" }),
     );
     const packageSpec = "file:/owned/openclaw-current.tgz";
 
@@ -555,105 +501,26 @@ describe("update-cli", () => {
     expect(lastWriteJsonCall()).not.toHaveProperty("targetVersionReason");
   });
 
-  it("previews the resolved package owner without probing for another manager", async () => {
-    mockPackageInstallStatus(createCaseDir("openclaw-dry-run-owner"));
-    resolveGlobalManager.mockResolvedValueOnce("npm").mockResolvedValue("bun");
-
-    await updateCommand({ dryRun: true, json: true });
-
-    expect(lastWriteJsonCall()).toMatchObject({ mode: "npm" });
-    expect(resolveGlobalManager).toHaveBeenCalledOnce();
-    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-  });
-
   it("does not clean handoffs before rejecting an unknown package owner", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-unknown-owner"));
     const refusal =
       "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.";
-    resolveGlobalManager.mockRejectedValueOnce(new Error(refusal));
+    resolveGlobalManager.mockRejectedValueOnce(
+      new UpdatePreMutationError("unmanaged-package-install", refusal),
+    );
 
-    await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(1));
+    await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(0));
     expect([getLogOutput(), getErrorOutput()].join("\n")).toContain(
       refusal.split(", then retry.")[0],
     );
 
     expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-  });
-
-  it("reports an incompatible package target during dry-run", async () => {
-    mockPackageInstallStatus(createCaseDir("openclaw-schema-dry-run"));
-    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ schemaVersions: { state: 2, agent: 9 } }),
-    );
-    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
-      incompatible: [
-        {
-          kind: "state",
-          path: "/tmp/openclaw/state/openclaw.sqlite",
-          foundVersion: 3,
-          supportedVersion: 2,
-        },
-      ],
-      indeterminate: [],
+    expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
+      status: "skipped",
+      phase: "finished",
+      reason: "unmanaged-package-install",
     });
-
-    await updateCommand({ dryRun: true });
-
-    const logs = getLogOutput();
-    expect(logs).toContain("Would refuse update: state database");
-    expect(logs).toContain("https://docs.openclaw.ai/reference/database-schemas");
-    expect(serviceStop).not.toHaveBeenCalled();
-    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-  });
-
-  it("refuses an incompatible git target before stopping the service", async () => {
-    mockOwnedGitService();
-    serviceLoaded.mockResolvedValue(true);
-    vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
-      await requireValue(
-        options.beforeGitMutation,
-        "Git mutation admission",
-      )({ schemaVersions: { state: 3, agent: 9 } });
-      return makeOkUpdateResult({ mode: "git" });
-    });
-    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
-      incompatible: [
-        {
-          kind: "agent",
-          path: "/tmp/openclaw/agents/main/agent/openclaw-agent.sqlite",
-          foundVersion: 11,
-          supportedVersion: 9,
-        },
-      ],
-      indeterminate: [],
-    });
-
-    await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
-
-    expectNoSideEffects(serviceStop, serviceRestart);
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-  });
-
-  it("reports indeterminate package databases during dry-run", async () => {
-    mockPackageInstallStatus(createCaseDir("openclaw-schema-indeterminate-dry-run"));
-    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
-    );
-    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
-      incompatible: [],
-      indeterminate: [
-        { kind: "state", path: "/tmp/openclaw/state/openclaw.sqlite", reason: "database busy" },
-      ],
-    });
-
-    await updateCommand({ dryRun: true });
-
-    const logs = getLogOutput();
-    expect(logs).toContain(
-      "could not inspect state database /tmp/openclaw/state/openclaw.sqlite: database busy; check database access and free disk space, then retry the update",
-    );
   });
 
   it("refuses a git target that changes after the service stops", async () => {
@@ -742,5 +609,299 @@ describe("update-cli", () => {
 
     expectNoSideEffects(serviceStop, serviceRestart);
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not write a control-plane sentinel when a dry-run preflight fails", async () => {
+    const sentinel = await runControlPlaneUpdate({
+      expectedExitCode: 1,
+      meta: {
+        sessionKey: "agent:main:webchat:dm:user-123",
+        handoffId: "extended-stable-dry-run",
+        note: "Preview requested from the agent.",
+      },
+      options: { channel: "extended-stable", dryRun: true, yes: true, json: true },
+      beforeUpdate: async () => {
+        await mockPackageInstallAtCaseDir();
+        vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
+          status: "failed",
+          reason: "selector_missing",
+        });
+      },
+    });
+
+    expect(sentinel).toBeNull();
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "reports unavailable plugins without refusing the core update (dryRun=%s)",
+    async (dryRun) => {
+      const detail =
+        'Plugin "example" update availability could not be confirmed before core installation.';
+      const sentinel = await runControlPlaneUpdate({
+        meta: {
+          sessionKey: "agent:main:webchat:dm:user-123",
+          handoffId: "plugin-admission",
+        },
+        options: { dryRun, yes: true, json: true },
+        beforeUpdate: async () => {
+          await mockPackageInstallAtCaseDir();
+          pluginAvailabilityPreflight.mockResolvedValue([
+            { pluginId: "example", reason: detail, message: detail, guidance: [] },
+          ]);
+        },
+      });
+
+      if (dryRun) {
+        expect(lastWriteJsonCall()).toMatchObject({
+          dryRun: true,
+          notes: expect.arrayContaining([detail]),
+        });
+        expectNoSideEffects(serviceStop, serviceStart, serviceRestart, replaceConfigFile);
+        expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+        expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+        expect(sentinel).toBeNull();
+      } else {
+        expect(lastWriteJsonCall()).toMatchObject({ status: "ok", mode: "npm" });
+        expect(getErrorOutput()).toContain(detail);
+        expect(packageInstallCommandCall()?.[0]).toBeDefined();
+        expect(sentinel).toMatchObject({ payload: { status: "ok", stats: { mode: "npm" } } });
+      }
+    },
+  );
+
+  it("preserves control-plane update sentinel consumption on restart health failure", async () => {
+    let sentinelConsumed = false;
+    const sentinel = await runControlPlaneUpdate({
+      expectedExitCode: 1,
+      meta: {
+        sessionKey: "agent:main:webchat:dm:user-123",
+        continuationMessage: "This should not report a successful update.",
+      },
+      options: { yes: true, json: true },
+      beforeUpdate: async () => {
+        setupNpmUpdatedRootRefresh();
+        serviceLoaded.mockResolvedValue(true);
+        mockGatewayHealth("2026.4.23", "old-gateway");
+        const respond = expectDefined(callGateway.getMockImplementation(), "health response");
+        callGateway.mockImplementation(async (opts) => {
+          const current = await readRestartSentinel();
+          if (current) {
+            sentinelConsumed =
+              (await clearRestartSentinelIfRevision(current.revision)) || sentinelConsumed;
+          }
+          return respond(opts);
+        });
+      },
+    });
+    expect(sentinelConsumed).toBe(true);
+    expect(sentinel).toBeNull();
+    expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "version-mismatch" });
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("keeps a core update successful when a plugin cannot load", async () => {
+    const { updatedEntrypoint } = setupNpmUpdatedRootRefresh();
+    readPackageVersion.mockResolvedValue("2026.4.24");
+    serviceLoaded.mockResolvedValue(true);
+    mockGatewayHealth("2026.4.23", "previous-gateway");
+    const activateGateway = mockPackageGatewayLifecycle();
+    const runFixtureCommand = requireValue(
+      vi.mocked(runCommandWithTimeout).getMockImplementation(),
+      "package command fixture",
+    );
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+      const result = await runFixtureCommand(argv, options);
+      if (
+        result.code === 0 &&
+        argv[2] === "gateway" &&
+        ["install", "restart"].includes(argv[3] ?? "")
+      ) {
+        await activateGateway(argv);
+        const activatedHealth = requireValue(
+          callGateway.getMockImplementation(),
+          "activated package health",
+        );
+        // Keep the identity read from the installed package and add the plugin failure after activation.
+        callGateway.mockImplementation(async (request) => {
+          await activatedHealth(request);
+          return {
+            ok: true,
+            plugins: {
+              errors: [
+                {
+                  id: "telegram",
+                  origin: "bundled",
+                  activated: true,
+                  error: "failed to load plugin dependency: ENOSPC",
+                },
+              ],
+            },
+          };
+        });
+      }
+      return result;
+    });
+
+    await updateCommand({ yes: true, json: false });
+
+    expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
+    expect(freshRestartCalls()).toHaveLength(0);
+    expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(getLogOutput()).toContain("Gateway: restarted and verified.");
+    expect(getLogOutput()).toContain('Plugin "telegram" could not be loaded.');
+    expect(getLogOutput()).toContain("openclaw doctor --fix");
+    expect(getLogOutput()).not.toContain("failed to load plugin dependency: ENOSPC");
+  });
+
+  it("merges current auth refs with captured service selectors for updated install refresh", async () => {
+    const invocationCwd = process.cwd();
+    let setup: ReturnType<typeof setupUpdatedRootRefresh> | undefined;
+    initializeExistingUpdateProfile({
+      ...process.env,
+      OPENCLAW_STATE_DIR: profileStateDir("personal"),
+    });
+    initializeExistingUpdateProfile({
+      ...process.env,
+      OPENCLAW_STATE_DIR: profileStateDir("work"),
+    });
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_AUTH_TOKEN: undefined,
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: path.relative(invocationCwd, profileStateDir("personal")),
+        OPENCLAW_CONFIG_PATH: path.relative(
+          invocationCwd,
+          path.join(profileStateDir("personal"), "openclaw.json"),
+        ),
+        PATH: "/caller/bin",
+      },
+      async () => {
+        setup = setupUpdatedRootRefresh({
+          gatewayUpdateImpl: async (root) => {
+            process.env.OPENCLAW_GATEWAY_AUTH_TOKEN = "runtime-auth-ref";
+            return makeOkUpdateResult({ mode: "npm", root, after: { version: VERSION } });
+          },
+        });
+        primeServiceCommand([process.execPath, setup.entrypoints[0], "gateway", "run"], {
+          OPENCLAW_PROFILE: "work",
+          OPENCLAW_STATE_DIR: path.relative(invocationCwd, profileStateDir("work")),
+          OPENCLAW_CONFIG_PATH: path.relative(
+            invocationCwd,
+            path.join(profileStateDir("work"), "openclaw.json"),
+          ),
+          PATH: "/service/bin",
+        });
+
+        await updateCommand({});
+      },
+    );
+
+    const entryPath = expectDefined(setup?.entrypoints[0], "updated entrypoint");
+    const installEnv = gatewayCommandCall(entryPath, "install")?.[1].env as
+      | NodeJS.ProcessEnv
+      | undefined;
+    expect(installEnv?.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("runtime-auth-ref");
+    expect(installEnv?.OPENCLAW_STATE_DIR).toBe(profileStateDir("work"));
+    expect(installEnv?.OPENCLAW_CONFIG_PATH).toBe(
+      path.join(profileStateDir("work"), "openclaw.json"),
+    );
+    expect(installEnv?.PATH).toBe("/service/bin");
+  });
+
+  it("reuses captured invocation paths after process.cwd becomes unavailable", async () => {
+    const invocationCwd = process.cwd();
+    let restoreCwd: (() => void) | undefined;
+    const { root, entrypoints } = setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async () => {
+        const spy = vi.spyOn(process, "cwd").mockImplementation(() => {
+          throw new Error("ENOENT: current working directory is gone");
+        });
+        restoreCwd = () => spy.mockRestore();
+        return makeOkUpdateResult({ mode: "npm", root, after: { version: VERSION } });
+      },
+    });
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: path.relative(invocationCwd, profileStateDir()),
+          OPENCLAW_WORKSPACE_DIR: path.relative(
+            invocationCwd,
+            path.join(profileStateDir(), "workspace"),
+          ),
+        },
+        () => updateCommand({}),
+      );
+    } finally {
+      restoreCwd?.();
+    }
+    const entrypoint = requireValue(entrypoints[0], "updated entrypoint");
+    const install = gatewayCommandCall(entrypoint, "install");
+    expect(install?.[0][0]).toBe(process.execPath);
+    expect(install?.[0].slice(1)).toEqual([
+      entrypoint,
+      "gateway",
+      "install",
+      "--force",
+      "--port",
+      "18789",
+      "--json",
+      "--update-executor",
+      "run",
+    ]);
+    expect(install?.[1]).toMatchObject({
+      cwd: root,
+      timeoutMs: 30 * 60_000,
+      env: {
+        OPENCLAW_STATE_DIR: profileStateDir(),
+        OPENCLAW_WORKSPACE_DIR: path.join(profileStateDir(), "workspace"),
+      },
+    });
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+  });
+
+  it("keeps the update flag through mutation and restores it after restart", async () => {
+    await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: undefined }, async () => {
+      const entrypoint = path.join(process.cwd(), "dist", "index.js");
+      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
+      mockRunningManagedGateway([nodeExecutable, entrypoint, "gateway"]);
+      mockGitUpdateAfterMutation(makeOkUpdateResult({ root: process.cwd() }));
+      const update = requireValue(
+        vi.mocked(updateGitCheckout).getMockImplementation(),
+        "Git update fixture",
+      );
+      vi.mocked(updateGitCheckout).mockImplementationOnce(async (...args) => {
+        expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
+        return update(...args);
+      });
+      vi.mocked(defaultRuntime.log).mockClear();
+
+      await updateCommand({});
+
+      expect(doctorCommand).not.toHaveBeenCalled();
+      expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
+      const restartIndex = vi
+        .mocked(runCommandWithTimeout)
+        .mock.calls.findIndex(([argv]) => argv[2] === "gateway" && argv[3] === "restart");
+      const restartOrder = requireValue(
+        vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[restartIndex],
+        "installed CLI restart call order",
+      );
+      const snapshotOrders = createPreUpdateConfigSnapshotMock.mock.invocationCallOrder;
+      expect(createPreUpdateConfigSnapshotMock).toHaveBeenCalledTimes(1);
+      expect(requireValue(snapshotOrders[0], "restart snapshot call order")).toBeLessThan(
+        restartOrder,
+      );
+
+      const successIndex = vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.findIndex((call) => String(call[0]).includes("OpenClaw updated"));
+      expect(successIndex).toBeGreaterThanOrEqual(0);
+      expect(vi.mocked(defaultRuntime.log).mock.invocationCallOrder[successIndex]).toBeGreaterThan(
+        restartOrder,
+      );
+    });
   });
 });

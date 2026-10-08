@@ -30,7 +30,6 @@ function calculateAdaptiveColumnWidths(
     return [];
   }
 
-  // Use original total width from Convert API, or fall back to default
   const totalWidth =
     originalWidths && originalWidths.length > 0
       ? originalWidths.reduce((a: number, b: number) => a + b, 0)
@@ -60,15 +59,8 @@ function calculateAdaptiveColumnWidths(
   // CJK (Chinese/Japanese/Korean) characters render ~2x wider than ASCII
   function getWeightedLength(text: string): number {
     let length = 0;
-    for (let index = 0; index < text.length; index += 1) {
-      const code = text.charCodeAt(index);
-      length += code > 255 ? 2 : 1;
-      if (code >= 0xd800 && code <= 0xdbff) {
-        const next = text.charCodeAt(index + 1);
-        if (next >= 0xdc00 && next <= 0xdfff) {
-          index += 1;
-        }
-      }
+    for (const character of text) {
+      length += character.charCodeAt(0) > 255 ? 2 : 1;
     }
     return length;
   }
@@ -106,7 +98,6 @@ function calculateAdaptiveColumnWidths(
     ),
   );
 
-  // Redistribute remaining space to fill total width
   let remaining = totalWidth - widths.reduce((a, b) => a + b, 0);
   while (remaining > 0) {
     const growable = widths.map((w, i) => (w < MAX_COLUMN_WIDTH ? i : -1)).filter((i) => i >= 0);
@@ -148,14 +139,6 @@ export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxB
     }
     return blockMap;
   };
-  const tableWidths = new Map<string, number[]>();
-  for (const block of blocks) {
-    if (block.block_type === 31 && block.block_id) {
-      const widths = calculateAdaptiveColumnWidths(blocks, block.block_id, getBlockMap);
-      tableWidths.set(block.block_id, widths);
-    }
-  }
-
   return blocks.map((block) => {
     const cleanBlock = { ...block };
     delete cleanBlock.parent_id;
@@ -166,7 +149,9 @@ export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxB
     }
 
     if (cleanBlock.block_type === 31 && cleanBlock.table) {
-      const adaptiveWidths = block.block_id ? tableWidths.get(block.block_id) : undefined;
+      const adaptiveWidths = block.block_id
+        ? calculateAdaptiveColumnWidths(blocks, block.block_id, getBlockMap)
+        : undefined;
       const { row_size, column_size } = cleanBlock.table.property || {};
       cleanBlock.table = {
         property: {

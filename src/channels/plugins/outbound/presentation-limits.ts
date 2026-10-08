@@ -1,3 +1,4 @@
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -14,6 +15,7 @@ import type {
   MessagePresentationButton,
   MessagePresentationOption,
 } from "../../../interactive/payload.js";
+import { chunkItems } from "../../../utils/chunk-items.js";
 import type { ChannelPresentationCapabilities } from "../outbound.types.js";
 
 type ActionLimits = NonNullable<NonNullable<ChannelPresentationCapabilities["limits"]>["actions"]>;
@@ -45,13 +47,7 @@ function positiveInteger(value: number | undefined): number | undefined {
 
 function truncateText(value: string, maxLength: number | undefined): string {
   const limit = positiveInteger(maxLength);
-  if (!limit || value.length <= limit) {
-    return value;
-  }
-  // A code point uses at most two UTF-16 units; later units cannot affect this prefix.
-  return Array.from(value.slice(0, limit * 2))
-    .slice(0, limit)
-    .join("");
+  return limit ? truncateCodePoints(value, limit) : value;
 }
 
 function truncateUtf8Bytes(value: string, limit: number): string {
@@ -179,21 +175,6 @@ function consumeButtonBudget(budget: ActionBudget, count: number): void {
   }
 }
 
-function chunkButtons(
-  buttons: readonly MessagePresentationButton[],
-  maxActionsPerRow: number | undefined,
-): MessagePresentationButton[][] {
-  const rowSize = positiveInteger(maxActionsPerRow);
-  if (!rowSize) {
-    return buttons.length > 0 ? [[...buttons]] : [];
-  }
-  const rows: MessagePresentationButton[][] = [];
-  for (let index = 0; index < buttons.length; index += rowSize) {
-    rows.push(buttons.slice(index, index + rowSize));
-  }
-  return rows;
-}
-
 function hasActionSlotBudget(budget: ActionBudget): boolean {
   return budget.remainingActions !== 0 && budget.remainingRows !== 0;
 }
@@ -207,30 +188,36 @@ function consumeSelectBudget(budget: ActionBudget, count = 1): void {
   }
 }
 
+function adaptControl<Control extends MessagePresentationButton | MessagePresentationOption>(
+  control: Control,
+  action: ReturnType<typeof resolveMessagePresentationButtonAction>,
+  limits: SelectLimits | undefined,
+): Control | undefined {
+  if (!action) {
+    return undefined;
+  }
+  const legacyValueFits = fitsByteLimit(control.value, limits?.maxValueBytes);
+  if (
+    control.action !== undefined
+      ? !fitsByteLimit(resolveMessagePresentationActionValue(action), limits?.maxValueBytes)
+      : action.type === "callback" && !legacyValueFits
+  ) {
+    return undefined;
+  }
+  const adapted = { ...control, label: truncateText(control.label, limits?.maxLabelLength) };
+  if (!legacyValueFits) {
+    delete adapted.value;
+  }
+  return adapted;
+}
+
 function adaptButton(
   button: MessagePresentationButton,
   limits: ActionLimits | undefined,
 ): MessagePresentationButton | undefined {
-  const hasExplicitAction = button.action !== undefined;
-  const action = resolveMessagePresentationButtonAction(button);
-  if (!action) {
+  const adapted = adaptControl(button, resolveMessagePresentationButtonAction(button), limits);
+  if (!adapted || (button.disabled === true && limits?.supportsDisabled !== true)) {
     return undefined;
-  }
-  const actionValue = resolveMessagePresentationActionValue(action);
-  const actionFits = actionValue === undefined || fitsByteLimit(actionValue, limits?.maxValueBytes);
-  const legacyValueFits = fitsByteLimit(button.value, limits?.maxValueBytes);
-  if (
-    (hasExplicitAction ? !actionFits : action.type === "callback" && !legacyValueFits) ||
-    (button.disabled === true && limits?.supportsDisabled !== true)
-  ) {
-    return undefined;
-  }
-  const adapted: MessagePresentationButton = {
-    ...button,
-    label: truncateText(button.label, limits?.maxLabelLength),
-  };
-  if (!legacyValueFits) {
-    delete adapted.value;
   }
   if (limits?.supportsStyles === false) {
     delete adapted.style;
@@ -277,10 +264,9 @@ function adaptButtonsBlock(
     return fallback;
   }
   return [
-    ...chunkButtons(buttons, limits?.maxActionsPerRow).map((row): MessagePresentationBlock => ({
-      type: "buttons",
-      buttons: row,
-    })),
+    ...chunkItems(buttons, positiveInteger(limits?.maxActionsPerRow) ?? buttons.length).map(
+      (row): MessagePresentationBlock => ({ type: "buttons", buttons: row }),
+    ),
     ...fallback,
   ];
 }
@@ -289,25 +275,7 @@ function adaptOption(
   option: MessagePresentationOption,
   limits: SelectLimits | undefined,
 ): MessagePresentationOption | undefined {
-  const hasExplicitAction = option.action !== undefined;
-  const action = resolveMessagePresentationOptionAction(option);
-  if (!action) {
-    return undefined;
-  }
-  const actionValue = resolveMessagePresentationActionValue(action);
-  const actionFits = actionValue === undefined || fitsByteLimit(actionValue, limits?.maxValueBytes);
-  const legacyValueFits = fitsByteLimit(option.value, limits?.maxValueBytes);
-  if (hasExplicitAction ? !actionFits : !legacyValueFits) {
-    return undefined;
-  }
-  const adapted: MessagePresentationOption = {
-    ...option,
-    label: truncateText(option.label, limits?.maxLabelLength),
-  };
-  if (!legacyValueFits) {
-    delete adapted.value;
-  }
-  return adapted;
+  return adaptControl(option, resolveMessagePresentationOptionAction(option), limits);
 }
 
 function adaptSelectBlock(

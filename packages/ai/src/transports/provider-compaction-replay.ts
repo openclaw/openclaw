@@ -1,4 +1,4 @@
-import type { AssistantMessage, Model, ProviderReplayState } from "@openclaw/llm-core";
+import type { AssistantMessage, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveNewestAnthropicCompaction } from "./anthropic-compaction-replay.js";
 import { resolveAnthropicServerCompactionPlan } from "./anthropic-payload-policy.js";
@@ -8,6 +8,15 @@ import {
 } from "./openai-responses-compaction-replay.js";
 import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
+import {
+  isCompactionReplayCheckpoint,
+  stripCompactionReplayCheckpoint,
+} from "./provider-compaction-checkpoint.js";
+
+export {
+  isCompactionReplayCheckpoint,
+  stripCompactionReplayCheckpoint,
+} from "./provider-compaction-checkpoint.js";
 
 export { CompactionReplayRefreshRequiredError } from "./openai-responses-compaction-replay.js";
 
@@ -233,27 +242,6 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
   };
 }
 
-/** Whether provider replay state is a prefix-bound server compaction checkpoint. */
-export function isCompactionReplayCheckpoint(replay: unknown): replay is ProviderReplayState {
-  const type =
-    replay && typeof replay === "object" ? (replay as { type?: unknown }).type : undefined;
-  return (
-    type === "anthropic-compaction" ||
-    type === "openai-responses-compaction" ||
-    type === "openai-responses-retained-compaction"
-  );
-}
-
-/** Strip prefix-bound checkpoints after local history rewrites. */
-export function stripCompactionReplayCheckpoint(message: AssistantMessage): AssistantMessage {
-  if (!isCompactionReplayCheckpoint(message.providerReplay)) {
-    return message;
-  }
-  const replaySafeMessage = { ...message };
-  delete replaySafeMessage.providerReplay;
-  return replaySafeMessage;
-}
-
 /** Strip prefix-bound checkpoint state from an in-place message rewrite. */
 export function stripCompactionReplayCheckpointInPlace(message: {
   providerReplay?: unknown;
@@ -263,7 +251,7 @@ export function stripCompactionReplayCheckpointInPlace(message: {
   }
 }
 
-/** Reindex a prefix-bound checkpoint after known content removals. */
+/** Preserve the covered prefix and reindex checkpoints after known content removals. */
 export function replaceCompactionReplayOwnerContent(
   message: AssistantMessage,
   content: AssistantMessage["content"],
@@ -283,6 +271,14 @@ export function replaceCompactionReplayOwnerContent(
     replayIndex > message.content.length
   ) {
     return stripCompactionReplayCheckpoint(next);
+  }
+  // Same-position rewrites after the checkpoint (such as tool-call id repair)
+  // change only the replayed suffix, not the prefix covered by its opaque state.
+  if (
+    content.length === message.content.length &&
+    content.slice(0, replayIndex).every((block, index) => block === message.content[index])
+  ) {
+    return next;
   }
   let sourceIndex = 0;
   let nextReplayIndex = 0;

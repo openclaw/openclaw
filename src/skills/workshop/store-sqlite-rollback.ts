@@ -19,33 +19,15 @@ export type ClearSkillProposalRollbackInput = {
   expectedRecordJson: string;
 };
 
-function removeOtherPendingTargetRollbacks(
-  database: DatabaseSync,
-  params: { proposalId: string; targetSkillFile: string },
-): void {
-  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
-  const rows = executeSqliteQuerySync(
-    database,
-    kysely
-      .selectFrom("skill_workshop_proposal_rollbacks")
-      .innerJoin(
-        "skill_workshop_proposals",
-        "skill_workshop_proposals.proposal_id",
-        "skill_workshop_proposal_rollbacks.proposal_id",
-      )
-      .select("skill_workshop_proposal_rollbacks.proposal_id as proposalId")
-      .where("skill_workshop_proposal_rollbacks.target_skill_file", "=", params.targetSkillFile)
-      .where("skill_workshop_proposals.status", "=", "pending")
-      .where("skill_workshop_proposals.proposal_id", "!=", params.proposalId),
-  ).rows;
-  for (const row of rows) {
-    executeSqliteQuerySync(
-      database,
-      kysely
-        .deleteFrom("skill_workshop_proposal_rollbacks")
-        .where("proposal_id", "=", row.proposalId),
-    );
-  }
+export function skillProposalRollbackValues(rollback: SkillProposalRollback) {
+  return {
+    written_at: rollback.writtenAt,
+    target_skill_file: rollback.targetSkillFile,
+    action: rollback.action,
+    previous_content_hash: rollback.previousContentHash ?? null,
+    previous_content: rollback.previousContent ?? null,
+    support_files_json: rollback.supportFiles ? JSON.stringify(rollback.supportFiles) : null,
+  };
 }
 
 export function writeSkillProposalRollbackInDatabase(
@@ -67,37 +49,31 @@ export function writeSkillProposalRollbackInDatabase(
   if (proposal.status !== "pending") {
     throw new Error(`Only pending proposals can be applied. Current status: ${proposal.status}.`);
   }
-  removeOtherPendingTargetRollbacks(db, {
-    proposalId: params.proposalId,
-    targetSkillFile: params.rollback.targetSkillFile,
-  });
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .deleteFrom("skill_workshop_proposal_rollbacks")
+      .where("target_skill_file", "=", params.rollback.targetSkillFile)
+      .where("proposal_id", "!=", params.proposalId)
+      .where(
+        "proposal_id",
+        "in",
+        kysely
+          .selectFrom("skill_workshop_proposals")
+          .select("proposal_id")
+          .where("status", "=", "pending"),
+      ),
+  );
+  const values = skillProposalRollbackValues(params.rollback);
   executeSqliteQuerySync(
     db,
     kysely
       .insertInto("skill_workshop_proposal_rollbacks")
       .values({
         proposal_id: params.proposalId,
-        written_at: params.rollback.writtenAt,
-        target_skill_file: params.rollback.targetSkillFile,
-        action: params.rollback.action,
-        previous_content_hash: params.rollback.previousContentHash ?? null,
-        previous_content: params.rollback.previousContent ?? null,
-        support_files_json: params.rollback.supportFiles
-          ? JSON.stringify(params.rollback.supportFiles)
-          : null,
+        ...values,
       })
-      .onConflict((conflict) =>
-        conflict.column("proposal_id").doUpdateSet({
-          written_at: params.rollback.writtenAt,
-          target_skill_file: params.rollback.targetSkillFile,
-          action: params.rollback.action,
-          previous_content_hash: params.rollback.previousContentHash ?? null,
-          previous_content: params.rollback.previousContent ?? null,
-          support_files_json: params.rollback.supportFiles
-            ? JSON.stringify(params.rollback.supportFiles)
-            : null,
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("proposal_id").doUpdateSet(values)),
   );
 }
 

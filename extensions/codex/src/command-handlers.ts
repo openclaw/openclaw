@@ -31,22 +31,18 @@ import {
 } from "./command-formatters.js";
 import {
   CODEX_NATIVE_CONTROL_SUBCOMMANDS,
+  controlConversationTurn,
   handleComputerUseCommand,
   handleNativeGoal,
   isReadOnlyCodexGoalCommand,
   resolveCodexNativeCommandSandboxBlock,
   returnsBeforeNativeCodexExecution,
-  setConversationFastMode,
   setConversationModel,
-  setConversationPermissions,
+  setConversationPreference,
   startThreadAction,
-  steerConversationTurn,
-  stopConversationTurn,
 } from "./command-handler-actions.js";
 import {
-  buildCodexComputerUseMenuReply,
-  buildCodexFastMenuReply,
-  buildCodexPermissionsMenuReply,
+  buildCodexChoiceMenuReply,
   buildCodexSubcommandPickerReply,
   isMenuVerb,
   splitArgs,
@@ -273,44 +269,27 @@ export async function handleCodexSubcommand(
   if (normalized === "binding") {
     return { text: await describeConversationBinding(deps, ctx) };
   }
-  if (normalized === "stop") {
-    return { text: await stopConversationTurn(deps, ctx) };
-  }
-  if (normalized === "steer") {
-    return {
-      text: await steerConversationTurn(deps, ctx, rest.join(" ")),
-    };
+  if (normalized === "stop" || normalized === "steer") {
+    return { text: await controlConversationTurn(deps, ctx, normalized, rest.join(" ")) };
   }
   if (normalized === "model") {
-    return { text: await setConversationModel(deps, ctx, options.pluginConfig, rest) };
+    return { text: await setConversationModel(deps, ctx, rest) };
   }
-  if (normalized === "fast") {
+  if (normalized === "fast" || normalized === "permissions") {
     if (isMenuVerb(rest)) {
-      return buildCodexFastMenuReply();
+      return buildCodexChoiceMenuReply(normalized);
     }
-    return { text: await setConversationFastMode(deps, ctx, rest) };
-  }
-  if (normalized === "permissions") {
-    if (isMenuVerb(rest)) {
-      return buildCodexPermissionsMenuReply();
-    }
-    return { text: await setConversationPermissions(deps, ctx, rest) };
+    return { text: await setConversationPreference(deps, ctx, rest, normalized) };
   }
   if (normalized === "compact" || normalized === "review") {
     return { text: await startThreadAction(deps, ctx, options.pluginConfig, normalized, rest) };
   }
   if (normalized === "diagnostics") {
-    return await handleCodexDiagnosticsFeedback(
-      deps,
-      ctx,
-      options.pluginConfig,
-      rest.join(" "),
-      "/codex diagnostics",
-    );
+    return await handleCodexDiagnosticsFeedback(deps, ctx, options.pluginConfig, rest.join(" "));
   }
   if (normalized === "computer-use" || normalized === "computeruse") {
     if (isMenuVerb(rest)) {
-      return buildCodexComputerUseMenuReply();
+      return buildCodexChoiceMenuReply("computer-use");
     }
     return {
       text: await handleComputerUseCommand(deps, ctx, options.pluginConfig, rest),

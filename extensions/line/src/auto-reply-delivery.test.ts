@@ -13,7 +13,6 @@ import {
   type LineAutoReplyDeps,
 } from "./auto-reply-delivery.test-helpers.js";
 import { processLineMessage as processOrderedLineMessage } from "./markdown-to-line.js";
-import { buildLineMediaMessage } from "./outbound-media.js";
 import { prepareLineReplyPayload } from "./rich-messages.js";
 import {
   createFlexMessage as createProviderFlexMessage,
@@ -331,7 +330,7 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("sanitizes internal traces on the inbound auto-reply path", async () => {
-    const processLineMessage = vi.fn((text: string) => ({ text, flexMessages: [] }));
+    const processLineMessage = vi.fn((text: string) => [{ type: "text" as const, text }]);
     const { replyMessageLine } = createDeps({ processLineMessage });
     const text = [
       "Done.",
@@ -358,7 +357,7 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("suppresses an internal-only auto-reply without consuming the reply token", async () => {
-    const processLineMessage = vi.fn((text: string) => ({ text, flexMessages: [] }));
+    const processLineMessage = vi.fn((text: string) => [{ type: "text" as const, text }]);
     const { replyMessageLine, pushMessagesLine } = createDeps({ processLineMessage });
 
     const result = await deliverLineAutoReply({
@@ -442,10 +441,10 @@ describe("deliverLineAutoReply", () => {
     const { replyMessageLine } = createDeps({
       ...(extracted
         ? {
-            processLineMessage: (text) => ({
-              text,
-              flexMessages: [{ type: "flex", altText, contents: { type: "bubble" } }],
-            }),
+            processLineMessage: (text) => [
+              { type: "text", text },
+              { type: "flex", message: { type: "flex", altText, contents: { type: "bubble" } } },
+            ],
           }
         : {}),
       createFlexMessage: createProviderFlexMessage,
@@ -496,7 +495,7 @@ describe("deliverLineAutoReply", () => {
       quickReplies: ["A"],
     };
     const { replyMessageLine, pushMessagesLine } = createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      processLineMessage: () => [],
       chunkMarkdownText: () => [],
     });
 
@@ -528,14 +527,11 @@ describe("deliverLineAutoReply", () => {
     // LINE hides quick replies as soon as a newer message arrives, so pinning
     // them to the last reply-token slot loses the buttons behind the overflow
     // push that follows.
-    const processLineMessage: LineAutoReplyDeps["processLineMessage"] = () => ({
-      text: "",
-      flexMessages: [1, 2, 3, 4, 5, 6].map((n) => ({
+    const processLineMessage: LineAutoReplyDeps["processLineMessage"] = () =>
+      [1, 2, 3, 4, 5, 6].map((n) => ({
         type: "flex",
-        altText: `B${n}`,
-        contents: { type: "bubble" },
-      })),
-    });
+        message: { type: "flex", altText: `B${n}`, contents: { type: "bubble" } },
+      }));
     const lineData = { quickReplies: ["A"] };
     const { replyMessageLine, pushMessagesLine } = createDeps({ processLineMessage });
 
@@ -654,6 +650,62 @@ describe("deliverLineAutoReply", () => {
     expect(pushMessagesLine).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "with final quick replies",
+      quickReplies: ["A"],
+      replyMessages: [
+        createFlexMessage("Card", { type: "bubble" }),
+        ...["c1", "c2", "c3", "c4"].map((text) => ({ type: "text", text })),
+      ],
+      overflowMessages: [{ type: "text", text: "c5", quickReply: createQuickReply("A") }],
+    },
+    {
+      name: "without quick replies",
+      quickReplies: [],
+      replyMessages: ["c1", "c2", "c3", "c4", "c5"].map((text) => ({ type: "text", text })),
+      overflowMessages: [createFlexMessage("Card", { type: "bubble" })],
+    },
+  ])(
+    "reports visible partial delivery when overflow fails $name",
+    async ({ quickReplies, replyMessages, overflowMessages }) => {
+      const lineData = {
+        flexMessage: { altText: "Card", contents: { type: "bubble" } },
+        quickReplies,
+      };
+      const failingPush = vi.fn<LineAutoReplyDeps["pushMessagesLine"]>(async () => {
+        throw new Error("push failed");
+      });
+      const { replyMessageLine } = createDeps({
+        chunkMarkdownText: () => ["c1", "c2", "c3", "c4", "c5"],
+        pushMessagesLine: failingPush,
+      });
+
+      const result = await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "hello", channelData: { line: lineData } },
+        lineData,
+      });
+
+      // Return the partial failure so the caller adopts the consumed token before
+      // surfacing the failed overflow; replaying the accepted reply duplicates it.
+      expect(result).toMatchObject({
+        status: "partial",
+        visibleReplySent: true,
+        replyTokenUsed: true,
+        error: { sentBeforeError: true, visibleReplySent: true },
+      });
+      expect(replyMessageLine).toHaveBeenCalledExactlyOnceWith("token", replyMessages, {
+        cfg: LINE_TEST_CFG,
+        accountId: "acc",
+      });
+      expect(failingPush).toHaveBeenCalledExactlyOnceWith("line:user:1", overflowMessages, {
+        cfg: LINE_TEST_CFG,
+        accountId: "acc",
+      });
+    },
+  );
+
   it("wraps a non-extensible rich failure without losing visible-send evidence", async () => {
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
@@ -688,7 +740,7 @@ describe("deliverLineAutoReply", () => {
       previewImageUrl: "https://example.com/preview.jpg",
     };
     const { replyMessageLine, buildMediaMessage } = createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      processLineMessage: () => [],
       chunkMarkdownText: () => [],
     });
 
@@ -720,12 +772,12 @@ describe("deliverLineAutoReply", () => {
     );
   });
 
-  it("leaves the media kind of a bare URL for the shared leaf to resolve", async () => {
+  it("delivers a bare audio URL through the shared media builder", async () => {
     // This path used to pin mediaKind to "image" for a bare media URL, so an
     // audio or video URL reached LINE as an empty image bubble. The leaf reads
     // the URL itself, so overriding the kind here is what hid the real one.
-    const { buildMediaMessage } = createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
+    const { buildMediaMessage, replyMessageLine, pushMessagesLine } = createDeps({
+      processLineMessage: () => [],
       chunkMarkdownText: () => [],
     });
 
@@ -749,6 +801,12 @@ describe("deliverLineAutoReply", () => {
       },
       "line:user:1",
     );
+    expect(replyMessageLine).toHaveBeenCalledExactlyOnceWith(
+      "token",
+      [{ type: "audio", originalContentUrl: "https://example.com/voice.m4a", duration: 60_000 }],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+    expect(pushMessagesLine).not.toHaveBeenCalled();
   });
 
   it("surfaces a visible partial delivery when a media message cannot be built", async () => {
@@ -782,7 +840,7 @@ describe("deliverLineAutoReply", () => {
   it("rejects a media-only build failure instead of reporting an empty delivery", async () => {
     const lineData = { mediaKind: "video" as const };
     const { replyMessageLine, pushMessagesLine } = createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      processLineMessage: () => [],
       chunkMarkdownText: () => [],
     });
 
@@ -808,9 +866,8 @@ describe("deliverLineAutoReply", () => {
     mediaUrl.password = ["line", "fixture"].join("-");
     mediaUrl.searchParams.set("auth", ["line", "query"].join("-"));
     const { replyMessageLine, pushMessagesLine } = createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      processLineMessage: () => [],
       chunkMarkdownText: () => [],
-      buildMediaMessage: buildLineMediaMessage,
     });
 
     await expect(
@@ -832,7 +889,7 @@ describe("deliverLineAutoReply", () => {
     const lineData = { mediaKind: "video" as const };
     const failure = { code: "invalid_media" };
     createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      processLineMessage: () => [],
       chunkMarkdownText: () => [],
       buildMediaMessage: vi.fn(async () => {
         // oxlint-disable-next-line typescript/only-throw-error -- dependency callbacks may reject unknown values; this proves the delivery boundary normalizes them.

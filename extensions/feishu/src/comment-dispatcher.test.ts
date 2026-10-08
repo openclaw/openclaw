@@ -177,6 +177,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
 
     const created = createTestCommentReplyDispatcher();
     const options = replyDispatcherOptions(created);
+    expect(start).not.toHaveBeenCalled();
     await options.onReplyStart?.();
 
     expect(start).toHaveBeenCalledTimes(1);

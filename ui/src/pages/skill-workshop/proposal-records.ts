@@ -43,17 +43,12 @@ function compactAgeLabel(ms: number): string {
   if (hr < 24) {
     return `${hr}h`;
   }
-  const day = Math.floor(hr / 24);
-  return `${day}d`;
+  return `${Math.floor(hr / 24)}d`;
 }
 
 function proposedVersionNumber(value: string | undefined): number {
   const parsed = Number.parseInt((value ?? "").replace(/^v/i, ""), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-}
-
-function byteLength(value: string): number {
-  return new TextEncoder().encode(value).length;
 }
 
 function stripProposalFrontmatter(content: string): string {
@@ -68,11 +63,14 @@ function supportFilesFromInspect(
   );
   return (result.supportFiles ?? []).map((file) => ({
     path: file.path,
-    size: formatBytes(Math.max(0, sizes.get(file.path) ?? byteLength(file.content)), {
-      fallback: "0 B",
-      maxUnit: "kilo",
-      fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
-    }),
+    size: formatBytes(
+      Math.max(0, sizes.get(file.path) ?? new TextEncoder().encode(file.content).length),
+      {
+        fallback: "0 B",
+        maxUnit: "kilo",
+        fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
+      },
+    ),
     contents: file.content,
   }));
 }
@@ -159,15 +157,12 @@ export function proposalFromEvaluation(
   previous: SkillWorkshopProposal,
 ): SkillWorkshopProposal {
   const record = result.record;
+  const origin = record.origin || previous.origin;
   return {
     ...proposalBaseFromRecord(record),
     body: previous.body,
     bodyLoaded: previous.bodyLoaded,
-    ...(record.origin
-      ? { origin: record.origin }
-      : previous.origin
-        ? { origin: previous.origin }
-        : {}),
+    ...(origin ? { origin } : {}),
     revisionHash: result.evaluation.revisionHash,
     evaluation: result.evaluation,
     supportFiles: previous.supportFiles,
@@ -179,21 +174,15 @@ export function proposalFromActionRecord(
   record: SkillsProposalRecordResult,
   previous: SkillWorkshopProposal | undefined,
 ): SkillWorkshopProposal {
+  const origin = record.origin || previous?.origin;
+  const evaluation = record.evaluation || previous?.evaluation;
   return {
     ...proposalBaseFromRecord(record),
     body: previous?.body ?? "",
     bodyLoaded: previous?.bodyLoaded ?? false,
-    ...(record.origin
-      ? { origin: record.origin }
-      : previous?.origin
-        ? { origin: previous.origin }
-        : {}),
+    ...(origin ? { origin } : {}),
     revisionHash: previous?.revisionHash ?? null,
-    ...(record.evaluation
-      ? { evaluation: record.evaluation }
-      : previous?.evaluation
-        ? { evaluation: previous.evaluation }
-        : {}),
+    ...(evaluation ? { evaluation } : {}),
     supportFiles: previous?.supportFiles ?? [],
     degradedState: previous?.degradedState,
   };

@@ -1,23 +1,21 @@
-import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptMessage,
   readActiveTranscriptEntryAnchor,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import type { EmbeddedAttemptExecutionState } from "./types.js";
 
@@ -27,8 +25,9 @@ const hoisted = vi.hoisted(() => ({
   waitForCompletionRequiredAsyncTasks: vi.fn(),
 }));
 
+// mock-isolation: Keep skill scheduling and plugin hooks outside phase-ordering tests.
 vi.mock("../../harness/agent-end-side-effects.js", () => ({
-  runAgentEndSideEffects: hoisted.runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync: hoisted.runAgentEndSideEffects,
 }));
 vi.mock("./agent-end-context.js", () => ({
   buildEmbeddedAgentEndContext: () => ({}),
@@ -42,7 +41,7 @@ import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-attempt-terminal-anchor-");
 
 describe("embedded attempt phase lifecycle state", () => {
   beforeEach(() => {
@@ -51,20 +50,16 @@ describe("embedded attempt phase lifecycle state", () => {
     hoisted.waitForCompletionRequiredAsyncTasks.mockReset();
   });
 
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-  });
-
   it("re-reads compaction timeout state after the retry wait", async () => {
     let timedOut = false;
     let timedOutDuringCompaction = false;
     const messages: never[] = [];
-    const removeTrailingEntries = vi.fn(() => 0);
+    const removeTrailingEntriesAsync = vi.fn(async () => 0);
     const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntry: vi.fn(),
+      appendCustomEntryAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages }),
       getEntries: () => [],
-      removeTrailingEntries,
+      removeTrailingEntriesAsync,
     });
     const activeSession = {
       agent: { state: { messages } },
@@ -119,7 +114,7 @@ describe("embedded attempt phase lifecycle state", () => {
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 0,
-      nestedToolActivities: [],
+      nestedToolActivityState: createAttemptNestedToolActivityState(),
       cache: {
         retention: undefined,
       },
@@ -127,7 +122,7 @@ describe("embedded attempt phase lifecycle state", () => {
     });
 
     expect(result.timedOutDuringCompaction).toBe(true);
-    expect(removeTrailingEntries).toHaveBeenCalledOnce();
+    expect(removeTrailingEntriesAsync).toHaveBeenCalledOnce();
   });
 
   it("settles a user-aborted run whose async-task wait throws AbortError", async () => {
@@ -138,10 +133,10 @@ describe("embedded attempt phase lifecycle state", () => {
     hoisted.waitForCompletionRequiredAsyncTasks.mockRejectedValueOnce(abortError);
     const messages: never[] = [];
     const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntry: vi.fn(),
+      appendCustomEntryAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages }),
       getEntries: () => [],
-      removeTrailingEntries: vi.fn(() => 0),
+      removeTrailingEntriesAsync: vi.fn(async () => 0),
     });
     const activeSession = {
       agent: { state: { messages } },
@@ -192,7 +187,7 @@ describe("embedded attempt phase lifecycle state", () => {
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 0,
-      nestedToolActivities: [],
+      nestedToolActivityState: createAttemptNestedToolActivityState(),
       cache: {
         retention: undefined,
       },
@@ -230,10 +225,10 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionId: "session-1",
     };
     const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntry: vi.fn(),
+      appendCustomEntryAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages }),
       getEntries: () => [],
-      removeTrailingEntries: vi.fn(() => 0),
+      removeTrailingEntriesAsync: vi.fn(async () => 0),
     });
 
     const runAbortDeadlineAtMs = Date.now() + 60_000;
@@ -280,25 +275,7 @@ describe("embedded attempt phase lifecycle state", () => {
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 1,
-      nestedToolActivities: [
-        createNestedToolActivity({
-          runId: "run-test",
-          scopeId: "scope-test",
-          afterEntryId: null,
-          startOrder: 0,
-          parentToolCallId: "outer-exec",
-          toolCallId: "tool_search_code:outer-exec:read:1",
-          toolName: "read",
-          input: { path: "missing.txt" },
-          result: {
-            content: [{ type: "text", text: "ENOENT" }],
-            details: { status: "error", error: "ENOENT" },
-          },
-          isError: true,
-          startedAt: 1,
-          timestamp: 2,
-        }),
-      ],
+      nestedToolActivityState: createAttemptNestedToolActivityState(),
       cache: {
         retention: undefined,
       },
@@ -315,7 +292,7 @@ describe("embedded attempt phase lifecycle state", () => {
   it.each(["complete", "missing admission", "missing terminal"] as const)(
     "handles %s candidate anchors without skipping later lifecycle work",
     async (boundary) => {
-      const dir = tempDirs.make("openclaw-attempt-terminal-anchor-");
+      const dir = tempDirs.make();
       const target = {
         agentId: "main",
         sessionId: "session-1",
@@ -412,7 +389,7 @@ describe("embedded attempt phase lifecycle state", () => {
           prepared: {
             bootstrap: { shouldRecordCompletedBootstrapTurn: true },
             bundleTools: { uncompactedEffectiveTools: [] },
-            toolBase: { nestedToolActivities: undefined },
+            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
             sessionRuntime: {
               sessionManager,
               agentSession: { hookRunner: null },
@@ -497,7 +474,7 @@ describe("embedded attempt phase lifecycle state", () => {
         prepared: {
           bootstrap: { shouldRecordCompletedBootstrapTurn: false },
           bundleTools: { uncompactedEffectiveTools: [{ name: "skill_workshop" }] },
-          toolBase: { nestedToolActivities: undefined },
+          toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
           sessionRuntime: {
             sessionManager: SessionManager.inMemory(),
             agentSession: { hookRunner: null },
@@ -534,7 +511,7 @@ describe("embedded attempt phase lifecycle state", () => {
   it.each(["blocked writes", "interrupted tool result"] as const)(
     "selects review evidence after the pre-turn boundary with %s",
     async (tail) => {
-      const dir = tempDirs.make("openclaw-attempt-review-boundary-");
+      const dir = tempDirs.make();
       const target = {
         agentId: "main",
         sessionId: "review-boundary",
@@ -591,7 +568,7 @@ describe("embedded attempt phase lifecycle state", () => {
           prepared: {
             bootstrap: { shouldRecordCompletedBootstrapTurn: true },
             bundleTools: { uncompactedEffectiveTools: [{ name: "skill_workshop" }] },
-            toolBase: { nestedToolActivities: undefined },
+            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
             sessionRuntime: {
               sessionManager,
               agentSession: { hookRunner: null },
@@ -635,7 +612,7 @@ describe("embedded attempt phase lifecycle state", () => {
     "eligible completion",
     "abort while queued",
   ] as const)("settles %s behind a held agent writer", async (scenario) => {
-    const dir = fs.realpathSync(tempDirs.make("openclaw-after-turn-admission-"));
+    const dir = tempDirs.make();
     const target = {
       agentId: "main",
       sessionId: "after-turn",
@@ -690,7 +667,7 @@ describe("embedded attempt phase lifecycle state", () => {
               shouldRecordCompletedBootstrapTurn: scenario !== "completion not requested",
             },
             bundleTools: { uncompactedEffectiveTools: [] },
-            toolBase: { nestedToolActivities: undefined },
+            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
             sessionRuntime: {
               sessionManager,
               agentSession: { hookRunner: null },
@@ -772,7 +749,7 @@ describe("embedded attempt phase lifecycle state", () => {
         prepared: {
           bootstrap: { shouldRecordCompletedBootstrapTurn: false },
           bundleTools: { uncompactedEffectiveTools: [] },
-          toolBase: { nestedToolActivities: undefined },
+          toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
           sessionRuntime: {
             sessionManager: SessionManager.inMemory(),
             agentSession: { hookRunner: null },
@@ -824,7 +801,7 @@ describe("embedded attempt phase lifecycle state", () => {
         prepared: {
           bootstrap: { shouldRecordCompletedBootstrapTurn: false },
           bundleTools: { uncompactedEffectiveTools: [] },
-          toolBase: { nestedToolActivities: undefined },
+          toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
           sessionRuntime: {
             sessionManager: SessionManager.inMemory(),
             agentSession: { hookRunner: null },

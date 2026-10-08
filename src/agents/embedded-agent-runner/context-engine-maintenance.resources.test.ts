@@ -4,18 +4,16 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { markGatewayRestartDraining } from "../../process/gateway-work-admission.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import {
   AsyncWorkScope,
   getAsyncWorkSignal,
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import {
   runContextEngineMaintenance,
@@ -87,10 +85,7 @@ async function withResources(
   ) => Promise<void>,
 ) {
   await withStateDirEnv("openclaw-maintenance-resources-", async ({ stateDir }) => {
-    using deliveries = captureTaskDeliveryWork();
     resetCommandQueueStateForTest();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     const db = new DatabaseSync(path.join(stateDir, "registration.sqlite"));
     db.exec("CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES (42)");
     const pending: Promise<void>[] = [];
@@ -115,16 +110,10 @@ async function withResources(
       await run(db, schedule);
     } finally {
       await Promise.allSettled(pending);
-      try {
-        await deliveries.settle();
-      } finally {
-        if (db.isOpen) {
-          db.close();
-        }
-        resetCommandQueueStateForTest();
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
+      if (db.isOpen) {
+        db.close();
       }
+      resetCommandQueueStateForTest();
     }
   });
 }
@@ -310,6 +299,7 @@ it("keeps accepted maintenance independent of parent completion until gateway re
       await closing;
       await parent.drain();
       await cancellationCheckpoint;
+      resetGatewayWorkAdmission();
     }
   });
 });

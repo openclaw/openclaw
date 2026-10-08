@@ -1,4 +1,3 @@
-// Matrix helper module prepares and chunks outbound formatted text.
 import {
   resolveMarkdownTableMode,
   type MarkdownTableMode,
@@ -231,8 +230,11 @@ export function chunkMatrixText(
       chunks: preparedText.convertedText ? [preparedText.convertedText] : [],
     };
   }
-  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text chunking") as CoreConfig;
-  const chunkMode = getMatrixRuntime().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
+  const chunkMode = getMatrixRuntime().channel.text.resolveChunkMode(
+    opts.cfg,
+    "matrix",
+    opts.accountId,
+  );
   const analysis = analyzeMatrixSpoilers(preparedText.convertedText);
   const collisionRedacted = analysis.metadataCollision ? renderMatrixBody(analysis) : undefined;
   const chunkSegment = (segmentText: string): string[] => {

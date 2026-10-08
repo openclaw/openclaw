@@ -2,11 +2,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeSubagentSessionEntry } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
-} from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
+} from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { writeSubagentSessionEntry } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import { resolvePhysicalSessionStorePath } from "../src/config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
@@ -25,7 +25,7 @@ import { createDeferred } from "./helpers/promise.js";
 const TEST_TIMEOUT_MS = 180_000;
 const MODEL_REF = "restored-settle/restored-settle";
 const PROBE_MARKER = "restored wake ordering probe";
-const RESTORED_WAKE_MARKER = "Every subagent spawned from this session has now settled";
+const RESTORED_WAKE_MARKER = "Every subagent in this batch has now settled";
 
 type HeldModelServer = {
   active: () => number;

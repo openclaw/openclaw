@@ -518,6 +518,36 @@ function verifyFixture(
   });
 }
 
+it.each([
+  "npm-token-bootstrap",
+  "npm-oidc",
+  "npm-mirror",
+  "npm-tag-repair",
+  "clawhub-token-release",
+  "clawhub-token-bootstrap",
+])("rejects alpha mutation through %s", (route) => {
+  const { artifactDir } = stagingFixture();
+  for (const override of [{ version: "2026.7.1-alpha.3" }, { publishTag: "alpha" }]) {
+    expect(() =>
+      createPluginPublicationArtifact(publicationParams(artifactDir, { route, ...override })),
+    ).toThrow("Alpha releases are retired;");
+  }
+});
+
+it.each(["npm-readback", "clawhub-readback"])(
+  "retains historical alpha artifact readback through %s",
+  (route) => {
+    const packageJson = JSON.parse(metaPackageJson("unused-marker"));
+    packageJson.version = "2026.7.1-alpha.3";
+    expect(() =>
+      createFixture({
+        packageJson: JSON.stringify(packageJson),
+        publicationOverrides: { route, version: packageJson.version, publishTag: "alpha" },
+      }),
+    ).not.toThrow();
+  },
+);
+
 describe("plugin publication artifact", () => {
   it("canonically binds and verifies the Meta beta3 token-bootstrap tuple without running lifecycle scripts", () => {
     const fixture = createFixture();
@@ -832,7 +862,7 @@ describe("plugin publication artifact", () => {
         runStatePolicy: "same-run-producer-success",
         workflowJobsMetadataPath: fixture.workflowJobsPath,
       }),
-    ).toThrow("Current producer workflow attempt must still be active or failed.");
+    ).toThrow("Current producer workflow attempt must still be active or sealed.");
   });
 
   it("retries bounded metadata, attempt, and archive failures against the exact run attempt", async () => {

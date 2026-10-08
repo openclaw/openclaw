@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { patchSettings } from "../../app/settings.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import "../../pages/agents-home/agents-home-page.ts";
 import {
@@ -158,18 +159,23 @@ describe("AppSidebar agent roster", () => {
     },
   );
 
-  it.each(
-    (["chip", "roster"] as const).flatMap((mode) =>
-      [false, true].map((viaRun) => ({ mode, viaRun })),
+  it.each([
+    ...(["chip", "roster"] as const).flatMap((mode) =>
+      [false, true].map((viaRun) => ({ mode, viaRun, collapsed: false })),
     ),
-  )(
-    "loads Home descendants and exposes their retry ($mode, hidden run=$viaRun)",
-    async ({ mode, viaRun }) => {
+    { mode: "roster" as const, viaRun: true, collapsed: true },
+  ])(
+    "loads Home descendants and exposes their retry ($mode, hidden run=$viaRun, collapsed=$collapsed)",
+    async ({ mode, viaRun, collapsed }) => {
       const agentId = mode === "chip" ? "main" : "working";
       const homeKey = `agent:${agentId}:main`;
       const runKey = `agent:${agentId}:subagent:bridge`;
       const childKey = `agent:${agentId}:project`;
       const parentKey = viaRun ? runKey : homeKey;
+      patchSettings({
+        gatewayUrl: "ws://gateway.test",
+        sidebarCollapsedAgentIds: collapsed ? [agentId] : [],
+      });
       const { sidebar, sessions, result } = await mountRoster(roster, []);
       let failed = false;
       sessions.list.mockImplementation(async (options) => {
@@ -210,6 +216,13 @@ describe("AppSidebar agent roster", () => {
       result.count = 1;
       sessions.publish({ result });
       sidebar.sidebarAgentsMode = mode;
+      if (collapsed) {
+        await vi.waitFor(() =>
+          expect(sidebar.querySelector(`[data-agent-collapse="${agentId}"]`)).not.toBeNull(),
+        );
+        expect(failed).toBe(false);
+        sidebar.querySelector<HTMLButtonElement>(`[data-agent-collapse="${agentId}"]`)!.click();
+      }
       await vi.waitFor(() =>
         expect(sidebar.querySelector(`[data-retry-child-sessions="${parentKey}"]`)).not.toBeNull(),
       );
@@ -295,7 +308,11 @@ describe("AppSidebar agent roster", () => {
       }),
     ]);
     sidebar.sidebarAgentsMode = "roster";
-    sidebar.hasSessionDraft = (sessionKey) => sessionKey === key("automation");
+    sidebar.storedOutboxes = {
+      total: 0,
+      attentionCountForSession: () => 0,
+      hasSessionDraft: (sessionKey) => sessionKey === key("automation"),
+    };
     sessions.sessions.setPullRequestSummary(key("open"), { numbers: [101], state: "open" });
     sessions.sessions.setPullRequestSummary(key("merged"), { numbers: [102], state: "merged" });
     await vi.waitFor(() => expect(sessionKeys(sidebar)).toHaveLength(7));
@@ -374,12 +391,23 @@ describe("AppSidebar agent roster", () => {
     );
   });
 
-  it("does not reinsert a main row rejected by the normal session visibility filter", async () => {
-    const { sidebar } = await mountRoster(roster, [session("working", 10, { kind: "unknown" })]);
-    sidebar.sidebarAgentsMode = "roster";
-    await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
-    expect(sessionKeys(sidebar)).toEqual([]);
-  });
+  it.each([
+    { kind: "unknown", archived: false },
+    { kind: "direct", archived: true },
+  ] as const)(
+    "does not restore filtered main metadata ($kind, archived=$archived)",
+    async ({ kind, archived }) => {
+      const { sidebar } = await mountRoster(roster, [
+        session("working", 10, { kind, archived, hasActiveRun: true, unread: true }),
+      ]);
+      sidebar.sidebarAgentsMode = "roster";
+      await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
+      expect(sessionKeys(sidebar)).toEqual([]);
+      expect(
+        sidebar.querySelector('[data-agent-group="working"] .sidebar-session-team-state'),
+      ).toBeNull();
+    },
+  );
 
   it.each(
     ["global", "GLOBAL"].flatMap((homeKey) => [false, true].map((viaRun) => ({ homeKey, viaRun }))),
@@ -473,7 +501,7 @@ describe("AppSidebar agent roster", () => {
   });
 
   it("suspends all mounted sidebar consumers while hidden, retaining a visible Agents home", async () => {
-    const { sidebar, context, provider, request } = await mountRoster();
+    const { sidebar, context, provider, sessions } = await mountRoster();
     sidebar.sidebarAgentsMode = "roster";
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
     await vi.waitFor(() =>
@@ -482,7 +510,9 @@ describe("AppSidebar agent roster", () => {
     const store = rosterActivityStore(context);
     await vi.waitFor(() => expect(store.snapshot.loading).toBe(false));
     const listCount = () =>
-      request.mock.calls.filter(([method]) => method === "sessions.list").length;
+      sessions.list.mock.calls.filter(
+        ([query]) => query?.archivedFilter === "all" && !query.agentId && !query.spawnedBy,
+      ).length;
     const initial = listCount();
     sidebar.navigationVisible = false;
     await vi.waitFor(() => expect(store.snapshot.result).toBeNull());

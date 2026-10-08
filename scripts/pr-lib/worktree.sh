@@ -136,19 +136,38 @@ write_review_transition_journal() {
   local target="$3"
   local mode="$4"
   local branch="$5"
+  local binding="${6:-}"
   mkdir -p .local
   local journal=.local/review-transition.json
   local pending
   pending=$(mktemp "$journal.XXXXXX") || return 1
   if jq -cn --argjson pr "$pr" --arg source "$source" --arg target "$target" \
-    --arg mode "$mode" --arg branch "$branch" \
-    '{version:1,pr:$pr,source:$source,target:$target,mode:$mode,branch:(if $mode == "branch" then $branch else null end)}' \
+    --arg mode "$mode" --arg branch "$branch" --arg binding "$binding" \
+    '{version:1,pr:$pr,source:$source,target:$target,mode:$mode,branch:(if $mode == "branch" or $mode == "prep" then $branch else null end)} +
+      (if $mode == "prep" then {binding:$binding} else {} end)' \
     >"$pending" && mv "$pending" "$journal"
   then
     return 0
   fi
   rm -f "$pending"
   return 1
+}
+
+validate_prep_baseline_transition() {
+  local command="$1" pr="$2" source="$3" target="$4" branch="$5"
+  local root observation incoming head_ref
+  root=$(repo_root) || return 1
+  if [ "$command" = install-transition ]; then
+    observation=$(cat .local/pr-meta.json) || return 1
+    incoming=$(printf '%s' "$observation" | jq -er .headRefOid) || return 1
+    head_ref=$(printf '%s' "$observation" | jq -er .headRefName) || return 1
+    revalidate_pr_publication "$pr" "$observation" "$head_ref" "$incoming" "$incoming" || return 1
+  fi
+  pr_operation_lock_owner_is_current "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+  node "$(dirname "${BASH_SOURCE[0]}")/baseline-refresh.mjs" \
+    "$command" "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+  pr_operation_lock_owner_is_current "$root" \
+    "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
 }
 
 recover_review_transition() {
@@ -158,10 +177,12 @@ recover_review_transition() {
 
   local fields source target mode branch
   fields=$(jq -er --argjson pr "$pr" '
-    select(type == "object" and (keys | sort) == ["branch","mode","pr","source","target","version"])
+    select(type == "object" and
+      (if .mode == "prep" then (keys | sort) == ["binding","branch","mode","pr","source","target","version"] and (.binding | type == "string")
+       else (keys | sort) == ["branch","mode","pr","source","target","version"] end))
     | select(.version == 1 and .pr == $pr)
     | select((.source | type == "string" and test("^[0-9a-f]{40}$")) and (.target | type == "string" and test("^[0-9a-f]{40}$")))
-    | select((.mode == "detached" and .branch == null) or (.mode == "branch" and (.branch | type == "string")))
+    | select((.mode == "detached" and .branch == null) or ((.mode == "branch" or .mode == "prep") and (.branch | type == "string")))
     | [.source,.target,.mode,(.branch // "")] | @tsv
   ' "$journal" 2>/dev/null) || {
     refuse_review_transition "$pr" "the transition journal is invalid."
@@ -170,13 +191,18 @@ recover_review_transition() {
   IFS=$'\t' read -r source target mode branch <<<"$fields"
   if ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$source^{commit}" 2>/dev/null ||
     ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$target^{commit}" 2>/dev/null ||
-    { [ "$mode" = "branch" ] && [ "$branch" != "temp/pr-$pr" ]; }
+    { [ "$mode" = "branch" ] && [ "$branch" != "temp/pr-$pr" ]; } ||
+    { [ "$mode" = "prep" ] && [ "$branch" != "pr-$pr-prep" ]; }
   then
     refuse_review_transition "$pr" "the transition journal names an invalid endpoint or branch."
     return 1
   fi
 
   validate_review_transition_state "$pr" "$source" "$target" || return 1
+  if [ "$mode" = prep ]; then
+    validate_prep_baseline_transition validate-transition "$pr" "$source" "$target" "$branch" || return 1
+    validate_prep_baseline_transition install-transition "$pr" "$source" "$target" "$branch" || return 1
+  fi
   # Restore can write files before committing its index. Rebuild the validated
   # source index so replay also owns source-only files left after index deletion.
   pr_git read-tree "$source" || return 1
@@ -189,7 +215,12 @@ recover_review_transition() {
     refuse_review_transition "$pr" "the tracked tree did not reach the journaled target."
     return 1
   fi
-  if [ "$mode" = "branch" ]; then
+  if [ "$mode" = prep ]; then
+    validate_prep_baseline_transition validate-transition "$pr" "$source" "$target" "$branch" || return 1
+    if [ "$(pr_git rev-parse "refs/heads/$branch")" = "$source" ]; then
+      pr_git update-ref --no-deref "refs/heads/$branch" "$target" "$source" || return 1
+    fi
+  elif [ "$mode" = "branch" ]; then
     pr_git checkout -B "$branch" "$target" || return 1
   else
     pr_git checkout --detach "$target" || return 1
@@ -199,6 +230,7 @@ recover_review_transition() {
   actual_branch=$(pr_git branch --show-current)
   if [ "$(pr_git rev-parse HEAD)" != "$target" ] || ! pr_git diff --quiet || ! pr_git diff --cached --quiet ||
     { [ "$mode" = "branch" ] && [ "$actual_branch" != "$branch" ]; } ||
+    { [ "$mode" = "prep" ] && [ "$actual_branch" != "$branch" ]; } ||
     { [ "$mode" = "detached" ] && [ -n "$actual_branch" ]; } ||
     ! require_no_foreign_untracked "$pr"
   then
@@ -285,9 +317,26 @@ fetch_pr_head() {
   before_identity=$(printf '%s\n' "$before" | jq -cS '{number,url,baseRepository,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner}') || return 1
   refspec="$expected_sha"
   [ -z "$destination" ] || refspec="+$expected_sha:$destination"
-  # GitHub's pull/head projection can lag live PR metadata and the branch.
-  # Fetch immutable source bytes without overwriting the operation's main checkpoint.
-  fetch_canonical_ref "$refspec" --no-write-fetch-head || return 1
+  local reused=false local_ref="" visibility_status=0
+  if [ -n "$destination" ]; then
+    pr_git config --get-regexp '^(fetch|transfer)\.hiderefs$' >/dev/null 2>&1 || visibility_status=$?
+    if [ "$visibility_status" -eq 1 ]; then
+      local_ref=$(GIT_NO_LAZY_FETCH=1 pr_git --no-lazy-fetch for-each-ref \
+        --format='%(refname) %(objectname) %(objecttype) %(symref)' "$destination" 2>/dev/null) || local_ref=""
+      if [ "$local_ref" = "$destination $expected_sha commit " ]; then
+        # A dangling commit can need objects that fetch repairs. Reuse only the
+        # already-bound ref, retaining Git's checked-out/rebasing branch refusal.
+        GIT_NO_LAZY_FETCH=1 pr_git branch --force --no-track \
+          "${destination#refs/heads/}" "$expected_sha" || return 1
+        reused=true
+      fi
+    fi
+  fi
+  if [ "$reused" = false ]; then
+    # GitHub's pull/head projection can lag live PR metadata and the branch.
+    # Preserve canonical filtering and errors when source acquisition is needed.
+    fetch_canonical_ref "$refspec" --no-write-fetch-head || return 1
+  fi
   fetched_sha=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "${destination:-$expected_sha}^{commit}") || return 1
   if [ "$fetched_sha" != "$expected_sha" ]; then
     echo "PR head changed while fetching it (expected $expected_sha, fetched $fetched_sha)." >&2

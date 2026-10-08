@@ -8,6 +8,7 @@ const DIR_LIST_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 type CanonicalDirListEntry = {
   name: string;
   isDirectory: boolean;
+  isFile: boolean;
   size: number;
   mtimeMs: number;
 };
@@ -16,14 +17,9 @@ type CanonicalDirListResult =
   | { ok: true; entries: CanonicalDirListEntry[]; total: number }
   | { ok: false; code: "CANONICAL_PATH_CHANGED" | "READ_ERROR" };
 
-export async function listCanonicalDirectory(input: {
-  directoryPath: string;
-  expectedCanonicalPath: string;
-  expectedDevice: string;
-  expectedInode: string;
-  maxEntries: number;
-  offset: number;
-}): Promise<CanonicalDirListResult> {
+export async function listCanonicalDirectory(
+  input: Parameters<typeof createCanonicalDirListCommand>[0],
+): Promise<CanonicalDirListResult> {
   // The worker binds cwd before validating it. Relative listing and metadata
   // reads therefore stay on that directory object if its path is replaced.
   const result = await runCommandBuffered(createCanonicalDirListCommand(input), {
@@ -49,6 +45,7 @@ export async function listCanonicalDirectory(input: {
         !entry ||
         typeof entry.name !== "string" ||
         typeof entry.isDirectory !== "boolean" ||
+        typeof entry.isFile !== "boolean" ||
         typeof entry.size !== "number" ||
         typeof entry.mtimeMs !== "number"
       ) {
@@ -57,6 +54,7 @@ export async function listCanonicalDirectory(input: {
       entries.push({
         name: entry.name,
         isDirectory: entry.isDirectory,
+        isFile: entry.isFile,
         size: entry.size,
         mtimeMs: entry.mtimeMs,
       });

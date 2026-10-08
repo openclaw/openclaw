@@ -64,10 +64,7 @@ struct ChatMarkdownList: Equatable {
 }
 
 struct ChatMarkdownListItem: Equatable {
-    enum Checkbox: Equatable {
-        case checked
-        case unchecked
-    }
+    typealias Checkbox = Markdown.Checkbox
 
     let checkbox: Checkbox?
     let content: [ChatMarkdownListItemContent]
@@ -95,14 +92,7 @@ enum ChatMarkdownBlockSyntax {
     }
 
     static func isEscaped(at index: String.Index, in source: String) -> Bool {
-        var cursor = index
-        var count = 0
-        while cursor > source.startIndex {
-            let previous = source.index(before: cursor)
-            guard source[previous] == "\\" else { break }
-            count += 1
-            cursor = previous
-        }
+        let count = source[..<index].reversed().prefix { $0 == "\\" }.count
         return count.isMultiple(of: 2) == false
     }
 
@@ -121,10 +111,7 @@ enum ChatMarkdownBlockSyntax {
                 cursor = source.index(after: cursor)
                 continue
             }
-            var end = cursor
-            while end < source.endIndex, source[end] == "`" {
-                end = source.index(after: end)
-            }
+            let end = source[cursor...].prefix { $0 == "`" }.endIndex
             runs.append(BacktickRun(
                 start: cursor,
                 end: end,
@@ -895,11 +882,6 @@ enum ChatMarkdownBlockSegmenter {
             itemCount += 1
             guard itemCount <= self.maxListItems else { return nil }
 
-            let checkbox: ChatMarkdownListItem.Checkbox? = switch item.checkbox {
-            case .checked?: .checked
-            case .unchecked?: .unchecked
-            case nil: nil
-            }
             var content: [ChatMarkdownListItemContent] = []
             for child in item.children {
                 if let code = child as? Markdown.CodeBlock {
@@ -926,7 +908,7 @@ enum ChatMarkdownBlockSegmenter {
                     content.append(.markdown(markdown))
                 }
             }
-            renderedItems.append(ChatMarkdownListItem(checkbox: checkbox, content: content))
+            renderedItems.append(ChatMarkdownListItem(checkbox: item.checkbox, content: content))
         }
         return ChatMarkdownList(kind: kind, items: renderedItems)
     }
@@ -1089,19 +1071,15 @@ enum ChatMarkdownBlockSegmenter {
         func tableLineRange(reportedRange: Range<Int>, columnCount: Int) -> Range<Int> {
             guard reportedRange.count > 1 else { return reportedRange }
             for delimiterIndex in reportedRange.dropFirst().indices
-                where self.isTableDelimiter(self.lines[delimiterIndex], columnCount: columnCount)
+                where self.isTableDelimiter(at: delimiterIndex, columnCount: columnCount)
             {
                 return reportedRange.index(before: delimiterIndex)..<reportedRange.upperBound
             }
             return reportedRange
         }
 
-        private func isTableDelimiter(_ line: String, columnCount: Int) -> Bool {
-            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-            var cells = trimmedLine.split(separator: "|", omittingEmptySubsequences: false)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-            if trimmedLine.hasPrefix("|"), cells.first?.isEmpty == true { cells.removeFirst() }
-            if trimmedLine.hasSuffix("|"), cells.last?.isEmpty == true { cells.removeLast() }
+        private func isTableDelimiter(at lineIndex: Int, columnCount: Int) -> Bool {
+            let cells = self.tableCells(at: lineIndex)
             return cells.count == columnCount && cells.allSatisfy {
                 $0.range(of: #"^:?-+:?$"#, options: .regularExpression) != nil
             }
@@ -1118,16 +1096,11 @@ enum ChatMarkdownBlockSegmenter {
             let character = line[afterIndent]
             guard character == "`" || character == "~" else { return nil }
 
-            var cursor = afterIndent
-            var count = 0
-            while cursor < line.endIndex, line[cursor] == character {
-                count += 1
-                cursor = line.index(after: cursor)
-            }
-            guard count >= 3 else { return nil }
-            let info = line[cursor...].trimmingCharacters(in: .whitespaces)
+            let fence = line[afterIndent...].prefix { $0 == character }
+            guard fence.count >= 3 else { return nil }
+            let info = line[fence.endIndex...].trimmingCharacters(in: .whitespaces)
             if character == "`", info.contains("`") { return nil }
-            return FenceOpener(character: character, count: count)
+            return FenceOpener(character: character, count: fence.count)
         }
 
         func isClose(_ line: String) -> Bool {
@@ -1135,23 +1108,13 @@ enum ChatMarkdownBlockSegmenter {
             guard indent <= 3, afterIndent < line.endIndex, line[afterIndent] == self.character else {
                 return false
             }
-            var cursor = afterIndent
-            var count = 0
-            while cursor < line.endIndex, line[cursor] == self.character {
-                count += 1
-                cursor = line.index(after: cursor)
-            }
-            return count >= self.count && line[cursor...].allSatisfy(\.isWhitespace)
+            let fence = line[afterIndent...].prefix { $0 == self.character }
+            return fence.count >= self.count && line[fence.endIndex...].allSatisfy(\.isWhitespace)
         }
 
         fileprivate static func leadingSpaces(of line: String) -> (count: Int, end: String.Index) {
-            var count = 0
-            var cursor = line.startIndex
-            while cursor < line.endIndex, line[cursor] == " " {
-                count += 1
-                cursor = line.index(after: cursor)
-            }
-            return (count, cursor)
+            let spaces = line.prefix { $0 == " " }
+            return (spaces.count, spaces.endIndex)
         }
     }
 }

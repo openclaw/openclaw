@@ -39,6 +39,21 @@ export type AgentFilesViewState = Pick<
   agentFileActive: string | null;
 };
 
+/** Retire the selected agent's file cache and drafts with its request generation. */
+export function resetAgentFiles(state: AgentFilesState & AgentFilesViewState): void {
+  state.agentFilesList = null;
+  state.agentFilesError = null;
+  state.agentFileActive = null;
+  state.agentFileContents = {};
+  state.agentFileBaseVersions = {};
+  state.agentFileVersions = {};
+  state.agentFileConflict = null;
+  state.agentFileDrafts = {};
+  state.agentFileWriteRevisions.clear();
+  state.agentFilesLoading = false;
+  state.agentFileSaving = false;
+}
+
 export function hasAgentFileContent(
   state: Pick<AgentFilesState, "agentFileContents" | "agentFileDrafts">,
   name: string,
@@ -180,7 +195,11 @@ async function requestAgentFile(
   } catch (err) {
     if (isCurrent()) {
       state.agentFilesError = formatUiError(err);
-      if (isAgentFileConflict(err)) {
+      if (
+        err instanceof GatewayRequestError &&
+        isRecord(err.details) &&
+        err.details.type === "agent_file_conflict"
+      ) {
         state.agentFileConflict = name;
       }
     }
@@ -194,14 +213,6 @@ async function requestAgentFile(
     }
   }
   return false;
-}
-
-function isAgentFileConflict(err: unknown): boolean {
-  return (
-    err instanceof GatewayRequestError &&
-    isRecord(err.details) &&
-    err.details.type === "agent_file_conflict"
-  );
 }
 
 export function loadAgentFileContent(

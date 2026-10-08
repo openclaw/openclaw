@@ -3,11 +3,7 @@ import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import type {
-  WorkboardCard,
-  WorkboardDependencyState,
-  WorkboardTaskSummary,
-} from "../../lib/workboard/index.ts";
+import type { WorkboardCard, WorkboardDependencyState } from "../../lib/workboard/index.ts";
 import { formatStatusLabel, formatUpdatedTime } from "./view-helpers.ts";
 
 export function renderDependencyDetailList(dependencies: WorkboardDependencyState) {
@@ -219,7 +215,6 @@ function getDetailSections(card: WorkboardCard) {
 
 export function renderTechnicalDetails(
   card: WorkboardCard,
-  task: WorkboardTaskSummary | undefined,
   linkedSessionKey: string | undefined,
   active: boolean,
 ) {
@@ -251,8 +246,6 @@ export function renderTechnicalDetails(
   ];
   const detailSections = getDetailSections(card);
   const hasTechnicalDetails = Boolean(
-    task?.taskId ||
-    card.taskId ||
     linkedSessionKey ||
     card.runId ||
     card.execution?.runId ||
@@ -276,22 +269,11 @@ export function renderTechnicalDetails(
   >
     <h3>${t("workboard.detailTechnical")}</h3>
     <div class="workboard-detail__technical-properties">
-      ${renderDetailRow(t("workboard.detailTask"), task?.taskId ?? card.taskId)}
       ${renderDetailRow(t("workboard.fieldSession"), linkedSessionKey)}
       ${renderDetailRow(t("workboard.detailRun"), card.runId ?? card.execution?.runId)}
       ${renderDetailRow(t("workboard.detailTenant"), automation?.tenant)}
       ${metadataFields.map(([label, value]) => renderDetailRow(label, value))}
     </div>
-    ${
-      task
-        ? renderDetailList(t("workboard.detailTask"), [
-            t(`workboard.taskStatus.${task.status}`),
-            formatUiExternalText(task.progressSummary),
-            formatUiExternalText(task.terminalSummary),
-            formatUiExternalText(task.error),
-          ])
-        : nothing
-    }
     ${
       notifications.length
         ? html`<section class="workboard-detail__section">

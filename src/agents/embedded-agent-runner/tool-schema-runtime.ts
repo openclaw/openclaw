@@ -1,6 +1,3 @@
-/**
- * Normalizes and logs provider-specific tool schemas at runtime.
- */
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
@@ -29,19 +26,18 @@ type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = u
 function buildProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = unknown>(
   params: ProviderToolSchemaParams<TSchemaType, TResult>,
 ) {
-  const provider = params.provider.trim();
-  return {
+  const context = {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    provider,
+    provider: params.provider.trim(),
+  };
+  return {
+    ...context,
     runtimeHandle: params.runtimeHandle,
     allowRuntimePluginLoad: params.allowRuntimePluginLoad,
     context: {
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      provider,
+      ...context,
       modelId: params.modelId,
       modelApi: params.modelApi,
       model: params.model,
@@ -66,15 +62,9 @@ export function normalizeProviderToolSchemas<
     : params.tools;
 }
 
-/**
- * Logs provider-owned tool-schema diagnostics after normalization.
- */
 export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParams): void {
   const diagnostics = inspectProviderToolSchemasWithPlugin(buildProviderToolSchemaParams(params));
-  if (!Array.isArray(diagnostics)) {
-    return;
-  }
-  if (diagnostics.length === 0) {
+  if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
     return;
   }
 

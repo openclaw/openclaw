@@ -1,4 +1,3 @@
-// Resolves ACP command target sessions from user text and active state.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpSessionTarget } from "../../../acp/control-plane/manager.types.js";
 import { resolveAcpSessionTarget } from "../../../acp/control-plane/manager.utils.js";
@@ -15,15 +14,11 @@ async function resolveSessionKeyByToken(
   token: string,
   commandParams: HandleCommandsParams,
 ): Promise<AcpSessionTarget | null> {
-  const trimmed = token.trim();
-  if (!trimmed) {
-    return null;
+  const attempts: Array<Record<string, string>> = [{ key: token }];
+  if (SESSION_ID_RE.test(token)) {
+    attempts.push({ sessionId: token });
   }
-  const attempts: Array<Record<string, string>> = [{ key: trimmed }];
-  if (SESSION_ID_RE.test(trimmed)) {
-    attempts.push({ sessionId: trimmed });
-  }
-  attempts.push({ label: trimmed });
+  attempts.push({ label: token });
 
   const callGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
   for (const params of attempts) {
@@ -32,7 +27,7 @@ async function resolveSessionKeyByToken(
       params: {
         ...params,
         allowMissing: true,
-        agentId: parseAgentSessionKey(trimmed)?.agentId ?? commandParams.agentId,
+        agentId: parseAgentSessionKey(token)?.agentId ?? commandParams.agentId,
       },
       timeoutMs: 8_000,
     });
@@ -45,7 +40,7 @@ async function resolveSessionKeyByToken(
       });
     }
     if (Array.isArray(resolved?.candidates) && resolved.candidates.length) {
-      throw new Error(`Ambiguous ACP session target: ${trimmed}. Use an agent-qualified key.`);
+      throw new Error(`Ambiguous ACP session target: ${token}. Use an agent-qualified key.`);
     }
   }
   return null;
@@ -94,42 +89,24 @@ export async function resolveAcpTargetSessionKey(params: {
 
   const threadBound = await resolveBoundAcpThreadSessionKey(params.commandParams);
   params.commandParams.opts?.abortSignal?.throwIfAborted();
-  if (threadBound) {
-    return {
-      ok: true,
-      ...resolveAcpSessionTarget({
-        cfg: params.commandParams.cfg,
-        sessionKey: threadBound,
-        agentId:
-          threadBound === params.commandParams.sessionKey
-            ? params.commandParams.agentId
-            : undefined,
-      }),
-    };
-  }
-
-  if (token) {
+  const sessionKey =
+    threadBound ||
+    (!token && resolveRequesterSessionKey(params.commandParams, { preferCommandTarget: true }));
+  if (!sessionKey) {
     return {
       ok: false,
-      error: `Unable to resolve session target: ${token}`,
-    };
-  }
-
-  const fallback = resolveRequesterSessionKey(params.commandParams, {
-    preferCommandTarget: true,
-  });
-  if (!fallback) {
-    return {
-      ok: false,
-      error: "Missing session key.",
+      error: token ? `Unable to resolve session target: ${token}` : "Missing session key.",
     };
   }
   return {
     ok: true,
     ...resolveAcpSessionTarget({
       cfg: params.commandParams.cfg,
-      sessionKey: fallback,
-      agentId: params.commandParams.agentId,
+      sessionKey,
+      agentId:
+        threadBound && threadBound !== params.commandParams.sessionKey
+          ? undefined
+          : params.commandParams.agentId,
     }),
   };
 }

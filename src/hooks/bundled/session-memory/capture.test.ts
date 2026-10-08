@@ -1,10 +1,10 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as accessor from "../../../config/sessions/session-accessor.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { captureSessionMemoryTranscript } from "./capture.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-memory-capture-");
 
 function message(id: string, parentId: string | null, role: string, content = id) {
   return { type: "message", id, parentId, message: { role, content } };
@@ -18,7 +18,7 @@ describe("session memory capture", () => {
       agentId: "main",
       sessionId: "capture",
       sessionKey: "agent:main:capture",
-      storePath: path.join(tempDirs.make("openclaw-memory-capture-"), "sessions.json"),
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
     };
   });
 

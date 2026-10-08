@@ -12,7 +12,7 @@ import { recordAdmittedModelRoutingDecision } from "../agents/model-routing-deci
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { agentExecCommand } from "./agent-exec.js";
+import { runAgentExecWithMock } from "./agent-exec.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -52,8 +52,11 @@ describe("agent local audit writer", () => {
     };
     setRuntimeConfigSnapshot({ logging: { audit: { executionIdentity: true } } });
     try {
-      const result = await agentExecCommand("inspect", { stateDir: root }, runtime, {
-        runAgent: vi.fn(async () => {
+      const result = await runAgentExecWithMock(
+        "inspect",
+        { stateDir: root },
+        runtime,
+        vi.fn(async () => {
           modelAdmission = prepareAgentRunAdmission({
             cfg: { logging: { audit: { executionIdentity: true } } },
             operationalRunInstance: createOperationalRunInstanceRef("agent-exec-run"),
@@ -93,7 +96,7 @@ describe("agent local audit writer", () => {
             },
           };
         }),
-      });
+      );
 
       expect(result.exitCode).toBe(0);
       expect(recordRuntimeReceipt()).toBe(false);

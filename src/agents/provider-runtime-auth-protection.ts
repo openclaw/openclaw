@@ -1,20 +1,13 @@
 // Protects provider auth exchange output before it enters retained runtime state.
+import type { ProviderPreparedRuntimeAuth } from "../plugins/provider-runtime.types.js";
 import { looksLikeSecretSentinel, mintSecretSentinel } from "../secrets/sentinel.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
-import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
-
-type PreparedProviderRuntimeAuth = {
-  apiKey: string;
-  baseUrl?: string;
-  request?: ModelProviderRequestTransportOverrides;
-  expiresAt?: number;
-};
 
 /** Re-sentinels credentials returned by a provider auth exchange. */
 export function protectPreparedProviderRuntimeAuth(params: {
   provider: string;
-  preparedAuth: PreparedProviderRuntimeAuth | null | undefined;
-}): PreparedProviderRuntimeAuth | undefined {
+  preparedAuth: ProviderPreparedRuntimeAuth | null | undefined;
+}): ProviderPreparedRuntimeAuth | undefined {
   const { preparedAuth } = params;
   if (!preparedAuth) {
     return undefined;

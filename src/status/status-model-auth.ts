@@ -4,12 +4,20 @@ import { createModelCatalogDecisions } from "../agents/model-catalog-decisions.j
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { getPreparedModelRuntimeAuthStore } from "../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
+import {
+  createSessionContextCapacityResolver,
+  type SessionContextCapacity,
+} from "../agents/session-context-capacity.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
 
-type StatusModelResolution = { authLabel?: string; endpoint?: string };
+type StatusModelResolution = {
+  authLabel?: string;
+  endpoint?: string;
+  ownerCapacity?: SessionContextCapacity;
+};
 
 /** Status borrows the account and route selected by the prepared model owner. */
 export function createStatusModelResolver(params: {
@@ -21,6 +29,7 @@ export function createStatusModelResolver(params: {
   owner?: PreparedModelRuntimeSnapshot;
 }) {
   const { owner, sessionEntry } = params;
+  const resolveCapacity = createSessionContextCapacityResolver(owner);
   const authStore = owner && getPreparedModelRuntimeAuthStore(owner);
   const decisions =
     owner && authStore
@@ -75,31 +84,38 @@ export function createStatusModelResolver(params: {
           })
         : "unknown";
     if (!decisions?.isCurrent() || !authStore) {
-      return { authLabel };
+      return { authLabel, ownerCapacity: { state: "unavailable" } };
     }
     const entry = findModelInCatalog(decisions.snapshot.entries, provider, model);
     const variants = decisions.snapshot.routeVariants.filter(
       (row) => row.provider === provider && row.id === model,
     );
-    const host = await decisions.evaluateEntry(
+    const host = decisions.evaluateEntry(
       entry ?? { provider, id: model },
       variants.length ? variants : entry ? [entry] : undefined,
       runtimeId,
     );
     const evaluation = entry ? decisions.evaluateNative(entry, host, runtimeId) : host;
     if (!decisions.isCurrent() || evaluation.availability !== true) {
-      return { authLabel };
+      return { authLabel, ownerCapacity: { state: "unavailable" } };
     }
     if (evaluation.runtimeAuth && evaluation.runtimeAuth.id !== runtimeId) {
-      return { authLabel };
+      return { authLabel, ownerCapacity: { state: "unavailable" } };
     }
+    const ownerCapacity = evaluation.selectedRoute
+      ? resolveCapacity(provider, model, {
+          profileId: evaluation.selectedProfileId,
+          route: evaluation.selectedRoute,
+          ...(evaluation.runtimeAuth ? { nativeRuntime: evaluation.runtimeAuth.id } : {}),
+        })
+      : { state: "unavailable" as const };
     const endpoint = evaluation.selectedRoute?.baseUrl
       ? formatModelEndpointUrl(evaluation.selectedRoute.baseUrl)
       : undefined;
     // A selected route and its auth must describe the same decision. Provider-wide
     // labels can prefer another stored credential over an explicitly configured key.
     if (hasAuthOverride || (usesHostAuth && !evaluation.selectedRoute)) {
-      return { authLabel, endpoint };
+      return { authLabel, endpoint, ownerCapacity };
     }
     const mode =
       evaluation.selectedAuthMode === "api_key" ? "api-key" : evaluation.selectedAuthMode;
@@ -108,13 +124,18 @@ export function createStatusModelResolver(params: {
       const label = isUserModelAuthProfileId(profileId)
         ? "personal account"
         : resolveAuthProfileDisplayLabel({ cfg: params.cfg, store: authStore, profileId });
-      return { authLabel: mode ? mode + (label ? " (" + label + ")" : "") : "unknown", endpoint };
+      return {
+        authLabel: mode ? mode + (label ? " (" + label + ")" : "") : "unknown",
+        endpoint,
+        ownerCapacity,
+      };
     }
     return {
       authLabel: evaluation.runtimeAuth
         ? (mode ?? "native") + " (" + runtimeId + ")"
         : (mode ?? "unknown"),
       endpoint,
+      ownerCapacity,
     };
   };
 }

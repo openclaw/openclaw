@@ -6,9 +6,12 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import {
+  createPaneHeaderWorkspaceFixture,
+  createSessionCapabilityFixture,
+  createTestChatPane,
+} from "./chat-pane.test-support.ts";
 
 describe("chat pane session access", () => {
   it("refuses ordinary session creation for read-only operators", async () => {
@@ -169,6 +172,18 @@ describe("chat pane session access", () => {
       auth: { role: "operator", scopes: ["operator.write"] },
       features: { methods: ["sessions.patch"] },
     } as ApplicationContext["gateway"]["snapshot"]["hello"];
+    state.sessionsResult = sessionsResult(
+      [
+        {
+          key: state.sessionKey,
+          kind: "direct",
+          sessionId: "session-a",
+          archived: true,
+          sharingRole: "owner",
+        },
+      ],
+      0,
+    );
 
     await pane.restoreArchivedSession(state.sessionKey, "session-a");
 
@@ -198,8 +213,7 @@ describe("chat pane session access", () => {
 
     render(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         session,
         false,
         undefined,
@@ -233,8 +247,7 @@ describe("chat pane session access", () => {
 
     render(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         session,
         false,
         undefined,

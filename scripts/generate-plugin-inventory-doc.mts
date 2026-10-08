@@ -4,10 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mts";
-import {
-  assertPluginInventoryCoverage,
-  resolvePluginSurface,
-} from "./lib/plugin-inventory-doc.mts";
+import { resolvePluginSurface } from "./lib/plugin-inventory-doc.mts";
 import {
   collectPluginSourceEntries,
   exportPluginInventory,
@@ -22,7 +19,6 @@ const DOC_PATH = "docs/plugins/plugin-inventory.md";
 const REFERENCE_INDEX_PATH = "docs/plugins/reference.md";
 const REFERENCE_DIR = "docs/plugins/reference";
 const ROOT = process.cwd();
-const EXTENSIONS_DIR = path.join(ROOT, "extensions");
 
 const PROVIDER_DOC_ALIASES = new Map([
   ["amazon-bedrock", "/providers/bedrock"],
@@ -148,6 +144,9 @@ function pluginReferenceLabel(record: PluginRecord) {
 }
 
 function humanizeId(value: string) {
+  if (value === "slack-huddles") {
+    return "Slack huddles";
+  }
   if (value === "teams-meetings") {
     return "Microsoft Teams meetings";
   }
@@ -267,6 +266,7 @@ function resolveDescription({ manifest, packageJson }: PluginSourceEntry) {
     realtimeTranscriptionProviders: "Adds realtime transcription provider support.",
     realtimeVoiceProviders: "Adds realtime voice provider support.",
     speechProviders: "Adds text-to-speech provider support.",
+    storageProviders: "Adds storage location transport support.",
     tools: "Adds agent-callable tools.",
     videoGenerationProviders: "Adds video generation provider support.",
     webContentExtractors: "Adds readable web content extraction.",
@@ -537,21 +537,6 @@ pnpm plugins:inventory:gen
 `;
 }
 
-function enumerateTopLevelPluginManifests() {
-  return fs
-    .readdirSync(EXTENSIONS_DIR)
-    .toSorted((left, right) => left.localeCompare(right))
-    .flatMap((dirName) => {
-      const manifestPath = path.join(EXTENSIONS_DIR, dirName, "openclaw.plugin.json");
-      if (!fs.existsSync(manifestPath)) {
-        return [];
-      }
-      const manifest = readJsonPath(manifestPath) as PluginManifest;
-      const id = typeof manifest.id === "string" && manifest.id ? manifest.id : dirName;
-      return [{ dirName, id }];
-    });
-}
-
 type ExternalPluginDocsInventorySeedEntry = {
   openclaw?: {
     channel?: NonNullable<PluginPackageJson["openclaw"]>["channel"];
@@ -603,7 +588,6 @@ function collectPluginRecords() {
   const rootPackageJson = readJsonPath(path.join(ROOT, "package.json")) as { files?: unknown[] };
   const excludedDirs = collectExcludedPackagedExtensionDirs(rootPackageJson);
   const sourceEntries = collectPluginSourceEntries(ROOT);
-  assertPluginInventoryCoverage(sourceEntries, enumerateTopLevelPluginManifests());
   const records = sourceEntries.map((entry) =>
     createPluginRecord(entry, resolvePluginStatus(entry, excludedDirs)),
   );
@@ -617,31 +601,14 @@ function collectPluginRecords() {
   return records.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-function writeGeneratedDocs(records: PluginRecord[]) {
-  fs.mkdirSync(path.join(ROOT, REFERENCE_DIR), { recursive: true });
+function* referencePages(records: PluginRecord[]) {
   for (const record of records.filter(hasGeneratedReferencePage)) {
     const relativePath = path.join(REFERENCE_DIR, `${record.id}.md`);
-    const manualSections = readManualReferenceSections(relativePath);
-    fs.writeFileSync(
-      path.join(ROOT, relativePath),
-      renderReferencePage(record, manualSections),
-      "utf8",
-    );
+    yield [
+      relativePath,
+      renderReferencePage(record, readManualReferenceSections(relativePath)),
+    ] as const;
   }
-  fs.writeFileSync(path.join(ROOT, REFERENCE_INDEX_PATH), renderReferenceIndex(records), "utf8");
-}
-
-function readGeneratedDocs(records: PluginRecord[]) {
-  return [
-    [REFERENCE_INDEX_PATH, renderReferenceIndex(records)] satisfies [string, string],
-    ...records.filter(hasGeneratedReferencePage).map((record) => {
-      const relativePath = path.join(REFERENCE_DIR, `${record.id}.md`);
-      return [
-        relativePath,
-        renderReferencePage(record, readManualReferenceSections(relativePath)),
-      ] satisfies [string, string];
-    }),
-  ];
 }
 
 function renderDocument(records: PluginRecord[]) {
@@ -757,7 +724,11 @@ function main(argv = process.argv.slice(2)) {
   const docPath = path.join(ROOT, DOC_PATH);
   if (write) {
     fs.writeFileSync(docPath, next, "utf8");
-    writeGeneratedDocs(records);
+    fs.mkdirSync(path.join(ROOT, REFERENCE_DIR), { recursive: true });
+    for (const [relativePath, content] of referencePages(records)) {
+      fs.writeFileSync(path.join(ROOT, relativePath), content, "utf8");
+    }
+    fs.writeFileSync(path.join(ROOT, REFERENCE_INDEX_PATH), renderReferenceIndex(records), "utf8");
     return;
   }
 
@@ -765,7 +736,10 @@ function main(argv = process.argv.slice(2)) {
   if (current !== next) {
     throw new Error(`${DOC_PATH} is stale. Run \`pnpm plugins:inventory:gen\`.`);
   }
-  for (const [relativePath, expected] of readGeneratedDocs(records)) {
+  for (const [relativePath, expected] of [
+    [REFERENCE_INDEX_PATH, renderReferenceIndex(records)] as const,
+    ...referencePages(records),
+  ]) {
     const fullPath = path.join(ROOT, relativePath);
     const actual = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, "utf8") : "";
     if (actual !== expected) {

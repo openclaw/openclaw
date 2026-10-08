@@ -4,8 +4,8 @@ import { isDeepStrictEqual } from "node:util";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { root } from "../infra/fs-safe.js";
 import {
-  appendConfigAuditRecord,
   appendConfigAuditRecordSync,
+  captureConfigAuditAppender,
   createConfigObserveAuditRecord,
 } from "./io.audit.js";
 import {
@@ -18,7 +18,7 @@ import {
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
 } from "./io.health-state.js";
-import type { ConfigHealthFingerprint, ConfigHealthSnapshot } from "./io.health-state.types.js";
+import type { ConfigHealthSnapshot } from "./io.health-state.types.js";
 import {
   createConfigRecoveryStatEffect,
   createConfigBackupMissingEffect,
@@ -28,11 +28,9 @@ import {
 import {
   createConfigHealthFingerprint,
   extractRestoreErrorDetails,
-  readConfigFingerprintForPath,
-  readConfigFingerprintForPathSync,
   readConfigHealthEntry,
 } from "./io.observe-state.js";
-import { resolveConfigReadRecoveryContext } from "./io.observe-suspicious.js";
+import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
 import { hashConfigRaw, resolveGatewayMode } from "./io.read-helpers.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type {
@@ -158,6 +156,7 @@ export async function maybeRecoverSuspiciousConfigRead(
   return await runConfigRecoveryAsync(
     recoverSuspiciousConfigRead(params),
     health,
+    captureConfigAuditAppender(params.deps, params.assertCurrent),
     params.assertCurrent,
   );
 }
@@ -165,6 +164,7 @@ export async function maybeRecoverSuspiciousConfigRead(
 async function runConfigRecoveryAsync<T>(
   recovery: ConfigRecoveryOperation<T>,
   health: ReturnType<typeof captureConfigHealthStateStore>,
+  appendAudit: ReturnType<typeof captureConfigAuditAppender>,
   assertCurrent?: () => void,
 ): Promise<T> {
   assertCurrent?.();
@@ -172,7 +172,7 @@ async function runConfigRecoveryAsync<T>(
   while (!step.done) {
     try {
       assertCurrent?.();
-      const value = await step.value.async(health);
+      const value = await step.value.async(health, appendAudit);
       assertCurrent?.();
       step = recovery.next(value);
     } catch (error) {
@@ -226,13 +226,17 @@ export async function prepareSuspiciousConfigRead(params: ConfigReadRecoveryPara
     params.configPath,
     params.assertCurrent,
   );
-  const plan = await runConfigRecoveryAsync(planSuspiciousConfigRead(params), health);
-  const captureApplyHealth = () => health.captureContinuation();
+  const appendAudit = captureConfigAuditAppender(params.deps, params.assertCurrent);
+  const plan = await runConfigRecoveryAsync(
+    planSuspiciousConfigRead(params, true),
+    health,
+    appendAudit,
+  );
   return (
     plan && {
       candidate: plan.candidate,
       apply: async (beforeCommit) => {
-        using applyHealth = captureApplyHealth();
+        using applyHealth = health.captureContinuation();
         const assertAllowed = () => {
           if (!applyHealth.isCurrent()) {
             throw new ConfigMutationConflictError("config recovery observation was superseded", {
@@ -244,8 +248,9 @@ export async function prepareSuspiciousConfigRead(params: ConfigReadRecoveryPara
         };
         assertAllowed();
         const currentPlan = await runConfigRecoveryAsync(
-          planSuspiciousConfigRead(params),
+          planSuspiciousConfigRead(params, true),
           applyHealth,
+          appendAudit,
         );
         if (!currentPlan || !isDeepStrictEqual(currentPlan.candidate, plan.candidate)) {
           throw new ConfigMutationConflictError(
@@ -263,6 +268,7 @@ export async function prepareSuspiciousConfigRead(params: ConfigReadRecoveryPara
         const result = await runConfigRecoveryAsync(
           currentPlan.apply(assertCurrentPlan),
           applyHealth,
+          appendAudit,
         );
         if (result.superseded) {
           throw new ConfigMutationConflictError("config recovery observation was superseded", {
@@ -300,6 +306,7 @@ function* recoverSuspiciousConfigRead(
 
 function* planSuspiciousConfigRead(
   params: ConfigReadRecoveryParams,
+  requireIdentity = false,
 ): ConfigRecoveryOperation<SuspiciousConfigRecoveryPlan | null> {
   const { deps, configPath, raw, parsed } = params;
   // External owners also own recovery; do not substitute backup bytes or create sidecars.
@@ -311,7 +318,13 @@ function* planSuspiciousConfigRead(
   if (yield createConfigBackupMissingEffect(deps, backupPath)) {
     return null;
   }
-  const stat = (yield createConfigRecoveryStatEffect(deps, configPath)) as fs.Stats | null;
+  // Explicit preparation will recheck these identities before publishing a replacement.
+  // Ordinary recovery uses stat only as optional diagnostic metadata.
+  const stat = (yield createConfigRecoveryStatEffect(
+    deps,
+    configPath,
+    requireIdentity,
+  )) as fs.Stats | null;
   const now = new Date().toISOString();
   const current = createConfigHealthFingerprint({
     raw,
@@ -326,26 +339,30 @@ function* planSuspiciousConfigRead(
   if (!healthSnapshot) {
     return null;
   }
-  const healthState = healthSnapshot.state;
-  const entry = readConfigHealthEntry(healthState, configPath);
+  const entry = readConfigHealthEntry(healthSnapshot.state, configPath);
+  let backupRaw: string | null = null;
+  if (!entry.lastKnownGood) {
+    backupRaw = (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
+  }
   const backupBaseline =
     entry.lastKnownGood ??
-    ((yield {
-      sync: () => readConfigFingerprintForPathSync(deps, backupPath),
-      async: () => readConfigFingerprintForPath(deps, backupPath),
-    }) as ConfigHealthFingerprint | null) ??
-    undefined;
-  const recoveryContext = resolveConfigReadRecoveryContext({
-    current,
+    (backupRaw
+      ? createConfigHealthFingerprint({
+          raw: backupRaw,
+          parsed: parseBackupConfigRaw(deps, backupRaw)?.parsed ?? {},
+          stat: null,
+        })
+      : undefined);
+  const suspicious = resolveConfigObserveSuspiciousReasons({
+    ...current,
     parsed,
-    entry,
-    backupBaseline,
+    lastKnownGood: backupBaseline,
   });
-  if (!recoveryContext) {
+  const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;
+  if (suspicious.length === 0 || entry.lastObservedSuspiciousSignature === suspiciousSignature) {
     return null;
   }
-  const { suspicious, suspiciousSignature } = recoveryContext;
-  const backupRaw = (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
+  backupRaw ??= (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
   if (!backupRaw) {
     return null;
   }
@@ -365,7 +382,11 @@ function* planSuspiciousConfigRead(
     return null;
   }
   const preparedCandidate = prepared.candidate;
-  const backupStat = (yield createConfigRecoveryStatEffect(deps, backupPath)) as fs.Stats | null;
+  const backupStat = (yield createConfigRecoveryStatEffect(
+    deps,
+    backupPath,
+    requireIdentity,
+  )) as fs.Stats | null;
   const backup = createConfigHealthFingerprint({
     raw: backupRaw,
     parsed: backupParse.parsed,
@@ -386,7 +407,7 @@ function* planSuspiciousConfigRead(
         [backupPath, backupRaw, backupStat],
       ] as const) {
         const actualRaw = createConfigBackupReadEffect(deps, pathname).sync();
-        const actualStat = createConfigRecoveryStatEffect(deps, pathname).sync();
+        const actualStat = createConfigRecoveryStatEffect(deps, pathname, true).sync();
         if (
           actualRaw !== expectedRaw ||
           !actualStat ||
@@ -480,7 +501,7 @@ function* planSuspiciousConfigRead(
       };
       yield {
         sync: () => appendConfigAuditRecordSync(audit),
-        async: () => appendConfigAuditRecord(audit, params.assertCurrent),
+        async: (_health, appendAudit) => appendAudit(audit.record),
       };
       if (restoredFromBackup) {
         yield {
@@ -598,6 +619,7 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
     return false;
   }
   using health = captureConfigHealthStateStore(deps, snapshot.path);
+  const appendAudit = captureConfigAuditAppender(deps);
   const healthSnapshot = await health.read();
   if (!healthSnapshot) {
     return false;
@@ -667,7 +689,7 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
       deps,
       configPath: snapshot.path,
       raw: recoveryCandidate.raw,
-    }).async(health))
+    }).async(health, appendAudit))
   ) {
     return false;
   }
@@ -680,10 +702,8 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
   deps.logger.warn(
     `Config auto-restored from last-known-good: ${snapshot.path} (${params.reason})${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
   );
-  await appendConfigAuditRecord({
-    env: deps.env,
-    homedir: deps.homedir,
-    record: createConfigObserveAuditRecord({
+  await appendAudit(
+    createConfigObserveAuditRecord({
       configPath: snapshot.path,
       valid: snapshot.valid,
       current,
@@ -694,7 +714,7 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
       restoredFromBackup: true,
       restoredBackupPath: lastGoodPath,
     }),
-  });
+  );
   await health.updateAfterFileCommit(
     {
       lastKnownGood: promoted,

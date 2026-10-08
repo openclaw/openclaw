@@ -1,21 +1,10 @@
 import { html, type ReactiveController, type TemplateResult } from "lit";
+import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import type { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 
-type FullscreenControllerOptions = {
-  section: () => HTMLElement | null;
-  onChange: () => void;
-  onError?: (message: string) => void;
-  enterLabel: () => string;
-  exitLabel: () => string;
-  unavailableLabel: () => string;
-  errorMessage: (error: unknown) => string;
-  buttonClass: string;
-  buttonSelector: string;
-  iconClass: string;
-};
-
-export class FullscreenController implements ReactiveController {
+export class DesktopFullscreenController implements ReactiveController {
   active = false;
   errorText: string | null = null;
 
@@ -23,7 +12,7 @@ export class FullscreenController implements ReactiveController {
 
   constructor(
     private readonly host: OpenClawLitElement,
-    private readonly options: FullscreenControllerOptions,
+    private readonly onChange: () => void,
   ) {
     host.addController(this);
   }
@@ -35,49 +24,52 @@ export class FullscreenController implements ReactiveController {
   hostDisconnected(): void {
     document.removeEventListener("fullscreenchange", this.onFullscreenChange);
     this.restoreFocus = false;
-    if (this.fullscreenElement() === this.options.section()) {
+    if (this.ownsFullscreen()) {
       void document.exitFullscreen().catch(() => {});
     }
   }
 
   renderButton(): TemplateResult {
     const supported = this.supported();
-    const label = this.active
-      ? this.options.exitLabel()
-      : supported
-        ? this.options.enterLabel()
-        : this.options.unavailableLabel();
+    const label = t(
+      this.active
+        ? "desktop.exitFullscreen"
+        : supported
+          ? "desktop.enterFullscreen"
+          : "desktop.fullscreenUnavailable",
+    );
     return html`<openclaw-tooltip .content=${label}>
       <button
-        class=${this.options.buttonClass}
+        class="bp-icon desktop-fullscreen-button"
         type="button"
         aria-label=${label}
         aria-pressed=${this.active ? "true" : "false"}
         aria-disabled=${supported ? "false" : "true"}
         @click=${() => void this.toggle()}
       >
-        <span class=${this.options.iconClass} aria-hidden="true">
+        <span class="desktop-fullscreen-icon" aria-hidden="true">
           ${this.active ? icons.minimize : icons.maximize}
         </span>
       </button>
     </openclaw-tooltip>`;
   }
 
-  async exit(): Promise<void> {
-    if (!this.active) {
-      return;
-    }
+  private async exit(): Promise<void> {
     try {
       await document.exitFullscreen();
     } catch (error) {
-      this.setError(this.options.errorMessage(error));
+      this.setError(t("desktop.errors.fullscreenFailed", { error: formatUiError(error) }));
     }
   }
 
-  private fullscreenElement(): Element | null {
+  private ownsFullscreen(): boolean {
+    const section = this.host.renderRoot.querySelector<HTMLElement>("section.bp");
+    if (!section) {
+      return false;
+    }
     const shadowFullscreen =
       this.host.renderRoot instanceof ShadowRoot ? this.host.renderRoot.fullscreenElement : null;
-    return shadowFullscreen ?? document.fullscreenElement;
+    return (shadowFullscreen ?? document.fullscreenElement) === section;
   }
 
   private supported(): boolean {
@@ -86,14 +78,16 @@ export class FullscreenController implements ReactiveController {
 
   private readonly onFullscreenChange = (): void => {
     const wasActive = this.active;
-    this.active = this.fullscreenElement() === this.options.section();
-    this.options.onChange();
+    this.active = this.ownsFullscreen();
+    this.onChange();
     this.host.requestUpdate();
     if (wasActive && !this.active && this.restoreFocus) {
       // Escape and browser controls exit outside the component. Restore focus so
       // keyboard operators return to the control that changed the viewport.
       void this.host.updateComplete.then(() => {
-        this.host.renderRoot.querySelector<HTMLButtonElement>(this.options.buttonSelector)?.focus();
+        this.host.renderRoot
+          .querySelector<HTMLButtonElement>(".desktop-fullscreen-button")
+          ?.focus();
         this.restoreFocus = false;
       });
     }
@@ -105,9 +99,9 @@ export class FullscreenController implements ReactiveController {
       await this.exit();
       return;
     }
-    const section = this.options.section();
+    const section = this.host.renderRoot.querySelector<HTMLElement>("section.bp");
     if (!section || !this.supported()) {
-      this.setError(this.options.unavailableLabel());
+      this.setError(t("desktop.fullscreenUnavailable"));
       return;
     }
     this.restoreFocus = true;
@@ -115,15 +109,12 @@ export class FullscreenController implements ReactiveController {
       await section.requestFullscreen();
     } catch (error) {
       this.restoreFocus = false;
-      this.setError(this.options.errorMessage(error));
+      this.setError(t("desktop.errors.fullscreenFailed", { error: formatUiError(error) }));
     }
   }
 
   private setError(errorText: string | null): void {
     this.errorText = errorText;
-    if (errorText) {
-      this.options.onError?.(errorText);
-    }
     this.host.requestUpdate();
   }
 }

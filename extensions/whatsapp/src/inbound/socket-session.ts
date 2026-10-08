@@ -8,6 +8,7 @@ import type {
   WASocket,
 } from "baileys";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { identitiesOverlap, type WhatsAppSelfIdentity } from "../identity.js";
@@ -121,18 +122,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     options.socketTiming.defaultQueryTimeoutMs,
   );
 
-  let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
-  const onClose = new Promise<WebListenerCloseReason>((resolve) => {
-    onCloseResolve = resolve;
-  });
-  const resolveClose = (reason: WebListenerCloseReason) => {
-    if (!onCloseResolve) {
-      return;
-    }
-    const resolver = onCloseResolve;
-    onCloseResolve = null;
-    resolver(reason);
-  };
+  const { promise: onClose, resolve: resolveClose } = createDeferred<WebListenerCloseReason>();
 
   const presence = options.selfChatMode ? "unavailable" : "available";
   try {
@@ -342,6 +332,11 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
             currentSock,
             sendOperationTimeoutMs,
             {
+              assertCurrent: () => {
+                if (getCurrentSock() !== currentSock) {
+                  throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+                }
+              },
               onSendMessageTimeout: ({ jid: timedOutJid, promise }) => {
                 trackLateAcceptedSend(timedOutJid, promise);
               },
@@ -390,6 +385,13 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       return await createWhatsAppSocketOperationTimeoutAdapter(
         currentSock,
         sendOperationTimeoutMs,
+        {
+          assertCurrent: () => {
+            if (getCurrentSock() !== currentSock) {
+              throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+            }
+          },
+        },
       ).sendPresenceUpdate(presenceLocal, jid);
     },
   };
