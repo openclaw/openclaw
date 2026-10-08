@@ -200,7 +200,7 @@ describe("registered Ollama catalog", () => {
             : new Response("unavailable", { status: 503 });
         }
         return Response.json({
-          capabilities: String(init?.body).includes("nomic-embed")
+          capabilities: (typeof init?.body === "string" ? init.body : "").includes("nomic-embed")
             ? ["embedding"]
             : ["completion", "tools"],
           model_info: { "general.context_length": 8192 },
