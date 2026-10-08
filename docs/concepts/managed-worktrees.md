@@ -221,6 +221,25 @@ On Linux, maintenance also removes up to 256 abandoned `tmp_pack_*` files per pa
 
 Transient fetch failures, including an incomplete object transfer, retry once after one second within the original fetch timeout. Cancellation and expired workspace authority stop recovery; a second failure surfaces the Git error. See [Retry policy](/concepts/retry#managed-git-operations).
 
+If a fetch finds a ref tip in the commit graph but not in the object store,
+OpenClaw attempts one bounded repair before retrying. It prunes only origin
+tracking branches confirmed deleted upstream (unless the fetch explicitly uses
+`--no-prune`), preserving tracking refs required by local symbolic refs or
+worktree HEADs, then fetches missing ref and
+worktree-HEAD objects by ID with commit-graph lookup and automatic maintenance
+disabled. Local branches, tags, and worktree HEADs are never deleted. Repair is
+limited to 50,000 refs, 4,096 missing tips, and five minutes; healthy fetches do
+not scan repository health. Managed project refresh retains its isolated,
+URL-pinned transport during recovery.
+
+Repair may clear empty origin-tracking ref locks on supported local Linux
+filesystems when their unchanged inode timestamps prove they predate the current
+boot by at least one hour. Age alone cannot establish that a native Git lock has
+no live owner, so same-boot, nonempty, symlinked, and otherwise uncertain locks
+remain intact. Recovery logs its result and an actionable warning if missing
+objects or locks still prevent fetching. No configuration or state migration is
+required.
+
 The Git worker reuses a bounded set of successful commit-size estimates while it remains active. Object availability and free disk space are checked on every allocation. Git replacement refs disable reuse of the affected size estimates, and worker shutdown discards them.
 
 Creation, restore, orphan cleanup, and snapshot expiry share an allocation owner across repositories and processes using the same state directory. Registered worktree removal holds custody of its own checkout, so an unrelated creation can proceed while background removal runs. Every allocation reserves its estimated pending writes on each volume. If another operation’s reservations leave insufficient space, creation waits for that operation to settle before retrying. Reserved bytes remain accounted for until native work settles, including after cancellation or lease loss. Managed sources stay protected while a creation copies them. Slot admission and orphan cleanup share allocation custody. Template preparation serializes per template while independent checkouts materialize concurrently. A dedicated heartbeat thread renews operation leases, and contention waits are bounded to 30 minutes, allowing a dependency install's 15-minute budget plus checkout and cleanup. Caller cancellation and overall request limits can stop the wait earlier. The separate Git and setup timeouts described above still apply. Costs on the same volume are added together. These checks are conservative estimates, not a disk quota: other OpenClaw state directories, shell commands, deployment tools, and arbitrary setup/build output can still consume space. Reusing an existing valid checkout does not allocate another checkout. Worktrees created directly through Git are outside the managed cleanup lifecycle.

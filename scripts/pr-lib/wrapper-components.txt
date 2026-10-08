@@ -893,6 +893,8 @@ src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
 src/infra/git-path-quote.ts
 src/infra/git-read-operations.runtime.ts
+src/infra/git-ref-lock-repair.ts
+src/infra/git-repository-repair.ts
 src/infra/git-root.ts
 src/infra/git-worker-context.ts
 src/infra/git-worker-contract.ts

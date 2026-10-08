@@ -14,6 +14,7 @@ import {
   type GitBufferedCommandOptions,
   type GitCommandOptions,
 } from "../../infra/git-exec.js";
+import { withGitRepositoryRepair } from "../../infra/git-repository-repair.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 import {
@@ -26,6 +27,17 @@ export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
 // Materializing checkout objects gets extra time without extending other Git commands or setup.
 export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
+const REPAIRABLE_FETCH_FLAGS = new Set([
+  "--no-auto-maintenance",
+  "--refetch",
+  "--no-tags",
+  "--no-write-fetch-head",
+  "--no-recurse-submodules",
+  "--recurse-submodules=no",
+  "--stdin",
+  "--prune",
+  "--no-prune",
+]);
 
 type WorktreeListEntry = {
   path: string;
@@ -117,7 +129,12 @@ export async function runGitBytes(
 }
 
 async function runOwnedGitCommand<
-  T extends { termination: string; code: number | null; stdout: string | Uint8Array },
+  T extends {
+    termination: string;
+    code: number | null;
+    stdout: string | Uint8Array;
+    stderr: string | Uint8Array;
+  },
 >(
   cwd: string,
   args: string[],
@@ -129,16 +146,46 @@ async function runOwnedGitCommand<
   return await withGitRefAdmission(
     cwd,
     args,
-    (gitArgs) =>
-      execute(cwd, gitArgs, {
-        ...options,
-        beforeRun: gitArgs === args ? options.beforeRun : undefined,
-        baseEnv,
-        env,
-        input: gitArgs === args ? options.input : undefined,
-        // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
-        killProcessTree: options.killProcessTree ?? (args[0] === "fetch" && gitArgs === args),
-      }),
+    async (gitArgs) => {
+      const run = () =>
+        execute(cwd, gitArgs, {
+          ...options,
+          beforeRun: gitArgs === args ? options.beforeRun : undefined,
+          baseEnv,
+          env,
+          input: gitArgs === args ? options.input : undefined,
+          // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
+          killProcessTree: options.killProcessTree ?? (args[0] === "fetch" && gitArgs === args),
+        });
+      const result = await run();
+      // Admit the flag-only forms used by base selection and object hydration.
+      // Values of other options (such as --server-option origin) are not remote authority.
+      if (
+        gitArgs !== args ||
+        args[0] !== "fetch" ||
+        result.code !== 128 ||
+        args.filter((arg) => arg === "origin").length !== 1 ||
+        args.slice(1).some((arg) => arg !== "origin" && !REPAIRABLE_FETCH_FLAGS.has(arg))
+      ) {
+        return result;
+      }
+      return await withGitRepositoryRepair({
+        cwd,
+        result,
+        remote: "origin",
+        pruneTracking: !args.includes("--no-prune"),
+        signal: options.signal,
+        assertCurrent: options.beforeRun,
+        retry: run,
+        run: (repairArgs, repairOptions) =>
+          executeGitCommand(cwd, repairArgs, {
+            ...options,
+            ...repairOptions,
+            baseEnv,
+            env: { ...env, ...repairOptions.env },
+          }),
+      });
+    },
     options.signal,
     options.refMutationDirectory,
   );
