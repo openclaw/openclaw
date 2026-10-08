@@ -6,7 +6,10 @@ import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  resetSessionEntryLifecycle,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
@@ -45,6 +48,7 @@ async function withWebchatTool(
     tool: ReturnType<typeof createCronTool>;
     cron: CronService;
     revoke: () => void;
+    creatorStorePath: string;
   }) => Promise<void>,
   storedContext: DeliveryContext = { channel: "webchat", to: sessionKey },
   channelsEnabled = true,
@@ -160,6 +164,7 @@ async function withWebchatTool(
     try {
       await check({
         cron,
+        creatorStorePath: sessionStorePath,
         revoke,
         tool,
         add: async (delivery, target = "current") => {
@@ -185,8 +190,45 @@ async function withWebchatTool(
 }
 
 describe("WebChat automation creation through the tool and Gateway", () => {
+  it("previews the retained binding when replaying a declaration after reset", async () => {
+    await withWebchatTool(
+      async ({ tool, cron, creatorStorePath }) => {
+        const create = () =>
+          tool.execute("declare-watcher", {
+            action: "add",
+            job: {
+              declarationKey: "conversation-watcher",
+              name: "Conversation watcher",
+              enabled: false,
+              sessionTarget: "isolated",
+              schedule: { kind: "every", everyMs: 60_000 },
+              payload: { kind: "agentTurn", message: "Reply tick." },
+            },
+          });
+        await create();
+        await resetSessionEntryLifecycle({
+          storePath: creatorStorePath,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+          buildNextEntry: () => ({
+            sessionId: "replacement-conversation",
+            lifecycleRevision: "replacement-generation",
+            updatedAt: 2,
+          }),
+        });
+        const replayed = await create();
+        expect(replayed.details).toMatchObject({
+          created: false,
+          deliveryPreview: { detail: expect.stringContaining("original session generation") },
+        });
+        expect(await cron.list({ includeDisabled: true })).toHaveLength(1);
+      },
+      undefined,
+      false,
+    );
+  });
+
   it.each([false, true])(
-    "reports only failing delivery with recovery choices on add and update (channels: %s)",
+    "previews external delivery or the creating conversation on add and update (channels: %s)",
     async (channelsEnabled) => {
       await withWebchatTool(
         async ({ add, cron, tool }) => {
@@ -206,28 +248,17 @@ describe("WebChat automation creation through the tool and Gateway", () => {
             expect(
               Value.Errors(expectDefined(tool.outputSchema, "output schema"), result.details),
             ).toEqual([]);
-            if (channelsEnabled) {
-              expect(JSON.stringify(result.details)).not.toContain("will fail-closed");
-            } else {
-              expect(result.details).toMatchObject({
-                deliveryPreview: {
-                  label: "announce -> last",
-                  detail: expect.stringContaining("no configured channels detected"),
+            expect(JSON.stringify(result.details)).not.toContain("will fail-closed");
+          }
+          expect(updated.details).not.toHaveProperty("deliveryPreview");
+          expect(added.details).toMatchObject({
+            deliveryPreview: channelsEnabled
+              ? { label: "announce -> telegram:recipient", detail: "explicit" }
+              : {
+                  label: "announce -> creating conversation",
+                  detail: "commits to this conversation (no external channel route)",
                 },
-              });
-              const text = result.content.find((block) => block.type === "text");
-              expect.soft(text?.text).toContain("will fail-closed");
-              expect.soft(text?.text).toContain("current");
-              expect.soft(text?.text).toContain("none");
-              expect.soft(text?.text).toContain("configure a channel");
-            }
-          }
-          if (channelsEnabled) {
-            expect(updated.details).not.toHaveProperty("deliveryPreview");
-            expect(added.details).toMatchObject({
-              deliveryPreview: { label: "announce -> telegram:recipient", detail: "explicit" },
-            });
-          }
+          });
         },
         undefined,
         channelsEnabled,

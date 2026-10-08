@@ -7576,7 +7576,6 @@
 ["src/gateway/server-methods/cron.history-publication.test.ts","../../cron/delivery-preview.js","4812ec57bb201ca29bef2a56fc2f0858b8cd49f41317dfeb5c757fbea394a6f2",1]
 ["src/gateway/server-methods/cron.history-publication.test.ts","../../cron/store/read-only.js","3170f72c9e330da886a8cf3772bd34a44d8fcfd9d7e25adf6b6aac45fd25968b",1]
 ["src/gateway/server-methods/cron.history-publication.test.ts","./chat-history-handler.js","3b5e2ea353cc9974a987861ece64f2718de096619a5cbbc1cf1f9892498900ca",1]
-["src/gateway/server-methods/cron.validation.test.ts","../../cron/delivery-preview.js","d8f08335393988091101431cce6e3007f909059256bf65ce0e2fb0c254260060",1]
 ["src/gateway/server-methods/cron.validation.test.ts","../session-utils.js","fceb51c37968d9b1ed07f3a610ad4a9d261dd2d047e95ed53d5922a6848ce9c1",1]
 ["src/gateway/server-methods/deleted-agent-guard.test-helpers.ts","../session-utils.js","9bf8a04e7f8665a5cf1d0a8782d48923234ed3961d07eaf0b993ad38a55e5306",1]
 ["src/gateway/server-methods/device-pair-setup.test.ts","../../infra/device-bootstrap.js","997c4fe4f39f430659d148315a7fc9318ad32273f72acfbf33769ffb68abeebf",1]

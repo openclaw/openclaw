@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -50,7 +49,6 @@ import {
 } from "../cron-creator-authority-grant.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
-import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
@@ -65,13 +63,13 @@ import {
   resolveCronMutationCommitGuard,
   resolveCronRequesterProvenanceForJob,
   resolveCronScheduledToolPolicyForCaller,
-  type CronCallerScope,
 } from "./cron-caller-scope.js";
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
 import { cronHistoryHandler } from "./cron-history.js";
 import {
   assertValidCronUpdatePatch,
-  createCronCreatorSessionGuard,
+  captureCronCreatorSession,
+  requiresExplicitAgentRuntimeToolsAllow,
   normalizeCronAddRequest,
   normalizeCronUpdateRequest,
   assertCronDoesNotTargetAgentHarness,
@@ -99,18 +97,6 @@ class CronJobConfigRevisionConflictError extends Error {
   ) {
     super("cron job definition no longer matches the loaded version");
   }
-}
-
-function requiresExplicitAgentRuntimeToolsAllow(params: {
-  job: Pick<CronJob, "payload" | "trigger">;
-  callerScope: CronCallerScope | undefined;
-}): boolean {
-  return (
-    params.callerScope !== undefined &&
-    !params.callerScope.manageAll &&
-    cronJobUsesToolRuntime(params.job) &&
-    params.job.payload.toolsAllow === undefined
-  );
 }
 
 export const cronHandlers: GatewayRequestHandlers = {
@@ -263,17 +249,9 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const callerScope = readCronCallerScope(client);
-    const operatorActor = callerScope ? undefined : resolveOperatorSessionCreation(client).actor;
-    const creatorSession = callerScope?.sessionKey
-      ? loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
-          agentId: callerScope.agentId,
-        }).entry
-      : undefined;
-    // Agent-tool clients own one exact signed session. Read that session's creator instead of
-    // reclassifying spawn context as the automation creator; params never carry this provenance.
-    const actor = operatorActor ?? creatorSession?.createdActor;
-    const actorId = normalizeOptionalString(actor?.id);
-    const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
+    const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
+    const { assertCurrent: assertCreatorSessionCurrent, ...creatorOptions } =
+      captureCronCreatorSession(jobCreate, callerScope, client);
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
     let assertCapturedAuthorityCurrent: (() => void) | undefined;
     try {
@@ -288,13 +266,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       sessionMutationCommitGuard,
       hasCurrentClientAuthority,
     });
-    const assertCreatorSessionCurrent = createCronCreatorSessionGuard(callerScope, creatorSession);
     const commitGuard = () => {
       assertMutationCurrent?.();
       assertCapturedAuthorityCurrent?.();
       assertCreatorSessionCurrent();
     };
-    const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
     const cfg = context.getRuntimeConfig();
     if (
       !cronCreateMatchesCallerScope({
@@ -340,19 +316,16 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     // Resolve before the durable add. A preview failure after commit would make a safe retry
     // create a duplicate job.
+    const previewContext = { cfg, defaultAgentId: context.cron.getDefaultAgentId() };
     const deliveryPreview = await resolveCronDeliveryPreview({
-      cfg,
-      defaultAgentId: context.cron.getDefaultAgentId(),
-      job: jobCreate,
+      ...previewContext,
+      job: { ...jobCreate, sourceConversation: creatorOptions.sourceConversation },
     });
     let result: Awaited<ReturnType<typeof context.cron.add>>;
     try {
       result = await context.cron.add(jobCreate, {
         enabledExplicit,
-        ...(createdActor ? { createdActor } : {}),
-        ...(creatorSession?.skillLibrarySelections
-          ? { skillLibrarySelections: creatorSession.skillLibrarySelections }
-          : {}),
+        ...creatorOptions,
         commitGuard,
         ...(captureRuntimeAuthority ? { captureRuntimeAuthority } : {}),
         matchesExisting: (job) =>
@@ -395,7 +368,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       true,
       cronAddResultReadView({
         result,
-        deliveryPreview,
+        deliveryPreview:
+          "job" in result && !result.created
+            ? await resolveCronDeliveryPreview({ ...previewContext, job })
+            : deliveryPreview,
       }),
       undefined,
     );

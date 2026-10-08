@@ -168,8 +168,13 @@ export async function prepareCronRunContext(params: {
     hookExternalContentSource,
   });
   const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
-  const sourceSessionGeneration = sourceEntry
-    ? { sessionId: sourceEntry.sessionId, lifecycleRevision: sourceEntry.lifecycleRevision }
+  const completionSource =
+    input.job.sessionTarget === "isolated" ? input.job.sourceConversation : sourceEntry;
+  const sourceSessionGeneration = completionSource
+    ? {
+        sessionId: completionSource.sessionId,
+        lifecycleRevision: completionSource.lifecycleRevision,
+      }
     : undefined;
   const reservedKey = isAgentHarnessSessionKey(agentSessionKey);
   if (cronSession.initialSessionEntry?.modelSelectionLocked === true) {
@@ -595,7 +600,10 @@ export async function prepareCronRunContext(params: {
         agentCfg,
         agentDir,
         agentSessionKey,
-        sourceSessionKey,
+        sourceSessionKey:
+          input.job.sessionTarget === "isolated"
+            ? input.job.sourceConversation?.sessionKey
+            : sourceSessionKey,
         sourceSessionGeneration,
         runSessionId,
         currentRunSessionId,

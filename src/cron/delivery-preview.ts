@@ -9,7 +9,8 @@ import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
   tryResolveCronJobEffectiveAgentId,
 } from "./agent-id.js";
-import { hasExplicitCronDeliveryTarget, resolveCronDeliveryPlan } from "./delivery-plan.js";
+import { resolveCronDeliveryPlan } from "./delivery-plan.js";
+import { hasExplicitCronDeliveryTarget } from "./delivery-target-validation.js";
 import type { CronDeliveryTargetContext } from "./isolated-agent/delivery-target-context.js";
 import {
   prepareCronDeliveryTargetContexts,
@@ -22,10 +23,10 @@ import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
 } from "./store/delivery-codec.js";
-import type { CronDeliveryPreview, CronJob } from "./types.js";
+import type { CronDeliveryPreview, CronStoredJob } from "./types.js";
 
-type CronDeliveryPreviewJob = Pick<CronJob, "delivery" | "payload" | "sessionTarget"> &
-  Partial<Pick<CronJob, "agentId" | "sessionKey">>;
+type CronDeliveryPreviewJob = Pick<CronStoredJob, "delivery" | "payload" | "sessionTarget"> &
+  Partial<Pick<CronStoredJob, "agentId" | "sessionKey" | "sourceConversation">>;
 
 function formatTarget(channel?: string, to?: string | null): string {
   if (!channel) {
@@ -98,7 +99,8 @@ function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
   const sessionTarget =
     params.job.payload.kind === "agentTurn" ? params.job.sessionTarget : undefined;
   const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
-  return { plan, requestedChannel, agentId, sessionTarget, deliverySessionKey };
+  const sourceConversation = plan.mode === "announce" ? params.job.sourceConversation : undefined;
+  return { plan, requestedChannel, agentId, sessionTarget, deliverySessionKey, sourceConversation };
 }
 
 async function resolvePreparedCronDeliveryPreview(
@@ -109,7 +111,8 @@ async function resolvePreparedCronDeliveryPreview(
   if (prepared.preview) {
     return prepared.preview;
   }
-  const { plan, requestedChannel, agentId, sessionTarget, deliverySessionKey } = prepared;
+  const { plan, requestedChannel, agentId, sessionTarget, deliverySessionKey, sourceConversation } =
+    prepared;
   let resolved: DeliveryTargetResolution;
   try {
     if (sessionContext && !sessionContext.ok) {
@@ -121,6 +124,7 @@ async function resolvePreparedCronDeliveryPreview(
       {
         ...plan,
         sessionTarget,
+        sourceConversation,
         sessionKey: deliverySessionKey,
       },
       { dryRun: true, ...(sessionContext ? { sessionContext: sessionContext.value } : {}) },
@@ -136,14 +140,13 @@ async function resolvePreparedCronDeliveryPreview(
   }
   if (!resolved.ok) {
     if (
-      sessionTarget === "current" &&
+      (sessionTarget === "current" || (sessionTarget === "isolated" && sourceConversation)) &&
       plan.mode === "announce" &&
+      !resolved.sourceConversationUnavailable &&
       !requiresExternalCronDelivery(plan, resolved)
     ) {
-      // Mirrors runtime: a current-target completion with no external channel
-      // route commits durably to its own conversation instead of failing.
       return {
-        label: "announce -> current session",
+        label: `announce -> ${sessionTarget === "current" ? "current session" : "creating conversation"}`,
         detail: "commits to this conversation (no external channel route)",
       };
     }
@@ -156,7 +159,7 @@ async function resolvePreparedCronDeliveryPreview(
       detail:
         plan.mode === "none"
           ? detail
-          : `${detail}${sessionTarget ? ' Use sessionTarget:"current" with delivery:{mode:"announce"} and the conversation sessionKey to commit there.' : ""} Use delivery:{mode:"none"} for no automatic delivery, or configure a channel and delivery target.`,
+          : `${detail} Configure a channel and delivery target, or use delivery:{mode:"none"} for no automatic delivery.`,
       ...(plan.mode !== "none" ? { failed: true } : {}),
     };
   }
@@ -197,7 +200,7 @@ export async function resolveCronDeliveryFailurePreview(
 export async function resolveCronDeliveryPreviews(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;
-  jobs: CronJob[];
+  jobs: CronStoredJob[];
 }): Promise<Record<string, CronDeliveryPreview>> {
   const prepared = params.jobs.map((job) => prepareCronDeliveryPreview({ ...params, job }));
   const targets = prepared.flatMap((preview, index) =>
