@@ -27,7 +27,6 @@ import {
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
   AssistantMessageEvent,
-  Context,
   Model,
   SimpleStreamOptions,
   StreamFunction,
@@ -44,10 +43,9 @@ import {
 } from "./anthropic-auth-headers.js";
 import {
   buildAnthropicClaudeCodeIdentity,
+  defaultsClaudeAdaptiveThinking,
   prepareClaudeNoPrefillRequestContext,
   resolveAnthropicThinkingEffort,
-  resolveClaudeOpus5ModelIdentity,
-  resolveClaudeSonnet5ModelIdentity,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   usesClaudeStreamingRefusalContract,
@@ -128,9 +126,9 @@ async function* iterateAnthropicEvents(
 }
 
 export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicCompactionOptions> = (
-  model: Model<"anthropic-messages">,
-  context: Context,
-  options?: AnthropicCompactionOptions,
+  model,
+  context,
+  options,
 ) => {
   const stream = new AssistantMessageEventStream();
   const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
@@ -277,11 +275,7 @@ type AnthropicSimpleStreamOptions = SimpleStreamOptions &
 export const streamSimpleAnthropic: StreamFunction<
   "anthropic-messages",
   AnthropicSimpleStreamOptions
-> = (
-  model: Model<"anthropic-messages">,
-  context: Context,
-  options?: AnthropicSimpleStreamOptions,
-) => {
+> = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = {
@@ -303,8 +297,7 @@ export const streamSimpleAnthropic: StreamFunction<
   }
   const reasoning = options?.reasoning === "off" ? "low" : options?.reasoning;
   if (
-    resolveClaudeOpus5ModelIdentity(model) ||
-    resolveClaudeSonnet5ModelIdentity(model) ||
+    defaultsClaudeAdaptiveThinking(model) ||
     (reasoning && supportsClaudeAdaptiveThinking(model))
   ) {
     return streamAnthropic(model, context, {
@@ -387,103 +380,82 @@ function createClient(
     ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
   };
 
-  if (model.provider === "cloudflare-ai-gateway") {
-    const client = new Anthropic({
-      ...clientOptions,
-      apiKey,
-      authToken: null,
-      baseURL: resolveCloudflareBaseUrl(model),
-      defaultHeaders: Object.assign(
-        {},
-        {
-          accept: baseHeaders.accept,
-          "anthropic-dangerous-direct-browser-access": "true",
-          Authorization: null,
-          ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
-        },
-        model.headers,
-        optionsHeaders,
-      ),
-    });
-
-    return { client, isOAuthToken: false, serverSideFallback: false };
-  }
-
+  let configuredApiKey: string | null = apiKey;
+  let authToken: string | null = null;
+  let defaultHeaders: Record<string, string | null>;
+  let isOAuthToken = false;
+  let serverSideFallback = false;
+  let directApiKeyBetaHeader: string | undefined;
+  let claudeCodeVersion: string | undefined;
   const isCopilot = model.provider === "github-copilot";
-  if (
+
+  if (model.provider === "cloudflare-ai-gateway") {
+    clientOptions.baseURL = resolveCloudflareBaseUrl(model);
+    defaultHeaders = Object.assign(
+      {},
+      baseHeaders,
+      { Authorization: null },
+      model.headers,
+      optionsHeaders,
+    );
+  } else if (
     isCopilot ||
     usesFoundryBearerAuth({
       ...model,
       headers: resolveAiTransportHeaderSentinels(model.headers),
     })
   ) {
-    const client = new Anthropic({
-      ...clientOptions,
-      apiKey: null,
-      authToken: apiKey,
-      defaultHeaders: Object.assign(
-        {},
-        baseHeaders,
-        isCopilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
-        dynamicHeaders,
-        optionsHeaders,
-      ),
-    });
-    return { client, isOAuthToken: false, serverSideFallback: false };
-  }
-
-  // OAuth: Bearer auth, Claude Code identity headers
-  if (isAnthropicOAuthApiKey(apiKey)) {
+    configuredApiKey = null;
+    authToken = apiKey;
+    defaultHeaders = Object.assign(
+      {},
+      baseHeaders,
+      isCopilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
+      dynamicHeaders,
+      optionsHeaders,
+    );
+  } else if (isAnthropicOAuthApiKey(apiKey)) {
     const identity = buildAnthropicClaudeCodeIdentity(
       ["claude-code-20250219", "oauth-2025-04-20", ...betaFeatures].join(","),
       model.headers,
       optionsHeaders,
     );
-    const client = new Anthropic({
-      ...clientOptions,
-      apiKey: null,
-      authToken: apiKey,
-      defaultHeaders: identity.headers,
-    });
-
-    return {
-      client,
-      isOAuthToken: true,
-      serverSideFallback: false,
-      claudeCodeVersion: identity.version,
-    };
+    configuredApiKey = null;
+    authToken = apiKey;
+    defaultHeaders = identity.headers;
+    isOAuthToken = true;
+    claudeCodeVersion = identity.version;
+  } else {
+    serverSideFallback =
+      model.provider === "anthropic" && supportsAnthropicServerSideFallback(model);
+    defaultHeaders = Object.assign(
+      {},
+      baseHeaders,
+      sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders
+        ? { "x-session-affinity": sessionId }
+        : {},
+      model.headers,
+      optionsHeaders,
+    );
+    // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
+    if (isDirectAnthropicModel(model)) {
+      directApiKeyBetaHeader =
+        Object.entries(defaultHeaders).findLast(
+          ([name]) => name.toLowerCase() === "anthropic-beta",
+        )?.[1] ?? "";
+    }
   }
 
-  // API key auth
-  const serverSideFallback =
-    model.provider === "anthropic" && supportsAnthropicServerSideFallback(model);
-  const sessionAffinityHeaders: Record<string, string | null> =
-    sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders
-      ? { "x-session-affinity": sessionId }
-      : {};
-  const defaultHeaders: Record<string, string | null> = Object.assign(
-    {},
-    baseHeaders,
-    sessionAffinityHeaders,
-    model.headers,
-    optionsHeaders,
-  );
-  const client = new Anthropic({
-    ...clientOptions,
-    apiKey,
-    authToken: null,
-    defaultHeaders,
-  });
-
   return {
-    client,
-    isOAuthToken: false,
+    client: new Anthropic({
+      ...clientOptions,
+      apiKey: configuredApiKey,
+      authToken,
+      defaultHeaders,
+    }),
+    isOAuthToken,
     serverSideFallback,
-    // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
-    directApiKeyBetaHeader: isDirectAnthropicModel(model)
-      ? (Object.entries(defaultHeaders).findLast(
-          ([name]) => name.toLowerCase() === "anthropic-beta",
-        )?.[1] ?? "")
-      : undefined,
+    directApiKeyBetaHeader,
+    claudeCodeVersion,
   };
 }

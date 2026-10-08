@@ -84,7 +84,6 @@ function getTelegramMessageReactionSequentialKey(
     : undefined;
 }
 
-/** Registry key for a text command, or undefined when the text is not one. */
 function resolveTelegramCommandKeyForControlLane(params: {
   rawText?: string;
   botUsername?: string;
@@ -171,49 +170,30 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   }
   const msg = getTelegramSequentialMessage(ctx) ?? ctx.update?.callback_query?.message;
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
+  const chatLane = typeof chatId === "number" ? `telegram:${chatId}` : "telegram";
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
   if (isTelegramControlLaneText({ rawText, botUsername })) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:control`;
-    }
-    return "telegram:control";
+    return `${chatLane}:control`;
   }
   if (isBtwRequestText(rawText, botUsername ? { botUsername } : undefined)) {
     const messageId = msg?.message_id;
-    if (typeof chatId === "number" && typeof messageId === "number") {
-      return `telegram:${chatId}:btw:${messageId}`;
-    }
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:btw`;
-    }
-    return "telegram:btw";
+    return typeof chatId === "number" && typeof messageId === "number"
+      ? `${chatLane}:btw:${messageId}`
+      : `${chatLane}:btw`;
   }
   const callbackData = ctx.update?.callback_query?.data;
   if (hasTelegramQuestionCallbackPrefix(callbackData)) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:question`;
-    }
-    return "telegram:question";
+    return `${chatLane}:question`;
   }
   if (
     hasTelegramApprovalCallbackPrefix(callbackData) ||
     (callbackData && parseExecApprovalCommandText(callbackData) !== null)
   ) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:approval`;
-    }
-    return "telegram:approval";
+    return `${chatLane}:approval`;
   }
-  // Raw durable-ingress fixtures and malformed updates can carry a partial
-  // message. Treat missing chat identity as an unknown lane instead of
-  // crashing before the queue records the update.
-  //
-  // General forum topic (topic:1) messages lack both `is_topic_message` and
-  // `is_forum` in the payload, so the forum flag hint is undefined. Fall back
-  // to the in-memory cache (populated by earlier messages or getChat calls)
-  // so the lane key resolves to `telegram:${chatId}:topic:1` rather than the
-  // base lane, preventing a cross-lane session-init race.
+  // Partial ingress updates use the unknown lane. General-topic messages can
+  // omit both forum flags; retain the cached hint to prevent a base-lane/topic:1 race.
   const forumHint = msg?.chat
     ? resolveTelegramMessageForumFlagHint({
         chatType: msg.chat.type,

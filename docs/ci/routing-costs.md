@@ -8,7 +8,7 @@ read_when:
 
 ## Routing from measured wall time
 
-Use GitHub-hosted runners for independent checks that fit the workflow's remaining time. Retain Blacksmith where the measured job tail threatens completion. Qualify RunsOn by workload before assigning it a production tier. Requested Blacksmith 8/16/32 labels delivered 2/4/8 CPUs in the capacity probe; labels are not worker counts.
+Use GitHub-hosted runners for independent checks that fit the workflow's remaining time. Retain Blacksmith where the measured job tail threatens completion. Qualify RunsOn by workload before assigning it a production tier. Requested Blacksmith 8/16/32 labels delivered 2/4/8 CPUs in the capacity check; labels are not worker counts.
 
 The table compares eleven successful B1/R1 main runs with five later successful main runs: `35679872894`, `35679457587`, `35678156129`, `35677164460`, and `35675497006`. These are longitudinal observations with different source revisions, not controlled provider comparisons. Values are median [maximum] complete job seconds; a dash means unmeasured. Existing trust, retry, and [hosted assignment admission](/ci/runners#hybrid-hosted-assignment-guard) still apply.
 
@@ -188,8 +188,8 @@ test and had a 118-second hosted median wait; it is not a complete fifteen-minut
 qualification.
 
 The change adds three actual Blacksmith registrations on ordinary hybrid main
-and same-repository PRs. Trusted fork PRs using the logical GitHub profile emit
-five core-lint rows, so their increase can be six including the gate. A fresh
+and same-repository PRs. Fork PRs keep the logical GitHub check profile, which
+emits five core-lint rows, so their increase can be six including the gate. A fresh
 current-source audit totals 71 potentially self-hosted non-Node rows across the
 supported automatic main/PR profiles. This conservative union includes five
 core-lint rows, five core-type rows, five Windows rows, and thirteen UI E2E rows;
@@ -218,7 +218,7 @@ Those historical Node rows waited for this job. Current Node rows start alongsid
 Preflight took 89–120 seconds, including 48–83 seconds of manifest planning;
 these hybrid runs already skipped preflight's exact dependency restore.
 
-Trusted same-repository hybrid PR first attempts, automatic main runs, and admitted qualification dispatches
+Same-repository hybrid PR first attempts, automatic main runs, and admitted qualification dispatches
 now request the existing Blacksmith 4-class for the ratchet job. Nearby default-Blacksmith runs `36208877388` and
 `36209067188` measured complete ratchet jobs of 85 and 91 seconds. Their setup
 took 12–15 seconds and ratchets 39–40 seconds. These different-head observations
@@ -229,8 +229,8 @@ Using the slower 91-second observation, the route adds at most a modeled
 and one actual hybrid Blacksmith registration. The job already belonged to the
 potentially self-hosted non-Node union under the default backend, so the existing
 84-row allowance and 5,110-registration envelope stay unchanged. Hosted routing
-remains for the GitHub override, hybrid retries, ordinary manual or frozen targets, untrusted
-contributors, and noncanonical repositories. Ratchet checks, merge-tree
+remains for the GitHub override, hybrid retries, ordinary manual or frozen targets, and
+noncanonical repositories. Ratchet checks, merge-tree
 validation, parallel Node admission, dependency reconciliation, and deadlines are unchanged.
 
 The same five runs spent 165–209 seconds in the separate `check-plan` prerequisite.
@@ -276,7 +276,7 @@ RunsOn's job duration was 36 seconds shorter than the Blacksmith control's, an 8
 
 The earlier [baseline run 35688659765](https://github.com/openclaw/openclaw/actions/runs/35688659765) measured the same cron descriptors at 252.63 combined child seconds. The newer 393.71-second control replaces that 4.21-minute costing assumption; the variation is another reason not to equate a child-duration forecast with realized savings.
 
-Selection uses the `runson` backend on a canonical, trusted same-repository PR's first attempt, or the [maintainer qualification dispatch](/ci/runners#runson-qualification) with an exact current PR head. The repository variable remains unchanged. The existing RunsOn GitHub App supplies runners from workflow labels; no interactive AWS login is part of dispatch. The latest operator identity check failed because the AWS SSO session was expired, so administrative state, teardown, and selected-AZ prices remain unverified. The public regional price feed is available without those credentials.
+Selection uses the `runson` backend on a canonical same-repository PR's first attempt, or the [maintainer qualification dispatch](/ci/runners#runson-qualification) with an exact current PR head. The repository variable remains unchanged. The existing RunsOn GitHub App supplies runners from workflow labels; no interactive AWS login is part of dispatch. The latest operator identity check failed because the AWS SSO session was expired, so administrative state, teardown, and selected-AZ prices remain unverified. The public regional price feed is available without those credentials.
 
 Jobs request `spot=true/retry=false`. Spot has native on-demand fallback when capacity is unavailable; the [provider's fallback documentation](https://runs-on.com/docs/costs/spot-pricing/#default-behavior) describes an additional 2–3 seconds, not a complete assignment SLA. `retry=false` opts out of automatic interruption reruns because the full-workflow recovery delay has not been shown to fit the original 900-second wall. An interruption can therefore fail this qualification. This is a Spot placement experiment, not an interruption-safe fifteen-minute tier.
 

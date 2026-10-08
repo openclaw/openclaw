@@ -14,9 +14,7 @@ export async function requestProviderUsage(
   opts?: { signal?: AbortSignal },
 ): Promise<ProviderUsageRequestResult> {
   try {
-    const summary = opts?.signal
-      ? await client.request<UsageSummary>("usage.status", undefined, { signal: opts.signal })
-      : await client.request<UsageSummary>("usage.status");
+    const summary = await client.request<UsageSummary>("usage.status", undefined, opts);
     return ok<UsageSummary, ProviderUsageRequestFailure>(summary);
   } catch (error) {
     if (opts?.signal?.aborted) {

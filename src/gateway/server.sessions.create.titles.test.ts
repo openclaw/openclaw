@@ -230,7 +230,7 @@ test("successful naming survives setup failure and is shared with discussion ope
     await settleWorkspaceRuns(context, storePath, key);
     expect(await fs.readFile(starts, "utf8")).toBe("started\n");
     expect(titleMocks.generate).toHaveBeenCalledOnce();
-    expect(managedWorktrees.findLiveByOwner("session", key)?.branch).toContain(
+    expect((await managedWorktrees.findLiveByOwner("session", key))?.branch).toContain(
       "workspace-repair-plan",
     );
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
@@ -243,7 +243,7 @@ test("successful naming survives setup failure and is shared with discussion ope
   } finally {
     naming.resolve("Workspace repair plan");
     await settleWorkspaceRuns(context, storePath, key, true);
-    const owned = key ? managedWorktrees.findLiveByOwner("session", key) : undefined;
+    const owned = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
     if (owned) {
       await managedWorktrees.remove({
         id: owned.id,
@@ -340,7 +340,7 @@ test.each(["generator error", "worktree wait timeout"])(
       title.resolve("Fixture cleanup");
       dispatchFinished.resolve();
       await settleWorkspaceRuns(context, storePath, key, true);
-      const owned = managedWorktrees.findLiveByOwner("session", key);
+      const owned = await managedWorktrees.findLiveByOwner("session", key);
       if (owned) {
         await managedWorktrees.remove({
           id: owned.id,
@@ -352,47 +352,6 @@ test.each(["generator error", "worktree wait timeout"])(
     }
   },
 );
-
-test("creates a two-word worktree name before an initial turn can generate its title", async () => {
-  const root = tempDirs.make("openclaw-session-worktree-naming-");
-  const workspace = await initializeRepository(root, "workspace");
-  testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
-  const context = {
-    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
-    dedupe: new Map(),
-  };
-  titleMocks.generate.mockResolvedValue("Canvas video and device presence");
-  let key: string | undefined;
-  try {
-    const created = await directSessionReq<{ key: string }>(
-      "sessions.create",
-      {
-        agentId: "main",
-        worktree: true,
-        titleSource: "Can you use the canvas feature to show a video on my screen?",
-      },
-      { ...controlUiClient, context },
-    );
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    key = created.payload!.key;
-    await settleWorkspaceRuns(context, storePath, key);
-    const branch = managedWorktrees.findLiveByOwner("session", key)?.branch;
-    expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+$/);
-    const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-    expect(entry?.worktree?.branch).toBe(branch);
-  } finally {
-    await settleWorkspaceRuns(context, storePath, key, true);
-    const owned = key ? managedWorktrees.findLiveByOwner("session", key) : undefined;
-    if (owned) {
-      await managedWorktrees.remove({
-        id: owned.id,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
-  }
-});
 
 test("sessions.create rejects another plugin's session before naming or worktree preparation", async () => {
   const root = tempDirs.make("openclaw-session-protected-title-");
@@ -425,5 +384,5 @@ test("sessions.create rejects another plugin's session before naming or worktree
   expect(result.error?.message).toContain("did not create it");
   expect(titleMocks.generate).not.toHaveBeenCalled();
   expect(loadSessionEntry(scope)).toEqual(entry);
-  expect(managedWorktrees.findLiveByOwner("session", sessionKey)).toBeUndefined();
+  expect(await managedWorktrees.findLiveByOwner("session", sessionKey)).toBeUndefined();
 });

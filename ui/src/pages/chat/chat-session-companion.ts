@@ -461,25 +461,3 @@ export function requestSessionCompanionAnswer(
     { timeoutMs: COMPANION_ASK_TIMEOUT_MS },
   );
 }
-
-export function requestSessionCompanionState(
-  client: Pick<GatewayBrowserClient, "request">,
-  sessionKey: string,
-  agentId?: string | null,
-): Promise<SessionsCompanionStateResult> {
-  return client.request<SessionsCompanionStateResult>("sessions.companion.state", {
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-  });
-}
-
-export function resetSessionCompanion(
-  client: Pick<GatewayBrowserClient, "request">,
-  sessionKey: string,
-  agentId?: string | null,
-): Promise<SessionsCompanionResetResult> {
-  return client.request<SessionsCompanionResetResult>("sessions.companion.reset", {
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-  });
-}

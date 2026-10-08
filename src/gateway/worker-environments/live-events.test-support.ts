@@ -8,6 +8,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";
@@ -70,7 +71,7 @@ export function captureWorkerTranscriptSource(
     throw new Error("expected admitted worker session");
   }
   const sessionTarget = {
-    ...target,
+    ...captureSessionTranscriptTargetBinding(target),
     expectedLifecycleRevision: entry.lifecycleRevision,
     expectedWriterRunId: entry.activeWriterRunId,
   };

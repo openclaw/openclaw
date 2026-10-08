@@ -50,15 +50,8 @@ export function buildTelegramNativeQuoteCandidate(params: {
   if (!text.trim()) {
     return undefined;
   }
-  const candidate: TelegramNativeQuoteCandidate = {
-    text,
-    position: 0,
-  };
   const entities = sliceTelegramEntitiesForQuote(params.entities, text.length);
-  if (entities) {
-    candidate.entities = entities;
-  }
-  return candidate;
+  return { text, position: 0, ...(entities ? { entities } : {}) };
 }
 
 export function addTelegramNativeQuoteCandidate(
@@ -94,31 +87,18 @@ export function resolveReplyQuoteForSend(params: {
   if (params.replyToId != null) {
     const mapped = params.replyQuoteByMessageId?.[String(params.replyToId)];
     if (mapped?.text) {
-      const quote: TelegramReplyQuoteForSend = {
+      return {
         messageId: params.replyToId,
         text: mapped.text,
+        ...(typeof mapped.position === "number" ? { position: mapped.position } : {}),
+        ...(mapped.entities ? { entities: mapped.entities } : {}),
       };
-      if (typeof mapped.position === "number") {
-        quote.position = mapped.position;
-      }
-      if (mapped.entities) {
-        quote.entities = mapped.entities;
-      }
-      return quote;
     }
   }
-  const quote: TelegramReplyQuoteForSend = {};
-  if (params.replyQuoteMessageId != null) {
-    quote.messageId = params.replyQuoteMessageId;
-  }
-  if (params.replyQuoteText != null) {
-    quote.text = params.replyQuoteText;
-  }
-  if (params.replyQuotePosition != null) {
-    quote.position = params.replyQuotePosition;
-  }
-  if (params.replyQuoteEntities != null) {
-    quote.entities = params.replyQuoteEntities;
-  }
-  return quote;
+  return {
+    ...(params.replyQuoteMessageId != null ? { messageId: params.replyQuoteMessageId } : {}),
+    ...(params.replyQuoteText != null ? { text: params.replyQuoteText } : {}),
+    ...(params.replyQuotePosition != null ? { position: params.replyQuotePosition } : {}),
+    ...(params.replyQuoteEntities != null ? { entities: params.replyQuoteEntities } : {}),
+  };
 }

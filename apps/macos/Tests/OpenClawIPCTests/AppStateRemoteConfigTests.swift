@@ -53,6 +53,13 @@ private actor GatewayConfigReadGate {
 @MainActor
 struct AppStateRemoteConfigTests {
     @Test
+    func `July discovery preference remains readable`() async {
+        await TestIsolation.withIsolatedState(defaults: ["gateway.preferredStableID": "gateway-july"]) {
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-july")
+        }
+    }
+
+    @Test
     func `config fingerprint ignores writer bookkeeping metadata`() {
         let base: [String: Any] = [
             "gateway": ["mode": "local"],
@@ -1074,7 +1081,7 @@ extension AppStateRemoteConfigTests {
 extension AppStateRemoteConfigTests {
     @Test
     func `updated remote gateway config sets trimmed token`() {
-        let remote = AppState._testUpdatedRemoteGatewayConfig(
+        let remote = AppState.updatedRemoteGatewayConfig(
             current: [:],
             draft: .init(
                 transport: .ssh,
@@ -1083,14 +1090,14 @@ extension AppStateRemoteConfigTests {
                 remoteTarget: "alice@gateway.example",
                 remoteIdentity: "/tmp/id_ed25519",
                 remoteToken: "  secret-token  ",
-                dirtyFields: [.remoteToken]))
+                dirtyFields: [.remoteToken])).remote
 
         #expect(remote["token"] as? String == "secret-token")
     }
 
     @Test
     func `updated remote gateway config clears token when blank`() {
-        let remote = AppState._testUpdatedRemoteGatewayConfig(
+        let remote = AppState.updatedRemoteGatewayConfig(
             current: ["token": "old-token"],
             draft: .init(
                 transport: .direct,
@@ -1099,14 +1106,14 @@ extension AppStateRemoteConfigTests {
                 remoteTarget: "",
                 remoteIdentity: "",
                 remoteToken: "   ",
-                dirtyFields: [.remoteToken]))
+                dirtyFields: [.remoteToken])).remote
 
         #expect((remote["token"] as? String) == nil)
     }
 
     @Test
     func `updated remote gateway config pins loopback url for ssh transport`() {
-        let remote = AppState._testUpdatedRemoteGatewayConfig(
+        let remote = AppState.updatedRemoteGatewayConfig(
             current: ["url": "ws://gateway.example:18789"],
             draft: .init(
                 transport: .ssh,
@@ -1115,7 +1122,7 @@ extension AppStateRemoteConfigTests {
                 remoteTarget: "alice@gateway.example",
                 remoteIdentity: "",
                 remoteToken: "",
-                dirtyFields: [.remoteTransport, .remoteUrl, .remoteTarget, .remoteHostKeyPolicy]))
+                dirtyFields: [.remoteTransport, .remoteUrl, .remoteTarget, .remoteHostKeyPolicy])).remote
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
         #expect(remote["transport"] as? String == "ssh")
@@ -1124,7 +1131,7 @@ extension AppStateRemoteConfigTests {
 
     @Test
     func `updated remote gateway config keeps OpenSSH opt in only for the same target`() {
-        let sameTarget = AppState._testUpdatedRemoteGatewayConfig(
+        let sameTarget = AppState.updatedRemoteGatewayConfig(
             current: [
                 "sshHostKeyPolicy": "openssh",
                 "sshTarget": "alice@gateway.example",
@@ -1136,8 +1143,8 @@ extension AppStateRemoteConfigTests {
                 remoteTarget: "alice@gateway.example",
                 remoteIdentity: "",
                 remoteToken: "",
-                dirtyFields: [.remoteTarget, .remoteHostKeyPolicy]))
-        let changedTarget = AppState._testUpdatedRemoteGatewayConfig(
+                dirtyFields: [.remoteTarget, .remoteHostKeyPolicy])).remote
+        let changedTarget = AppState.updatedRemoteGatewayConfig(
             current: [
                 "sshHostKeyPolicy": "openssh",
                 "sshTarget": "old-gateway-alias",
@@ -1149,7 +1156,7 @@ extension AppStateRemoteConfigTests {
                 remoteTarget: "new-gateway-alias",
                 remoteIdentity: "",
                 remoteToken: "",
-                dirtyFields: [.remoteTarget, .remoteHostKeyPolicy]))
+                dirtyFields: [.remoteTarget, .remoteHostKeyPolicy])).remote
 
         #expect(sameTarget["sshHostKeyPolicy"] as? String == "openssh")
         #expect(changedTarget["sshHostKeyPolicy"] as? String == "strict")
@@ -1157,7 +1164,7 @@ extension AppStateRemoteConfigTests {
 
     @Test
     func `updated remote gateway config preserves custom loopback tunnel port`() {
-        let remote = AppState._testUpdatedRemoteGatewayConfig(
+        let remote = AppState.updatedRemoteGatewayConfig(
             current: ["url": "ws://localhost.:29876"],
             draft: .init(
                 transport: .ssh,
@@ -1166,14 +1173,14 @@ extension AppStateRemoteConfigTests {
                 remoteTarget: "alice@gateway.example",
                 remoteIdentity: "",
                 remoteToken: "",
-                dirtyFields: [.remoteUrl]))
+                dirtyFields: [.remoteUrl])).remote
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:29876")
     }
 
     @Test
     func `updated remote gateway config preserves custom port when existing host matches ssh target`() {
-        let remote = AppState._testUpdatedRemoteGatewayConfig(
+        let remote = AppState.updatedRemoteGatewayConfig(
             current: ["url": "ws://gateway.example:19999"],
             draft: .init(
                 transport: .ssh,
@@ -1182,14 +1189,14 @@ extension AppStateRemoteConfigTests {
                 remoteTarget: "alice@gateway.example",
                 remoteIdentity: "",
                 remoteToken: "",
-                dirtyFields: [.remoteUrl]))
+                dirtyFields: [.remoteUrl])).remote
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:19999")
     }
 
     @Test
     func `updated remote gateway config drops custom port when existing host does not match ssh target`() {
-        let remote = AppState._testUpdatedRemoteGatewayConfig(
+        let remote = AppState.updatedRemoteGatewayConfig(
             current: ["url": "ws://other-host.example:19999"],
             draft: .init(
                 transport: .ssh,
@@ -1198,14 +1205,14 @@ extension AppStateRemoteConfigTests {
                 remoteTarget: "alice@gateway.example",
                 remoteIdentity: "",
                 remoteToken: "",
-                dirtyFields: [.remoteUrl]))
+                dirtyFields: [.remoteUrl])).remote
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
     }
 
     @Test
     func `updated remote gateway config does not preserve port for hostname prefix collision`() {
-        let remote = AppState._testUpdatedRemoteGatewayConfig(
+        let remote = AppState.updatedRemoteGatewayConfig(
             current: ["url": "ws://example.attacker.tld:19999"],
             draft: .init(
                 transport: .ssh,
@@ -1214,7 +1221,7 @@ extension AppStateRemoteConfigTests {
                 remoteTarget: "alice@example.com",
                 remoteIdentity: "",
                 remoteToken: "",
-                dirtyFields: [.remoteUrl]))
+                dirtyFields: [.remoteUrl])).remote
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
     }
@@ -1338,7 +1345,7 @@ extension AppStateRemoteConfigTests {
 
     @Test
     func `updated remote gateway config replaces object token when user enters plaintext`() {
-        let remote = AppState._testUpdatedRemoteGatewayConfig(
+        let remote = AppState.updatedRemoteGatewayConfig(
             current: [
                 "token": [
                     "$secretRef": "gateway-token", // pragma: allowlist secret
@@ -1351,7 +1358,7 @@ extension AppStateRemoteConfigTests {
                 remoteTarget: "",
                 remoteIdentity: "",
                 remoteToken: "  fresh-token  ",
-                dirtyFields: [.remoteToken]))
+                dirtyFields: [.remoteToken])).remote
 
         #expect(remote["token"] as? String == "fresh-token")
     }
@@ -1364,7 +1371,7 @@ extension AppStateRemoteConfigTests {
             ],
         ]
 
-        let preserved = AppState._testUpdatedRemoteGatewayConfig(
+        let preserved = AppState.updatedRemoteGatewayConfig(
             current: current,
             draft: .init(
                 transport: .direct,
@@ -1373,10 +1380,10 @@ extension AppStateRemoteConfigTests {
                 remoteTarget: "",
                 remoteIdentity: "",
                 remoteToken: "",
-                dirtyFields: []))
+                dirtyFields: [])).remote
         #expect((preserved["token"] as? [String: String])?["$secretRef"] == "gateway-token") // pragma: allowlist secret
 
-        let cleared = AppState._testUpdatedRemoteGatewayConfig(
+        let cleared = AppState.updatedRemoteGatewayConfig(
             current: current,
             draft: .init(
                 transport: .direct,
@@ -1385,7 +1392,7 @@ extension AppStateRemoteConfigTests {
                 remoteTarget: "",
                 remoteIdentity: "",
                 remoteToken: "   ",
-                dirtyFields: [.remoteToken]))
+                dirtyFields: [.remoteToken])).remote
         #expect((cleared["token"] as? String) == nil)
     }
 

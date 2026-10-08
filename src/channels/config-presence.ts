@@ -9,6 +9,7 @@ import {
   hasBundledChannelPersistedAuthState,
   listBundledChannelIdsWithPersistedAuthState,
 } from "../channels/plugins/persisted-auth-state.js";
+import { hasMeaningfulChannelConfig } from "../config/channel-config-activation.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
@@ -16,6 +17,8 @@ import { listOfficialExternalChannelEnvVars } from "../plugins/official-external
 import { isRecord } from "../utils.js";
 import { isChannelConfigMetadataKey } from "./config-metadata.js";
 import { listBundledChannelIds } from "./plugins/bundled-ids.js";
+
+export { hasMeaningfulChannelConfig } from "../config/channel-config-activation.js";
 
 export type AmbientEnvTriggerPolicy = "allow" | "suppress";
 
@@ -35,16 +38,6 @@ type ChannelPresenceSignal = {
   channelId: string;
   source: ChannelPresenceSignalSource;
 };
-
-/** Returns true when a channel config entry contains settings beyond enabled/disabled state. */
-export function hasMeaningfulChannelConfig(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  // `enabled` alone is operator intent, not configuration material; setup/status code uses this
-  // distinction to avoid treating explicit disables as configured channels.
-  return Object.keys(value).some((key) => key !== "enabled");
-}
 
 /** Lists channels explicitly disabled in config so activation logic can suppress auto-detection. */
 export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): string[] {
@@ -89,19 +82,16 @@ export function listPotentialConfiguredChannelPresenceSignals(
   env: NodeJS.ProcessEnv = process.env,
   options: ChannelPresenceOptions = {},
 ): ChannelPresenceSignal[] {
-  const signals: ChannelPresenceSignal[] = [];
-  const seenSignals = new Set<string>();
+  const signals = new Map<string, ChannelPresenceSignal>();
   const addSignal = (rawChannelId: string, source: ChannelPresenceSignalSource) => {
     const channelId = rawChannelId.trim();
     if (!channelId || isChannelConfigMetadataKey(channelId)) {
       return;
     }
     const key = `${source}:${channelId}`;
-    if (seenSignals.has(key)) {
-      return;
+    if (!signals.has(key)) {
+      signals.set(key, { channelId, source });
     }
-    seenSignals.add(key);
-    signals.push({ channelId, source });
   };
   const scopedChannelIds = options.channelIds
     ? new Set(
@@ -124,7 +114,7 @@ export function listPotentialConfiguredChannelPresenceSignals(
       }
       // Shared channel defaults are not concrete channel configuration; only per-channel entries
       // with meaningful settings should produce presence signals.
-      if (hasMeaningfulChannelConfig(value)) {
+      if (hasMeaningfulChannelConfig(value, key)) {
         addSignal(key, "config");
       }
     }
@@ -174,5 +164,5 @@ export function listPotentialConfiguredChannelPresenceSignals(
     }
   }
 
-  return signals;
+  return [...signals.values()];
 }

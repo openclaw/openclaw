@@ -134,18 +134,20 @@ describe("SQLite reclamation admission races", () => {
       { type: "session", id: sessionId, content: "retire this session" },
     ]);
     await replaceSessionEntry(unrelated, { sessionId: unrelated.sessionId, updatedAt });
-    const recorders = [0, 1, 2].map((index) => {
-      const recorder = createTrajectoryRuntimeRecorder({
-        sessionId: unrelated.sessionId,
-        sessionTarget: unrelated,
-        runId: `trajectory-writer-${index}`,
-      });
-      if (!recorder) {
-        throw new Error("expected SQLite trajectory recorder");
-      }
-      recorder.recordEvent("admission-proof", { index });
-      return recorder;
-    });
+    const recorders = await Promise.all(
+      [0, 1, 2].map(async (index) => {
+        const recorder = await createTrajectoryRuntimeRecorder({
+          sessionId: unrelated.sessionId,
+          sessionTarget: unrelated,
+          runId: `trajectory-writer-${index}`,
+        });
+        if (!recorder) {
+          throw new Error("expected SQLite trajectory recorder");
+        }
+        recorder.recordEvent("admission-proof", { index });
+        return recorder;
+      }),
+    );
     const writes: Promise<void>[] = [];
     let pendingBeforeAuthorization: Array<string | undefined> = [];
     archiveMaterializationHook.beforeCommitRequest = vi.fn(() => {
@@ -197,6 +199,7 @@ describe("SQLite reclamation admission races", () => {
         { sessionId, updatedAt: 1 },
       );
       // Close/checkpoint before copying so both files start with the same durable row and revision.
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       fs.copyFileSync(originalPath, replacementPath);
       fs.symlinkSync(originalPath, alias);

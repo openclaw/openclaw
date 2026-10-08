@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  coerceSecretRef,
+  parseSecretRef,
   normalizeSecretInputString,
   type SecretInput,
 } from "../config/types.secrets.js";
@@ -13,7 +13,7 @@ import { findEdgeAuthIssue } from "../shared/gateway-edge-auth-headers.js";
 export type EdgeAuthHeadersConfig = Record<string, SecretInput>;
 
 function normalizeEdgeAuthSecretInput(value: unknown, headerName: string): SecretInput {
-  const ref = coerceSecretRef(value);
+  const ref = parseSecretRef(value);
   if (ref) {
     return ref;
   }
@@ -53,13 +53,7 @@ export async function resolveEdgeAuthHeaders(params: {
   if (!params.value) {
     return undefined;
   }
-  let protocol: string;
-  try {
-    protocol = new URL(params.targetUrl).protocol;
-  } catch {
-    throw new Error("gateway.remote.edgeAuth requires a wss:// connection target");
-  }
-  if (protocol !== "wss:") {
+  if (URL.parse(params.targetUrl)?.protocol !== "wss:") {
     throw new Error("gateway.remote.edgeAuth requires a wss:// connection target");
   }
   const resolvedEntries = await Promise.all(

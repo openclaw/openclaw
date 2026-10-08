@@ -1,5 +1,6 @@
 import type { BackupStatusResult, StorageLocationsProbeResult } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -39,12 +40,10 @@ export class SystemsController {
   statusFilter: SystemsStatusFilter = "all";
   showStats = true;
   showDetails = false;
-  loading = false;
   error: string | null = null;
   sampledAtMs: number | null = null;
   desktopSetupError: string | null = null;
   backups: BackupStatusResult | null = null;
-  backupsLoading = false;
   backupsError: string | null = null;
   readonly storageProbes = new Map<string, StorageLocationsProbeResult>();
   private backupsRequest: AbortController | undefined;
@@ -76,6 +75,14 @@ export class SystemsController {
     return this.inventory === null || this.refreshQueued !== undefined;
   }
 
+  get loading(): boolean {
+    return this.request !== undefined;
+  }
+
+  get backupsLoading(): boolean {
+    return this.backupsRequest !== undefined;
+  }
+
   get desktopAvailable(): boolean {
     return this.current && isDesktopPanelAvailable(this.context.gateway.snapshot);
   }
@@ -103,97 +110,85 @@ export class SystemsController {
   private cancelBackups(): void {
     this.backupsRequest?.abort();
     this.backupsRequest = undefined;
-    this.backupsLoading = false;
     for (const request of this.storageProbeRequests.values()) {
       request.abort();
     }
     this.storageProbeRequests.clear();
   }
 
-  async refreshBackups(): Promise<void> {
-    const scope = this.lifecycle.capture();
-    if (
-      !this.presented ||
-      !this.current ||
-      !scope ||
-      this.backupsRequest ||
-      document.visibilityState === "hidden" ||
-      !hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null)
-    ) {
-      return;
-    }
-    const request = new AbortController();
-    this.backupsRequest = request;
-    this.backupsLoading = true;
-    this.backupsError = null;
-    const isCurrent = () =>
-      this.presented &&
-      this.current &&
-      this.backupsRequest === request &&
-      this.lifecycle.isCurrent(scope) &&
-      hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null);
-    this.notify();
-    try {
-      const result = await scope.client.request<BackupStatusResult>(
-        "backup.status",
-        {},
-        {
-          signal: request.signal,
-        },
-      );
-      if (isCurrent()) {
-        this.backups = result;
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        this.backupsError = formatUiError(error);
-      }
-    } finally {
-      if (isCurrent()) {
-        this.backupsRequest = undefined;
-        this.backupsLoading = false;
-        this.notify();
-      }
-    }
+  refreshBackups(): Promise<void> {
+    return this.readBackupState();
   }
 
-  async probeStorage(name: string): Promise<void> {
+  probeStorage(name: string): Promise<void> {
+    return this.readBackupState(name);
+  }
+
+  private async readBackupState(name?: string): Promise<void> {
     const scope = this.lifecycle.capture();
     if (
       !this.presented ||
       !this.current ||
       !scope ||
-      this.storageProbeBusy(name) ||
+      (name === undefined ? this.backupsRequest : this.storageProbeBusy(name)) ||
+      (name === undefined && document.visibilityState === "hidden") ||
       !hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null)
     ) {
       return;
     }
     const request = new AbortController();
-    this.storageProbeRequests.set(name, request);
-    this.storageProbes.delete(name);
+    if (name === undefined) {
+      this.backupsRequest = request;
+      this.backupsError = null;
+    } else {
+      this.storageProbeRequests.set(name, request);
+      this.storageProbes.delete(name);
+    }
     const isCurrent = () =>
       this.presented &&
       this.current &&
-      this.storageProbeRequests.get(name) === request &&
+      (name === undefined
+        ? this.backupsRequest === request
+        : this.storageProbeRequests.get(name) === request) &&
       this.lifecycle.isCurrent(scope) &&
       hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null);
     this.notify();
     try {
-      const result = await scope.client.request<StorageLocationsProbeResult>(
-        "storage.locations.probe",
-        { name },
-        { signal: request.signal },
-      );
-      if (isCurrent()) {
-        this.storageProbes.set(name, result);
+      if (name === undefined) {
+        const result = await scope.client.request<BackupStatusResult>(
+          "backup.status",
+          {},
+          { signal: request.signal },
+        );
+        if (isCurrent()) {
+          this.backups = result;
+        }
+      } else {
+        const result = await scope.client.request<StorageLocationsProbeResult>(
+          "storage.locations.probe",
+          { name },
+          { signal: request.signal },
+        );
+        if (isCurrent()) {
+          this.storageProbes.set(name, result);
+        }
       }
     } catch (error) {
       if (isCurrent()) {
-        this.storageProbes.set(name, { state: "error", message: formatUiError(error) });
+        const message = formatUiError(error);
+        if (name === undefined) {
+          this.backupsError = message;
+        } else {
+          this.storageProbes.set(name, { state: "error", message });
+        }
       }
     } finally {
       if (isCurrent()) {
-        this.storageProbeRequests.delete(name);
+        if (name === undefined) {
+          this.backupsRequest = undefined;
+        } else {
+          this.storageProbeRequests.delete(name);
+        }
         this.notify();
       }
     }
@@ -265,10 +260,7 @@ export class SystemsController {
   }
 
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+    return registerListener(this.listeners, listener);
   }
 
   private notify(): void {
@@ -334,28 +326,12 @@ export class SystemsController {
     this.notify();
   }
 
-  search(query: string): void {
-    this.query = query;
-    this.notify();
-  }
-
-  setSortMode(mode: SystemsSortMode): void {
-    this.sortMode = mode;
-    this.notify();
-  }
-
-  setStatusFilter(filter: SystemsStatusFilter): void {
-    this.statusFilter = filter;
-    this.notify();
-  }
-
-  toggleStats(): void {
-    this.showStats = !this.showStats;
-    this.notify();
-  }
-
-  toggleDetails(): void {
-    this.showDetails = !this.showDetails;
+  updatePresentation(
+    patch: Partial<
+      Pick<SystemsController, "query" | "sortMode" | "statusFilter" | "showStats" | "showDetails">
+    >,
+  ): void {
+    Object.assign(this, patch);
     this.notify();
   }
 
@@ -442,7 +418,6 @@ export class SystemsController {
     this.telemetryRequest?.abort();
     this.request = undefined;
     this.telemetryRequest = undefined;
-    this.loading = false;
     this.refreshQueued = undefined;
   }
 
@@ -487,7 +462,6 @@ export class SystemsController {
     this.request = request;
     const isCurrent = () =>
       this.presented && this.current && this.request === request && this.lifecycle.isCurrent(scope);
-    this.loading = true;
     this.error = null;
     void this.refreshBackups();
     this.notify();
@@ -525,7 +499,6 @@ export class SystemsController {
       }
     } finally {
       if (isCurrent()) {
-        this.loading = false;
         this.request = undefined;
         this.notify();
         if (this.refreshQueued) {
@@ -557,13 +530,11 @@ export class SystemsController {
     }
     const request = new AbortController();
     this.telemetryRequest = request;
-    const id = this.selectedId;
     const isCurrent = () =>
       this.presented &&
       this.current &&
       this.lifecycle.isCurrent(scope) &&
-      this.telemetryRequest === request &&
-      this.selectedId === id;
+      this.telemetryRequest === request;
     try {
       if (gatewayHost) {
         const sample = await readSystemInfo(this.context.gateway, request.signal);

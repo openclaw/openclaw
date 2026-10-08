@@ -16,6 +16,7 @@ import { isPidAlive } from "../../shared/pid-alive.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 
+const NATIVE_CLEANUP_GUARD_MS = 5_000;
 let preparedParent: ReturnType<typeof startParent> | undefined;
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -191,8 +192,9 @@ function startParent(killProcessTree: boolean) {
           const native: { pid: number; gate: number } = JSON.parse(
             fs.readFileSync(path.join(fixture.controllers, receipt), "utf8"),
           );
-          await waitForDead(native.pid, 5000);
-          await waitForDead(native.gate, 5000);
+          // Cleanup hang guards after the owner released the fixture; these are not readiness races.
+          await waitForDead(native.pid, AbortSignal.timeout(NATIVE_CLEANUP_GUARD_MS));
+          await waitForDead(native.gate, AbortSignal.timeout(NATIVE_CLEANUP_GUARD_MS));
           await expect
             .poll(() => isChildProcessTreeAlive({ pid: native.gate }), { timeout: 5000 })
             .toBe(false);

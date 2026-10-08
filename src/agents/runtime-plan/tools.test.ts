@@ -10,7 +10,9 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { createPluginRecord } from "../../plugins/loader-records.js";
+import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
+import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import {
@@ -273,7 +275,17 @@ describe("AgentRuntimePlan tool policy helpers", () => {
   ] as const)(
     "owns the assembly array after %s normalization (%s) while retaining plugin tool admission",
     async (route, mode) => {
-      const instance = new PluginInstance("normalizer-fixture");
+      const builder = createTestPluginRegistry();
+      const record = createPluginRecord({
+        id: "normalizer-fixture",
+        source: "/synthetic/normalizer-fixture.ts",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      builder.registry.plugins.push(record);
+      const api = builder.createApi(record, { config: {} });
+      const instance = getPluginInstance(record)!;
       const catalogRef = createToolSearchCatalogRef();
       try {
         const output = { content: [{ type: "text" as const, text: "fixture note" }], details: {} };
@@ -294,10 +306,19 @@ describe("AgentRuntimePlan tool policy helpers", () => {
           },
         };
         setPluginToolMeta(tool, metadata);
-        // Even a pass-through provider hook returns an instance-owned collection view.
-        const normalize = instance.wrap((tools: AgentTool[]) =>
-          mode === "cloned" ? tools.map((entry) => ({ ...entry })) : tools,
-        );
+        api.registerProvider({
+          id: "normalizer-fixture",
+          label: "Normalizer fixture",
+          auth: [],
+          normalizeToolSchemas: ({ tools }) =>
+            mode === "cloned" ? tools.map((entry) => ({ ...entry })) : tools,
+        });
+        const provider = expectDefined(
+          builder.registry.providers[0],
+          "registered provider",
+        ).provider;
+        const normalize = (tools: AgentTool[]) =>
+          provider.normalizeToolSchemas!({ tools, provider: provider.id });
         mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools }) => normalize(tools));
         const runtimePlan =
           route === "plan"

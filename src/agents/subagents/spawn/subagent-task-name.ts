@@ -7,7 +7,6 @@ type NormalizeSubagentTaskNameResult =
   | { taskName?: string; error?: undefined }
   | { taskName?: undefined; error: string };
 
-/** Normalizes and validates an optional subagent task name. */
 export function normalizeSubagentTaskName(value: unknown): NormalizeSubagentTaskNameResult {
   const taskName = normalizeOptionalString(value);
   if (!taskName) {

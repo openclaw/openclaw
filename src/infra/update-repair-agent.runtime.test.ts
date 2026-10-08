@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { captureAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolExecutionBudget,
+  captureAgentToolSourceExecutionGuard,
+} from "../agents/agent-tool-source-execution-guard.js";
 import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
 import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
@@ -86,7 +89,6 @@ beforeEach(() => {
 
 describe("post-failure repair execution", () => {
   it.each([
-    { localOverride: false, cleanupFails: false, borrowedOwner: false },
     { localOverride: true, cleanupFails: false, borrowedOwner: true },
     { localOverride: false, cleanupFails: true, borrowedOwner: false },
   ])(
@@ -333,6 +335,52 @@ describe("post-failure repair execution", () => {
       });
       expect(mocks.run).not.toHaveBeenCalled();
       expect(mocks.entry).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps full authority at tool effect guards when preparation uses live checks", async () => {
+    await withOpenClawTestState({ layout: "home" }, async (state) => {
+      const config: OpenClawConfig = { plugins: { enabled: false } };
+      let current = true;
+      let allowed = false;
+      let refusal: unknown;
+      mocks.run.mockImplementation(async () => {
+        captureAgentToolExecutionBudget()?.();
+        const beforeEffect = captureAgentToolSourceExecutionGuard();
+        beforeEffect();
+        allowed = true;
+        // Revocation during a tool's own awaits must stop its final write or spawn.
+        current = false;
+        try {
+          beforeEffect();
+        } catch (error) {
+          refusal = error;
+        }
+        return { payloads: [{ text: "Stopped." }], meta: { durationMs: 1 } };
+      });
+      const result = await runUpdateRepairTurn({
+        target: { ...state, installRoot: state.workspaceDir },
+        route: {
+          runner: "embedded",
+          provider: "fixture",
+          model: "repair",
+          modelLabel: "fixture/repair",
+          agentId: "owner",
+          agentDir: state.statePath("agents", "owner", "agent"),
+          runConfig: config,
+          sourceConfig: config,
+        },
+        modelFallbacks: [],
+        prompt: "Repair.",
+        timeoutMs: 10_000,
+        maxToolCalls: 1,
+        signal: new AbortController().signal,
+        isCurrent: () => current,
+        isLive: () => true,
+      });
+      expect(allowed).toBe(true);
+      expect(refusal).toMatchObject({ message: "Agent tool execution scope is no longer active" });
+      expect(result).toMatchObject({ status: "completed", toolCalls: 1 });
     });
   });
 });

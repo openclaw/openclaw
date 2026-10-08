@@ -11,7 +11,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
-import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
+import type { ChannelMessageActionContext, ChannelPlugin } from "./types.public.js";
 
 const receipt = { content: [{ type: "text" as const, text: "edited" }], details: { ok: true } };
 
@@ -69,48 +69,14 @@ function registerWriter(
 }
 
 describe("scheduled message write declaration", () => {
-  it.each(["global", "bundled"] as const)(
-    "projects only the declared operator action through an active %s registration",
-    async (origin) => {
+  it.each([
+    { origin: "global", error: false },
+    { origin: "bundled", error: false },
+    { origin: "global", error: true },
+  ] as const)(
+    "projects declared $origin writes and closes completed callbacks (error=$error)",
+    async ({ origin, error }) => {
       const fixture = registerWriter({ origin, trusted: origin === "global" });
-      expect(await dispatchChannelMessageAction(fixture.context)).toBe(receipt);
-      const received = fixture.handleAction.mock.calls[0]?.[0];
-      expect(received?.senderIsOwner).toBe(true);
-      expect(received?.toolContext).toBeUndefined();
-      expect(received?.requesterSenderId).toBeUndefined();
-      expect(received).not.toHaveProperty("messageActionAuthorization");
-      expect(fixture.context.senderIsOwner).toBe(false);
-    },
-  );
-
-  it.each([{ trusted: false }, { writes: ["read"] as const }])(
-    "does not infer writer support or registration authority from action arguments (%j)",
-    async (options) => {
-      const fixture = registerWriter(options);
-      fixture.context.params.writeAuthorityActions = ["channel-edit"];
-      fixture.context.params.trustedOfficialInstall = true;
-      fixture.context.params.senderIsOwner = true;
-      await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
-        "write authorization support",
-      );
-      expect(fixture.handleAction).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not borrow writer authority from a root registration into an empty scope", async () => {
-    const fixture = registerWriter();
-    await withPluginRuntimeRegistryScope(createTestRegistry([]), async () => {
-      await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
-        "write authorization support",
-      );
-    });
-    expect(fixture.handleAction).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "closes a retained request callback after completion (error=%s)",
-    async (error) => {
-      const fixture = registerWriter();
       let retained: (() => void) | undefined;
       fixture.handleAction.mockImplementation(async (context) => {
         retained = context.assertDirectAdapterHandoff;
@@ -126,59 +92,82 @@ describe("scheduled message write declaration", () => {
       } else {
         await expect(request).resolves.toBe(receipt);
       }
+      const received = fixture.handleAction.mock.calls[0]?.[0];
+      expect(received?.senderIsOwner).toBe(true);
+      expect(received?.toolContext).toBeUndefined();
+      expect(received?.requesterSenderId).toBeUndefined();
+      expect(received).not.toHaveProperty("messageActionAuthorization");
+      expect(fixture.context.senderIsOwner).toBe(false);
       expect(fixture.source.signal.aborted).toBe(false);
       expect(retained).toBeTypeOf("function");
       expect(retained).toThrow("invocation is no longer active");
     },
   );
 
-  it("awaits the platform dispatch hook before the final fence and adapter", async () => {
-    const fixture = registerWriter();
-    let hookFinished = false;
-    let fencedAfterHook = false;
-    fixture.context.onPlatformSendDispatch = vi.fn(async () => {
-      await Promise.resolve();
-      hookFinished = true;
-    });
-    fixture.context.assertDirectAdapterHandoff = () => {
-      if (hookFinished) {
-        fencedAfterHook = true;
-      }
-    };
-    fixture.handleAction.mockImplementation(async () => {
-      expect(hookFinished).toBe(true);
-      expect(fencedAfterHook).toBe(true);
-      return receipt;
-    });
-    await expect(dispatchChannelMessageAction(fixture.context)).resolves.toBe(receipt);
-    expect(fixture.context.onPlatformSendDispatch).toHaveBeenCalledTimes(1);
-    expect(fixture.handleAction).toHaveBeenCalledTimes(1);
+  it.each([
+    { name: "untrusted registration", options: { trusted: false }, emptyScope: false },
+    { name: "undeclared action", options: { writes: ["read"] }, emptyScope: false },
+    { name: "empty scope", options: {}, emptyScope: true },
+  ] satisfies {
+    name: string;
+    options: Parameters<typeof registerWriter>[0];
+    emptyScope: boolean;
+  }[])("rejects $name regardless of forged action arguments", async ({ options, emptyScope }) => {
+    const fixture = registerWriter(options);
+    fixture.context.params.writeAuthorityActions = ["channel-edit"];
+    fixture.context.params.trustedOfficialInstall = true;
+    fixture.context.params.senderIsOwner = true;
+    const run = () =>
+      expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
+        "write authorization support",
+      );
+    if (emptyScope) {
+      await withPluginRuntimeRegistryScope(createTestRegistry([]), run);
+    } else {
+      await run();
+    }
+    expect(fixture.handleAction).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "fences a rejected platform dispatch hook without calling the adapter (revoked: %s)",
-    async (revoked) => {
+  it.each(["sent", "rejected", "revoked"] as const)(
+    "awaits the dispatch hook and fences its %s outcome before the adapter",
+    async (outcome) => {
       const fixture = registerWriter();
-      let hookRejected = false;
+      let hookFinished = false;
       let fencedAfterHook = false;
-      fixture.context.onPlatformSendDispatch = async () => {
+      fixture.context.onPlatformSendDispatch = vi.fn(async () => {
         await Promise.resolve();
-        hookRejected = true;
-        throw new Error("source conversation changed before delivery");
-      };
+        hookFinished = true;
+        if (outcome !== "sent") {
+          throw new Error("source conversation changed before delivery");
+        }
+      });
       fixture.context.assertDirectAdapterHandoff = () => {
-        if (hookRejected) {
+        if (hookFinished) {
           fencedAfterHook = true;
-          if (revoked) {
+          if (outcome === "revoked") {
             throw new Error("caller authority ended");
           }
         }
       };
-      await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
-        revoked ? "caller authority ended" : "source conversation changed before delivery",
-      );
+      fixture.handleAction.mockImplementation(async () => {
+        expect(hookFinished).toBe(true);
+        expect(fencedAfterHook).toBe(true);
+        return receipt;
+      });
+      const request = dispatchChannelMessageAction(fixture.context);
+      if (outcome === "sent") {
+        await expect(request).resolves.toBe(receipt);
+      } else {
+        await expect(request).rejects.toThrow(
+          outcome === "revoked"
+            ? "caller authority ended"
+            : "source conversation changed before delivery",
+        );
+      }
       expect(fencedAfterHook).toBe(true);
-      expect(fixture.handleAction).not.toHaveBeenCalled();
+      expect(fixture.context.onPlatformSendDispatch).toHaveBeenCalledTimes(1);
+      expect(fixture.handleAction).toHaveBeenCalledTimes(outcome === "sent" ? 1 : 0);
     },
   );
 

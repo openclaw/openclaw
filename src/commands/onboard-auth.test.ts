@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 // Onboard auth tests cover provider auth setup, credential persistence, and auth-profile state.
@@ -128,9 +129,25 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("openai", creds, undefined, {
-      syncSiblingAgents: true,
+    const readdir = fsSync.readdirSync;
+    const discovery = vi.spyOn(fsSync, "readdirSync").mockImplementation((...args) => {
+      const entries = readdir(...args);
+      if (args[0] === path.join(tempStateDir, "agents")) {
+        // The shared owner must precede siblings even when the filesystem lists it last.
+        entries.sort(
+          (left, right) =>
+            Number(left.name.toString() === "kid") - Number(right.name.toString() === "kid"),
+        );
+      }
+      return entries;
     });
+    try {
+      await writeOAuthCredentials("openai", creds, undefined, {
+        syncSiblingAgents: true,
+      });
+    } finally {
+      discovery.mockRestore();
+    }
 
     for (const dir of [mainAgentDir, kidAgentDir]) {
       const effectiveStore = readEffectiveAuthProfiles(dir);

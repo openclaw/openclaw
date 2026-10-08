@@ -1,5 +1,3 @@
-// Gateway credential resolution.
-// Selects token/password credentials from explicit, env, local, and remote config inputs.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createGatewayCredentialPlan,
@@ -22,21 +20,12 @@ export function resolveExplicitGatewayAuth(auth?: ExplicitGatewayAuth): Explicit
   };
 }
 
-type ResolvedGatewayCredentials = {
-  token?: string;
-  password?: string;
-};
-
-/** Selects local Gateway credentials or remote Gateway client credentials. */
 export type GatewayCredentialMode = "local" | "remote";
 
-/** Chooses whether environment credentials or config credentials win for local auth. */
 export type GatewayCredentialPrecedence = "env-first" | "config-first";
 
-/** Chooses whether remote config or environment credentials win for remote client auth. */
 export type GatewayRemoteCredentialPrecedence = "remote-first" | "env-first";
 
-/** Controls whether remote client auth may fall back to env/local credentials. */
 export type GatewayRemoteCredentialFallback = "remote-env-local" | "remote-only";
 
 const GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE = "GATEWAY_SECRET_REF_UNAVAILABLE"; // pragma: allowlist secret
@@ -59,28 +48,23 @@ export class GatewaySecretRefUnavailableError extends Error {
   }
 }
 
-/** Type guard for unresolved Gateway secret-ref errors, optionally scoped to a config path. */
 export function isGatewaySecretRefUnavailableError(
   error: unknown,
   expectedPath?: string,
 ): error is GatewaySecretRefUnavailableError {
-  if (!(error instanceof GatewaySecretRefUnavailableError)) {
-    return false;
-  }
-  if (!expectedPath) {
-    return true;
-  }
-  return error.path === expectedPath;
+  return (
+    error instanceof GatewaySecretRefUnavailableError &&
+    (!expectedPath || error.path === expectedPath)
+  );
 }
 
-/** Resolve direct token/password values with caller-selected env-vs-config precedence. */
 export function resolveGatewayCredentialsFromValues(params: {
   configToken?: unknown;
   configPassword?: unknown;
   env?: NodeJS.ProcessEnv;
   tokenPrecedence?: GatewayCredentialPrecedence;
   passwordPrecedence?: GatewayCredentialPrecedence;
-}): ResolvedGatewayCredentials {
+}): ExplicitGatewayAuth {
   const env = params.env ?? process.env;
   const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
   const envPassword = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
@@ -102,7 +86,7 @@ export function resolveGatewayCredentialsFromValues(params: {
 function resolveLocalGatewayCredentials(params: {
   plan: GatewayCredentialPlan;
   localPrecedence: GatewayCredentialPrecedence;
-}): ResolvedGatewayCredentials {
+}): ExplicitGatewayAuth {
   const tokenConfigFallback = params.plan.localToken.configured
     ? params.plan.localToken.value
     : params.plan.remoteToken.value;
@@ -180,7 +164,7 @@ function resolveRemoteGatewayCredentials(params: {
   remotePasswordPrecedence: GatewayRemoteCredentialPrecedence;
   remoteTokenFallback: GatewayRemoteCredentialFallback;
   remotePasswordFallback: GatewayRemoteCredentialFallback;
-}): ResolvedGatewayCredentials {
+}): ExplicitGatewayAuth {
   const token =
     params.remoteTokenFallback === "remote-only"
       ? params.plan.remoteToken.value
@@ -238,7 +222,6 @@ function resolveRemoteGatewayCredentials(params: {
   return { token, password };
 }
 
-/** Resolve Gateway credentials from config, explicit auth, URL overrides, and mode policy. */
 export function resolveGatewayCredentialsFromConfig(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -251,27 +234,16 @@ export function resolveGatewayCredentialsFromConfig(params: {
   remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
   remoteTokenFallback?: GatewayRemoteCredentialFallback;
   remotePasswordFallback?: GatewayRemoteCredentialFallback;
-}): ResolvedGatewayCredentials {
+}): ExplicitGatewayAuth {
   const env = params.env ?? process.env;
-  const explicitToken = trimToUndefined(params.explicitAuth?.token);
-  const explicitPassword = trimToUndefined(params.explicitAuth?.password);
-  if (explicitToken || explicitPassword) {
-    return { token: explicitToken, password: explicitPassword };
+  const explicitAuth = resolveExplicitGatewayAuth(params.explicitAuth);
+  if (explicitAuth.token || explicitAuth.password) {
+    return explicitAuth;
   }
-  // A CLI URL override points at an ad-hoc Gateway, so stored credentials for
-  // the configured Gateway must not leak into that request.
-  if (trimToUndefined(params.urlOverride) && params.urlOverrideSource !== "env") {
-    return {};
-  }
-  // Env URL overrides keep env credentials paired with the same environment.
-  if (trimToUndefined(params.urlOverride) && params.urlOverrideSource === "env") {
-    return resolveGatewayCredentialsFromValues({
-      configToken: undefined,
-      configPassword: undefined,
-      env,
-      tokenPrecedence: "env-first",
-      passwordPrecedence: "env-first", // pragma: allowlist secret
-    });
+  // Ad-hoc URLs cannot reuse configured credentials. Env overrides retain only
+  // credentials from the same environment; CLI overrides need explicit auth.
+  if (trimToUndefined(params.urlOverride)) {
+    return params.urlOverrideSource === "env" ? resolveGatewayCredentialsFromValues({ env }) : {};
   }
 
   const plan = createGatewayCredentialPlan({
@@ -309,7 +281,7 @@ export function resolveGatewayProbeCredentialsFromConfig(params: {
   explicitAuth?: ExplicitGatewayAuth;
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
-}): ResolvedGatewayCredentials {
+}): ExplicitGatewayAuth {
   return resolveGatewayCredentialsFromConfig({
     cfg: params.cfg,
     env: params.env,

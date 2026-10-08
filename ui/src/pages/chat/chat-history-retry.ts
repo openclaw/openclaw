@@ -1,16 +1,26 @@
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { isAgentDatabaseInspectionPendingError } from "../../lib/gateway-availability.ts";
 
-const DEFAULT_RETRY_MS = 500;
-const MAX_RETRY_MS = 5_000;
+export const CHAT_HISTORY_RETRY_WINDOW_MS = 60_000;
 
-export function isRetryableStartupUnavailable(
+type RetryableChatReadError = GatewayRequestError | GatewayProtocolRequestTimeoutError;
+
+/** Reads are replayable; subscription acquisition first settles its coordinator's compensation. */
+export function isRetryableChatReadError(
   err: unknown,
   method: string,
-): err is GatewayRequestError {
-  if (!(err instanceof GatewayRequestError)) {
-    return false;
+): err is RetryableChatReadError {
+  if (err instanceof GatewayProtocolRequestTimeoutError) {
+    return err.method === method;
   }
-  if (err.gatewayCode !== "UNAVAILABLE" || !err.retryable) {
+  if (
+    !(err instanceof GatewayRequestError) ||
+    err.gatewayCode !== "UNAVAILABLE" ||
+    !err.retryable
+  ) {
     return false;
   }
   const details = err.details;
@@ -21,13 +31,11 @@ export function isRetryableStartupUnavailable(
   return typeof detailMethod !== "string" || detailMethod === method;
 }
 
-export function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
-  const retryAfterMs = typeof err.retryAfterMs === "number" ? err.retryAfterMs : DEFAULT_RETRY_MS;
-  return Math.min(Math.max(retryAfterMs, 100), MAX_RETRY_MS);
-}
-
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+export function formatChatHistoryLoadError(error: unknown): string {
+  if (isAgentDatabaseInspectionPendingError(error)) {
+    return t("chat.agentDatabaseWarming");
+  }
+  return error instanceof GatewayProtocolRequestTimeoutError
+    ? t("chat.historyRequestTimedOut")
+    : formatUiError(error);
 }

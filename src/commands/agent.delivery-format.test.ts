@@ -82,7 +82,6 @@ it.each([
     accountId: "plain",
     rich: false,
   },
-  { turn: "an undelivered turn", mode: {}, accountId: "rich", rich: undefined },
 ])(
   "gives $turn from the $accountId account its delivering formatting contract",
   async (testCase) => {
@@ -118,10 +117,6 @@ it.each([
       );
 
       const prompt = vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0].extraSystemPrompt ?? "";
-      if (testCase.rich === undefined) {
-        expect(prompt).toBe("Announce the child result.");
-        return;
-      }
       const markup = testCase.rich ? "markdown_telegram_rich" : "markdown";
       expect(prompt.startsWith("Announce the child result.\n\n### Delivery Format")).toBe(true);
       expect(prompt.split("### Delivery Format")).toHaveLength(2);

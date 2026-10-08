@@ -19,6 +19,7 @@ import {
 } from "../../lib/workboard/index.ts";
 import { isReservedSessionKey } from "../../lib/workboard/session-links.ts";
 import type { WorkboardSessionResolution } from "../../lib/workboard/session-resolution.ts";
+import { getCardSessionState } from "../../lib/workboard/session-state.ts";
 import { agentDisplayName, findCardAgent, type WorkboardAgentsList } from "./agent-filter.ts";
 
 export type BoardAutomationState = { jobId: string } & (
@@ -91,13 +92,15 @@ const lifecycleCopy = {
   running: ["workboard.lifecycleRunning", "workboard.lifecycleRunningDetail", "live"],
   succeeded: ["workboard.lifecycleDone", "workboard.lifecycleDoneDetail", "done"],
   failed: ["workboard.lifecycleFailed", "workboard.lifecycleFailedDetail", "blocked"],
+  timed_out: ["workboard.lifecycleTimedOut", "workboard.lifecycleFailedDetail", "blocked"],
+  stopped: ["workboard.lifecycleStopped", "workboard.lifecycleStoppedDetail", "idle"],
   stale: ["workboard.lifecycleStale", "workboard.lifecycleStaleDetail", "blocked"],
   idle: ["workboard.lifecycleLinked", "workboard.lifecycleIdleDetail", "idle"],
   unknown: ["workboard.lifecycleUnknown", "workboard.lifecycleUnknownDetail", "idle"],
   unavailable: ["workboard.lifecycleUnavailable", "workboard.lifecycleUnavailableDetail", "idle"],
   ambiguous: ["workboard.lifecycleAmbiguous", "workboard.lifecycleAmbiguousDetail", "blocked"],
   unlinked: ["workboard.lifecycleUnlinked", "workboard.lifecycleUnlinkedDetail", "idle"],
-} as const satisfies Record<WorkboardLifecycle["state"], LifecycleCopy>;
+} as const satisfies Record<ReturnType<typeof getCardSessionState>, LifecycleCopy>;
 
 export const formatStatusLabel = (status: WorkboardStatus) => t(`workboard.status.${status}`);
 
@@ -173,14 +176,8 @@ export function formatEventLabel(event: WorkboardEvent): string {
   return t(eventLabelKeys[event.kind]);
 }
 
-export function matchesFilter(
-  card: WorkboardCard,
-  options: { query: string; priority: "all" | WorkboardPriority },
-): boolean {
-  if (options.priority !== "all" && card.priority !== options.priority) {
-    return false;
-  }
-  const query = options.query.trim().toLowerCase();
+export function matchesCardQuery(card: WorkboardCard, search: string): boolean {
+  const query = search.trim().toLowerCase();
   if (!query) {
     return true;
   }
@@ -277,23 +274,7 @@ export function formatLifecycle(lifecycle: WorkboardLifecycle): {
   detail: string | undefined;
   tone: "blocked" | "done" | "idle" | "live";
 } {
-  if (lifecycle.state === "failed") {
-    if (lifecycle.session?.status === "timeout") {
-      return {
-        label: t("workboard.lifecycleTimedOut"),
-        detail: t("workboard.lifecycleFailedDetail"),
-        tone: "blocked",
-      };
-    }
-    if (lifecycle.session?.status === "killed" || lifecycle.session?.abortedLastRun) {
-      return {
-        label: t("workboard.lifecycleStopped"),
-        detail: t("workboard.lifecycleStoppedDetail"),
-        tone: "idle",
-      };
-    }
-  }
-  const [labelKey, detailKey, tone] = lifecycleCopy[lifecycle.state];
+  const [labelKey, detailKey, tone] = lifecycleCopy[getCardSessionState(lifecycle)];
   return { label: t(labelKey), detail: detailKey === undefined ? undefined : t(detailKey), tone };
 }
 

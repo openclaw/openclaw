@@ -32,6 +32,7 @@ type DebounceBuffer<T> = {
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
   flushDeadlineMs: number;
+  flushCheckToken: number;
   releaseReady: () => void;
   task: Promise<void>;
 };
@@ -140,6 +141,8 @@ export type InboundDebounceCreateParams<T> = {
   maxWaitMs?: number | ((item: T) => number | undefined);
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
+  /** Hold a quiet-period flush before its deadline; explicit flushes bypass this check. */
+  shouldHoldFlush?: (items: readonly T[]) => boolean | Promise<boolean>;
   resolveDebounceMs?: (item: T, pending?: readonly T[]) => number | undefined;
   canAppend?: (item: T, pending: readonly T[]) => boolean;
   serializeImmediate?: boolean;
@@ -211,8 +214,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const admission = flush.admission.catch(reportOnce);
     const completion = flush.completion.catch(reportOnce);
     activeCompletions.add(completion);
-    const cleanup = () => activeCompletions.delete(completion);
-    void completion.then(cleanup, cleanup);
+    void completion.then(() => activeCompletions.delete(completion));
     await Promise.race([admission, completion]);
   };
 
@@ -246,29 +248,10 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
   const enqueueKeyTask = (key: string, task: () => Promise<void>) => {
     const previous = keyChains.get(key) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(task);
+    const next = previous.then(task);
     const settled = next.catch(() => undefined);
     keyChains.set(key, settled);
-    const cleanup = () => untrackKeyTask(key, settled);
-    settled.then(cleanup, cleanup);
-    return next;
-  };
-
-  const runKeyTaskNow = (key: string, task: () => Promise<void>) => {
-    const { promise: settled, resolve: resolveSettled } = createDeferredCore();
-    keyChains.set(key, settled);
-    const cleanup = () => {
-      resolveSettled();
-      untrackKeyTask(key, settled);
-    };
-    let next: Promise<void>;
-    try {
-      next = task();
-    } catch (err) {
-      cleanup();
-      throw err;
-    }
-    next.then(cleanup, cleanup);
+    void settled.then(() => untrackKeyTask(key, settled));
     return next;
   };
 
@@ -330,7 +313,44 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return true;
   };
 
+  const settleQuietFlush = async (
+    key: string,
+    buffer: DebounceBuffer<T>,
+    checkToken: number,
+  ): Promise<void> => {
+    if (buffers.get(key) !== buffer || buffer.flushCheckToken !== checkToken) {
+      return;
+    }
+    if (!params.shouldHoldFlush || performance.now() >= buffer.flushDeadlineMs) {
+      await flushBuffer(key, buffer);
+      return;
+    }
+    // A slow hold check cannot extend the batch's fixed deadline.
+    buffer.timeout = setTimeout(
+      () => {
+        void flushBuffer(key, buffer);
+      },
+      Math.max(0, buffer.flushDeadlineMs - performance.now()),
+    );
+    buffer.timeout.unref?.();
+    let shouldHold: boolean;
+    try {
+      shouldHold = await params.shouldHoldFlush(buffer.items);
+    } catch {
+      shouldHold = false;
+    }
+    if (buffers.get(key) !== buffer || buffer.flushCheckToken !== checkToken) {
+      return;
+    }
+    if (shouldHold) {
+      scheduleFlush(key, buffer);
+    } else {
+      await flushBuffer(key, buffer);
+    }
+  };
+
   const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
+    const checkToken = ++buffer.flushCheckToken;
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
     }
@@ -341,7 +361,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       Math.max(0, buffer.flushDeadlineMs - performance.now()),
     );
     buffer.timeout = setTimeout(() => {
-      void flushBuffer(key, buffer);
+      if (params.shouldHoldFlush) {
+        void settleQuietFlush(key, buffer, checkToken);
+      } else {
+        void flushBuffer(key, buffer);
+      }
     }, delayMs);
     buffer.timeout.unref?.();
   };
@@ -358,9 +382,9 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
           // Reserve the keyed immediate slot before forcing the pending buffer
           // to flush so fire-and-forget callers cannot be overtaken.
           const generation = resolveKeyGeneration(key);
-          const reservedTask = enqueueReservedKeyTask(key, async () => {
-            await runQueuedFlush(key, generation, [item]);
-          });
+          const reservedTask = enqueueReservedKeyTask(key, () =>
+            runQueuedFlush(key, generation, [item]),
+          );
           try {
             await flushKey(key);
           } finally {
@@ -371,15 +395,18 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
         }
         if (keyChains.has(key)) {
           const generation = resolveKeyGeneration(key);
-          await enqueueKeyTask(key, async () => {
-            await runQueuedFlush(key, generation, [item]);
-          });
+          await enqueueKeyTask(key, () => runQueuedFlush(key, generation, [item]));
           return;
         }
         if (params.serializeImmediate) {
-          await runKeyTaskNow(key, async () => {
+          const { promise: settled, resolve: resolveSettled } = createDeferredCore();
+          keyChains.set(key, settled);
+          try {
             await runFlush([item]);
-          });
+          } finally {
+            resolveSettled();
+            untrackKeyTask(key, settled);
+          }
           return;
         }
       }
@@ -404,9 +431,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       // When the debounce map is saturated, fall back to immediate keyed work
       // instead of buffering, but still preserve same-key ordering.
       const generation = resolveKeyGeneration(key);
-      await enqueueKeyTask(key, async () => {
-        await runQueuedFlush(key, generation, [item]);
-      });
+      await enqueueKeyTask(key, () => runQueuedFlush(key, generation, [item]));
       return;
     }
     const generation = resolveKeyGeneration(key);
@@ -425,6 +450,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       items: [item],
       timeout: null,
       debounceMs,
+      flushCheckToken: 0,
       flushDeadlineMs:
         performance.now() +
         Math.max(

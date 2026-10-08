@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as usageCacheSqlite from "../infra/session-cost-usage-cache.sqlite.js";
 import {
   decodeUsageCostRollup,
   encodeUsageCostRollup,
@@ -11,10 +12,10 @@ import {
 } from "../infra/session-cost-usage-rollup-codec.js";
 import { createSessionUsageRollupData } from "../infra/session-cost-usage-rollup.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { maybeRepairLegacyRuntimeFiles } from "./doctor-usage-cost-cache.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -26,8 +27,8 @@ let root: string | undefined;
 afterEach(async () => {
   vi.restoreAllMocks();
   note.mockReset();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   if (root) {
     await fs.rm(root, { recursive: true, force: true });
     root = undefined;
@@ -155,10 +156,9 @@ describe("legacy usage-cost cache cleanup", () => {
         .all();
 
       if (rejectFirst) {
-        firstDatabase.db.exec(`
-        CREATE TEMP TRIGGER reject_usage_pruning BEFORE DELETE ON cache_entries
-        BEGIN SELECT RAISE(ABORT, 'pruning rejected'); END;
-      `);
+        vi.spyOn(usageCacheSqlite, "deleteSessionCostUsageRollupsExcept").mockRejectedValueOnce(
+          new Error("pruning rejected"),
+        );
       }
       await maybeRepairLegacyRuntimeFiles(true, env);
 

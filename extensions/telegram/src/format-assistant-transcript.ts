@@ -9,12 +9,9 @@ type TelegramHtmlVisibleProjection = {
 };
 
 function maskTelegramExcludedText(text: string): string {
-  return text
-    .split("\n")
-    .map((line) =>
-      line.trim() ? `x${" ".repeat(Math.max(0, line.length - 1))}` : " ".repeat(line.length),
-    )
-    .join("\n");
+  return text.replace(/[^\n]+/g, (line) =>
+    line.trim() ? `x${" ".repeat(line.length - 1)}` : " ".repeat(line.length),
+  );
 }
 
 function maskTelegramExcludedRanges(projection: TelegramHtmlVisibleProjection): string {
@@ -49,62 +46,46 @@ function telegramProjectionHasRoleHeader(projection: TelegramHtmlVisibleProjecti
   );
 }
 
-function appendTelegramHtmlVisibleValue(
-  projection: TelegramHtmlVisibleProjection,
-  value: string,
-  excluded: boolean,
-): void {
-  if (!value) {
-    return;
-  }
-  const start = projection.text.length;
-  projection.text += value;
-  if (!excluded) {
-    return;
-  }
-  const previous = projection.excludedRanges.at(-1);
-  if (previous?.end === start) {
-    previous.end = projection.text.length;
-  } else {
-    projection.excludedRanges.push({ start, end: projection.text.length });
-  }
-}
-
 function projectTelegramHtmlVisibleText(html: string): TelegramHtmlVisibleProjection {
   const projection: TelegramHtmlVisibleProjection = { text: "", excludedRanges: [] };
-  let codeDepth = 0;
-  let preDepth = 0;
+  const depths = { code: 0, pre: 0 };
+  const append = (value: string) => {
+    if (!value) {
+      return;
+    }
+    const start = projection.text.length;
+    projection.text += value;
+    if (depths.code === 0 && depths.pre === 0) {
+      return;
+    }
+    const previous = projection.excludedRanges.at(-1);
+    if (previous?.end === start) {
+      previous.end = projection.text.length;
+    } else {
+      projection.excludedRanges.push({ start, end: projection.text.length });
+    }
+  };
   let lastIndex = 0;
 
   for (const tag of tokenizeHtmlTags(html)) {
-    appendTelegramHtmlVisibleValue(
-      projection,
-      decodeTelegramHtmlEntities(html.slice(lastIndex, tag.start)),
-      codeDepth > 0 || preDepth > 0,
-    );
+    append(decodeTelegramHtmlEntities(html.slice(lastIndex, tag.start)));
 
     if (
       isTelegramRichLineBreakStructuralTag(tag.raw, tag.name) &&
       projection.text &&
       !projection.text.endsWith("\n")
     ) {
-      appendTelegramHtmlVisibleValue(projection, "\n", codeDepth > 0 || preDepth > 0);
+      append("\n");
     }
     if (tag.name === "br" && !tag.closing) {
-      appendTelegramHtmlVisibleValue(projection, "\n", codeDepth > 0 || preDepth > 0);
+      append("\n");
     }
-    if (!tag.selfClosing && tag.name === "code") {
-      codeDepth = tag.closing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
-    } else if (!tag.selfClosing && tag.name === "pre") {
-      preDepth = tag.closing ? Math.max(0, preDepth - 1) : preDepth + 1;
+    if (!tag.selfClosing && (tag.name === "code" || tag.name === "pre")) {
+      depths[tag.name] = tag.closing ? Math.max(0, depths[tag.name] - 1) : depths[tag.name] + 1;
     }
     lastIndex = tag.end;
   }
-  appendTelegramHtmlVisibleValue(
-    projection,
-    decodeTelegramHtmlEntities(html.slice(lastIndex)),
-    codeDepth > 0 || preDepth > 0,
-  );
+  append(decodeTelegramHtmlEntities(html.slice(lastIndex)));
   return projection;
 }
 

@@ -1,11 +1,9 @@
-// Doctor repair for open DM policies that still need explicit allowFrom wildcards.
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { ensureOpenDmPolicyAllowFromWildcard } from "../../../channels/plugins/dm-access.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
+import { iterateDoctorChannelAccounts } from "./allowlist.js";
 
-/** Format doctor warnings for open DM policies missing allowFrom wildcards. */
 export function collectOpenPolicyAllowFromWarnings(params: {
   changes: string[];
   doctorFixCommand: string;
@@ -19,7 +17,6 @@ export function collectOpenPolicyAllowFromWarnings(params: {
   ];
 }
 
-/** Add allowFrom wildcards for open DM policies where channel metadata requires them. */
 export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
@@ -42,27 +39,18 @@ export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
     if (capabilities.openDmRequiresAllowFromWildcard === false) {
       continue;
     }
-    const mode = capabilities.dmAllowFromMode;
-    ensureOpenDmPolicyAllowFromWildcard({
-      entry: channelConfig,
-      mode,
-      pathPrefix: `channels.${channelName}`,
-      changes,
-    });
-
-    const accounts = asNullableRecord(channelConfig.accounts);
-    if (!accounts) {
-      continue;
-    }
-    for (const [accountName, accountConfig] of Object.entries(accounts)) {
-      if (accountConfig && typeof accountConfig === "object") {
-        ensureOpenDmPolicyAllowFromWildcard({
-          entry: accountConfig as Record<string, unknown>,
-          mode,
-          pathPrefix: `channels.${channelName}.accounts.${accountName}`,
-          changes,
-        });
-      }
+    const repair = (entry: Record<string, unknown>, pathPrefix: string) =>
+      ensureOpenDmPolicyAllowFromWildcard({
+        entry,
+        mode: capabilities.dmAllowFromMode,
+        pathPrefix,
+        changes,
+      });
+    for (const { account, prefix } of iterateDoctorChannelAccounts(
+      channelConfig,
+      `channels.${channelName}`,
+    )) {
+      repair(account, prefix);
     }
   }
 

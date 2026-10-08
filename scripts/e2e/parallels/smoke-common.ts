@@ -520,5 +520,5 @@ export function printSmokeTargetSummary(input: {
 }
 
 function currentGitHeadShort(): string {
-  return run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim();
+  return run("git", ["rev-parse", "--short", "HEAD"]).stdout.trim();
 }

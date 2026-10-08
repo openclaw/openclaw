@@ -1,6 +1,4 @@
 /** Shared command registry builders used by browser-safe and runtime command lists. */
-import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
@@ -41,57 +39,6 @@ export function shouldForwardModelCommandToServer(rawArgs: string): boolean {
   return ["default", "list", "status"].includes(normalized) || /\s/u.test(args);
 }
 
-/** Validates command registry uniqueness and text/native surface invariants. */
-function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
-  const keys = new Set<string>();
-  const nativeNames = new Set<string>();
-  const textAliases = new Set<string>();
-  for (const command of commands) {
-    if (keys.has(command.key)) {
-      throw new Error(`Duplicate command key: ${command.key}`);
-    }
-    keys.add(command.key);
-
-    const nativeName = command.nativeName?.trim();
-    if (command.scope === "text") {
-      if (nativeName) {
-        throw new Error(`Text-only command has native name: ${command.key}`);
-      }
-      if (command.nativeAliases?.length) {
-        throw new Error(`Text-only command has native aliases: ${command.key}`);
-      }
-      if (command.textAliases.length === 0) {
-        throw new Error(`Text-only command missing text alias: ${command.key}`);
-      }
-    } else if (!nativeName) {
-      throw new Error(`Native command missing native name: ${command.key}`);
-    } else {
-      for (const alias of [nativeName, ...(command.nativeAliases ?? [])]) {
-        const nativeKey = normalizeOptionalLowercaseString(alias) ?? "";
-        if (nativeNames.has(nativeKey)) {
-          throw new Error(`Duplicate native command: ${alias}`);
-        }
-        nativeNames.add(nativeKey);
-      }
-    }
-
-    if (command.scope === "native" && command.textAliases.length > 0) {
-      throw new Error(`Native-only command has text aliases: ${command.key}`);
-    }
-
-    for (const alias of command.textAliases) {
-      if (!alias.startsWith("/")) {
-        throw new Error(`Command alias missing leading '/': ${alias}`);
-      }
-      const aliasKey = normalizeOptionalLowercaseString(alias) ?? "";
-      if (textAliases.has(aliasKey)) {
-        throw new Error(`Duplicate command alias: ${alias}`);
-      }
-      textAliases.add(aliasKey);
-    }
-  }
-}
-
 type BuiltinCommandArgument = NonNullable<ChatCommandDefinition["args"]>[number];
 type BuiltinCommandArgumentOptions = Omit<
   BuiltinCommandArgument,
@@ -122,12 +69,8 @@ function defineBuiltinCommand(
   return {
     key,
     nativeName: nativeName === false ? undefined : nativeName,
-    nativeAliases: options.nativeAliases
-      ? normalizeStringEntries(options.nativeAliases)
-      : undefined,
-    nativeProviders: options.nativeProviders
-      ? normalizeStringEntries(options.nativeProviders)
-      : undefined,
+    nativeAliases: options.nativeAliases,
+    nativeProviders: options.nativeProviders,
     description,
     ...(options.descriptionLocalizations
       ? { descriptionLocalizations: options.descriptionLocalizations }
@@ -137,7 +80,7 @@ function defineBuiltinCommand(
     argsParsing: options.argsParsing ?? (options.args?.length ? "positional" : "none"),
     formatArgs: options.formatArgs,
     argsMenu: options.argsMenu,
-    textAliases: (options.textAliases ?? [`/${key}`]).map((alias) => alias.trim()).filter(Boolean),
+    textAliases: options.textAliases ?? [`/${key}`],
     scope: nativeName === false ? "text" : "both",
     category,
     tier,
@@ -156,7 +99,7 @@ export function buildBuiltinChatCommands(
     const levels = configuredThinkingLevels(provider, model, catalog, agentRuntime);
     return ["default", ...levels.filter((level) => level !== "default")];
   };
-  const commands: ChatCommandDefinition[] = [
+  return [
     defineBuiltinCommand("help", "Show available commands.", "status", "essential", {
       activeRunSafe: true,
       modelIndependent: "always",
@@ -228,12 +171,9 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("goal", "Show or control the current goal.", "status", "standard", {
       modelIndependent: (args) => {
-        const parsed = parseSlashCommandOrNull(`/goal ${args}`, "/goal", {
-          defaultAction: "status",
-          invalidMessage: "",
-        });
+        const parsed = parseSlashCommandOrNull(`/goal ${args}`, "/goal", "status");
         return (
-          parsed?.ok === true &&
+          parsed !== null &&
           (["status", "edit", "pause", "complete", "done", "block", "blocked", "clear"].includes(
             parsed.action,
           ) ||
@@ -415,11 +355,8 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand("acp", "Manage ACP sessions and runtime options.", "management", "power", {
       modelIndependent: (args) => {
-        const parsed = parseSlashCommandOrNull(`/acp ${args}`, "/acp", {
-          defaultAction: "help",
-          invalidMessage: "",
-        });
-        return parsed?.ok === true && (parsed.action !== "steer" || !parsed.args);
+        const parsed = parseSlashCommandOrNull(`/acp ${args}`, "/acp", "help");
+        return parsed !== null && (parsed.action !== "steer" || !parsed.args);
       },
       args: [
         defineCommandArgument("action", "Action to run", {
@@ -697,6 +634,4 @@ export function buildBuiltinChatCommands(
       args: [defineCommandArgument("command", "Shell command", { captureRemaining: true })],
     }),
   ];
-  assertCommandRegistry(commands);
-  return commands;
 }

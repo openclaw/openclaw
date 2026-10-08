@@ -1,8 +1,10 @@
 // Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src/schema/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectPackageManager } from "./detect-package-manager.js";
+import { isMissingPathError } from "./errno.js";
 import { createGitCommandError, executeGitCommand } from "./git-exec.js";
 import { readInstallOwner, type InstallOwner } from "./install-owner.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
@@ -14,10 +16,7 @@ import {
   selectNpmChannelVersion,
   type UpdateChannel,
 } from "./update-channels.js";
-import {
-  fetchNpmPackageTargetStatus,
-  type NpmMetadataCommandRunner,
-} from "./update-check-package-target.js";
+import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
 import {
   readGitReceiptFetchTarget,
   readGitBranchFetchTarget,
@@ -64,6 +63,7 @@ type GitUpdateStatus = {
 
 export type UpdateInstallIdentity = {
   installKind: UpdateInstallKind;
+  immutable?: UpdateImmutableInstall;
   installOwner?: InstallOwner;
   git?: Pick<GitUpdateStatus, "branch" | "tag" | "error">;
 };
@@ -111,6 +111,7 @@ type NpmTagStatus = {
 export type UpdateCheckResult = {
   root: string | null;
   installKind: UpdateInstallKind;
+  immutable?: UpdateImmutableInstall;
   installOwner?: InstallOwner;
   packageManager: PackageManager;
   git?: GitUpdateStatus;
@@ -249,10 +250,26 @@ async function resolveUpdateInstallOwnership(
   if (installOwner) {
     return { installKind: "host", installOwner };
   }
-  const result = await runUpdateGitCommand(root, ["rev-parse", "--show-toplevel"], {
-    ...options,
-    timeoutMs: options.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
-  });
+  const { inspectImmutableInstall } = await import("./update-immutable-install.js");
+  const immutable = await inspectImmutableInstall(root);
+  if (immutable) {
+    return { installKind: "immutable", immutable };
+  }
+  // An exact checkout root needs a marker unless Git ownership is supplied
+  // explicitly. Avoid spawning Git for packages nested inside another checkout.
+  const probeGit =
+    process.env.GIT_DIR ||
+    process.env.GIT_WORK_TREE ||
+    (await fs.lstat(path.join(root, ".git")).then(
+      () => true,
+      (error: unknown) => !isMissingPathError(error),
+    ));
+  const result = probeGit
+    ? await runUpdateGitCommand(root, ["rev-parse", "--show-toplevel"], {
+        ...options,
+        timeoutMs: options.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
+      })
+    : null;
   options.signal?.throwIfAborted();
   if (result?.termination === "timeout") {
     // An expired probe does not establish that this root is a package installation.
@@ -454,11 +471,32 @@ async function checkGitUpdateStatus(params: {
     upstreamCommit = null;
   }
 
-  const mergeBase = sha && upstreamCommit ? await readGit("merge-base", sha, upstreamCommit) : null;
-  const counts =
-    sha && upstreamCommit && mergeBase
+  const mergeBases =
+    sha && upstreamCommit ? await readGit("merge-base", "--all", sha, upstreamCommit) : null;
+  let counts =
+    sha && upstreamCommit && mergeBases
       ? await readGit("rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`)
       : null;
+  if (counts && mergeBases && (await readGit("rev-parse", "--is-shallow-repository")) !== "false") {
+    // A shallow common ancestor can hide commits exposed by another merge parent.
+    // Exact counts require every exclusive commit to descend from every visible
+    // merge base. Hidden ancestry is then common and cannot change the difference.
+    for (const mergeBase of mergeBases.split("\n")) {
+      // Use the argument-free form for compatibility with Git before 2.38.
+      const ancestryCounts = await Promise.all(
+        [
+          [sha, upstreamCommit],
+          [upstreamCommit, sha],
+        ].map(([tip, opposite]) =>
+          readGit("rev-list", "--count", "--ancestry-path", `${mergeBase}..${tip}`, `^${opposite}`),
+        ),
+      );
+      if (ancestryCounts.join("\t") !== counts) {
+        counts = null;
+        break;
+      }
+    }
+  }
 
   const parsed = counts?.match(/^(\d+)\s+(\d+)$/u);
 
@@ -534,18 +572,9 @@ async function checkDepsStatus(params: {
   };
 }
 
-export async function fetchNpmTagVersion(params: {
-  tag: string;
-  registryUrl?: string;
-  packageName?: string;
-  timeoutMs?: number;
-  spec?: string;
-  command?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runCommand?: NpmMetadataCommandRunner;
-  signal?: AbortSignal;
-}): Promise<NpmTagStatus> {
+export async function fetchNpmTagVersion(
+  params: Omit<Parameters<typeof fetchNpmPackageTargetStatus>[0], "target"> & { tag: string },
+): Promise<NpmTagStatus> {
   const { tag, ...options } = params;
   const res = await fetchNpmPackageTargetStatus({
     ...options,
@@ -559,17 +588,11 @@ export async function fetchNpmTagVersion(params: {
   };
 }
 
-export async function resolveNpmChannelTag(params: {
-  channel: UpdateChannel;
-  registryUrl?: string;
-  packageName?: string;
-  timeoutMs?: number;
-  command?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runCommand?: NpmMetadataCommandRunner;
-  signal?: AbortSignal;
-}): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
+export async function resolveNpmChannelTag(
+  params: Omit<Parameters<typeof fetchNpmTagVersion>[0], "tag" | "spec"> & {
+    channel: UpdateChannel;
+  },
+): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
   const { channel, ...options } = params;
   const channelTag = channelToNpmTag(channel);
   if (channel === "extended-stable") {
@@ -647,13 +670,16 @@ export async function checkUpdateStatus(params: {
     };
   }
 
-  const { installKind, installOwner } = await resolveUpdateInstallOwnership(root, {
+  const { installKind, installOwner, immutable } = await resolveUpdateInstallOwnership(root, {
     signal: params.signal,
     timeoutMs: params.timeoutMs,
     onGitProbeTimeout: params.onGitProbeTimeout,
   });
   if (installKind === "host") {
     return { root, installKind, installOwner, packageManager: "unknown" };
+  }
+  if (installKind === "immutable") {
+    return { root, installKind, immutable, packageManager: "unknown" };
   }
   const isGit = installKind === "git";
   if (installKind === "unknown") {

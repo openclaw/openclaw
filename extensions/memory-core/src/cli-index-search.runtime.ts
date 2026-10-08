@@ -15,8 +15,11 @@ import {
   resolveMemoryDreamingWorkspace,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import {
-  buildCliMemorySearchSessionKey,
+  emitMemoryCoreSidecarNotice,
   formatAuditCounts,
   formatExtraPaths,
   formatMemoryIndexOutcome,
@@ -64,7 +67,7 @@ export async function runMemoryIndex(
   setVerbose(Boolean(opts.verbose));
   await withMemoryCommand({
     commandName: "memory index",
-    agent: opts.agent,
+    options: { agent: opts.agent },
     allAgents: true,
     purpose: "cli",
     inspectSources: true,
@@ -203,9 +206,8 @@ export async function runMemorySearch(
 ) {
   await withMemoryCommand({
     commandName: "memory search",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
+    requiresMemorySlot: true,
     purpose: "cli",
     inspectSources: true,
     ...hostOptions,
@@ -219,7 +221,12 @@ export async function runMemorySearch(
         pluginConfig: memoryPluginConfig,
         cfg,
       });
-      const sessionKey = buildCliMemorySearchSessionKey(agentId);
+      const sessionKey = buildAgentSessionKey({
+        agentId,
+        channel: "cli",
+        peer: { kind: "direct", id: "memory-search" },
+        dmScope: "per-channel-peer",
+      });
       let readRebuildWarning: () => string | undefined = () => undefined;
       let results: Awaited<ReturnType<typeof manager.search>>;
       try {
@@ -281,6 +288,10 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
   try {
     const cfg = getRuntimeConfig({ skipPluginValidation: true });
     const agentId = resolveMemoryAgent(cfg, opts.agent);
+    const slotOwner = resolveForeignMemorySlotOwner(cfg);
+    if (slotOwner) {
+      emitMemoryCoreSidecarNotice(slotOwner, { json: Boolean(opts.json) });
+    }
     const report = await forgetMemoryEntries({
       cfg,
       agentId,
@@ -368,9 +379,7 @@ export async function runMemoryPromote(
 ) {
   await withMemoryCommand({
     commandName: "memory promote",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -433,10 +442,7 @@ export async function runMemoryPromote(
           });
         }
       }
-      const outputLimit =
-        typeof opts.limit === "number" && Number.isFinite(opts.limit)
-          ? Math.max(0, Math.floor(opts.limit))
-          : candidates.length;
+      const outputLimit = resolveNonNegativeIntegerOption(opts.limit, candidates.length);
       const rejectedCandidates = applyResult
         ? applyResult.rejectedCandidates.slice(
             0,
@@ -545,9 +551,7 @@ export async function runMemoryPromoteExplain(
 ) {
   await withMemoryCommand({
     commandName: "memory promote-explain",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {

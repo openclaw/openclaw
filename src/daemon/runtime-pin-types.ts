@@ -8,4 +8,11 @@ export type DaemonRuntimePinSnapshot = {
   pin?: DaemonRuntimePin;
 };
 
-export type DaemonRuntimePinUpdate = { expected: DaemonRuntimePinSnapshot; pin?: DaemonRuntimePin };
+export type DaemonRuntimePinUpdate = {
+  expected: DaemonRuntimePinSnapshot;
+  pin?: DaemonRuntimePin;
+  /** A guarded caller also binds unpinned service definitions. */
+  requireDefinitionMatch?: true;
+  /** An explicit runtime switch may replace an existing service only while it is running. */
+  requireRunning?: true;
+};

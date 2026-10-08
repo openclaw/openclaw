@@ -1,5 +1,4 @@
-import { expect, it, vi, type Mock } from "vitest";
-import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
+import { expect, it, vi } from "vitest";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -19,20 +18,7 @@ export function registerHostedUpdateStopTests({
   managedUpdateSuccessorOwner,
   respawnGatewayProcessForUpdate,
   isGatewayWorkAdmissionClosed,
-}: Pick<
-  UpdateRespawnFixtures,
-  | "captureForegroundUpdateHandoffStop"
-  | "isForegroundUpdateHandoff"
-  | "completeForegroundUpdateHandoffAfterClose"
-  | "hostedStopPrepare"
-  | "createSignaledLoopHarness"
-  | "managedUpdateSuccessorOwner"
-  | "respawnGatewayProcessForUpdate"
-  | "isGatewayWorkAdmissionClosed"
-> & {
-  hostedStopExecute: Mock<HostedGatewayStop["execute"]>;
-  hostedStopDispose: Mock<HostedGatewayStop["dispose"]>;
-}) {
+}: UpdateRespawnFixtures) {
   it.each([false, true])(
     "joins the accepted hosted Stop through foreground update settlement (park overlap: %s)",
     async (parkOverlap) => {

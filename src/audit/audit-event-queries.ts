@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
-import { getNodeSqliteKysely, prepareSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  getNodeSqliteKysely,
+  prepareSqliteQueryTakeFirstSync,
+} from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
 type AuditEventsTable = OpenClawStateKyselyDatabase["audit_events"];
@@ -64,13 +68,4 @@ function createAuditEventQueries(db: DatabaseSync) {
   };
 }
 
-const auditEventQueries = new WeakMap<DatabaseSync, ReturnType<typeof createAuditEventQueries>>();
-
-export function getAuditEventQueries(db: DatabaseSync) {
-  let queries = auditEventQueries.get(db);
-  if (!queries) {
-    queries = createAuditEventQueries(db);
-    auditEventQueries.set(db, queries);
-  }
-  return queries;
-}
+export const getAuditEventQueries = createSqliteQueryCache(createAuditEventQueries);

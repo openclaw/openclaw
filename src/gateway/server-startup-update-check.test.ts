@@ -257,6 +257,27 @@ describe("deferred Gateway update-check lifecycle", () => {
     }
   });
 
+  it("warns once when initialization records unavailable Git facts", async () => {
+    const warned = createDeferred();
+    const warn = vi.fn(() => warned.resolve());
+    defaultUpdateCheck.initialize = vi.fn<UpdateCheck["initialize"]>(async () => ({
+      root: null,
+      installReceipt: null,
+      status: {
+        root: null,
+        installKind: "unknown",
+        packageManager: "unknown",
+        error: { status: "failed", message: "Git discovery timed out", timeoutMs: 120_000 },
+      },
+    }));
+    const owner = await startUpdateCheck({ log: { info: vi.fn(), warn } });
+    await warned.promise;
+    await owner.stop();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "gateway update status failed to initialize: Error: Git discovery timed out",
+    );
+  });
+
   it("fences update discovery immediately and joins its pending initialization", async () => {
     const initialization = createDeferred<Awaited<ReturnType<UpdateCheck["initialize"]>>>();
     const cleanup = createDeferred();

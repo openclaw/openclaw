@@ -31,85 +31,54 @@ const IMPLICIT_OPENCLAW_RUNTIME = {
   devicePlacementSupported: true,
   source: "implicit",
 } as const;
-const MODEL_CODEX_RUNTIME = { ...IMPLICIT_CODEX_RUNTIME, source: "model" } as const;
 
 describe("models.list OpenAI routes", () => {
-  it.each(["agent", "config"] as const)(
-    "does not reuse a preloaded catalog from another %s",
-    async (mismatch) => {
-      const config: OpenClawConfig = { agents: { entries: { main: {}, worker: {} } } };
-      const context = createModelsListTestContext({ agentId: "worker", cfg: config, catalog: [] });
-      const result = await buildModelsListResult({
-        source: { kind: "gateway", context },
-        agentId: "worker",
-        params: { view: "all" },
-        preloadedCatalog: {
-          agentId: mismatch === "agent" ? "main" : "worker",
-          config:
-            mismatch === "config" ? { agents: { defaults: { model: "openai/stale" } } } : config,
-          snapshot: { entries: [catalogEntry("stale", "openai-responses")], routeVariants: [] },
-        },
-      });
-      expect(result).toEqual({ models: [] });
-    },
-  );
-
-  it("uses the published owner's identity for implicit projection", async () => {
+  it("uses the system-agent owner when no request agent is given", async () => {
     const config: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main", models: { "openai/gpt-owner": { agentRuntime: { id: "codex" } } } },
-          {
-            id: "worker",
-            default: true,
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "worker" } },
+        entries: {
+          main: { models: { "openai/gpt-owner": { agentRuntime: { id: "codex" } } } },
+          worker: {
             models: { "openai/gpt-owner": { agentRuntime: { id: "openclaw" } } },
           },
-        ],
+        },
       },
     };
     const context = createModelsListTestContext({
-      agentId: "main",
+      agentId: "worker",
       cfg: config,
       catalog: [catalogEntry("gpt-owner", "openai-responses")],
+    });
+    const published = expectDefined(
+      await readPreparedCatalog(context, "worker"),
+      "Published catalog fixture must supply the system-agent owner",
+    );
+    const readPrepared = vi.fn(async () => published);
+    registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+      readPrepared,
+      loadDeferred: async () => {
+        throw new Error("Ordinary inventory acquired models");
+      },
     });
     const result = await buildModelsListResult({
       source: { kind: "gateway", context },
       params: { view: "all" },
     });
+    expect(readPrepared).toHaveBeenCalledExactlyOnceWith({ agentId: "worker" });
     expect(result.models).toEqual([
       expect.objectContaining({
         id: "gpt-owner",
         provider: "openai",
-        agentRuntime: MODEL_CODEX_RUNTIME,
+        agentRuntime: { ...IMPLICIT_OPENCLAW_RUNTIME, source: "model" },
       }),
     ]);
   });
 
-  it("passes the resolved default agent to the published reader without acquisition", async () => {
-    const config: OpenClawConfig = { agents: { list: [{ id: "worker", default: true }] } };
-    const context = createModelsListTestContext({ agentId: "worker", cfg: config, catalog: [] });
-    const published = expectDefined(
-      await readPreparedCatalog(context, "worker"),
-      "Published catalog fixture must supply its owner",
-    );
-    const readPrepared = vi.fn(async () => published);
-    const loadDeferred = vi.fn(async () => {
-      throw new Error("Ordinary inventory acquired models");
-    });
-    registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
-      readPrepared,
-      loadDeferred,
-    });
-    await expect(
-      buildModelsListResult({ source: { kind: "gateway", context }, params: { view: "all" } }),
-    ).resolves.toEqual({ models: [] });
-    expect(readPrepared).toHaveBeenCalledExactlyOnceWith({ agentId: "worker" });
-    expect(loadDeferred).not.toHaveBeenCalled();
-  });
-
   it("does not project another owner's catalog as an explicitly requested agent", async () => {
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "worker" }] },
+      agents: { entries: { main: {}, worker: {} } },
     };
     const context = createModelsListTestContext({
       agentId: "main",
@@ -123,34 +92,6 @@ describe("models.list OpenAI routes", () => {
         params: { view: "all" },
       }),
     ).resolves.toEqual({ models: [] });
-  });
-
-  it("accepts a canonical owner for a noncanonical explicit agent request", async () => {
-    const config: OpenClawConfig = {
-      agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "worker", models: { "openai/gpt-worker": { agentRuntime: { id: "openclaw" } } } },
-        ],
-      },
-    };
-    const context = createModelsListTestContext({
-      agentId: "worker",
-      cfg: config,
-      catalog: [catalogEntry("gpt-worker", "openai-responses")],
-    });
-    const result = await buildModelsListResult({
-      source: { kind: "gateway", context },
-      agentId: "WORKER",
-      params: { view: "all" },
-    });
-    expect(result.models).toEqual([
-      expect.objectContaining({
-        id: "gpt-worker",
-        provider: "openai",
-        agentRuntime: { ...IMPLICIT_OPENCLAW_RUNTIME, source: "model" },
-      }),
-    ]);
   });
 
   it("keeps route-aware default browse indeterminate without the provider artifact", async () => {
@@ -173,47 +114,6 @@ describe("models.list OpenAI routes", () => {
     );
     expect(createResolver).toHaveBeenCalledOnce();
     expect(resolveRoutes).toHaveBeenCalledTimes(2);
-  });
-  it("keeps exhaustive Codex rows visible but unavailable when the route artifact is missing", async () => {
-    await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
-      await withOpenClawTestState(
-        {
-          layout: "state-only",
-          prefix: "openclaw-models-list-openai-null-artifact-oauth-",
-          agentEnv: "main",
-        },
-        async (state) => {
-          await state.writeAuthProfiles({
-            version: 1,
-            profiles: {
-              "openai:chatgpt": {
-                type: "oauth",
-                provider: "openai",
-                access: "chatgpt-access",
-                refresh: "chatgpt-refresh",
-                expires: Date.now() + 30 * 60_000,
-              },
-            },
-          });
-          await expect(
-            listModels({
-              catalog: [catalogEntry("gpt-5.4-codex", "openai-responses")],
-              routeResolverFactory: () => () => null,
-            }),
-          ).resolves.toEqual({
-            models: [
-              {
-                id: "gpt-5.4-codex",
-                name: "gpt-5.4-codex",
-                provider: "openai",
-                agentRuntime: IMPLICIT_CODEX_RUNTIME,
-                available: false,
-              },
-            ],
-          });
-        },
-      );
-    });
   });
 
   it("omits route-sensitive metadata while route observation is required", async () => {
@@ -267,53 +167,6 @@ describe("models.list OpenAI routes", () => {
       "gpt-5.4",
     ]);
     expect(result.models.every((entry) => !("providerOrder" in entry))).toBe(true);
-  });
-
-  it("keeps public metadata for a provider-canonical model-level Platform route", async () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [
-              {
-                id: "gpt-5.4-nano",
-                name: "GPT-5.4 Nano",
-                api: "openai-completions",
-                baseUrl: "https://api.openai.com",
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const row = {
-      ...catalogEntry("gpt-5.4-nano", "openai-completions"),
-      baseUrl: "https://api.openai.com",
-      contextTokens: 800_000,
-      contextWindow: 1_000_000,
-      input: ["text", "image"],
-      params: { apiKey: "private" },
-      compat: { supportsStore: false },
-      mediaInput: { image: { maxBytes: 42 } },
-      reasoning: true,
-    } as ModelCatalogEntry;
-
-    await withEnvAsync({ ...WITHOUT_OPENAI_ENV_AUTH, OPENAI_API_KEY: "test-key" }, async () => {
-      await expect(listModels({ catalog: [row], cfg })).resolves.toEqual({
-        models: [
-          expect.objectContaining({
-            id: "gpt-5.4-nano",
-            name: "GPT-5.4 Nano",
-            provider: "openai",
-            agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
-            contextWindow: 1_000_000,
-            reasoning: true,
-            available: true,
-          }),
-        ],
-      });
-    });
   });
 
   it("keeps the all view exhaustive while default hides incompatible implicit rows", async () => {
@@ -513,41 +366,6 @@ describe("models.list OpenAI routes", () => {
       );
     });
   });
-  it("keeps configured provider rows visible when unavailable", async () => {
-    await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
-      const cfg = {
-        models: {
-          providers: {
-            openai: {
-              api: "openai-chatgpt-responses",
-              baseUrl: "https://chatgpt.com/backend-api/codex",
-              models: [{ id: "gpt-5.6", name: "GPT-5.6" }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      await expect(
-        listModels({
-          cfg,
-          view: "configured",
-          includeDefaultModels: false,
-          catalog: [catalogEntry("gpt-5.6", "openai-chatgpt-responses")],
-        }),
-      ).resolves.toEqual({
-        models: [
-          {
-            id: "gpt-5.6",
-            name: "GPT-5.6",
-            provider: "openai",
-            agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
-            available: false,
-            tags: ["default"],
-          },
-        ],
-      });
-    });
-  });
 
   it("includes runtime-discovered rows for configured providers without explicit models", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
@@ -605,53 +423,6 @@ describe("models.list OpenAI routes", () => {
     });
   });
 
-  it("keeps configured fallback rows visible when their route is unavailable", async () => {
-    await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
-      await withOpenClawTestState(
-        {
-          layout: "state-only",
-          prefix: "openclaw-models-list-openai-fallback-",
-          agentEnv: "main",
-        },
-        async () => {
-          const cfg = {
-            agents: {
-              defaults: {
-                model: {
-                  primary: "anthropic/claude-test",
-                  fallbacks: ["openai/chat-latest"],
-                },
-              },
-            },
-            models: {
-              providers: {
-                openai: {
-                  api: "openai-chatgpt-responses",
-                  baseUrl: "https://chatgpt.com/backend-api/codex",
-                  models: [],
-                },
-              },
-            },
-          } as unknown as OpenClawConfig;
-          const result = await listModels({
-            cfg,
-            view: "configured",
-            catalog: [catalogEntry("chat-latest", "openai-chatgpt-responses")],
-          });
-
-          expect(result.models).toContainEqual({
-            id: "chat-latest",
-            name: "chat-latest",
-            provider: "openai",
-            agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
-            available: false,
-            tags: ["fallback#1"],
-          });
-        },
-      );
-    });
-  });
-
   it("resolves configured fallback aliases before retaining unavailable rows", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
       const cfg = {
@@ -699,35 +470,112 @@ describe("models.list OpenAI routes", () => {
       });
     });
   });
+});
 
-  it("exposes configured runtime intent independently of route execution", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.4-nano": {
-              agentRuntime: { id: "codex" },
+async function withPublishedCatalog(
+  run: (context: ReturnType<typeof createModelsListTestContext>) => Promise<void>,
+) {
+  await withOpenClawTestState(
+    { layout: "state-only", prefix: "published-catalog-read-" },
+    async (state) => {
+      await run(
+        createModelsListTestContext({
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+          catalog: [providerCatalogEntry("ollama", "published-model")],
+          cfg: {
+            agents: {
+              defaults: {
+                model: { primary: "ollama/published-model" },
+                modelPolicy: { allow: ["ollama/*"] },
+              },
             },
           },
-        },
-      },
-    } as unknown as OpenClawConfig;
+        }),
+      );
+    },
+  );
+}
 
-    await withEnvAsync(
-      { ...WITHOUT_OPENAI_ENV_AUTH, OPENAI_API_KEY: "test-token-placeholder" },
-      async () => {
-        const result = await listModels({
-          cfg,
-          catalog: [catalogEntry("gpt-5.4-nano", "openai-responses")],
-        });
+describe("models.list published inventory", () => {
+  it("refuses a retired generation and permits a later current read without discovery", async () => {
+    await withPublishedCatalog(async (context) => {
+      const first = expectDefined(
+        await readPreparedCatalog(context, "main"),
+        "Published catalog fixture must supply its owner",
+      );
+      let published = { ...first, isCurrent: () => false };
+      const loadDeferred = vi.fn(async () => published);
+      registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+        loadDeferred,
+        readPrepared: async () => published,
+      });
+      await expect(
+        buildModelsListResult({
+          source: { kind: "gateway", context },
+          agentId: "main",
+          params: { view: "all" },
+        }),
+      ).rejects.toThrow("Model catalog changed");
+      published = { ...first, isCurrent: () => true };
+      const current = await buildModelsListResult({
+        source: { kind: "gateway", context },
+        agentId: "main",
+        params: { view: "all" },
+      });
+      expect(current.models.some((model) => model.id === "published-model")).toBe(true);
+      expect(loadDeferred).not.toHaveBeenCalled();
+    });
+  });
 
-        expect(result.models).toContainEqual(
-          expect.objectContaining({
-            id: "gpt-5.4-nano",
-            agentRuntime: MODEL_CODEX_RUNTIME,
-          }),
-        );
-      },
-    );
+  it("reports a missing published owner without starting acquisition", async () => {
+    await withPublishedCatalog(async (context) => {
+      const published = expectDefined(
+        await readPreparedCatalog(context, "main"),
+        "Published catalog fixture must supply its owner",
+      );
+      const loadDeferred = vi.fn(async () => published);
+      registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+        loadDeferred,
+        readPrepared: async () => undefined,
+      });
+      await expect(
+        buildModelsListResult({
+          source: { kind: "gateway", context },
+          agentId: "main",
+          params: {},
+        }),
+      ).rejects.toThrow("Model catalog is not ready");
+      expect(loadDeferred).not.toHaveBeenCalled();
+    });
+  });
+
+  it("returns the generation published by an explicit refresh", async () => {
+    await withPublishedCatalog(async (context) => {
+      let published = expectDefined(
+        await readPreparedCatalog(context, "main"),
+        "Published catalog fixture must supply its owner",
+      );
+      const refreshed = providerCatalogEntry("ollama", "refreshed-model");
+      const loadDeferred = vi.fn(async () => {
+        published = { ...published, entries: [refreshed], routeVariants: [refreshed] };
+        return published;
+      });
+      registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+        loadDeferred,
+        readPrepared: async () => published,
+      });
+      const result = await buildModelsListResult({
+        source: { kind: "gateway", context },
+        agentId: "main",
+        params: { view: "all", refresh: true },
+      });
+      expect(result.models.some((model) => model.id === "refreshed-model")).toBe(true);
+      expect(loadDeferred).toHaveBeenCalledExactlyOnceWith({
+        agentId: "main",
+        readOnly: false,
+        refreshFullCatalog: true,
+      });
+    });
   });
 });

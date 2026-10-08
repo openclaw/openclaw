@@ -61,7 +61,7 @@ afterEach(async () => {
 });
 
 describe("plugin Doctor migrations", () => {
-  it("requires explicit Doctor to repair shared schema before plugin migrations", async () => {
+  it("refuses pre-July shared schema before plugin migrations", async () => {
     const root = await tempDirs.make("openclaw-plugin-doctor-shared-schema-");
     const stateDir = path.join(root, ".openclaw");
     const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: stateDir };
@@ -102,7 +102,7 @@ describe("plugin Doctor migrations", () => {
 
     await expect(
       autoMigrateLegacyPluginDoctorState({ config: cfg, env, homedir: () => root }),
-    ).rejects.toThrow("agent-databases-composite-primary-key");
+    ).rejects.toThrow("unsupported agent database registry schema");
     expect(migrateLegacyState).not.toHaveBeenCalled();
     const preserved = new DatabaseSync(stateDbPath, { readOnly: true });
     try {
@@ -126,12 +126,11 @@ describe("plugin Doctor migrations", () => {
       doctorOnlyStateMigrations: true,
     });
 
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain(
-      "Migrated shared state agent database registry primary key → agent_id,path",
-    );
-    expect(result.changes).toContain("plugin state migrated");
-    expect(migrateLegacyState).toHaveBeenCalledOnce();
+    expect(result.warnings).toEqual([
+      expect.stringContaining("unsupported agent database registry schema"),
+    ]);
+    expect(result.changes).toEqual([]);
+    expect(migrateLegacyState).not.toHaveBeenCalled();
   });
   it.each([
     {

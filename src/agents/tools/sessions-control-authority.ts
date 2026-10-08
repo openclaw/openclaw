@@ -1,75 +1,16 @@
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../gateway/operator-role-policy.js";
-import { readOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
-import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
-import {
-  assertAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { ToolAuthorizationError } from "./common.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
 import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
-
-function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAuthority) {
-  const invocation = readOperatorToolGatewayAuthority();
-  const caller = getGatewayToolCallerIdentity()?.operatorAuthority;
-  const scope = getPluginRuntimeGatewayRequestScope();
-  const retained = scope?.client?.internal?.operatorRunAuthority;
-  const authority = prepared ?? caller ?? invocation?.operatorRunAuthority ?? retained;
-  if (!authority) {
-    return undefined;
-  }
-  const sources = [
-    ...new Set([authority, caller, invocation?.operatorRunAuthority, retained]),
-  ].filter((source): source is AdmittedRunOperatorAuthority => source !== undefined);
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  const assertCurrent = () => {
-    for (const source of sources) {
-      assertAdmittedRunOperatorAuthority(source);
-      source.assertCurrent();
-      if (source.source !== authority.source) {
-        throw new Error("Session control operator source changed.");
-      }
-    }
-    assertCallerCurrent?.("sessions.patch");
-    invocation?.signal.throwIfAborted();
-    invocation?.assertCurrent?.();
-    if (retained && scope?.hasCurrentClientAuthority?.() === false) {
-      throw new Error("Session control caller authority is no longer active.");
-    }
-  };
-  assertCurrent();
-  return {
-    authority,
-    assertCurrent,
-    allows: (requested: string) =>
-      sources.every((source) => operatorScopeSatisfied(requested, source.scopes)) &&
-      (!invocation || operatorScopeSatisfied(requested, invocation.scopes)) &&
-      (!retained || operatorScopeSatisfied(requested, scope?.client?.connect.scopes ?? [])),
-  };
-}
-
-/** Resolve the original host-issued source without upgrading an insufficient scope. */
-export function readSessionControlAuthority(
-  prepared?: AdmittedRunOperatorAuthority,
-): AdmittedRunOperatorAuthority | undefined {
-  return captureSessionControlAuthority(prepared)?.authority;
-}
-
-/** Availability only; the target guard and underlying Gateway policy still apply. */
-export function hasSessionControlAuthority(prepared?: AdmittedRunOperatorAuthority): boolean {
-  return captureSessionControlAuthority(prepared)?.allows("operator.write") ?? false;
-}
+import { captureSessionControlAuthority } from "./sessions-operator-authority.js";
 
 /** Bind one target incarnation; this never grants the caller Gateway access. */
 export async function prepareSessionControlTarget(params: {
@@ -83,7 +24,7 @@ export async function prepareSessionControlTarget(params: {
 }): Promise<{
   sessionId: string;
   lifecycleRevision: string | null;
-  assertCurrent(): void;
+  assertCurrent(this: void): void;
   release(): void;
 }> {
   // Identity-only callers compose their own invocation guard. In particular, accepted
@@ -92,15 +33,18 @@ export async function prepareSessionControlTarget(params: {
   const gateway = getInProcessGatewayToolContext();
   const currentConfig = () =>
     gateway ? (gateway.getCommittedRuntimeConfig ?? gateway.getRuntimeConfig)() : params.cfg;
-  const assertSourceCurrent = () => {
-    if (gateway && getInProcessGatewayToolContext() !== gateway) {
-      throw new ToolAuthorizationError("Session control Gateway instance changed.");
-    }
-    source?.assertCurrent();
-    if (source && !source.allows("operator.write")) {
-      throw new ToolAuthorizationError("Session controls require operator.write.");
-    }
-  };
+  const assertSourceCurrent = composeSessionSourceAssertion(
+    [source?.assertCurrent],
+    (assertSource) => {
+      if (gateway && getInProcessGatewayToolContext() !== gateway) {
+        throw new ToolAuthorizationError("Session control Gateway instance changed.");
+      }
+      assertSource();
+      if (source && !source.allows("operator.write")) {
+        throw new ToolAuthorizationError("Session controls require operator.write.");
+      }
+    },
+  );
   assertSourceCurrent();
   const facts = await prepareSessionMutationFacts({
     cfg: params.cfg,
@@ -129,8 +73,7 @@ export async function prepareSessionControlTarget(params: {
       ? await prepareUserProfileRoleAuthority(source.authority.profileId)
       : undefined;
     const profileIds = new Set(profile ? [profile.profileId, ...profile.aliases] : []);
-    const assertCurrent = () => {
-      assertSourceCurrent();
+    const assertTargetCurrent = () => {
       const cfg = currentConfig();
       const currentFacts = facts.readCurrent(cfg);
       const current = currentFacts.target.entry;
@@ -163,7 +106,12 @@ export async function prepareSessionControlTarget(params: {
         },
         currentFacts,
         {
-          policy: resolveOperatorRolePolicyForAssignment(profile.profileId, profile.role, cfg),
+          policy: resolveOperatorRolePolicyForAssignment(
+            profile.profileId,
+            profile.role,
+            cfg,
+            profile.githubLogin ?? null,
+          ),
           aliases: new Set(profile.aliases),
         },
       );
@@ -186,6 +134,7 @@ export async function prepareSessionControlTarget(params: {
         );
       }
     };
+    const assertCurrent = composeSessionSourceAssertion([assertSourceCurrent, assertTargetCurrent]);
     assertCurrent();
     // Consume committed owner publications even when no action is executing. A later
     // reassignment must not revive a capture that lost its original target authority.
@@ -197,7 +146,7 @@ export async function prepareSessionControlTarget(params: {
         return;
       }
       try {
-        assertCurrent();
+        assertTargetCurrent();
       } catch {
         release();
       }

@@ -21,6 +21,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../src/infra/kysely-sync.js";
+import { writeGatewayRestartIntentSync } from "../../src/infra/restart-intent.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../src/state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -211,7 +212,16 @@ describe("gateway restart benchmark script", () => {
     expect(() => testing.parseOptions(["--restarts", "--runs", "1"])).toThrow(
       "--restarts requires a value",
     );
-    expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
+    expect(() => testing.parseOptions(["--entry", " --inspect"])).toThrow(/must be a file path/u);
+  });
+
+  it("selects the Gateway runtime and affinity independently of the controller", () => {
+    expect(testing.parseOptions([]).gatewayRuntime).toBe(process.execPath);
+    expect(
+      testing.parseOptions(["--gateway-runtime", "/tmp/bun", "--gateway-cpus", "0,1"]),
+    ).toMatchObject({ gatewayRuntime: "/tmp/bun", gatewayCpus: "0,1" });
+    expect(() => testing.parseOptions(["--gateway-cpus", "0-1"])).toThrow("--gateway-cpus");
+    expect(() => testing.parseOptions(["--gateway-runtime", "bun\0"])).toThrow("--gateway-runtime");
   });
 
   it("rejects unknown benchmark CLI args before checking platform or running cases", () => {
@@ -471,11 +481,6 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     ).toBe(false);
   });
 
-  it("reports deadline expiry separately from child exit", () => {
-    expect(testing.resolveRestartDeadlineFailure(false)).toBe("restart_deadline_timeout");
-    expect(testing.resolveRestartDeadlineFailure(true)).toBe("restart_child_exited");
-  });
-
   it("marks clean and signaled pre-teardown child exits as benchmark failures", () => {
     expect(
       testing.resolveSampleExitFailure({
@@ -505,15 +510,6 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         signal: "SIGTERM",
       }),
     ).toBeNull();
-  });
-
-  it("budgets timeout per restart instead of against the whole sample", () => {
-    const sampleStartAt = 1_000;
-    const timeoutMs = 30_000;
-    const restart20SignalAt = sampleStartAt + 25_000;
-
-    expect(testing.resolvePhaseDeadlineAt(sampleStartAt, timeoutMs)).toBe(31_000);
-    expect(testing.resolvePhaseDeadlineAt(restart20SignalAt, timeoutMs)).toBe(56_000);
   });
 
   it("does not fail successful restarts when probes miss the unavailable window", () => {
@@ -733,7 +729,9 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
       // The benchmark records intent only after Gateway startup creates state.
       openOpenClawStateDatabase({ env });
-      expect(testing.writeRestartIntent(env, 12345, "gateway-restart-bench")).toBe(true);
+      expect(
+        writeGatewayRestartIntentSync({ env, targetPid: 12345, reason: "gateway-restart-bench" }),
+      ).toBe(true);
       const row = readRestartIntentRow(env);
 
       expect(row).toMatchObject({

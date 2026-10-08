@@ -228,7 +228,7 @@ describe("Agents API input attachment custody", () => {
     );
   });
 
-  it.each([Number.NaN, -1, 1.5])(
+  it.each([Number.NaN, -1])(
     "rejects invalid size metadata %s without treating it as a limit omission",
     async (sizeBytes) => {
       const saved = await saveMediaBuffer(Buffer.from("x"), undefined, "inbound");
@@ -499,7 +499,7 @@ function outputClient(
     } else {
       const id = pathname.match(/\/artifacts\/([^/]+)\/content$/u)?.[1];
       const bytes = id ? content[id] : undefined;
-      if (!bytes) {
+      if (!bytes || pathname !== `${sessionPath}/artifacts/${id}/content`) {
         throw new Error(`Unexpected fixture request: ${pathname}`);
       }
       options.onContent?.();

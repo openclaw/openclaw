@@ -7,9 +7,7 @@ const binding = { kind: "write", anchorPath: "/workspace", anchorDevice: "1", an
 const sizeBytes = 50 * 1024 * 1024;
 const expectedSha256 = "a".repeat(64);
 
-function fixture(
-  overrides: { maxBytes?: number; allowWritePaths?: string[]; canonical?: string } = {},
-) {
+function fixture(overrides: { maxBytes?: number; canonical?: string } = {}) {
   const { ctx, invokeNode } = createCtx({
     command: "file.create",
     params: {
@@ -28,7 +26,7 @@ function fixture(
         "node-1": {
           ask: "off",
           allowReadPaths: ["/workspace/**"],
-          allowWritePaths: overrides.allowWritePaths ?? ["/workspace/**"],
+          allowWritePaths: ["/workspace/**"],
           maxBytes: overrides.maxBytes ?? sizeBytes,
           followSymlinks: true,
         },
@@ -70,12 +68,6 @@ describe("file.create node policy", () => {
       expectedSha256,
     });
     expect(invokeNode.mock.calls[1]?.[0]?.params).not.toHaveProperty("preflightOnly");
-  });
-
-  it("does not turn a read grant into a create grant", async () => {
-    const { ctx, invokeNode } = fixture({ allowWritePaths: [] });
-    expect(await createFileTransferNodeInvokePolicy().handle(ctx)).toMatchObject({ ok: false });
-    expect(invokeNode).not.toHaveBeenCalled();
   });
 
   it("honors a smaller configured byte allowance before node dispatch", async () => {

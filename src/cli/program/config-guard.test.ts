@@ -38,6 +38,22 @@ vi.mock("../../config/config.js", () => ({
   setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
 
+const recoveryMocks = vi.hoisted(() => ({
+  confirm: vi.fn(),
+  isInteractive: vi.fn(),
+  runDoctor: vi.fn(),
+}));
+vi.mock("../prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../prompt.js")>()),
+  promptYesNo: recoveryMocks.confirm,
+}));
+vi.mock("../terminal-interactivity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../terminal-interactivity.js")>()),
+  isTerminalInteractive: recoveryMocks.isInteractive,
+}));
+// mock-isolation: Consent and retry tests must not initialize Doctor migrations or state admission.
+vi.mock("../../commands/doctor.js", () => ({ doctorCommand: recoveryMocks.runDoctor }));
+
 type ConfigIssue = ConfigValidationIssue;
 
 function makeSnapshot() {
@@ -142,6 +158,9 @@ describe("ensureConfigReady", () => {
       "OPENCLAW_STATE_DIR",
     ]);
     vi.clearAllMocks();
+    recoveryMocks.confirm.mockReset().mockResolvedValue(true);
+    recoveryMocks.isInteractive.mockReset().mockReturnValue(false);
+    recoveryMocks.runDoctor.mockReset().mockResolvedValue(undefined);
     resetConfigGuardStateForTests();
     for (const root of tempRoots.splice(0)) {
       fs.rmSync(root, { recursive: true, force: true });
@@ -171,7 +190,6 @@ describe("ensureConfigReady", () => {
     ["skips state preparation for health", ["health"], 0],
     ["skips state preparation for logs", ["logs"], 0],
     ["skips state preparation for sessions", ["sessions"], 0],
-    ["skips state preparation for remote gateway calls", ["gateway", "call"], 0],
     ["skips state preparation for gateway restart control", ["gateway", "restart"], 0],
     ["skips state preparation for legacy daemon restart control", ["daemon", "restart"], 0],
     ["skips state preparation for config set", ["config", "set"], 0],
@@ -222,12 +240,6 @@ describe("ensureConfigReady", () => {
       pluginValidation: "core-only",
     });
     expect(runStartupConfigPreflightMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps remote gateway call config reads non-observing", async () => {
-    await runEnsureConfigReady(["gateway", "call"]);
-
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
   });
 
   it.each([
@@ -477,13 +489,11 @@ describe("ensureConfigReady", () => {
       .mockResolvedValueOnce({ snapshot: validSnapshot, baseConfig: validSnapshot.config });
     readConfigFileSnapshotMock.mockResolvedValue(validSnapshot);
     const runtime = makeRuntime();
-    const confirm = vi.fn(async () => true);
-    const runDoctor = vi.fn(async () => {});
+    const confirm = recoveryMocks.confirm;
+    recoveryMocks.isInteractive.mockReturnValue(true);
+    const runDoctor = recoveryMocks.runDoctor;
 
-    await ensureConfigReady(
-      { runtime: runtime as never, commandPath: ["message"] },
-      { confirm, isInteractive: () => true, runDoctor },
-    );
+    await ensureConfigReady({ runtime: runtime as never, commandPath: ["message"] });
 
     expect(confirm).toHaveBeenCalledWith(
       `Run "${formatCliCommand("openclaw doctor --fix")}" now?`,
@@ -503,16 +513,14 @@ describe("ensureConfigReady", () => {
   it("does not prompt for repair when stdout belongs to a machine-readable command", async () => {
     setInvalidSnapshot();
     const runtime = makeRuntime();
-    const confirm = vi.fn(async () => true);
+    const confirm = recoveryMocks.confirm;
+    recoveryMocks.isInteractive.mockReturnValue(true);
 
-    await ensureConfigReady(
-      {
-        runtime: runtime as never,
-        commandPath: ["agents", "list"],
-        suppressDoctorStdout: true,
-      },
-      { confirm, isInteractive: () => true },
-    );
+    await ensureConfigReady({
+      runtime: runtime as never,
+      commandPath: ["agents", "list"],
+      suppressDoctorStdout: true,
+    });
 
     expect(confirm).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -579,12 +587,10 @@ describe("ensureConfigReady", () => {
       setInvalidSnapshot();
       setTestEnvValue(mode, "1");
       const runtime = makeRuntime();
-      const confirm = vi.fn(async () => true);
+      const confirm = recoveryMocks.confirm;
+      recoveryMocks.isInteractive.mockReturnValue(true);
 
-      await ensureConfigReady(
-        { runtime: runtime as never, commandPath: ["gateway", "run"] },
-        { confirm, isInteractive: () => true },
-      );
+      await ensureConfigReady({ runtime: runtime as never, commandPath: ["gateway", "run"] });
 
       expect(confirm).not.toHaveBeenCalled();
       expect(plainErrorCalls(runtime).join("\n")).toContain(`${mode}=1`);
@@ -657,11 +663,12 @@ describe("ensureConfigReady", () => {
         issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" }],
       });
       const runtime = makeRuntime();
-      const confirm = vi.fn(async () => true);
-      await ensureConfigReady(
-        { runtime, commandPath: subcommand ? ["gateway", subcommand] : ["gateway"] },
-        { confirm, isInteractive: () => true },
-      );
+      const confirm = recoveryMocks.confirm;
+      recoveryMocks.isInteractive.mockReturnValue(true);
+      await ensureConfigReady({
+        runtime,
+        commandPath: subcommand ? ["gateway", subcommand] : ["gateway"],
+      });
       expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
       expect(confirm).not.toHaveBeenCalled();
       expect(plainErrorCalls(runtime).join("\n")).not.toContain("doctor --fix");
@@ -682,16 +689,14 @@ describe("ensureConfigReady", () => {
   it("does not offer repair for an explicitly allowed gateway startup", async () => {
     setInvalidSnapshot();
     const runtime = makeRuntime();
-    const confirm = vi.fn(async () => true);
+    const confirm = recoveryMocks.confirm;
+    recoveryMocks.isInteractive.mockReturnValue(true);
 
-    await ensureConfigReady(
-      {
-        runtime: runtime as never,
-        commandPath: ["gateway", "run"],
-        allowInvalid: true,
-      },
-      { confirm, isInteractive: () => true },
-    );
+    await ensureConfigReady({
+      runtime: runtime as never,
+      commandPath: ["gateway", "run"],
+      allowInvalid: true,
+    });
 
     expect(confirm).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();

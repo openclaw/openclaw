@@ -16,7 +16,7 @@ import {
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { rewindSessionBackfillIngestionState } from "./session-backfill-lifecycle.js";
 import { removeGroundedShortTermCandidates } from "./short-term-promotion-artifacts.js";
-import { recordGroundedShortTermCandidates } from "./short-term-promotion-record.js";
+import { recordShortTermRecalls } from "./short-term-promotion-record.js";
 import { recordDreamingPhaseSignals } from "./short-term-promotion-stats.js";
 import {
   configureMemoryCoreDreamingStateForTests,
@@ -38,11 +38,13 @@ it.each([
     failingNamespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
     pendingNamespace: SHORT_TERM_RECALL_NAMESPACE,
     async prepare(workspaceDir: string) {
-      await recordGroundedShortTermCandidates({
+      await recordShortTermRecalls({
         workspaceDir,
         query: "historical candidate",
-        items: [
+        signalType: "grounded",
+        results: [
           {
+            source: "memory",
             path: "memory/2026-04-03.md",
             startLine: 1,
             endLine: 1,

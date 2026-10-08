@@ -2,11 +2,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentRegistry, createFileSessionStore, type AcpProcessStarted } from "acpx/runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
 import { AcpxRuntime } from "./runtime.js";
 
 const script = fileURLToPath(new URL("../test/fixtures/model-catalog-agent.mjs", import.meta.url));
+
+function modelRequest(name: string, model: string) {
+  return {
+    sessionKey: `agent:main:acp:${name}`,
+    agent: "catalog",
+    mode: "persistent" as const,
+    model,
+    modelExplicit: true,
+  };
+}
 
 function isAlive(pid: number): boolean {
   try {
@@ -20,7 +32,7 @@ function isAlive(pid: number): boolean {
 async function withRuntime(
   run: (
     runtime: AcpxRuntime,
-    spawned: AcpProcessStarted[],
+    spawned: Array<AcpProcessStarted & { exited: Promise<void> }>,
     restart: () => AcpxRuntime,
   ) => Promise<void>,
   cursor = true,
@@ -39,7 +51,8 @@ async function withRuntime(
         await fs.symlink(process.execPath, executable);
       }
     }
-    const spawned: AcpProcessStarted[] = [];
+    const spawned: Array<AcpProcessStarted & { exited: Promise<void> }> = [];
+    const exits = new Map<string, () => void>();
     const runtimes: AcpxRuntime[] = [];
     const create = () => {
       const created = new AcpxRuntime({
@@ -48,7 +61,17 @@ async function withRuntime(
         agentRegistry: createAgentRegistry({ overrides: { catalog: [executable, script] } }),
         permissionMode: "deny-all",
         timeoutMs: 10_000,
-        processLifecycle: { onSpawned: (started) => void spawned.push(started) },
+        processLifecycle: {
+          onSpawned: (started) => {
+            const exited = createDeferred<void>();
+            exits.set(started.launchId, exited.resolve);
+            spawned.push({ ...started, exited: exited.promise });
+          },
+          onExit: ({ launchId }) => {
+            exits.get(launchId)?.();
+            exits.delete(launchId);
+          },
+        },
       });
       runtimes.push(created);
       return created;
@@ -81,13 +104,9 @@ async function prompt(
 
 it("selects the unique advertised id for an explicit model ref", async () => {
   await withRuntime(async (runtime) => {
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:main:acp:catalog-explicit",
-      agent: "catalog",
-      mode: "persistent",
-      model: "cursor/composer-2.5",
-      modelExplicit: true,
-    });
+    const handle = await runtime.ensureSession(
+      modelRequest("catalog-explicit", "cursor/composer-2.5"),
+    );
     // Session metadata keeps the OpenClaw ref; the harness reports the advertised id.
     expect(handle.appliedModel).toBeUndefined();
     expect(await runtime.getStatus({ handle })).toMatchObject({
@@ -117,22 +136,13 @@ it("selects the unique advertised id for an explicit model ref", async () => {
   });
 });
 
-it.each(["missing-model", "vendor/ambiguous"])(
-  "rejects an ambiguous or unknown model %s",
-  async (model) => {
-    await withRuntime(async (runtime) => {
-      await expect(
-        runtime.ensureSession({
-          sessionKey: "agent:main:acp:catalog-missing",
-          agent: "catalog",
-          mode: "persistent",
-          model,
-          modelExplicit: true,
-        }),
-      ).rejects.toMatchObject({ code: "ACP_MODEL_UNSUPPORTED" });
-    });
-  },
-);
+it("rejects an ambiguous model before trying a provider-stripped reference", async () => {
+  await withRuntime(async (runtime) => {
+    await expect(
+      runtime.ensureSession(modelRequest("catalog-missing", "vendor/ambiguous")),
+    ).rejects.toMatchObject({ code: "ACP_MODEL_UNSUPPORTED" });
+  });
+});
 
 it("rejects a model that becomes ambiguous on reconnect and preserves the conversation", async () => {
   await withRuntime(async (runtime, _spawned, restart) => {
@@ -160,33 +170,16 @@ it("rejects a model that becomes ambiguous on reconnect and preserves the conver
   });
 });
 
-it("releases rejected startup attempts when an advertised model cannot be selected", async () => {
-  await withRuntime(async (runtime, spawned) => {
-    await expect(
-      runtime.ensureSession({
-        sessionKey: "agent:main:acp:catalog-locked",
-        agent: "catalog",
-        mode: "persistent",
-        model: "provider/locked-1",
-        modelExplicit: true,
-      }),
-    ).rejects.toThrow(/not available on this plan/);
+it("cleans up failed selections and keeps rejecting same-key retries after restart", async ({
+  signal,
+}) => {
+  await withRuntime(async (runtime, spawned, restart) => {
+    const input = modelRequest("catalog-retry", "provider/locked-1");
+    await expect(runtime.ensureSession(input)).rejects.toThrow(/not available on this plan/);
     // The original reference and stripped retry both failed before session publication.
     expect(spawned).toHaveLength(2);
-    await expect.poll(() => spawned.filter(({ pid }) => isAlive(pid))).toEqual([]);
-  });
-});
-
-it("keeps rejecting a failed selection on a same-key retry or after restart", async () => {
-  await withRuntime(async (runtime, _spawned, restart) => {
-    const input = {
-      sessionKey: "agent:main:acp:catalog-retry",
-      agent: "catalog",
-      mode: "persistent" as const,
-      model: "provider/locked-1",
-      modelExplicit: true,
-    };
-    await expect(runtime.ensureSession(input)).rejects.toThrow(/not available on this plan/);
+    await withinTest(Promise.all(spawned.map(({ exited }) => exited)), signal);
+    expect(spawned.filter(({ pid }) => isAlive(pid))).toEqual([]);
     // A published incomplete record would make these succeed without the requested model.
     await expect(runtime.ensureSession(input)).rejects.toThrow(/not available on this plan/);
     await runtime.shutdown();
@@ -196,13 +189,9 @@ it("keeps rejecting a failed selection on a same-key retry or after restart", as
 
 it("preserves an advertised slash id before considering a provider-stripped reference", async () => {
   await withRuntime(async (runtime) => {
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:main:acp:catalog-native-id",
-      agent: "catalog",
-      mode: "persistent",
-      model: "vendor/native-model",
-      modelExplicit: true,
-    });
+    const handle = await runtime.ensureSession(
+      modelRequest("catalog-native-id", "vendor/native-model"),
+    );
     expect(await prompt(runtime, handle, "startup")).toMatchObject({
       model: "vendor/native-model",
     });
@@ -217,21 +206,11 @@ it("preserves an advertised slash id before considering a provider-stripped refe
 it("does not interpret another harness's opaque ids as Cursor aliases", async () => {
   await withRuntime(async (runtime) => {
     await expect(
-      runtime.ensureSession({
-        sessionKey: "agent:main:acp:generic-alias",
-        agent: "catalog",
-        mode: "persistent",
-        model: "composer-2.5",
-        modelExplicit: true,
-      }),
+      runtime.ensureSession(modelRequest("generic-alias", "composer-2.5")),
     ).rejects.toMatchObject({ reason: "unadvertised-model" });
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:main:acp:generic-exact",
-      agent: "catalog",
-      mode: "persistent",
-      model: "composer-2.5[fast=true]",
-      modelExplicit: true,
-    });
+    const handle = await runtime.ensureSession(
+      modelRequest("generic-exact", "composer-2.5[fast=true]"),
+    );
     await expect(
       runtime.setConfigOption({ handle, key: "model", value: "grok-4.5" }),
     ).rejects.toMatchObject({ reason: "unadvertised-model" });

@@ -1,21 +1,19 @@
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getRuntimeConfig } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { snapshotFiles } from "../../infra/state-migrations.caller-mode.test-helpers.js";
 import { autoMigrateLegacyState } from "../../infra/state-migrations.doctor.js";
 import type { Model } from "../../llm/types.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../../plugins/legacy-session-surfaces.types.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabaseByPathAsync,
   inspectOpenClawAgentDatabaseOwner,
+  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   assertAuthProfileMigrationReady,
@@ -26,6 +24,7 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../auth-profiles/sqlite.js";
 import type { ApiKeyCredential, AuthProfileStore } from "../auth-profiles/types.js";
+import { getAgentDir } from "../config.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AuthStorage } from "./auth-storage.js";
 import { ModelRegistry } from "./model-registry.js";
@@ -60,6 +59,57 @@ const testModel: Model = {
 afterEach(() => {
   clearAuthProfileMigrationDiagnostics();
   vi.restoreAllMocks();
+});
+
+it("keeps a legacy SDK store when Doctor's configured owner differs", async () => {
+  await withOpenClawTestState(
+    { label: "sdk-legacy-owner", layout: "split", agentEnv: "clear" },
+    async (state) => {
+      vi.spyOn(os, "homedir").mockReturnValue(state.home);
+      const legacyDir = path.join(state.home, ".openclaw", "agent");
+      const databasePath = path.join(legacyDir, "openclaw-agent.sqlite");
+      await mkdir(path.join(legacyDir, "bin"), { recursive: true });
+      await writeFile(path.join(legacyDir, "bin", "fd"), "installed SDK tool");
+      openOpenClawAgentDatabase({ agentId: "main", env: state.env, path: databasePath });
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual({
+        status: "owned",
+        agentId: "main",
+      });
+      const before = snapshotFiles(legacyDir);
+      const cfg = { agents: { entries: { worker: {} } }, plugins: { enabled: false } };
+      await state.writeConfig(cfg);
+
+      const result = await autoMigrateLegacyState({
+        cfg,
+        homedir: () => state.home,
+        doctorOnlyStateMigrations: true,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
+
+      expect(result.stepReceipts.find((entry) => entry.outcome === "refused")).toBeUndefined();
+      const receipt = result.stepReceipts.find((entry) => entry.id === "agent-dir");
+      expect(receipt).toMatchObject({
+        outcome: "deferred",
+        deferred: [
+          {
+            reason: "owner-mismatch",
+            recordedOwner: "main",
+            configuredOwner: "worker",
+            path: legacyDir,
+          },
+        ],
+      });
+      expect(receipt?.warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining("Keep using the existing store")]),
+      );
+      expect(snapshotFiles(legacyDir)).toEqual(before);
+      await expect(
+        access(path.join(state.agentDir("worker"), ".legacy-agent-dir-migration.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(getAgentDir()).toBe(legacyDir);
+    },
+  );
 });
 
 describe("SDK migration guard endpoint context", () => {
@@ -126,13 +176,19 @@ describe("SDK migration guard endpoint context", () => {
             provider: "arcee",
             baseUrl,
           };
+          const config = getRuntimeConfig();
+          const authStorage = AuthStorage.forAgent(agentDir, config);
           const { session } = await createAgentSession({
-            agentDir,
+            systemPrompt: "Test session prompt",
+            modelRegistry: ModelRegistry.create(authStorage, path.join(agentDir, "models.json"), {
+              config,
+            }),
             model,
+            thinkingLevel: "medium",
             resourceLoader: createResourceLoader(),
             settingsManager: SettingsManager.inMemory(),
             sessionManager: SessionManager.inMemory(),
-            noTools: "all",
+            tools: [],
           });
           const credential = "synthetic-fallback-key";
           const providerIo = vi.fn(() => createAssistantMessageEventStream());
@@ -472,243 +528,4 @@ describe("SDK migration guard endpoint context", () => {
       },
     );
   });
-});
-
-describe("SDK installation ownership", () => {
-  it.each([
-    { configuredOwner: "worker", doctor: false },
-    { configuredOwner: "worker", doctor: true },
-    { configuredOwner: "main", doctor: true },
-  ])(
-    "preserves existing standalone sessions (configured owner: $configuredOwner, Doctor: $doctor)",
-    async ({ configuredOwner, doctor }) => {
-      await withOpenClawTestState(
-        { label: "sdk-legacy-owner", layout: "split", agentEnv: "clear" },
-        async (state) => {
-          vi.spyOn(os, "homedir").mockReturnValue(state.home);
-          const legacyDir = path.join(state.home, ".openclaw", "agent");
-          const options = {
-            cwd: state.workspaceDir,
-            model: testModel,
-            resourceLoader: createResourceLoader(),
-            settingsManager: SettingsManager.inMemory(),
-            authStorage: AuthStorage.inMemory(),
-            modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-          };
-          const existing = await createAgentSession({ ...options, agentDir: legacyDir });
-          const original = expectDefined(
-            existing.session.sessionManager.getSessionTarget(),
-            "legacy SDK target",
-          );
-          existing.session.dispose();
-          await closeOpenClawAgentDatabasesAsync();
-          closeOpenClawAgentDatabasesForTest();
-          expect(inspectOpenClawAgentDatabaseOwner(original.storePath)).toEqual({
-            status: "owned",
-            agentId: "main",
-          });
-
-          const binary = process.platform === "win32" ? "fd.exe" : "fd";
-          await mkdir(path.join(legacyDir, "bin"));
-          await writeFile(path.join(legacyDir, "bin", binary), "installed SDK tool");
-          await writeFile(
-            path.join(legacyDir, "models.json"),
-            JSON.stringify({
-              providers: {
-                [testModel.provider]: {
-                  baseUrl: testModel.baseUrl,
-                  api: testModel.api,
-                  models: [testModel],
-                },
-              },
-            }),
-          );
-
-          const before = snapshotFiles(legacyDir);
-          const cfg = {
-            agents: { entries: { [configuredOwner]: {} } },
-            plugins: { enabled: false },
-          };
-          await state.writeConfig(cfg);
-          if (doctor) {
-            const result = await autoMigrateLegacyState({
-              cfg,
-              homedir: () => state.home,
-              doctorOnlyStateMigrations: true,
-              legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-            });
-            expect(
-              result.stepReceipts.find((entry) => entry.outcome === "refused"),
-            ).toBeUndefined();
-            const receipt = result.stepReceipts.find((entry) => entry.id === "agent-dir");
-            if (configuredOwner === "worker") {
-              expect(receipt).toMatchObject({
-                outcome: "deferred",
-                deferred: [
-                  {
-                    reason: "owner-mismatch",
-                    recordedOwner: "main",
-                    configuredOwner,
-                    path: legacyDir,
-                  },
-                ],
-              });
-              expect(receipt?.warnings).toEqual(
-                expect.arrayContaining([expect.stringContaining("Keep using the existing store")]),
-              );
-              expect(snapshotFiles(legacyDir)).toEqual(before);
-            } else {
-              expect(receipt).toMatchObject({
-                outcome: "deferred",
-                sqliteFamilies: [
-                  {
-                    database: original.storePath,
-                    files: expect.arrayContaining([original.storePath]),
-                    destination: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-                    outcome: "deferred",
-                    reason: "sqlite-family",
-                  },
-                ],
-              });
-              expect(snapshotFiles(legacyDir)).toEqual(before);
-            }
-            await expect(
-              access(
-                path.join(state.agentDir(configuredOwner), ".legacy-agent-dir-migration.json"),
-              ),
-            ).rejects.toMatchObject({ code: "ENOENT" });
-            await closeOpenClawAgentDatabasesAsync();
-            closeOpenClawAgentDatabasesForTest();
-          }
-
-          const { session } = await createAgentSession(options);
-          try {
-            const target = expectDefined(
-              session.sessionManager.getSessionTarget(),
-              "resolved SDK target",
-            );
-            expect(target.agentId).toBe("main");
-            const activeDir = legacyDir;
-            expect(target.storePath).toBe(original.storePath);
-            const { ensureTool } = await import("../utils/tools-manager.js");
-            await expect(ensureTool("fd", true)).resolves.toBe(path.join(activeDir, "bin", binary));
-            const discovered = ModelRegistry.create(AuthStorage.inMemory());
-            expect(discovered.find(testModel.provider, testModel.id)).toMatchObject({
-              id: testModel.id,
-            });
-            const retained = { ...original, storePath: target.storePath, agentId: target.agentId };
-            expect(loadSessionEntry(retained)).toMatchObject({ sessionId: original.sessionId });
-            await expect(loadTranscriptEvents(retained)).resolves.toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({ type: "session", id: original.sessionId }),
-              ]),
-            );
-          } finally {
-            session.dispose();
-          }
-        },
-      );
-    },
-  );
-
-  it.each(["legacy", "environment", "option"])(
-    "creates a session with malformed config and a %s directory",
-    async (selection) => {
-      await withOpenClawTestState(
-        { label: "sdk-invalid-config", agentEnv: "clear" },
-        async (state) => {
-          const agentDir =
-            selection === "legacy"
-              ? path.join(state.home, ".openclaw/agent")
-              : state.statePath("selected-agent");
-          vi.spyOn(os, "homedir").mockReturnValue(state.home);
-          await mkdir(agentDir, { recursive: true });
-          await writeFile(path.join(agentDir, "existing-state.txt"), "SDK state");
-          await writeFile(state.configPath, "{broken config");
-          const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-          const error = vi.spyOn(console, "error").mockImplementation(() => {});
-          await withEnvAsync(
-            { OPENCLAW_AGENT_DIR: selection === "environment" ? agentDir : undefined },
-            async () => {
-              const beforeEnv = { ...process.env };
-              const { session } = await createAgentSession({
-                ...(selection === "option" ? { agentDir } : {}),
-                cwd: state.workspaceDir,
-                model: testModel,
-                resourceLoader: createResourceLoader(),
-                settingsManager: SettingsManager.inMemory(),
-              });
-              try {
-                expect(session.sessionManager.getSessionTarget()?.storePath).toBe(
-                  path.join(agentDir, "openclaw-agent.sqlite"),
-                );
-                expect(await readFile(state.configPath, "utf8")).toBe("{broken config");
-                expect(await readFile(path.join(agentDir, "existing-state.txt"), "utf8")).toBe(
-                  "SDK state",
-                );
-                expect(process.env).toEqual(beforeEnv);
-                expect(
-                  warn.mock.calls.filter(([message]) =>
-                    String(message).includes("default agent directory"),
-                  ),
-                ).toHaveLength(1);
-                expect(error).not.toHaveBeenCalled();
-              } finally {
-                session.dispose();
-              }
-            },
-          );
-        },
-      );
-    },
-  );
-
-  it.each(["canonical", "custom"])(
-    "keeps the implicit SDK session with its configured owner in a %s directory",
-    async (layout) => {
-      await withOpenClawTestState(
-        { label: "sdk-install-owner", agentEnv: "clear" },
-        async (state) => {
-          const agentDir =
-            layout === "custom" ? state.statePath("worker-state") : state.agentDir("worker");
-          const homedir = vi.spyOn(os, "homedir").mockReturnValue(state.home);
-          try {
-            await state.writeConfig({
-              agents: { entries: { worker: layout === "custom" ? { agentDir } : {} } },
-              plugins: { enabled: false },
-            });
-            const { session } = await createAgentSession({
-              cwd: state.workspaceDir,
-              model: testModel,
-              resourceLoader: createResourceLoader(),
-              settingsManager: SettingsManager.inMemory(),
-              modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-            });
-            try {
-              const target = expectDefined(session.sessionManager.getSessionTarget(), "SDK target");
-              expect(target).toMatchObject({
-                agentId: "worker",
-                sessionKey: `agent:worker:sdk:${target.sessionId}`,
-                storePath: path.join(agentDir, "openclaw-agent.sqlite"),
-              });
-              expect(inspectOpenClawAgentDatabaseOwner(target.storePath)).toMatchObject({
-                status: "owned",
-                agentId: "worker",
-              });
-              expect(loadSessionEntry(target)).toMatchObject({ sessionId: target.sessionId });
-              await expect(loadTranscriptEvents(target)).resolves.toEqual(
-                expect.arrayContaining([
-                  expect.objectContaining({ type: "session", id: target.sessionId }),
-                ]),
-              );
-            } finally {
-              session.dispose();
-            }
-          } finally {
-            homedir.mockRestore();
-          }
-        },
-      );
-    },
-  );
 });

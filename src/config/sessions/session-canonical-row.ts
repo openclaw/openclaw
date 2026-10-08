@@ -1,4 +1,5 @@
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { SessionCanonicalKeyMigrationRequiredError } from "./session-canonical-key-error.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
@@ -18,13 +19,7 @@ export type CanonicalSessionValidationRow = {
   retained_window_id: string | null;
 };
 
-export class SessionCanonicalKeyMigrationRequiredError extends Error {
-  readonly code = "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED";
-  constructor(detail: string) {
-    super(`${detail}; stop the Gateway and run openclaw doctor --fix`);
-    this.name = "SessionCanonicalKeyMigrationRequiredError";
-  }
-}
+export { SessionCanonicalKeyMigrationRequiredError } from "./session-canonical-key-error.js";
 
 export function canonicalSessionKeyMigrationRequiredError(
   detail: string,

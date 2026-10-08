@@ -7,21 +7,6 @@ import {
 } from "./tool-policy-pipeline.js";
 import { mergeAlsoAllowPolicy, type ToolPolicyLike } from "./tool-policy.js";
 
-type ResolvedConversationToolPolicies = {
-  profilePolicy?: ToolPolicyLike;
-  providerProfilePolicy?: ToolPolicyLike;
-  globalPolicy?: ToolPolicyLike;
-  globalProviderPolicy?: ToolPolicyLike;
-  agentPolicy?: ToolPolicyLike;
-  agentProviderPolicy?: ToolPolicyLike;
-  groupPolicy?: ToolPolicyLike;
-  senderPolicy?: ToolPolicyLike;
-  sandboxPolicy?: ToolPolicyLike;
-  subagentPolicy?: ToolPolicyLike;
-  runtimeToolPolicy?: ToolPolicyLike;
-  inheritedToolPolicy?: ToolPolicyLike;
-};
-
 function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
   policy: TPolicy | undefined,
   alsoAllow: readonly string[] | undefined,
@@ -41,7 +26,7 @@ export function resolveConversationToolPolicies(params: {
   additionalProfileAllow?: readonly string[];
   additionalPolicyAllow?: readonly string[];
   additionalInheritedAllow?: readonly string[];
-}): ResolvedConversationToolPolicies {
+}) {
   const policy = params.capabilityProfile.policy;
   const profileAllow = [
     ...(policy.profileAlsoAllow ?? []),
@@ -79,7 +64,7 @@ export function resolveConversationToolPolicies(params: {
 /** Builds the canonical ordered policy pipeline for a resolved conversation. */
 export function buildConversationToolPolicyPipelineSteps(params: {
   capabilityProfile: ResolvedConversationCapabilityProfile;
-  policies: ResolvedConversationToolPolicies;
+  policies: ReturnType<typeof resolveConversationToolPolicies>;
   additionalStepsAfterSandbox?: ToolPolicyPipelineStep[];
   includeRuntimeToolPolicy: boolean;
   unavailableCoreToolReason?: string;

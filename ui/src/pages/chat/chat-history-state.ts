@@ -5,7 +5,6 @@ import type { SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
-  uiConversationMatches,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -54,6 +53,17 @@ type ChatHistoryPaneRequests = {
   subscriptionGeneration: number;
   subscriptionReady?: Promise<boolean>;
   subscriptionError?: string;
+  subscriptionRetry?: AbortController;
+  syncRetries: Map<
+    "subscription" | "history",
+    {
+      client: ChatState["client"];
+      sessions: ChatState["sessions"];
+      connectionEpoch: number;
+      sessionKey: string;
+      agentId?: string;
+    }
+  >;
   pendingSubscriptionReleases: Set<SessionMessageSubscription>;
   historyLoad: ChatHistoryLoadState;
   acceptedHistory?: Extract<ChatHistoryLoadState, { phase: "committed" }>;
@@ -80,11 +90,44 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
       branchVersion: 0,
       subscriptionGeneration: 0,
       pendingSubscriptionReleases: new Set(),
+      syncRetries: new Map(),
       historyLoad: { phase: "idle" },
     };
     chatHistoryPaneRequests.set(owner, requests);
   }
   return requests;
+}
+
+export function setChatHistoryRetrying(
+  state: ChatState,
+  source: "subscription" | "history",
+  retrying: boolean,
+): void {
+  const requests = chatHistoryRequests(state);
+  if (retrying) {
+    requests.syncRetries.set(source, {
+      client: state.client,
+      sessions: state.sessions,
+      connectionEpoch: state.connectionEpoch,
+      sessionKey: state.sessionKey,
+      agentId: resolveUiSelectedSessionAgentId(state),
+    });
+  } else if (!requests.syncRetries.delete(source)) {
+    return;
+  }
+  state.historyRecoveryChanged?.();
+}
+
+export function isChatHistoryRetrying(state: ChatState): boolean {
+  return [...chatHistoryRequests(state).syncRetries.values()].some(
+    (retry) =>
+      state.connected &&
+      retry.client === state.client &&
+      retry.sessions === state.sessions &&
+      retry.connectionEpoch === state.connectionEpoch &&
+      retry.sessionKey === state.sessionKey &&
+      retry.agentId === resolveUiSelectedSessionAgentId(state),
+  );
 }
 
 export function retireInitialChatSnapshot(state: ChatState): void {
@@ -263,14 +306,7 @@ export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
     : load.phase !== "committed" && load.startup;
 }
 
-type ChatHistoryRequestOwnership = {
-  version: number;
-  sessions: ChatState["sessions"];
-  client: GatewayBrowserClient;
-  connectionEpoch: number;
-  sessionKey: string;
-  agentId?: string;
-};
+type ChatHistoryRequestOwnership = ReturnType<typeof beginHistoryRequest>;
 
 export function beginHistoryRequest(
   state: ChatState,
@@ -278,7 +314,7 @@ export function beginHistoryRequest(
   connectionEpoch: number,
   sessionKey: string,
   agentId?: string,
-): ChatHistoryRequestOwnership {
+) {
   return {
     version: ++chatHistoryRequests(state).historyVersion,
     sessions: state.sessions,
@@ -342,12 +378,4 @@ export function setChatError(
   if (requestUpdate) {
     state.requestUpdate?.();
   }
-}
-
-export function chatScopedEventSessionMatches(
-  state: ChatState,
-  sessionKey: string,
-  agentId?: string | null,
-): boolean {
-  return uiConversationMatches(state, state.sessionKey, sessionKey, agentId);
 }

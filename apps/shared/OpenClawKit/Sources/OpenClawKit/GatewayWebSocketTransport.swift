@@ -1,13 +1,21 @@
 import Foundation
+import Synchronization
 
 public protocol WebSocketTasking: AnyObject {
     var state: URLSessionTask.State { get }
+    var response: URLResponse? { get }
     func resume()
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
     func send(_ message: URLSessionWebSocketTask.Message) async throws
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void)
     func receive() async throws -> URLSessionWebSocketTask.Message
     func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+}
+
+extension WebSocketTasking {
+    public var response: URLResponse? {
+        nil
+    }
 }
 
 extension URLSessionWebSocketTask: WebSocketTasking {}
@@ -54,22 +62,6 @@ public protocol WebSocketRequestSending: WebSocketTasking {
     func sendRequest(_ message: URLSessionWebSocketTask.Message, lifetime: WebSocketRequestLifetime) async throws
 }
 
-private final class WebSocketPingContinuationGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var didResume = false
-
-    func resumeOnce(_ resume: () -> Void) {
-        self.lock.lock()
-        if self.didResume {
-            self.lock.unlock()
-            return
-        }
-        self.didResume = true
-        self.lock.unlock()
-        resume()
-    }
-}
-
 public struct WebSocketTaskBox: @unchecked Sendable {
     /// Bounds a ping whose pong handler URLSession may never invoke. Long enough that a
     /// slow-but-live link still pongs, short enough that a wedged keepalive recovers.
@@ -82,6 +74,10 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 
     public var state: URLSessionTask.State {
         self.task.state
+    }
+
+    public var response: URLResponse? {
+        self.task.response
     }
 
     public func resume() {
@@ -119,7 +115,15 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 
     public func sendPing(timeout: Duration = WebSocketTaskBox.pingTimeout) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let gate = WebSocketPingContinuationGate()
+            let didResume = Mutex(false)
+            let finish: @Sendable (Error?) -> Void = { error in
+                let first = didResume.withLock { resumed in
+                    guard !resumed else { return false }
+                    resumed = true
+                    return true
+                }
+                if first { ThrowingContinuationSupport.resumeVoid(continuation, error: error) }
+            }
             // URLSession drops the pong handler entirely when the task is cancelled or
             // closed mid-flight, which orphans this continuation and wedges the keepalive
             // loop forever on an await that can never return. The deadline guarantees the
@@ -133,19 +137,13 @@ public struct WebSocketTaskBox: @unchecked Sendable {
                     // ping as timed out.
                     return
                 }
-                gate.resumeOnce {
-                    // URLError keeps this indistinguishable from a transport timeout for
-                    // callers, which already handle URLSession errors from every other path.
-                    ThrowingContinuationSupport.resumeVoid(continuation, error: URLError(.timedOut))
-                }
+                finish(URLError(.timedOut))
             }
             self.task.sendPing { error in
                 deadline.cancel()
                 // URLSession can race ping callbacks with cancellation; only the first
                 // pong result owns this checked continuation or Swift traps the app.
-                gate.resumeOnce {
-                    ThrowingContinuationSupport.resumeVoid(continuation, error: error)
-                }
+                finish(error)
             }
         }
     }

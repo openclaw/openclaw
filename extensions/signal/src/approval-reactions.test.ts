@@ -72,7 +72,6 @@ function registerTarget(
     allowedDecisions: ["allow-once", "deny"],
     targetAuthorKeys: ["+15550009999"],
     route: approvalRoute,
-    routeAllowed: true,
     ...overrides,
   });
 }
@@ -463,7 +462,6 @@ describe("Signal approval reactions", () => {
         channel: "signal",
         accountId: "default",
         senderId: "+15551230000",
-        gatewayUrl: undefined,
       });
     },
   );

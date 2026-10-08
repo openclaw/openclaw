@@ -3,7 +3,7 @@
 import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderConfigForm } from "../../components/config-form.ts";
-import { memoryTabForRoute, narrowMemorySchema } from "./memory-schema.ts";
+import { memoryTabForRoute, memorySettingsSchema } from "./memory-schema.ts";
 import { renderMemory } from "./memory.ts";
 
 /** The view is the only public surface, so its props type comes from its signature. */
@@ -17,7 +17,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
       { id: "memory-core", label: "OpenClaw Memory", available: true },
       { id: "memory-lancedb", label: "Memory LanceDB", available: true },
     ],
-    engineSelection: { kind: "auto", engineId: "memory-core" },
+    engineSelection: { kind: "default", pluginId: "memory-core" },
     engineState: "enabled",
     engineBusy: false,
     engineOutcome: null,
@@ -93,7 +93,7 @@ describe("renderMemory", () => {
     expect(auto.textContent).not.toContain("Using default:");
 
     const pinned = renderInto(
-      createProps({ engineSelection: { kind: "pinned", engineId: "memory-core" } }),
+      createProps({ engineSelection: { kind: "pinned", pluginId: "memory-core" } }),
     );
     expect(pinned.textContent).toContain("pinned in config");
     expect(pinned.textContent).toContain("Default: OpenClaw Memory");
@@ -103,7 +103,7 @@ describe("renderMemory", () => {
     const container = renderInto(
       createProps({
         engineOptions: [{ id: "retired-memory", label: "retired-memory", available: false }],
-        engineSelection: { kind: "pinned", engineId: "retired-memory" },
+        engineSelection: { kind: "pinned", pluginId: "retired-memory" },
         engineState: "unknown",
       }),
     );
@@ -225,7 +225,7 @@ describe("memoryTabForRoute", () => {
   });
 });
 
-describe("narrowMemorySchema", () => {
+describe("memorySettingsSchema", () => {
   const schema = {
     type: "object",
     properties: {
@@ -234,31 +234,29 @@ describe("narrowMemorySchema", () => {
         properties: {
           citations: { type: "string" },
           search: { type: "object" },
+          internal: { type: "object" },
         },
       },
       tools: { type: "object" },
     },
   };
 
-  it("keeps only the requested memory children and drops sibling sections", () => {
-    const narrowed = narrowMemorySchema(schema, ["search"]) as {
+  it("keeps the curated settings and drops other fields and sibling sections", () => {
+    const narrowed = memorySettingsSchema(schema) as {
       properties: { memory: { properties: Record<string, unknown> }; tools?: unknown };
     };
 
     expect(Object.keys(narrowed.properties)).toEqual(["memory"]);
-    expect(Object.keys(narrowed.properties.memory.properties)).toEqual(["search"]);
+    expect(Object.keys(narrowed.properties.memory.properties)).toEqual(["citations", "search"]);
   });
 
-  it("returns a stable object per key set so schema analysis stays cached", () => {
-    expect(narrowMemorySchema(schema, ["search"])).toBe(narrowMemorySchema(schema, ["search"]));
-    expect(narrowMemorySchema(schema, ["search"])).not.toBe(
-      narrowMemorySchema(schema, ["citations"]),
-    );
+  it("returns a stable object so schema analysis stays cached", () => {
+    expect(memorySettingsSchema(schema)).toBe(memorySettingsSchema(schema));
   });
 
   it("passes non-memory schemas through untouched", () => {
     const unrelated = { type: "object", properties: { tools: {} } };
-    expect(narrowMemorySchema(unrelated, ["search"])).toBe(unrelated);
-    expect(narrowMemorySchema(null, ["search"])).toBeNull();
+    expect(memorySettingsSchema(unrelated)).toBe(unrelated);
+    expect(memorySettingsSchema(null)).toBeNull();
   });
 });

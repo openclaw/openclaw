@@ -28,7 +28,6 @@ it.each([
     }));
     vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: "2026.9.4" });
     vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
-      target: "2026.9.4",
       version: "2026.9.4",
       nodeEngine: null,
       schemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 },

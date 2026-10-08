@@ -18,7 +18,7 @@ describe("diagnostic event listener interest", () => {
     vi.restoreAllMocks();
   });
 
-  it("applies internal listener interests before dispatch", async () => {
+  it("filters listener interests across dispatch, unsubscribe, and reset", async () => {
     const included: string[] = [];
     const excluded: string[] = [];
     onInternalDiagnosticEvent((event) => included.push(event.type), {
@@ -34,9 +34,6 @@ describe("diagnostic event listener interest", () => {
 
     expect(included).toEqual(["message.queued"]);
     expect(excluded).toEqual(["message.queued"]);
-  });
-
-  it("tracks broad, included, and excluded event interest through unsubscribe and reset", () => {
     const stopBroad = onInternalDiagnosticEvent(() => undefined);
     expect(hasInternalDiagnosticEventInterest("log.record")).toBe(true);
     stopBroad();

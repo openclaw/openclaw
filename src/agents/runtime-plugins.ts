@@ -103,13 +103,15 @@ function resolveAgentRuntimePluginRegistryLoad(
   // startup runtime plugin ids plus selected run owners bound the registry scope.
   const activePluginIds = listLoadedRuntimePluginIds();
   const startupPluginIds =
-    params.purpose === "model-catalog"
-      ? (params.basePluginIds ?? [])
-      : (params.basePluginIds ??
-        (requestPluginRegistry
-          ? listRuntimePluginIdsFromRegistry(requestPluginRegistry)
-          : (metadataSnapshot.pluginIds ??
-            (activePluginIds.length > 0 ? activePluginIds : undefined))));
+    params.purpose === "isolated-completion"
+      ? []
+      : params.purpose === "model-catalog"
+        ? (params.basePluginIds ?? [])
+        : (params.basePluginIds ??
+          (requestPluginRegistry
+            ? listRuntimePluginIdsFromRegistry(requestPluginRegistry)
+            : (metadataSnapshot.pluginIds ??
+              (activePluginIds.length > 0 ? activePluginIds : undefined))));
   const plan = resolveAgentRuntimePluginLoadPlan({
     config: params.config,
     workspaceDir: workspaceDir ?? process.cwd(),
@@ -117,7 +119,9 @@ function resolveAgentRuntimePluginRegistryLoad(
     selections: resolveAgentRuntimePluginSelections(
       params.config,
       params.selections ?? [],
-      params.purpose === "model-catalog" ? [] : params.configuredHarnessRuntimes,
+      params.purpose === "model-catalog" || params.purpose === "isolated-completion"
+        ? []
+        : params.configuredHarnessRuntimes,
     ),
     metadataSnapshot,
     ...(params.purpose ? { purpose: params.purpose } : {}),
@@ -155,7 +159,7 @@ function reusableAgentRuntimeRegistry(
   const pluginIds = loadOptions.onlyPluginIds;
   return params.reusableRegistry &&
     pluginIds !== undefined &&
-    (params.purpose !== "model-catalog" ||
+    ((params.purpose !== "model-catalog" && params.purpose !== "isolated-completion") ||
       listRuntimePluginIdsFromRegistry(params.reusableRegistry).every((pluginId) =>
         pluginIds.includes(pluginId),
       )) &&
@@ -175,7 +179,7 @@ function adoptAgentRuntimeRegistrations(
   toolDonor?: PluginRegistry;
 } {
   const activeRegistry = getActivePluginRegistry();
-  if (params.purpose === "model-catalog") {
+  if (params.purpose === "model-catalog" || params.purpose === "isolated-completion") {
     return { registry: pluginRegistry };
   }
   const channelRegistry =

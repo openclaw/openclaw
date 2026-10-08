@@ -124,6 +124,7 @@ it("retains pressure retirement across path close and releases its subscription 
       context.admission.databasePath,
       context,
       context.admission.assertCurrent,
+      context.admission.identity,
     ),
   ).resolves.toBeUndefined();
   expect(pressure.hasSubscribers).toBe(false);
@@ -320,6 +321,14 @@ it("replaces a failed idle actor after an enclosing callback settles", async () 
           entered.resolve();
           await finish.promise;
           await expect(f.read()).rejects.toMatchObject({ code: "unavailable" });
+          await expect(
+            openOpenClawStateWorkerCleanupStore(
+              f.context.admission.databasePath,
+              f.context,
+              f.context.admission.assertCurrent,
+              f.context.admission.identity,
+            ).then((store) => store?.close()),
+          ).rejects.toMatchObject({ code: "unavailable" });
           return "completed without dispatch";
         })(),
         escape.promise,
@@ -510,9 +519,9 @@ poolIt.each([undefined, "agent-resources", "shared-handles"] as const)(
   },
 );
 
-poolIt(
-  "reopens an idle failed actor without waiting for its other maintenance client to close",
-  async () => {
+poolIt.each(["ordinary", "cleanup"] as const)(
+  "reopens an idle failed actor through %s without waiting for its other maintenance client to close",
+  async (entrypoint) => {
     const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-idle-reopen-") };
     const firstScope = createOpenClawDatabaseMaintenanceScope();
     const peerScope = createOpenClawDatabaseMaintenanceScope();
@@ -520,6 +529,7 @@ poolIt(
     const peerContext = peerScope.run(() => captureOpenClawStateWorkerContext({ env }));
     const messages = vi.spyOn(Worker.prototype, "postMessage");
     let stopped: Promise<number> | undefined;
+    let cleanupStore: Awaited<ReturnType<typeof openOpenClawStateWorkerCleanupStore>>;
     try {
       const first = await openClient(firstContext);
       const peer = await openClient(peerContext);
@@ -533,15 +543,33 @@ poolIt(
       await stopped;
       await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "unavailable" });
 
-      const reopened = await openClient(firstContext);
-      expect(reopened.actor === first.actor).toBe(false);
+      const reopened =
+        entrypoint === "ordinary"
+          ? (await openClient(firstContext)).store
+          : (cleanupStore = await openOpenClawStateWorkerCleanupStore(
+              firstContext.admission.databasePath,
+              firstContext,
+              firstContext.admission.assertCurrent,
+              firstContext.admission.identity,
+            ));
+      if (!reopened) {
+        throw new Error("Expected cleanup to retain the existing shared database");
+      }
+      expect(getSqliteWorkerActorIdentity(reopened) === first.actor).toBe(false);
       await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "closed" });
+      await cleanupStore?.close();
+      cleanupStore = undefined;
       await expect(
         runOpenClawStateWorkerOperation(firstContext, (scope) => scope.execute(read)),
       ).resolves.toBeNull();
     } finally {
       messages.mockRestore();
-      await Promise.allSettled([stopped, firstScope.close(), peerScope.close()]);
+      await Promise.allSettled([
+        stopped,
+        cleanupStore?.close(),
+        firstScope.close(),
+        peerScope.close(),
+      ]);
     }
   },
 );

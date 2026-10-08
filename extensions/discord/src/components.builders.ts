@@ -31,19 +31,11 @@ import {
   UserSelectMenu,
   type TopLevelComponents,
 } from "./internal/discord.js";
+import { stripUndefinedFields } from "./internal/undefined-fields.js";
 
 function createShortId(prefix: string) {
   return `${prefix}${crypto.randomBytes(6).toString("base64url")}`;
 }
-
-type DiscordSelectMenuByType = {
-  string: StringSelectMenu;
-  user: UserSelectMenu;
-  role: RoleSelectMenu;
-  mentionable: MentionableSelectMenu;
-  channel: ChannelSelectMenu;
-};
-type DiscordSelectMenu = DiscordSelectMenuByType[DiscordComponentSelectType];
 
 const selectMenuConstructors = {
   string: class extends StringSelectMenu {
@@ -62,16 +54,20 @@ const selectMenuConstructors = {
   channel: class extends ChannelSelectMenu {
     customId = "";
   },
-} satisfies {
-  [Type in DiscordComponentSelectType]: new () => DiscordSelectMenuByType[Type];
 };
+type DiscordSelectMenuByType = {
+  [Type in keyof typeof selectMenuConstructors]: InstanceType<
+    (typeof selectMenuConstructors)[Type]
+  >;
+};
+type DiscordSelectMenu = DiscordSelectMenuByType[DiscordComponentSelectType];
 
 export function createDiscordSelectMenu<Type extends DiscordComponentSelectType>(
   type: Type,
   customId: string,
   options?: DiscordComponentSelectSpec["options"],
 ): DiscordSelectMenuByType[Type] {
-  // SAFETY: the constructor map satisfies the same Type-to-select-class relationship.
+  // SAFETY: the instance map is derived from these constructors.
   const SelectMenu = selectMenuConstructors[type] as new () => DiscordSelectMenuByType[Type];
   const select = new SelectMenu();
   select.customId = customId;
@@ -126,18 +122,16 @@ function createButtonComponent(params: {
   }
   return {
     component: new DynamicButton(),
-    entry: {
+    entry: stripUndefinedFields<DiscordComponentEntry>({
       id: componentId,
       kind: params.modalId ? "modal-trigger" : "button",
       label: params.spec.label,
-      ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
-      ...(params.spec.callbackDataKind !== undefined
-        ? { callbackDataKind: params.spec.callbackDataKind }
-        : {}),
-      ...(params.modalId !== undefined ? { modalId: params.modalId } : {}),
-      ...(params.spec.reusable !== undefined ? { reusable: params.spec.reusable } : {}),
-      ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
-    },
+      callbackData: params.spec.callbackData,
+      callbackDataKind: params.spec.callbackDataKind,
+      modalId: params.modalId,
+      reusable: params.spec.reusable,
+      allowedUsers: params.spec.allowedUsers,
+    }),
   };
 }
 
@@ -161,7 +155,6 @@ function createSelectComponent(params: {
   select.minValues = params.spec.minValues;
   select.maxValues = params.spec.maxValues;
   select.placeholder = params.spec.placeholder;
-  select.disabled = false;
   const labels: Record<DiscordComponentSelectType, string> = {
     string: "select",
     user: "user select",
@@ -171,20 +164,19 @@ function createSelectComponent(params: {
   };
   return {
     component: select,
-    entry: {
+    entry: stripUndefinedFields<DiscordComponentEntry>({
       id: componentId,
       kind: "select",
       label: params.spec.placeholder ?? labels[type],
-      ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
-      ...(params.spec.callbackDataKind !== undefined
-        ? { callbackDataKind: params.spec.callbackDataKind }
-        : {}),
+      callbackData: params.spec.callbackData,
+      callbackDataKind: params.spec.callbackDataKind,
       selectType: type,
-      ...(type === "string"
-        ? { options: options.map((option) => ({ value: option.value, label: option.label })) }
-        : {}),
-      ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
-    },
+      options:
+        type === "string"
+          ? options.map((option) => ({ value: option.value, label: option.label }))
+          : undefined,
+      allowedUsers: params.spec.allowedUsers,
+    }),
   };
 }
 
@@ -278,36 +270,36 @@ export function buildDiscordComponentMessage(params: {
 
   if (params.spec.modal) {
     const modalId = createShortId("mdl_");
-    const fields = params.spec.modal.fields.map((field, index) => ({
-      id: createShortId("fld_"),
-      name: normalizeModalFieldName(field.name, index),
-      label: field.label,
-      type: field.type,
-      ...(field.description !== undefined ? { description: field.description } : {}),
-      ...(field.placeholder !== undefined ? { placeholder: field.placeholder } : {}),
-      ...(field.required !== undefined ? { required: field.required } : {}),
-      ...(field.options !== undefined ? { options: field.options } : {}),
-      ...(field.minValues !== undefined ? { minValues: field.minValues } : {}),
-      ...(field.maxValues !== undefined ? { maxValues: field.maxValues } : {}),
-      ...(field.minLength !== undefined ? { minLength: field.minLength } : {}),
-      ...(field.maxLength !== undefined ? { maxLength: field.maxLength } : {}),
-      ...(field.style !== undefined ? { style: field.style } : {}),
-    }));
-    modals.push({
-      id: modalId,
-      title: params.spec.modal.title,
-      fields,
-      ...(params.spec.modal.callbackData !== undefined
-        ? { callbackData: params.spec.modal.callbackData }
-        : {}),
-      ...(params.sessionKey !== undefined ? { sessionKey: params.sessionKey } : {}),
-      ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-      ...(params.accountId !== undefined ? { accountId: params.accountId } : {}),
-      ...(params.spec.reusable !== undefined ? { reusable: params.spec.reusable } : {}),
-      ...(params.spec.modal.allowedUsers !== undefined
-        ? { allowedUsers: params.spec.modal.allowedUsers }
-        : {}),
-    });
+    const fields = params.spec.modal.fields.map((field, index) =>
+      stripUndefinedFields({
+        id: createShortId("fld_"),
+        name: normalizeModalFieldName(field.name, index),
+        label: field.label,
+        type: field.type,
+        description: field.description,
+        placeholder: field.placeholder,
+        required: field.required,
+        options: field.options,
+        minValues: field.minValues,
+        maxValues: field.maxValues,
+        minLength: field.minLength,
+        maxLength: field.maxLength,
+        style: field.style,
+      }),
+    );
+    modals.push(
+      stripUndefinedFields({
+        id: modalId,
+        title: params.spec.modal.title,
+        fields,
+        callbackData: params.spec.modal.callbackData,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        accountId: params.accountId,
+        reusable: params.spec.reusable,
+        allowedUsers: params.spec.modal.allowedUsers,
+      }),
+    );
 
     const triggerSpec: DiscordComponentButtonSpec = {
       label: params.spec.modal.triggerLabel ?? "Open form",

@@ -1,11 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import {
-  diagnosticStates as diagnosticState,
   diagnosticError as errorSchema,
   diagnosticPackage as packageSchema,
-  diagnosticStage as stageSchema,
-  diagnosticStageNames as stageNames,
+  diagnosticSchema as producerDiagnosticSchema,
 } from "./lib/release-postpublish-diagnostic-schema.mts";
 
 // Observation limits are independent of the continuation controller's wait budget.
@@ -211,60 +209,11 @@ export const PUBLICATION_CHILDREN = {
   },
   npmTelegram: { workflow: ".github/workflows/npm-telegram-beta-e2e.yml", surface: "npmTelegram" },
 } as const;
-const childNames = ["fullReleaseValidation", ...Object.keys(PUBLICATION_CHILDREN)] as [
-  string,
-  ...string[],
-];
-const diagnosticSchema = z.object({
-  schemaVersion: z.literal(1),
-  kind: z.literal("release-postpublish-diagnostics"),
-  invocationId: z.string().uuid(),
-  context: z.object({
-    repository: repository.nullable(),
-    releaseVersion: z
-      .string()
-      .max(80)
-      .regex(/^[0-9]+(?:\.[0-9]+){2}(?:-[a-z0-9.-]+)?$/u)
-      .nullable(),
-    releaseTag: z
-      .string()
-      .max(81)
-      .regex(/^v[0-9]+(?:\.[0-9]+){2}(?:-[a-z0-9.-]+)?$/u)
-      .nullable(),
-    npmDistTag: z.enum(["latest", "beta", "alpha", "extended-stable"]).nullable(),
-    requestedSourceSha: sha.nullable(),
-    toolingSha: sha.nullable(),
-    suppliedToolingSha: sha.nullable(),
-    suppliedToolingRef: ref.nullable(),
-    parentRunId: decimal.nullable(),
-    parentRunAttempt: decimal.nullable(),
-    validationEvidence: z.object({
-      mode: z.enum(["full-release-validation", "authorized-beta-focused-v1"]).nullable(),
-      runId: decimal.nullable(),
-      runAttempt: decimal.nullable(),
-    }),
-  }),
-  selection: z.object({
-    plugins: z.array(packageSchema.shape.name).max(256),
-    pluginsTruncated: z.boolean(),
-    workflowRef: ref.nullable(),
-    clawHubWorkflowRef: ref.nullable(),
-  }),
-  verification: diagnosticState,
-  currentStage: z.enum(stageNames).nullable(),
-  stages: z.record(z.enum(stageNames), stageSchema),
+// Observers also describe GitHub startup failures that the producer cannot record.
+const diagnosticSchema = producerDiagnosticSchema.extend({
   children: z.record(
-    z.enum(childNames),
-    z.object({
-      suppliedRunId: decimal.nullable(),
-      runAttempt: decimal.nullable(),
-      producerRunAttempt: decimal.nullable(),
-      status: z.enum([...runState.options, "unknown"]),
-      conclusion: diagnosticConclusion,
-      failedJobCount: z.number().int().min(0).max(10000).nullable(),
-      readbackArtifactId: decimal.nullable(),
-      packageArtifactId: decimal.nullable(),
-    }),
+    producerDiagnosticSchema.shape.children.keyType,
+    producerDiagnosticSchema.shape.children.valueType.extend({ conclusion: diagnosticConclusion }),
   ),
   jobOutcomeBeforeArtifactUploads: diagnosticConclusion,
   stepOutcomes: z.object({ coreStart: diagnosticConclusion, completion: diagnosticConclusion }),

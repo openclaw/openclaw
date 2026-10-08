@@ -291,10 +291,6 @@ export function validatePluginSdkApiReleaseEvidence({
   };
 }
 
-function readJson(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
 function readArgs(argv) {
   const values = new Map();
   for (let index = 0; index < argv.length; index += 2) {
@@ -317,7 +313,7 @@ function readArgs(argv) {
 
 function main() {
   const args = readArgs(process.argv.slice(2));
-  const manifest = readJson(args.get("--manifest"));
+  const manifest = JSON.parse(fs.readFileSync(args.get("--manifest"), "utf8"));
   const result = validatePluginSdkApiReleaseEvidence({
     acknowledgement: args.get("--acknowledge") ?? "",
     currentSelectorRef: args.get("--current-selector-ref"),

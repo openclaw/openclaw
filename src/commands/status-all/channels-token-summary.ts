@@ -5,14 +5,13 @@ import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { ChannelAccountInspectionResult } from "../../channels/account-inspection.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 
-export type ChannelAccountTokenSummaryRow = {
-  account: unknown;
-  enabled: boolean;
-  snapshot: ChannelAccountSnapshot;
-};
+export type ChannelAccountTokenSummaryRow = Pick<
+  ChannelAccountInspectionResult,
+  "account" | "enabled" | "snapshot"
+>;
 
 function summarizeSources(sources: Array<string | undefined>): string {
   const counts = new Map<string, number>();
