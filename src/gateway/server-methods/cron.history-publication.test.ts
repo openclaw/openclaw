@@ -13,7 +13,8 @@ const publication = vi.hoisted(() => ({
   afterVerification: () => {},
   verified: false,
 }));
-vi.mock("../../cron/store/read-only.js", () => ({
+vi.mock("../../cron/store/read-only.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cron/store/read-only.js")>()),
   readCronRunHistoryBinding: async () => ({
     binding: "recorded-binding",
     agentId: "main",
