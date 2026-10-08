@@ -13,6 +13,11 @@ const identity = (file) => {
 };
 const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const write = (file, value) => fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+const authoredSettings = (file) => {
+  const config = read(file);
+  const { mode, port, bind, reload, auth } = config.gateway;
+  return { gateway: { mode, port, bind, reload, auth }, pluginsEnabled: config.plugins.enabled };
+};
 const packageIdentity = (root) => ({
   version: read(path.join(root, "package.json")).version,
   build: read(path.join(root, "dist/build-info.json")),
@@ -72,11 +77,14 @@ export function assertPackageRecoveryEvidence(value) {
   assert.equal(value.repair.exitCode, 0);
   assert.equal(value.repair.retainedBytesPreserved, true);
   assert.equal(value.repair.candidateUnchanged, true);
+  assert.equal(value.repair.settingsPreserved, true);
   assert.equal(value.repeatRepair.exitCode, 0);
+  assert.equal(value.repeatRepair.settingsPreserved, true);
   assert.equal(value.nextUpdate.exitCode, 0);
   assert.notEqual(value.nextUpdate.installed.version, value.candidate.version);
   assert.deepEqual(value.nextUpdate.installed, value.nextUpdate.expected);
   assert.equal(value.nextUpdate.retainedBytesPreserved, true);
+  assert.equal(value.nextUpdate.settingsPreserved, true);
   assert.equal(value.targetSelector, "installed-candidate");
   for (const version of [value.candidate.version, value.nextUpdate.installed.version]) {
     assert.match(version, /^\d{4}\.\d+\.\d+(?:[-+][a-z0-9.-]+)?$/iu);
@@ -87,7 +95,7 @@ function main([command, artifacts, ...args]) {
   const file = path.join(artifacts, "package-activation-recovery.json");
   const faultFile = path.join(artifacts, "package-activation-fault.json");
   if (command === "setup") {
-    const [installRoot, candidateTarball, cut] = args;
+    const [installRoot, candidateTarball, cut, configPath] = args;
     const root = fs.realpathSync(installRoot);
     const baseline = packageIdentity(root);
     assert(["2026.9.7", "2026.9.8", "2026.9.9"].includes(baseline.version));
@@ -121,6 +129,8 @@ function main([command, artifacts, ...args]) {
       candidate,
       root,
       anchor,
+      configPath,
+      authoredSettings: authoredSettings(configPath),
       targetSelector: "installed-candidate",
     });
     return;
@@ -128,6 +138,14 @@ function main([command, artifacts, ...args]) {
   const value = read(file);
   const fault = read(faultFile);
   const save = () => write(file, value);
+  const assertSettings = () => {
+    assert.deepEqual(
+      authoredSettings(value.configPath),
+      value.authoredSettings,
+      "authored settings changed",
+    );
+    return true;
+  };
   const assertCandidate = () => {
     const actual = packageIdentity(value.root);
     assert.equal(actual.version, value.candidate.version);
@@ -156,7 +174,10 @@ function main([command, artifacts, ...args]) {
       digest(path.join(retainedRoot, "previous/package.json")),
       value.interruption.previousManifest,
     );
-    assert.equal(digest(path.join(retainedRoot, "recovery.mjs")), value.interruption.helperDigest);
+    assert.equal(
+      digest(path.join(retainedRoot, "control/recovery.mjs")),
+      value.interruption.helperDigest,
+    );
     return true;
   };
   if (command === "interrupted") {
@@ -254,12 +275,13 @@ function main([command, artifacts, ...args]) {
       exitCode: 0,
       retainedBytesPreserved: preserved(),
       candidateUnchanged: Boolean(assertCandidate()),
+      settingsPreserved: assertSettings(),
     };
   } else if (command === "repeat") {
     assert.equal(Number(args[0]), 0);
     preserved();
     assertCandidate();
-    value.repeatRepair = { exitCode: 0 };
+    value.repeatRepair = { exitCode: 0, settingsPreserved: assertSettings() };
   } else if (command === "next") {
     assert.equal(Number(args[0]), 0, "a distinct subsequent update must actually install");
     const future = args[1];
@@ -279,6 +301,7 @@ function main([command, artifacts, ...args]) {
       expected,
       installed: packageIdentity(value.root),
       retainedBytesPreserved: preserved(),
+      settingsPreserved: assertSettings(),
     };
     value.status = "passed";
     assertPackageRecoveryEvidence(value);

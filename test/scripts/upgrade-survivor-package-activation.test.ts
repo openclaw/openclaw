@@ -7,8 +7,21 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertPackageRecoveryEvidence } from "../../scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each([
+  "package-publication-recovery",
+  "package-verification-recovery",
+  "package-stranded-first-hop",
+])("keeps %s live package journals on runtime storage, not the artifact mount", (scenario) => {
+  const paths = readUpgradeSurvivorPaths("/tmp/package-recovery-paths", {
+    OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+  });
+  expect(paths.npmPrefix).toBe(path.join(paths.runtimeRoot, "npm-prefix"));
+  expect(paths.summaryJson).toBe(path.join(paths.artifactRoot, "summary.json"));
+});
 
 describe("release package interruption fixture", () => {
   it.each(["run", "all"])(
@@ -103,6 +116,15 @@ it("rejects repair receipts after non-manifest bytes change in either package tr
   const anchor = path.join(artifacts, "activation");
   const previous = path.join(anchor, "previous");
   const candidate = { version: "2026.9.10", build: { buildId: "candidate" } };
+  const configPath = path.join(artifacts, "openclaw.json");
+  const gateway = {
+    mode: "local",
+    port: 18789,
+    bind: "loopback",
+    reload: { mode: "off" },
+    auth: { mode: "token" },
+  };
+  fs.writeFileSync(configPath, JSON.stringify({ gateway, plugins: { enabled: false } }));
   for (const tree of [root, previous]) {
     fs.mkdirSync(path.join(tree, "dist"), { recursive: true });
     fs.writeFileSync(
@@ -115,7 +137,6 @@ it("rejects repair receipts after non-manifest bytes change in either package tr
   fs.mkdirSync(`${anchor}.control`);
   const helper = "released recovery helper fixture";
   fs.writeFileSync(path.join(`${anchor}.control`, "recovery.mjs"), helper);
-  fs.writeFileSync(path.join(anchor, "recovery.mjs"), helper);
   const journal = path.join(artifacts, "operation.sqlite");
   const db = new DatabaseSync(journal);
   db.exec("CREATE TABLE package_activation(slot INTEGER, phase TEXT, descriptor_json TEXT)");
@@ -142,6 +163,8 @@ it("rejects repair receipts after non-manifest bytes change in either package tr
       candidate,
       root,
       anchor,
+      configPath,
+      authoredSettings: { gateway, pluginsEnabled: false },
     }),
   );
   const run = (command: string, exit: string) =>
@@ -159,8 +182,14 @@ it("rejects repair receipts after non-manifest bytes change in either package tr
   expect(interrupted.status, interrupted.stderr).toBe(0);
   const retained = `${anchor}.superseded-fixture-operation`;
   fs.renameSync(anchor, retained);
+  fs.renameSync(`${anchor}.control`, path.join(retained, "control"));
   const repaired = run("repaired", "0");
   expect(repaired.status, repaired.stderr).toBe(0);
+  fs.writeFileSync(configPath, JSON.stringify({ gateway, plugins: { enabled: true } }));
+  const changedSettings = run("repaired", "0");
+  expect(changedSettings.status).not.toBe(0);
+  expect(changedSettings.stderr).toContain("authored settings changed");
+  fs.writeFileSync(configPath, JSON.stringify({ gateway, plugins: { enabled: false } }));
   for (const tree of [root, path.join(retained, "previous")]) {
     const runtime = path.join(tree, "dist/runtime.mjs");
     fs.writeFileSync(runtime, "damaged runtime bytes");
@@ -187,9 +216,20 @@ function completeEvidence() {
       writerVersion: "2026.9.8",
       helperPreserved: true,
     },
-    repair: { exitCode: 0, retainedBytesPreserved: true, candidateUnchanged: true },
-    repeatRepair: { exitCode: 0 },
-    nextUpdate: { exitCode: 0, expected: installed, installed, retainedBytesPreserved: true },
+    repair: {
+      exitCode: 0,
+      retainedBytesPreserved: true,
+      candidateUnchanged: true,
+      settingsPreserved: true,
+    },
+    repeatRepair: { exitCode: 0, settingsPreserved: true },
+    nextUpdate: {
+      exitCode: 0,
+      expected: installed,
+      installed,
+      retainedBytesPreserved: true,
+      settingsPreserved: true,
+    },
     targetSelector: "installed-candidate",
   };
 }

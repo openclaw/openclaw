@@ -21,7 +21,7 @@ run_package_activation_recovery_survivor() {
       >"$ARTIFACT_ROOT/stranded-target-package.json"
     target="$RUNTIME_ROOT/stranded-target/openclaw-2026.9.8.tgz"
   fi
-  phase capture-recovery-packages node "$fixture" setup "$ARTIFACT_ROOT" "$(package_root)" "$target" "$fault"
+  phase capture-recovery-packages node "$fixture" setup "$ARTIFACT_ROOT" "$(package_root)" "$target" "$fault" "$OPENCLAW_CONFIG_PATH"
   # Do not route this deliberate failure through the normal success classifier.
   # This uses the unmodified published updater; only its external dependencies
   # observe the durable boundary and terminate/fail the relevant real process.
