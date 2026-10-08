@@ -60,6 +60,7 @@ describe("startup run repair auto-disable", () => {
         runningAtMs,
         consecutiveErrors: 9,
         lastErrorReason: "timeout",
+        lastCompletionStatus: "succeeded",
         deliverySuppressionReason: "silent",
       },
     };
@@ -80,6 +81,7 @@ describe("startup run repair auto-disable", () => {
       enabled: false,
       state: {
         consecutiveErrors: 10,
+        lastCompletionStatus: "failed",
         autoDisabled: {
           reason: "consecutive-failures",
           atMs: nowMs,

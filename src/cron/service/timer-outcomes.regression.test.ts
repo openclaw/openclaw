@@ -48,6 +48,41 @@ function outcomeFixture(
 }
 
 describe("cron timer outcome and failure policy regressions", () => {
+  it.each(["failed", "unknown"] as const)(
+    "records %s end-to-end completion without re-running a one-shot payload",
+    async (completionStatus) => {
+      const startedAt = Date.parse("2026-10-07T11:00:00.000Z");
+      const { state, job } = outcomeFixture(startedAt, {
+        schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+        delivery: { mode: "announce", channel: "slack", to: "user:test" },
+      });
+      applyJobResult(
+        state,
+        job,
+        {
+          status: "ok",
+          completionStatus,
+          deliveryState: {
+            status: completionStatus === "failed" ? "not-delivered" : "unknown",
+            delivered: false,
+            failureNotification: { status: "not-requested" },
+          },
+          startedAt,
+          endedAt: startedAt + 100,
+        },
+        { deferredNotifications: [] },
+      );
+      expect(job.state.lastRunStatus).toBe("ok");
+      expect(job.state.lastCompletionStatus).toBe(completionStatus);
+      expect(job.enabled).toBe(false);
+      const store = timerRegressionFixtures.makeStorePath();
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state.lastCompletionStatus).toBe(
+        completionStatus,
+      );
+    },
+  );
+
   it("preserves every cadence after a transient recurring retry succeeds", () => {
     const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");
     const everyTwelveHoursMs = 12 * 60 * 60 * 1_000;
