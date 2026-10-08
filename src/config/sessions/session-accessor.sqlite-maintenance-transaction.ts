@@ -83,11 +83,12 @@ function prepareWorkerAgeFact(
   }
 }
 
-function captureWorkerAgeSnapshot(
+function captureWorkerAgeSnapshotInTransaction(
   database: Pick<OpenClawAgentDatabase, "db" | "path" | "agentId">,
   maintenance: SessionEntryMaintenanceInput["maintenance"],
 ) {
-  const revision = readSessionEntryCacheValidityToken(database.db);
+  // The transaction owner refreshed after BEGIN; capture the same admitted snapshot.
+  const revision = readSessionEntryCacheValidityToken(database.db, "cached");
   const capture = captureSessionEntryMaintenanceAgeFact(database.db, maintenance);
   let id = ageCaptureIds.get(capture);
   if (id === undefined) {
@@ -240,7 +241,8 @@ export function readSessionMaintenanceInWorker(
                   kind: "maintenance-plan",
                   value: prepared.value,
                   readOnlyInput: input,
-                  ageSnapshot: captureWorkerAgeSnapshot(database, input.maintenance),
+                  ageSnapshot: captureWorkerAgeSnapshotInTransaction(database, input.maintenance),
+                  nextAt: readSessionEntryMaintenanceNextAgeAt(database, input.maintenance),
                 }
               : {
                   kind: "maintenance-age",
@@ -341,7 +343,7 @@ export function runSessionMaintenanceMetadataInTransaction(
           }
           let expectedSnapshotMatches = true;
           if (plan.expected) {
-            const snapshot = captureWorkerAgeSnapshot(database, plan.maintenance);
+            const snapshot = captureWorkerAgeSnapshotInTransaction(database, plan.maintenance);
             expectedSnapshotMatches =
               plan.expected.incarnation === snapshot.incarnation &&
               plan.expected.capture === snapshot.capture &&
@@ -374,7 +376,8 @@ export function runSessionMaintenanceMetadataInTransaction(
         return {
           kind: plan.kind,
           value: maintenance,
-          ageSnapshot: captureWorkerAgeSnapshot(database, plan.input.maintenance),
+          ageSnapshot: captureWorkerAgeSnapshotInTransaction(database, plan.input.maintenance),
+          nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.input.maintenance),
         };
       },
       plan.databaseOptions,
