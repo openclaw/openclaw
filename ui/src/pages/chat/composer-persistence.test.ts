@@ -434,6 +434,19 @@ it("keeps readable migrated composer state when the migration write fails", () =
 it("reviews full v1 main and global queues while consuming legacy tombstones", () => {
   const globalQueue = Array.from({ length: 50 }, (_, i) => legacyReconnectItem(`global-${i}`, i));
   const mainQueue = Array.from({ length: 50 }, (_, i) => legacyReconnectItem(`main-${i}`, i + 50));
+  mainQueue[0] = {
+    ...legacyReconnectItem("main-0", 50),
+    sendState: "failed",
+    sendError: "RangeError: Maximum call stack size exceeded",
+    attachments: [
+      {
+        id: "legacy-attachment",
+        mimeType: "image/png",
+        fileName: "legacy.png",
+        dataUrl: "data:image/png;base64,AAA",
+      },
+    ],
+  };
   const mainKey = "agent:work:main";
   seedSessions({
     "global\u0000agent:work": { queue: globalQueue, updatedAt: 2 },
@@ -487,7 +500,10 @@ it("reviews full v1 main and global queues while consuming legacy tombstones", (
     ...item,
     storageScope: outboxStorageScope(state),
     sendState: "failed" as const,
-    sendError: "Recovered message. Review this destination and retry only if it did not arrive.",
+    sendError:
+      item.id === "main-0"
+        ? "RangeError: Maximum call stack size exceeded"
+        : "Recovered message. Review this destination and retry only if it did not arrive.",
   });
   expect(snapshot(state, "agent:work:notes")?.draft).toBe("draft only");
   expectDraft(

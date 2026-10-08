@@ -504,6 +504,21 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
     }
   });
 
+  it("routes prepared typed reasoning-only finals to the reasoning lane when reasoning streams", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    mockTurn(createReasoningFinalDelivery());
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+      "🧠 _hidden_",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
+    expect(answerDraftStream.update).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("suppresses whitespace-form internal prefixes until one visible final", async () => {
     const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,

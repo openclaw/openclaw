@@ -232,6 +232,14 @@ describe("Client.handleInteraction native command channel identity", () => {
     expectVisibleStatus(harness, channelId);
   });
 
+  it("rejects a thread whose parent is outside the allowlist", async () => {
+    const harness = createHarness();
+    denyThreadParent(harness);
+    await harness.client.handleInteraction(payload(THREAD));
+    expect(harness.status).not.toHaveBeenCalled();
+    expectFollowUp(harness, "This channel is not allowed.");
+  });
+
   it.each([THREAD])(
     "autocompletes for raw channel %s through the registered option",
     async (channelId) => {
@@ -289,15 +297,18 @@ describe("Client.handleInteraction native command channel identity", () => {
     },
   );
 
-  it.each(["sender", "identity"] as const)(
+  it.each(["sender", "parent", "identity"] as const)(
     "denies raw picker selection with denied %s",
     async (denial) => {
       const harness = createHarness();
       const interaction = pickerPayload(
-        CHANNEL,
+        denial === "parent" ? THREAD : CHANNEL,
         "reset",
         denial === "sender" ? "100000000000000099" : USER,
       );
+      if (denial === "parent") {
+        denyThreadParent(harness);
+      }
       if (denial === "identity") {
         Reflect.deleteProperty(interaction, "channel_id");
       }
