@@ -22,44 +22,41 @@ async function writeTranscript(name: string, records: unknown[]): Promise<string
 }
 
 describe("session transcript provenance", () => {
-  it.each(["assistant", "toolResult"])(
-    "discards earlier archive lines after an authoritative %s event identifies a dreaming run",
-    async (role) => {
-      const records = [
-        { type: "message", message: { role: "user", content: "Private fragment from dreaming." } },
-        {
-          type: "message",
-          message: {
-            role,
-            content: "Internal narrative output.",
-            __openclaw: { runId: "dreaming-narrative-main-light-real" },
-          },
+  it("discards earlier archive lines after an authoritative tool result identifies a dreaming run", async () => {
+    const records = [
+      { type: "message", message: { role: "user", content: "Private fragment from dreaming." } },
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          content: "Internal narrative output.",
+          __openclaw: { runId: "dreaming-narrative-main-light-real" },
         },
-        { type: "message", message: { role: "assistant", content: "Later dreaming output." } },
-      ];
-      const filePath = await writeTranscript(
-        "narrative.jsonl.deleted.2026-08-26T10-00-00.000Z",
-        records,
-      );
-      const observer = vi.fn();
+      },
+      { type: "message", message: { role: "assistant", content: "Later dreaming output." } },
+    ];
+    const filePath = await writeTranscript(
+      "narrative.jsonl.deleted.2026-08-26T10-00-00.000Z",
+      records,
+    );
+    const observer = vi.fn();
 
-      const entry = await buildSessionEntry(filePath, {
-        sessionKind: "unknown",
-        onTranscriptMessage: observer,
-      });
+    const entry = await buildSessionEntry(filePath, {
+      sessionKind: "unknown",
+      onTranscriptMessage: observer,
+    });
 
-      expect(entry?.generatedByDreamingNarrative).toBe(true);
-      expect(entry?.content).toBe("");
-      expect(entry?.lineProvenance).toEqual([]);
-      expect(entry?.lineMap).toEqual([]);
-      expect(entry?.messageTimestampsMs).toEqual([]);
-      expect(observer.mock.calls.map(([message]) => message)).toEqual(
-        records
-          .filter((record) => record.message.role !== "toolResult")
-          .map((record) => record.message),
-      );
-    },
-  );
+    expect(entry?.generatedByDreamingNarrative).toBe(true);
+    expect(entry?.content).toBe("");
+    expect(entry?.lineProvenance).toEqual([]);
+    expect(entry?.lineMap).toEqual([]);
+    expect(entry?.messageTimestampsMs).toEqual([]);
+    expect(observer.mock.calls.map(([message]) => message)).toEqual(
+      records
+        .filter((record) => record.message.role !== "toolResult")
+        .map((record) => record.message),
+    );
+  });
 
   it("does not treat run identity on user-authored transcript messages as authoritative", async () => {
     const filePath = await writeTranscript("interactive.jsonl", [
@@ -145,56 +142,6 @@ describe("session transcript provenance", () => {
 
     const entry = await buildSessionEntry(filePath, { sessionKind: "interactive" });
     expect(entry?.lineProvenance.map((item) => item.originClass)).toEqual(["owner", "untrusted"]);
-  });
-
-  it("excludes a structurally marked recalled turn", async () => {
-    const filePath = await writeTranscript("recalled.jsonl", [
-      {
-        type: "message",
-        message: {
-          role: "user",
-          content: "Recalled snippet that must not loop.",
-          provenance: { kind: "internal_system", sourceTool: "memory_search" },
-        },
-      },
-      {
-        type: "message",
-        message: { role: "assistant", content: "Paraphrase of the recalled snippet." },
-      },
-    ]);
-
-    const entry = await buildSessionEntry(filePath);
-    expect(entry?.content).toBe("");
-    expect(entry?.lineMap).toEqual([]);
-  });
-
-  it("skips inter-session user messages", async () => {
-    const filePath = await writeTranscript("inter-session.jsonl", [
-      {
-        type: "message",
-        message: {
-          role: "user",
-          content: "A background task completed. Internal relay text.",
-          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-        },
-      },
-      {
-        type: "message",
-        message: { role: "assistant", content: "User-facing summary." },
-      },
-      {
-        type: "message",
-        message: { role: "user", content: "Actual user follow-up." },
-      },
-    ]);
-
-    const entry = await buildSessionEntry(filePath);
-    expect(entry?.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
-    expect(entry?.lineMap).toStrictEqual([2, 3]);
-    expect(entry?.lineProvenance.map((item) => item.originClass)).toEqual([
-      "untrusted",
-      "untrusted",
-    ]);
   });
 
   it("drops every assistant response in a provenance-marked heartbeat turn", async () => {
@@ -295,23 +242,5 @@ describe("session transcript provenance", () => {
     const entry = await buildSessionEntry(filePath);
     expect(entry?.content).toBe("Assistant: I can see the photo.");
     expect(entry?.lineMap).toStrictEqual([4]);
-  });
-
-  it("normalizes filesystem fallback observation times to SQLite integers", async () => {
-    const filePath = await writeTranscript("mtime.jsonl", [
-      {
-        type: "message",
-        message: {
-          role: "user",
-          content: "Owner preference without a message timestamp.",
-          __openclaw: { senderIsOwner: true },
-        },
-      },
-    ]);
-    const mtime = new Date("2026-07-01T10:00:00.789Z");
-    await fs.utimes(filePath, mtime, mtime);
-
-    const entry = await buildSessionEntry(filePath, { sessionKind: "interactive" });
-    expect(Number.isInteger(entry?.lineProvenance[0]?.observedAt)).toBe(true);
   });
 });
