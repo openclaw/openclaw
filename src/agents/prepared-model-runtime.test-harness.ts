@@ -165,14 +165,16 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
   },
 }));
 
-vi.mock("./model-catalog.js", async () => ({
-  findModelCatalogEntry: (await import("./model-catalog-lookup.js")).findModelCatalogEntry,
-  loadManifestModelCatalog: (
-    await vi.importActual<typeof import("./model-catalog.js")>("./model-catalog.js")
-  ).loadManifestModelCatalog,
-  buildPreparedModelCatalogSnapshot: (...args: Parameters<BuildPreparedModelCatalogSnapshot>) =>
-    preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot(...args),
-}));
+vi.mock("./model-catalog.js", async () => {
+  const actual = await vi.importActual<typeof import("./model-catalog.js")>("./model-catalog.js");
+  return {
+    findModelCatalogEntry: (await import("./model-catalog-lookup.js")).findModelCatalogEntry,
+    loadManifestModelCatalog: actual.loadManifestModelCatalog,
+    loadManifestModelProviderConfigs: actual.loadManifestModelProviderConfigs,
+    buildPreparedModelCatalogSnapshot: (...args: Parameters<BuildPreparedModelCatalogSnapshot>) =>
+      preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot(...args),
+  };
+});
 
 vi.mock("./agent-auth-discovery.js", () => ({
   prepareAmbientAgentCredentialsForDiscovery: async (...args: unknown[]) =>
