@@ -31,10 +31,7 @@ import {
   TAILSCALE_ROUTE_OWNER_ARG,
   type TailscaleRouteOwnerMessage,
 } from "./tailscale-route-owner-protocol.js";
-import {
-  createTailscaleRouteOwnershipConflictError,
-  TailscaleRouteOwnershipConflictError,
-} from "./tailscale-route-ownership-error.js";
+import { TailscaleRouteOwnershipConflictError } from "./tailscale-route-ownership-error.js";
 
 const TAILSCALE_STATUS_ATTEMPTS = 3;
 const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
@@ -279,13 +276,7 @@ async function startTailscaleRouteOwner(
     () => {
       throw new Error("Tailscale route claim did not become ready within 15 seconds");
     },
-    {
-      ref: false,
-      signal,
-      onAbort: (aborted) => {
-        throw aborted.reason;
-      },
-    },
+    { ref: false, signal, onAbort: (aborted) => aborted.throwIfAborted() },
   );
 
   const stop = async () => {
@@ -311,12 +302,7 @@ async function startTailscaleRouteOwner(
     }
     worker.kill("SIGKILL");
     await exited;
-    throw (
-      stopFailure ??
-      new Error(
-        "Tailscale route cleanup did not finish; inspect the claimant process before restarting",
-      )
-    );
+    throw stopFailure ?? new Error("Tailscale route cleanup did not finish");
   };
 
   try {
@@ -326,11 +312,6 @@ async function startTailscaleRouteOwner(
   } catch (error) {
     await stop();
     signal?.throwIfAborted();
-    if (failure instanceof TailscaleRouteOwnershipConflictError) {
-      const conflict = await createTailscaleRouteOwnershipConflictError(failure.port, serveStatus);
-      signal?.throwIfAborted();
-      throw conflict;
-    }
     throw failure ?? error;
   }
 }
@@ -403,18 +384,12 @@ async function claimTailscaleRouteOwned(
   let adopted = false;
   const start = async (bin: string, prefix: string[] = []) => {
     assertCurrent();
-    const exec = async (args: string[]) => {
-      try {
-        return await runExec(bin, [...prefix, ...args], {
-          timeoutMs: 5000,
-          maxBuffer: 400_000,
-          signal: params.signal,
-        });
-      } catch (error) {
-        params.signal?.throwIfAborted();
-        throw error;
-      }
-    };
+    const exec = (args: string[]) =>
+      runExec(bin, [...prefix, ...args], {
+        timeoutMs: 5000,
+        maxBuffer: 400_000,
+        signal: params.signal,
+      }).finally(() => params.signal?.throwIfAborted());
     await waitForTailscaleBackendReady({ bin, prefix, info, signal: params.signal });
     assertCurrent();
     const { stdout } = await exec(["serve", "status", "--json"]);

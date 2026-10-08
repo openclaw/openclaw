@@ -1,6 +1,7 @@
 // Owns one foreground Tailscale route claim and releases it when Gateway IPC closes.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
+import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { signalProcessTree } from "../process/kill-tree.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -14,6 +15,7 @@ import {
 const READY_MARKER = "Press Ctrl+C to exit.";
 const OUTPUT_LIMIT = 200_000;
 const STOP_GRACE_MS = 2_000;
+const execFileAsync = promisify(execFile);
 
 type RouteOwnerStart = { argv: string[] };
 
@@ -70,23 +72,19 @@ async function signalChild(
     if (privileged) {
       // The detached, non-TTY sudo claim owns this group. An unprivileged
       // kill cannot reach its root processes; serve off cannot release it.
-      await new Promise<void>((resolve) => {
-        execFile(
+      try {
+        await execFileAsync(
           "sudo",
           ["-n", "/bin/kill", `-${signal.slice(3)}`, "--", `-${child.pid}`],
           { timeout: 5_000, maxBuffer: 16_384 },
-          (error) => {
-            if (error) {
-              onError(
-                `Could not stop the owned Tailscale process group ${child.pid} through sudo. ` +
-                  `Run \`sudo /bin/kill -TERM -- -${child.pid}\` to stop it, then ` +
-                  "`sudo tailscale set --operator=$USER` to avoid privileged claims.",
-              );
-            }
-            resolve();
-          },
         );
-      });
+      } catch {
+        onError(
+          `Could not stop the owned Tailscale process group ${child.pid} through sudo. ` +
+            `Run \`sudo /bin/kill -TERM -- -${child.pid}\` to stop it, then ` +
+            "`sudo tailscale set --operator=$USER` to avoid privileged claims.",
+        );
+      }
       return;
     }
     signalProcessTree(child.pid, signal, { detached: true });

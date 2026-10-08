@@ -161,16 +161,10 @@ If startup reports an occupied HTTPS port, run `tailscale serve status --json`.
 Check `Foreground` for the reported session, hostname, path, and proxy target.
 On macOS or Linux, inspect candidate CLI processes with
 `ps -axo pid,ppid,args | grep '[t]ailscale'`. Confirm which process created that
-route before stopping it with `kill -TERM <confirmed-pid>`. Tailscale status does
+route before stopping it with `kill -TERM <confirmed-pid>` (or `sudo kill -TERM <confirmed-pid>` for a root process). Tailscale status does
 not report the claimant PID. A backend listener PID or an orphaned parent alone
 does not prove ownership. If another application owns the claim, leave it alone
 and keep OpenClaw managed ingress off until you resolve the conflict.
-
-On macOS and Linux, the startup refusal lists readable process candidates matching
-the conflicting HTTPS port and proxy target, with a PID recheck command and the
-exact termination command. Confirm the candidate before running it; root-owned
-claims require `sudo kill -TERM <confirmed-pid>`. If process inspection is
-unavailable or ambiguous, the refusal retains manual inspection guidance.
 
 Verify that the foreground session disappears from `tailscale serve status
 --json`, then restart the Gateway. `tailscale serve --https=443 --set-path=/ off`

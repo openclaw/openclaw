@@ -86,11 +86,8 @@ export async function waitForTailscaleBackendReady(params: {
       params.info(`waiting for the local Tailscale daemon (${pending})`);
       announced = pending;
     }
-    try {
-      await sleep(pollMs, undefined, { signal: params.signal });
-    } catch (error) {
-      params.signal?.throwIfAborted();
-      throw error;
-    }
+    await sleep(pollMs, undefined, { signal: params.signal }).finally(() =>
+      params.signal?.throwIfAborted(),
+    );
   }
 }

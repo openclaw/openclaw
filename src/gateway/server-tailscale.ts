@@ -58,16 +58,16 @@ export async function startGatewayTailscaleExposure(params: {
       params.logTailscale.info,
       params.signal,
     );
+    const hostname = (
+      params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
+    ).catch((error: unknown) => {
+      params.logTailscale.warn(
+        `Could not read the Tailscale hostname; managed portal ingress is unavailable: ${formatErrorMessage(error)}`,
+      );
+      return null;
+    });
     const host = await racePromiseWithAbortSignal(
-      (params.tailscaleMode === "serve"
-        ? getTailnetHostnameAfterServe()
-        : getTailnetHostname()
-      ).catch((error: unknown) => {
-        params.logTailscale.warn(
-          `Could not read the Tailscale hostname; managed portal ingress is unavailable: ${formatErrorMessage(error)}`,
-        );
-        return null;
-      }),
+      hostname,
       params.signal,
       (signal) => signal.reason,
     );
