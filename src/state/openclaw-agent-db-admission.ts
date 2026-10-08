@@ -122,9 +122,7 @@ function assertAgentDatabaseOperationCurrent(
 
 function assertAgentDatabaseWriteAllowed(): void {
   if (isArtifactPreservingStateRead("agent")) {
-    throw new Error(
-      "Programming error: writable agent database open during artifact-preserving inspection.",
-    );
+    throw new Error("Programming error: writable agent database open during read-only inspection.");
   }
 }
 

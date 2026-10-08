@@ -12,6 +12,7 @@ import { getRuntimeConfig } from "../config/io.runtime.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { ExitError } from "../runtime.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -115,6 +116,24 @@ it.each([
         const sharedPath = resolveOpenClawStateSqlitePath(state.env);
         await closeOpenClawAgentDatabasesAsync();
         await closeStateDatabaseForTest();
+        if (customStore) {
+          const aliasDir = state.statePath("agent-alias");
+          fs.symlinkSync(path.dirname(agentPath), aliasDir, "junction");
+          const aliasPath = path.join(aliasDir, path.basename(agentPath));
+          const normal = openOpenClawAgentDatabaseReadOnly({
+            agentId: "main",
+            env: state.env,
+            path: aliasPath,
+          });
+          try {
+            expect(normal.found && normal.database.path).toBe(aliasPath);
+          } finally {
+            if (normal.found) {
+              normal.database.close();
+            }
+            fs.rmSync(aliasDir);
+          }
+        }
         seedStoppedWalDatabase(
           sharedPath,
           `ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state;

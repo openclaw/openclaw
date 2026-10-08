@@ -14,6 +14,7 @@ import {
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -193,7 +194,8 @@ export function openOpenClawAgentDatabaseReadOnly(
   try {
     enableNodeSqliteKyselyStatementCache(db);
     registerOpenClawAgentDatabaseIdentity(db);
-    const database = { agentId, db, path: db.location() ?? pathname, close };
+    const privatePath = isArtifactPreservingStateRead("agent") ? db.location() : undefined;
+    const database = { agentId, db, path: privatePath ?? pathname, close };
     const hasSchema = runSqliteReadOperationSync(db, () => {
       admitSqliteSchema(db);
       return hasAdmittedAgentReadOnlySchema(database);
