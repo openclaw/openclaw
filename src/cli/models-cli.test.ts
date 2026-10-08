@@ -1,4 +1,7 @@
 // Models CLI tests cover model listing command registration and provider output.
+import "../commands/models/accounts.js";
+import "../commands/models/auth-order.js";
+import "../commands/models/fallbacks-shared.js";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime, ExitError } from "../runtime.js";
@@ -71,7 +74,8 @@ vi.mock("../commands/models/auth.js", () => ({
 vi.mock("../commands/models/auth-list.js", () => ({
   modelsAuthListCommand: mocks.modelsAuthListCommand,
 }));
-vi.mock("../commands/models/accounts.js", () => ({
+vi.mock("../commands/models/accounts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/models/accounts.js")>()),
   modelsAccountsListCommand: mocks.modelsAccountsListCommand,
   modelsAccountsLoginCommand: mocks.modelsAccountsLoginCommand,
   modelsAccountsUpdateDefaultCommand: mocks.modelsAccountsUpdateDefaultCommand,
@@ -82,7 +86,8 @@ vi.mock("../commands/models/auth-activate.js", () => ({
 vi.mock("../commands/models/auth-logout.js", () => ({
   modelsAuthLogoutCommand: mocks.modelsAuthLogoutCommand,
 }));
-vi.mock("../commands/models/auth-order.js", () => ({
+vi.mock("../commands/models/auth-order.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/models/auth-order.js")>()),
   modelsAuthOrderGetCommand: mocks.modelsAuthOrderGetCommand,
   modelsAuthOrderUpdateCommand: mocks.modelsAuthOrderUpdateCommand,
 }));
@@ -91,7 +96,8 @@ vi.mock("../commands/models/aliases.js", () => ({
   modelsAliasesListCommand: mocks.modelsAliasesListCommand,
   modelsAliasesRemoveCommand: mocks.modelsAliasesRemoveCommand,
 }));
-vi.mock("../commands/models/fallbacks-shared.js", () => ({
+vi.mock("../commands/models/fallbacks-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/models/fallbacks-shared.js")>()),
   changeFallbacksCommand: mocks.changeFallbacksCommand,
   clearFallbacksCommand: mocks.clearFallbacksCommand,
   listFallbacksCommand: mocks.noopAsync,
