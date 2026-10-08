@@ -1040,8 +1040,13 @@ function appendReferences(references, additions) {
   }
 }
 
+const RELEASE_PROVENANCE_MARKER_PATTERN =
+  /^Release provenance: ([0-9a-f]{40}) -> (#\d+(?:,\s*#\d+)*)\.?\s*$/i;
+const CONSOLIDATED_RELEASE_PROVENANCE_PATTERN =
+  /^Release provenance: [0-9a-f]{40} -> #\d+(?:,\s*#\d+)*(?:;\s*[0-9a-f]{40} -> #\d+(?:,\s*#\d+)*)+\.?\s*$/i;
+
 function releaseProvenanceMarker(line) {
-  const match = line.match(/^Release provenance: ([0-9a-f]{40}) -> (#\d+(?:,\s*#\d+)*)\.?\s*$/i);
+  const match = line.match(RELEASE_PROVENANCE_MARKER_PATTERN);
   if (!match) {
     fail(`invalid release provenance marker: ${line}`);
   }
@@ -1071,16 +1076,29 @@ export function collectReleaseProvenanceOverrides(activeCommits, releaseProvenan
     }
     overrides.set(marker.commit, marker.pullRequests);
   };
-  for (const commit of activeCommits) {
-    for (const marker of releaseProvenanceMarkers(commit.body)) {
-      addMarker(marker);
-    }
-  }
   for (const value of releaseProvenance) {
     if (/[\r\n]/u.test(value)) {
       fail(`invalid release provenance marker: Release provenance: ${value}`);
     }
     addMarker(releaseProvenanceMarker(`Release provenance: ${value}`));
+  }
+  const explicitlyMappedCommits = new Set(overrides.keys());
+  for (const commit of activeCommits) {
+    for (const line of commit.body
+      .split("\n")
+      .filter((entry) => /^Release provenance:/i.test(entry))) {
+      // Recover consolidated origin metadata without rewriting pushed history, but
+      // only when the containing commit's explicit mapping preserves every PR.
+      if (
+        explicitlyMappedCommits.has(commit.hash) &&
+        CONSOLIDATED_RELEASE_PROVENANCE_PATTERN.test(line) &&
+        [...new Set([...line.matchAll(/#(\d+)/g)].map((match) => Number(match[1])))].join(",") ===
+          overrides.get(commit.hash).join(",")
+      ) {
+        continue;
+      }
+      addMarker(releaseProvenanceMarker(line));
+    }
   }
   return overrides;
 }
