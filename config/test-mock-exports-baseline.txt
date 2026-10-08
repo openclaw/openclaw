@@ -173,7 +173,6 @@
 ["extensions/browser/src/browser/routes/agent.act.wait-visibility.chromium.test.ts","./agent.shared.js","07f5989e4313fe92cd7991c322e512178ce290ecfdc33e38ba3a2e68b1fd0af9",1]
 ["extensions/browser/src/browser/routes/agent.existing-session.test.ts","../cdp.js","2a4432391f0b1957fc4c35bd8a6a168f047cac019004c77c10fb53df3366d7b0",1]
 ["extensions/browser/src/browser/routes/agent.existing-session.test.ts","../chrome-mcp-actions.js","1a08691070a3d25a6d3fd0d3eb0d9931d3804c227978c7da23d228888054dc2f",1]
-["extensions/browser/src/browser/routes/agent.existing-session.test.ts","../chrome-mcp-routing.js","223e74c48958025f234ba3ff59fb6cf7a665509a9d4d0b213e7ddabceb44ce8b",1]
 ["extensions/browser/src/browser/routes/agent.existing-session.test.ts","../chrome-mcp.js","6306d3625ac4e556d811e53125b0891cc7c0d2c8093ab4a64fc96d194cf05785",1]
 ["extensions/browser/src/browser/routes/agent.existing-session.test.ts","../navigation-guard.js","0b155fd2dae085d1fc59e1042bed70c4422247ddf588b670b0af446749963ea8",1]
 ["extensions/browser/src/browser/routes/agent.existing-session.test.ts","../pw-ai-module.js","93ee7347d934e8381472e65ce55ad5e31ccde1afe1b8e6932bccfdcc060f6ecb",1]

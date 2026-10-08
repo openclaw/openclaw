@@ -61,8 +61,8 @@ function normalizeScopeAccountId(accountId: string | undefined): string {
 }
 
 export function normalizeCreatorSender(value: string): string {
-  const creatorSender = value.trim();
-  if (!creatorSender || creatorSender.toLowerCase() === "unknown") {
+  const creatorSender = readKnownCreatorSender(value);
+  if (!creatorSender) {
     throw new Error("creating sender is unavailable for this turn");
   }
   return creatorSender;
@@ -137,10 +137,6 @@ function parseStoredChannelScope(value: string | null): {
   return { scope: "anywhere", identity: null };
 }
 
-function parseStoredSenderScope(value: string | null): string | null {
-  return parseStoredScope(value, 4)?.[3] ?? null;
-}
-
 export function rowToIntent(row: StandingIntentRow): StandingIntent {
   const channelScope = parseStoredChannelScope(row.channel_scope);
   return {
@@ -150,7 +146,7 @@ export function rowToIntent(row: StandingIntentRow): StandingIntent {
     triggerEmbedding: row.trigger_embedding,
     scope: channelScope.scope,
     channelScope: channelScope.identity,
-    senderScope: parseStoredSenderScope(row.sender_scope),
+    senderScope: parseStoredScope(row.sender_scope, 4)?.[3] ?? null,
     creatorSender: readKnownCreatorSender(row.creator_sender),
     status: row.status,
     expiresAt: row.expires_at,
