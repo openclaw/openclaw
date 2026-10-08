@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { maybeApprovePendingBridgePairing, type GatewayRpcClient } from "./mcp-channels.fixture.ts";
 import {
   connectMcpClientWithPairingReconnect,
   connectMcpWithTimeout,
@@ -13,6 +14,33 @@ import {
 describe("MCP gateway transport fixture", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it.each([
+    { error: "unknown requestId", reconnect: false },
+    { error: undefined, reconnect: true },
+    { error: "missing scope: operator.pairing", reconnect: undefined },
+  ])("settles a listed pairing after approval returns $error", async ({ error, reconnect }) => {
+    const gateway: GatewayRpcClient = {
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      events: [],
+      close: async () => {},
+      async request<T>(method: string): Promise<T> {
+        if (method === "device.pair.list") {
+          return { pending: [{ requestId: "bridge-request", role: "operator" }] } as T;
+        }
+        if (error) {
+          throw new Error(error);
+        }
+        return {} as T;
+      },
+    };
+    const result = maybeApprovePendingBridgePairing(gateway);
+    if (reconnect === undefined) {
+      await expect(result).rejects.toThrow(error);
+    } else {
+      await expect(result).resolves.toBe(reconnect);
+    }
   });
 
   it("creates unique client temp state and removes token files on cleanup", () => {
