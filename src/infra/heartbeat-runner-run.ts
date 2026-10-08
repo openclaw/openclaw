@@ -269,7 +269,10 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     heartbeatLog.error(`heartbeat failed: ${reason}`, { error: reason });
     return { status: "failed", reason };
   } finally {
-    if (!execRequestOwners.some((owner) => owner.signal.aborted)) {
+    if (
+      !execRequestOwners.some((owner) => owner.signal.aborted) ||
+      (policy.execDeliveryOutcome !== undefined && policy.execDeliveryOutcome !== "rejected")
+    ) {
       consumeSelectedSystemEventEntries(eventQueueKey, admittedGenericEvents);
     }
     typing?.onCleanup?.();

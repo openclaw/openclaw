@@ -5,6 +5,8 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
+import * as durableMessages from "../channels/message/send.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   cancelExecRequestOwners,
@@ -23,6 +25,8 @@ import {
 } from "./heartbeat-runner.test-utils.js";
 import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "./heartbeat-wake.js";
 import { PlatformMessageNotDispatchedError } from "./outbound/deliver-types.js";
+import * as deliveryLease from "./outbound/delivery-queue-lease.js";
+import { drainPendingDeliveriesCore } from "./outbound/delivery-queue-recovery.js";
 import { enqueueDelivery, ackDelivery } from "./outbound/delivery-queue-storage.js";
 import { loadPendingDeliveries } from "./outbound/delivery-queue.test-helpers.js";
 import {
@@ -42,11 +46,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.for(["ambiguous transport", "permanent rejection settlement"] as const)(
-  "preserves a live coalesced completion when its peer is stopped during %s",
+it.for([
+  "before platform dispatch",
+  "ambiguous transport",
+  "identityless transport",
+  "confirmed delivery",
+  "acknowledgment delivery",
+  "permanent rejection settlement",
+] as const)(
+  "preserves delivery custody when a coalesced peer is stopped during %s",
   async (stage, test) => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = heartbeatTestConfig(tmpDir, "last", "telegram", storePath);
+      const sendsAck = stage === "acknowledgment delivery";
+      if (sendsAck) {
+        cfg.channels = {
+          ...cfg.channels,
+          defaults: { heartbeatVisibility: { showOk: true } },
+        };
+      }
       const route = {
         channel: "telegram",
         to: "telegram:-1003774691294:topic:47",
@@ -88,23 +106,64 @@ it.for(["ambiguous transport", "permanent rejection settlement"] as const)(
       replySpy.mockImplementation(async (ctx) =>
         createHeartbeatToolResponsePayload({
           outcome: "done",
-          notify: true,
+          notify: !sendsAck,
           summary: "Completion results reviewed",
-          notificationText: ctx.Body?.includes("STOPPED_RESULT")
-            ? "Combined completion result"
-            : "Live peer completion result",
+          notificationText: sendsAck
+            ? undefined
+            : ctx.Body?.includes("STOPPED_RESULT")
+              ? "Combined completion result"
+              : "Live peer completion result",
         }),
       );
       const entered = createDeferred();
       const release = createDeferred();
-      const telegram = vi
-        .fn()
-        .mockResolvedValue({ messageId: "live-peer", chatId: "-1003774691294" });
-      if (stage === "ambiguous transport") {
-        telegram.mockImplementationOnce(async () => {
+      const received: string[] = [];
+      const telegram = vi.fn().mockImplementation(async (_to: string, text: string) => {
+        received.push(text);
+        return { messageId: "live-peer", chatId: "-1003774691294" };
+      });
+      if (sendsAck) {
+        const send = durableMessages.sendDurableMessageBatchCore;
+        vi.spyOn(durableMessages, "sendDurableMessageBatchCore").mockImplementationOnce(
+          async (...args) => {
+            const result = await send(...args);
+            expect(result.status).toBe("sent");
+            entered.resolve();
+            await release.promise;
+            return result;
+          },
+        );
+      } else if (stage === "before platform dispatch") {
+        const startLease = deliveryLease.startDeliveryProducerLease;
+        vi.spyOn(deliveryLease, "startDeliveryProducerLease").mockImplementationOnce(
+          async (params) => {
+            const lease = await startLease(params);
+            entered.resolve();
+            await release.promise;
+            return lease;
+          },
+        );
+      } else if (stage === "ambiguous transport" || stage === "identityless transport") {
+        telegram.mockImplementationOnce(async (_to: string, text: string) => {
+          received.push(text);
           entered.resolve();
           await release.promise;
+          if (stage === "identityless transport") {
+            return {};
+          }
           throw new Error("Synthetic response lost after platform dispatch");
+        });
+      } else if (stage === "confirmed delivery") {
+        const patch = sessionAccessor.patchSessionEntryCore;
+        let gated = false;
+        vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementation(async (...args) => {
+          const result = await patch(...args);
+          if (received.length === 1 && !gated) {
+            gated = true;
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
         });
       } else {
         telegram.mockRejectedValueOnce(
@@ -144,12 +203,64 @@ it.for(["ambiguous transport", "permanent rejection settlement"] as const)(
         );
         expect(replySpy.mock.calls[0]?.[0].Body).toContain("STOPPED_RESULT");
         expect(replySpy.mock.calls[0]?.[0].Body).toContain("LIVE_RESULT");
-        expect(telegram).toHaveBeenCalledOnce();
-        expect(await loadPendingDeliveries()).toHaveLength(stage === "ambiguous transport" ? 1 : 0);
+        expect(telegram).toHaveBeenCalledTimes(stage === "before platform dispatch" ? 0 : 1);
+        expect(await loadPendingDeliveries()).toHaveLength(
+          stage === "ambiguous transport" ||
+            stage === "identityless transport" ||
+            stage === "before platform dispatch"
+            ? 1
+            : 0,
+        );
         cancelExecRequestOwners([stoppedOwner]);
         release.resolve();
-        expect(await pending).toEqual({ status: "skipped", reason: "preempted" });
         expect(liveOwner.signal.aborted).toBe(false);
+        if (
+          stage === "ambiguous transport" ||
+          stage === "identityless transport" ||
+          stage === "confirmed delivery" ||
+          sendsAck
+        ) {
+          expect(await pending).toEqual({ status: "skipped", reason: "no-pending-event" });
+          expect(received).toEqual([
+            expect.stringContaining(sendsAck ? "HEARTBEAT_OK" : "Combined completion result"),
+          ]);
+          expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+          expect(await run()).toEqual({ status: "skipped", reason: "no-pending-event" });
+          expect(replySpy).toHaveBeenCalledOnce();
+          expect(telegram).toHaveBeenCalledOnce();
+          const recovery = await loadPendingDeliveries();
+          if (stage === "ambiguous transport" || stage === "identityless transport") {
+            expect(recovery).toHaveLength(1);
+            expect(recovery[0]).toMatchObject({
+              to: route.to,
+              accountId: "work",
+              threadId: 47,
+              recoveryState: "unknown_after_send",
+            });
+            const recoverSend = vi.fn();
+            await drainPendingDeliveriesCore({
+              cfg,
+              deliver: recoverSend,
+              log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+              drainKey: "cancelled-coalesced-completion",
+              logLabel: "cancelled coalesced completion",
+              selectEntry: (entry) => ({
+                match: entry.id === recovery[0]?.id,
+                bypassBackoff: true,
+              }),
+            });
+            expect(recoverSend).not.toHaveBeenCalled();
+            expect(await loadPendingDeliveries()).toEqual([]);
+            expect(await run()).toEqual({ status: "skipped", reason: "no-pending-event" });
+            expect(replySpy).toHaveBeenCalledOnce();
+            expect(telegram).toHaveBeenCalledOnce();
+            expect(received).toHaveLength(1);
+          } else {
+            expect(recovery).toEqual([]);
+          }
+          return;
+        }
+        expect(await pending).toEqual({ status: "skipped", reason: "preempted" });
         expect(peekSystemEventEntries(sessionKey).map((event) => event.id)).toEqual([live?.id]);
         expect(peekDeliverableSystemEventEntries(sessionKey).map((event) => event.id)).toEqual([
           live?.id,
@@ -159,8 +270,9 @@ it.for(["ambiguous transport", "permanent rejection settlement"] as const)(
         expect(replySpy).toHaveBeenCalledTimes(2);
         expect(replySpy.mock.calls[1]?.[0].Body).toContain("LIVE_RESULT");
         expect(replySpy.mock.calls[1]?.[0].Body).not.toContain("STOPPED_RESULT");
-        expect(telegram).toHaveBeenCalledTimes(2);
-        expect(telegram.mock.calls[1]?.[1]).toContain("Live peer completion result");
+        expect(telegram).toHaveBeenCalledTimes(stage === "before platform dispatch" ? 1 : 2);
+        expect(telegram.mock.calls.at(-1)?.[1]).toContain("Live peer completion result");
+        expect(received).toEqual([expect.stringContaining("Live peer completion result")]);
         expect(peekSystemEventEntries(sessionKey)).toEqual([]);
       } finally {
         release.resolve();

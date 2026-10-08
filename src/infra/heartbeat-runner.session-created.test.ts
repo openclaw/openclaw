@@ -11,6 +11,7 @@ import * as embeddedAgent from "../agents/embedded-agent.js";
 import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import { canRequesterAbortChatRun } from "../gateway/server-methods/chat-abort-authorization.js";
 import { recordSessionCreated } from "../sessions/session-created.js";
@@ -29,9 +30,12 @@ import {
   seedMainSessionStore,
   setupTelegramHeartbeatPluginRuntimeForTests,
 } from "./heartbeat-runner.test-utils.js";
+import * as deferredDelivery from "./outbound/deferred-delivery-admission.js";
+import { loadPendingDeliveries } from "./outbound/delivery-queue.test-helpers.js";
 import {
   enqueueSystemEvent,
   enqueueSystemEventEntry,
+  peekDeliverableSystemEventEntries,
   peekSystemEventEntries,
   peekSystemEvents,
   resetSystemEventsForTest,
@@ -51,7 +55,7 @@ afterEach(async () => {
   resetSystemEventsForTest();
 });
 
-async function createHeartbeatScenario() {
+async function createHeartbeatScenario(target: "none" | "telegram" = "none") {
   state = await createOpenClawTestState({
     label: "session-created-heartbeat",
     env: { OPENCLAW_TEST_FAST: "0" },
@@ -64,7 +68,7 @@ async function createHeartbeatScenario() {
         skipBootstrap: true,
         model: { primary: "mock-openai/gpt-5.6-luna" },
         models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-        heartbeat: { every: "5m", target: "none" },
+        heartbeat: { every: "5m", target },
       },
     },
     plugins: { enabled: false },
@@ -79,9 +83,9 @@ async function createHeartbeatScenario() {
   return { cfg, sessionKey };
 }
 
-function completedTurn(sessionId: string) {
+function completedTurn(sessionId: string, text = "Handled internally") {
   return {
-    payloads: [{ text: "Handled internally" }],
+    payloads: [{ text }],
     meta: {
       durationMs: 1,
       agentMeta: { sessionId, provider: "mock-openai", model: "gpt-5.6-luna" },
@@ -279,6 +283,180 @@ it.for(["stopped", "failed"] as const)(
         expect(next.currentInboundContext?.text).toContain(peer.text);
       }
       expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
+  },
+);
+
+it.for(["confirmed", "recovery-owned", "deferred admission abort"] as const)(
+  "settles admitted generic events for a later human turn after %s",
+  async (outcome, test) => {
+    const { cfg, sessionKey } = await createHeartbeatScenario("telegram");
+    const identity = {
+      runId: "generic-delivery-request",
+      sessionKey,
+      sessionId: "sid",
+      agentId: "main",
+      ownerConnId: "generic-delivery-owner",
+    };
+    const owner = await withExecRequestTurn({ identity }, async () =>
+      expectDefined(captureExecRequestOwners(identity)?.[0], "command request owner"),
+    );
+    const completion = expectDefined(
+      enqueueSystemEventEntry(
+        "Exec completed (generic-delivery, code 0) :: COMMAND_RESULT",
+        withExecRequestOwners({ sessionKey }, [owner]),
+      ),
+      "command completion occurrence",
+    );
+    const generic = expectDefined(
+      enqueueSystemEventEntry("Admitted notification with its own delivery custody", {
+        sessionKey,
+      }),
+      "admitted generic occurrence",
+    );
+    const runAgent = vi
+      .spyOn(embeddedAgent, "runEmbeddedAgent")
+      .mockImplementation(async (params) =>
+        completedTurn(params.sessionId, "The command and its admitted notification were handled."),
+      );
+    const entered = createDeferred();
+    const release = createDeferred();
+    const received: string[] = [];
+    const telegram = vi.fn(async (_to: string, text: string) => {
+      received.push(text);
+      return { messageId: "generic-delivery", chatId: "-100155462274" };
+    });
+    if (outcome === "confirmed") {
+      const patch = sessionAccessor.patchSessionEntryCore;
+      let gated = false;
+      vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementation(async (...args) => {
+        const result = await patch(...args);
+        if (received.length === 1 && !gated) {
+          gated = true;
+          entered.resolve();
+          await release.promise;
+        }
+        return result;
+      });
+    } else if (outcome === "recovery-owned") {
+      telegram.mockImplementationOnce(async (_to: string, text: string) => {
+        received.push(text);
+        entered.resolve();
+        await release.promise;
+        throw new Error("Synthetic response lost after platform dispatch");
+      });
+    } else {
+      const prepare = deferredDelivery.prepareDeferredDeliveryAdmission;
+      vi.spyOn(deferredDelivery, "prepareDeferredDeliveryAdmission").mockImplementationOnce(
+        async (...args) => {
+          const resolveAdmission = await prepare(...args);
+          expect(args[0]).toMatchObject({ channel: "telegram", phase: "live" });
+          entered.resolve();
+          await release.promise;
+          // Return the real function: its native currentness check observes Stop.
+          return resolveAdmission;
+        },
+      );
+    }
+    const pending = runHeartbeatOnce({
+      cfg,
+      agentId: "main",
+      sessionKey,
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      deps: { getReplyFromConfig, telegram },
+    });
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, pending, "heartbeat missed its delivery gate"),
+        test.signal,
+      );
+      const first = expectDefined(runAgent.mock.calls[0]?.[0], "first model input");
+      expect(first.currentInboundContext?.text).toContain(generic.text);
+      const noSend = outcome === "deferred admission abort";
+      let pendingFinalIdentity: { intentId: string; deliveryId: string } | undefined;
+      if (noSend) {
+        const source = sessionAccessor.loadSessionEntry({
+          storePath: cfg.session.store,
+          sessionKey,
+        });
+        expect(source?.sessionId).toBe(first.sessionId);
+        const pendingFinal = expectDefined(source?.pendingFinalDelivery, "native pending final");
+        expect(pendingFinal).toMatchObject({
+          intentId: expect.any(String),
+          deliveries: [{ id: expect.any(String), state: "queued" }],
+        });
+        pendingFinalIdentity = {
+          intentId: expectDefined(pendingFinal.intentId, "native pending-final intent ID"),
+          deliveryId: expectDefined(pendingFinal.deliveries?.[0], "native pending-final delivery")
+            .id,
+        };
+        expect(telegram).not.toHaveBeenCalled();
+        expect(await loadPendingDeliveries()).toEqual([]);
+      }
+      expect(peekSystemEventEntries(sessionKey).map((event) => event.id)).toEqual([
+        completion.id,
+        generic.id,
+      ]);
+      const late = expectDefined(
+        enqueueSystemEventEntry("Late notification for the next human turn", { sessionKey }),
+        "late generic occurrence",
+      );
+      const cancellation = captureExecRequestCancellation(identity);
+      expect(cancellation.cancel()).toBe(true);
+      await cancellation.settle();
+      release.resolve();
+      expect(await pending).toMatchObject({ status: "skipped" });
+      expect(telegram).toHaveBeenCalledTimes(noSend ? 0 : 1);
+      expect(received).toHaveLength(noSend ? 0 : 1);
+      expect(peekSystemEventEntries(sessionKey).map((event) => event.id)).toEqual(
+        (noSend ? [generic, late] : [late]).map((event) => event.id),
+      );
+      expect(peekDeliverableSystemEventEntries(sessionKey).map((event) => event.id)).toEqual(
+        (noSend ? [generic, late] : [late]).map((event) => event.id),
+      );
+      const recovery = await loadPendingDeliveries();
+      expect(recovery).toHaveLength(outcome === "recovery-owned" ? 1 : 0);
+      if (outcome === "recovery-owned") {
+        expect(recovery[0]?.recoveryState).toBe("unknown_after_send");
+      } else if (noSend) {
+        const previousFinal = expectDefined(pendingFinalIdentity, "captured native final identity");
+        const source = sessionAccessor.loadSessionEntry({
+          storePath: cfg.session.store,
+          sessionKey,
+        });
+        expect(source?.pendingFinalDelivery).toMatchObject({
+          intentId: previousFinal.intentId,
+          deliveries: [{ id: previousFinal.deliveryId, state: "unknown" }],
+        });
+      }
+
+      const nextBody = "Handle only my new instruction";
+      await getReplyFromConfig(
+        finalizeInboundContext({
+          Body: nextBody,
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:123",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+        }),
+        undefined,
+        cfg,
+      );
+      expect(runAgent).toHaveBeenCalledTimes(2);
+      const next = expectDefined(runAgent.mock.calls[1]?.[0], "later human model input");
+      expect(next.prompt).toContain(nextBody);
+      expect((next.currentInboundContext?.text ?? "").includes(generic.text)).toBe(noSend);
+      expect(next.currentInboundContext?.text).toContain(late.text);
+      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+      expect(telegram).toHaveBeenCalledTimes(noSend ? 0 : 1);
+      expect(received).toHaveLength(noSend ? 0 : 1);
     } finally {
       release.resolve();
       await Promise.allSettled([pending]);
