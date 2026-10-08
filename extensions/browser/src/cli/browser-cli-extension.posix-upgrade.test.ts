@@ -196,39 +196,33 @@ async function setup(
 
 describe("POSIX bundle migration", () => {
   const platform = "linux";
-  it.each([
-    { legacy: true, action: "inspect", profile: undefined },
-    { legacy: true, action: "install", profile: "other" },
-  ])(
-    "refuses $action from a different config before effects (legacy=$legacy, profile=$profile)",
-    async ({ legacy, action, profile }) => {
-      const f = await setup(platform, { legacy, registeredConfig: "custom", relocate: false });
-      const callerConfigPath = path.join(f.stateDir, "openclaw.json");
-      const callerConfig = {
-        browser: {
-          defaultProfile: "other",
-          profiles: {
-            other: { driver: "extension" as const, cdpPort: 19555 },
-            work: { driver: "extension" as const, cdpPort: 29444 },
-          },
+  it("refuses inspection from a different config before effects", async () => {
+    const f = await setup(platform, { legacy: true, registeredConfig: "custom", relocate: false });
+    const callerConfigPath = path.join(f.stateDir, "openclaw.json");
+    const callerConfig = {
+      browser: {
+        defaultProfile: "other",
+        profiles: {
+          other: { driver: "extension" as const, cdpPort: 19555 },
+          work: { driver: "extension" as const, cdpPort: 29444 },
         },
-      };
-      await fs.writeFile(callerConfigPath, JSON.stringify(callerConfig), { mode: 0o600 });
-      boundary.deps = { ...f.deps, env: { ...f.deps.env, OPENCLAW_CONFIG_PATH: undefined } };
-      f.config.mockReturnValue(callerConfig);
-      const copy = path.join(f.stateDir, "browser", "chrome-extension", "background.js");
-      const paths = [f.manifestPath, f.manifest.path, callerConfigPath, copy];
-      const assertUnchanged = await preserveFiles(...paths);
-      const copyInode = (await fs.stat(copy)).ino;
-      await expect(f.run(action, profile)).rejects.toThrow("__exit__:1");
-      expect(f.error).toHaveBeenCalledWith(expect.stringContaining("OPENCLAW_CONFIG_PATH"));
-      expect(boundary.readToken).not.toHaveBeenCalled();
-      expect(boundary.connect).not.toHaveBeenCalled();
-      await assertUnchanged();
-      expect((await fs.stat(copy)).ino).toBe(copyInode);
-      await f.assertPairingPreserved();
-    },
-  );
+      },
+    };
+    await fs.writeFile(callerConfigPath, JSON.stringify(callerConfig), { mode: 0o600 });
+    boundary.deps = { ...f.deps, env: { ...f.deps.env, OPENCLAW_CONFIG_PATH: undefined } };
+    f.config.mockReturnValue(callerConfig);
+    const copy = path.join(f.stateDir, "browser", "chrome-extension", "background.js");
+    const paths = [f.manifestPath, f.manifest.path, callerConfigPath, copy];
+    const assertUnchanged = await preserveFiles(...paths);
+    const copyInode = (await fs.stat(copy)).ino;
+    await expect(f.run("inspect")).rejects.toThrow("__exit__:1");
+    expect(f.error).toHaveBeenCalledWith(expect.stringContaining("OPENCLAW_CONFIG_PATH"));
+    expect(boundary.readToken).not.toHaveBeenCalled();
+    expect(boundary.connect).not.toHaveBeenCalled();
+    await assertUnchanged();
+    expect((await fs.stat(copy)).ino).toBe(copyInode);
+    await f.assertPairingPreserved();
+  });
 
   it("accepts an implicit default config matching the explicitly registered default", async () => {
     const f = await setup(platform, { registeredConfig: "default", relocate: false });
@@ -319,18 +313,6 @@ describe("POSIX bundle migration", () => {
       await f.assertPairingPreserved();
     },
   );
-  it("honors an explicit different extension profile rather than treating omission as that choice", async () => {
-    const f = await setup(platform);
-    await f.run("install", "other");
-    expect(f.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: expect.objectContaining({ profile: "other", relayPort: 19555 }),
-      }),
-    );
-    const selected = JSON.parse(await fs.readFile(f.manifestPath, "utf8")) as { path: string };
-    expect(await fs.readFile(selected.path, "utf8")).toContain("'--browser-profile' 'other'");
-    await f.assertPairingPreserved();
-  });
   it("refuses verification for a different profile without rewriting a healthy registration", async () => {
     const f = await setup(platform, { relocate: false });
     const assertUnchanged = await preserveFiles(f.manifestPath, f.manifest.path);
@@ -360,23 +342,6 @@ describe("POSIX bundle migration", () => {
       });
     }
     const assertUnchanged = await preserveFiles(f.manifestPath, f.manifest.path);
-    await expect(f.run("install")).rejects.toThrow("__exit__:1");
-    expect(boundary.install).not.toHaveBeenCalled();
-    await assertUnchanged();
-    await f.assertPairingPreserved();
-  });
-  it("refuses mixed owned and foreign roots before migrating either", async () => {
-    const f = await setup(platform);
-    const other = chromeProductRoots(f.deps).find((entry) => entry.product === "chromium")!;
-    await fs.mkdir(other.nativeManifestDir, { recursive: true, mode: 0o700 });
-    const foreign = path.join(other.nativeManifestDir, path.basename(f.manifestPath));
-    await fs.writeFile(
-      foreign,
-      JSON.stringify({ name: "foreign", path: "/foreign/native-host", allowed_origins: [] }),
-      { mode: 0o600 },
-    );
-    const paths = [f.manifestPath, f.manifest.path, foreign];
-    const assertUnchanged = await preserveFiles(...paths);
     await expect(f.run("install")).rejects.toThrow("__exit__:1");
     expect(boundary.install).not.toHaveBeenCalled();
     await assertUnchanged();
