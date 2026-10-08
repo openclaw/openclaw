@@ -365,6 +365,10 @@ export async function processDiscordMessage(
       logSkippedDelivery("internal-only payload");
       return { visibleReplySent: false };
     }
+    if (await draftPreview.adoptProgressDraft(deliverablePayload, info)) {
+      replyReference.markSent();
+      return { visibleReplySent: true };
+    }
     if (isFinal && !replyLifecycleStarted && !isRoomEvent && configuredTypingMode !== "never") {
       // Fast replies can bypass the normal resolver lifecycle. Start feedback
       // only after a deliverable final survives every suppression boundary.

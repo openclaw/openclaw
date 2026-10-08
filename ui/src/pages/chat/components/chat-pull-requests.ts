@@ -119,7 +119,6 @@ function renderChecks(
     gateway?: ApplicationGateway;
     sessionKey?: string;
     sessionId?: string;
-    basePath?: string;
     presented?: PresentationValue;
   },
 ) {
@@ -183,7 +182,6 @@ function renderChecks(
             .gateway=${props.gateway}
             .sessionKey=${props.sessionKey ?? ""}
             .sessionId=${props.sessionId ?? ""}
-            .basePath=${props.basePath ?? ""}
             .presented=${livePresentation(presented)}
           ></openclaw-chat-ci-automation>
           ${
@@ -324,7 +322,6 @@ export function renderChatPullRequests(props: {
   gateway?: ApplicationGateway;
   sessionKey?: string;
   sessionId?: string;
-  basePath?: string;
   presented?: PresentationValue;
   branch?: ControlUiSessionBranch;
   /** Hides the branch row and its idle publish offer; retained publication outcomes stay visible. */

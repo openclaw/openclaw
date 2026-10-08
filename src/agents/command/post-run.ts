@@ -605,7 +605,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
                     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
                   },
                   recordTerminalSource: true,
-                  clearRecoveryState: clearsRecoveryCycle,
+                  clearRecoveryState: clearsRecoveryCycle && entry.abortedLastRun !== true,
                   terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence(
                     deliveryResult ?? result,
                   ),
@@ -614,13 +614,14 @@ export async function finalizeEmbeddedAgentCommand(params: {
               : {}),
           },
           assertCommitAllowed: () => {
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             if (interruptedForRestart()) {
               throw createAgentRunRestartAbortError();
             }
           },
           shouldPersist: (current) =>
             !interruptedForRestart() &&
-            shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId) &&
+            shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId, runId) &&
             (!clearUnclaimedRecoveryContext ||
               (current?.restartRecoveryDeliveryRunId === undefined &&
                 current?.restartRecoveryDeliverySourceRunId === undefined &&

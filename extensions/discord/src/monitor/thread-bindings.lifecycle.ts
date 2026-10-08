@@ -97,6 +97,13 @@ export async function autoBindSpawnedDiscordSubagent(params: {
     return null;
   }
   const managerToken = getThreadBindingToken(manager.accountId);
+  const resolveChannel = (threadId: string) =>
+    resolveChannelIdForBinding({
+      cfg: params.cfg,
+      accountId: manager.accountId,
+      token: managerToken,
+      threadId,
+    });
 
   const requesterThreadId = normalizeOptionalStringifiedId(params.threadId);
   let channelId = "";
@@ -105,13 +112,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
     if (existing?.channelId?.trim()) {
       channelId = existing.channelId.trim();
     } else {
-      channelId =
-        (await resolveChannelIdForBinding({
-          cfg: params.cfg,
-          accountId: manager.accountId,
-          token: managerToken,
-          threadId: requesterThreadId,
-        })) ?? "";
+      channelId = (await resolveChannel(requesterThreadId)) ?? "";
     }
   }
   if (!channelId) {
@@ -124,13 +125,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
       if (!target || target.kind !== "channel") {
         return null;
       }
-      channelId =
-        (await resolveChannelIdForBinding({
-          cfg: params.cfg,
-          accountId: manager.accountId,
-          token: managerToken,
-          threadId: target.id,
-        })) ?? "";
+      channelId = (await resolveChannel(target.id)) ?? "";
     } catch {
       return null;
     }

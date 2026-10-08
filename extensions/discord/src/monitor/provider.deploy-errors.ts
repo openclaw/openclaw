@@ -63,11 +63,11 @@ export function attachDiscordDeployRestContext(
   }
 }
 
-function stringifyDiscordDeployField(value: unknown): string {
+function stringifyDiscordDeployField(value: unknown, depth = 2): string {
   try {
     return JSON.stringify(value);
   } catch {
-    return inspect(value, { depth: 2, breakLength: 120 });
+    return inspect(value, { depth, breakLength: 120 });
   }
 }
 
@@ -286,13 +286,7 @@ export function formatDiscordDeployErrorDetails(err: unknown): string {
     details.push(`code=${discordCode}`);
   }
   if (rawBody !== undefined && !isRedundantDiscordDeployBody(rawBody)) {
-    let bodyText;
-    try {
-      bodyText = JSON.stringify(rawBody);
-    } catch {
-      bodyText =
-        typeof rawBody === "string" ? rawBody : inspect(rawBody, { depth: 3, breakLength: 120 });
-    }
+    const bodyText = stringifyDiscordDeployField(rawBody, 3);
     if (bodyText) {
       const maxLen = 800;
       const trimmed =

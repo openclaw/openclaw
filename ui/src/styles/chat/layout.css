@@ -2460,8 +2460,7 @@ button.chat-pr__diff {
 }
 
 .chat-ci__automation-checkbox:focus-visible,
-.chat-ci__automation-retry:focus-visible,
-.chat-ci__automation-job-status a:focus-visible {
+.chat-ci__automation-retry:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -2477,10 +2476,6 @@ button.chat-pr__diff {
   font-size: 11px;
   font-weight: 400;
   line-height: 1.5;
-}
-
-.chat-ci__automation-status:empty {
-  display: none;
 }
 
 .chat-ci__automation-error {
@@ -2526,37 +2521,13 @@ button.chat-pr__diff {
   min-width: 0;
 }
 
-.chat-ci__automation-job {
+.chat-ci__automation-job-error {
   margin: 0 4px 6px 28px;
-  color: var(--muted);
+  color: var(--danger);
   font-size: 11px;
   font-weight: 400;
   line-height: 1.5;
   overflow-wrap: anywhere;
-}
-
-.chat-ci__automation-job-status {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 4px 12px;
-}
-
-.chat-ci__automation-job-status a {
-  flex: 0 0 auto;
-  color: var(--muted);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.chat-ci__automation-job-status a:hover {
-  color: var(--text);
-}
-
-.chat-ci__automation-job-error {
-  margin-top: 4px;
-  color: var(--danger);
 }
 
 .chat-ci__automation-warning {

@@ -187,7 +187,10 @@ describe("Node Code Mode executor", () => {
   it.for(timeoutSources)(
     "preserves published output when interrupting: %s",
     async (source, { signal }) => {
-      const worker = new URL("./code-mode-node.timeout.test-support.ts", import.meta.url);
+      const worker = new URL(
+        "../../test/helpers/code-mode-node.timeout.test-support.ts",
+        import.meta.url,
+      );
       const notifications = new BroadcastChannel(randomUUID());
       const environmentKey = "openclaw.codeModeTimeoutOutputTest";
       const previousEnvironment = getEnvironmentData(environmentKey);

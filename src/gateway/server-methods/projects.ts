@@ -413,8 +413,8 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           } else {
             const projection = requireSessionRowProjection(context);
             do {
-              await projection.ensureMaterialized();
-            } while (projection.needsMaterialization);
+              await projection.prepareSelection();
+            } while (projection.needsSelectionPreparation());
             assertCurrent();
             if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
               throw new Error(
@@ -428,7 +428,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
                 // Federation and process-local incognito stores retain the existing loader.
                 loadEntries: (target) =>
                   projection
-                    .selectEntries({ storePath: target.storePath, sortBy: null })
+                    .selectEntries({ storePath: target.storePath, sortBy: null }, true)
                     .map((row) => ({
                       sessionKey: row.key,
                       entry: row.storedEntry ?? row.entry,
@@ -461,7 +461,6 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         const recents = recentProfile
           ? await listProjectRecents(store, recentProfile.aliases, registryProjects)
           : undefined;
-        assertCurrent();
         recentProfile?.assertCurrent();
         diagnostics?.mark("response");
         assertCurrent();

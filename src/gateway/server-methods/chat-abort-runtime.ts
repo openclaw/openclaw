@@ -90,7 +90,12 @@ export async function abortControlledSubagents(params: {
       agentId: params.agentId,
       sessionId: params.sessionId,
     });
-  const runs = listControlledSubagentRunsForTurn(controller, params.requesterTurnRunId);
+  const turnIds = params.requesterTurnRunId
+    ? [...new Set([params.requesterTurnRunId, ...commands.requestRunIds])]
+    : [undefined];
+  const runs = [
+    ...new Set(turnIds.flatMap((runId) => listControlledSubagentRunsForTurn(controller, runId))),
+  ];
   let execAborted = false;
   const commandErrors: unknown[] = [];
   const beforeKill = async () => {

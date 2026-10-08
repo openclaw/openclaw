@@ -2,7 +2,15 @@ import { isShellToolDisplayName } from "../agents/tool-display.js";
 export type ChannelProgressDraftLine = {
   /** Stable line id used to update an existing progress line in place. */
   id?: string;
-  kind: "tool" | "item" | "plan" | "approval" | "command-output" | "patch";
+  kind:
+    | "tool"
+    | "item"
+    | "plan"
+    | "approval"
+    | "command-output"
+    | "patch"
+    | "operation-status"
+    | "subagent-status";
   /** Rendered line text before final draft truncation/prefix formatting. */
   text: string;
   label: string;

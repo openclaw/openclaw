@@ -458,6 +458,12 @@ export function readSqliteNativeMutationRevision(database: DatabaseSync): number
   return owners.get(database)?.mutationRevision;
 }
 
+/** Reuse schema only through unchanged synchronous transaction work, never as write authority. */
+export function canReuseSqliteSchemaInTransaction(database: DatabaseSync): boolean {
+  const owner = owners.get(database);
+  return owner !== undefined && !owner.authorizerActive && database.isTransaction;
+}
+
 /** Reuse row facts only inside admitted reads, never during a native write or snapshot. */
 export function getSqliteReadOperationRevision(
   database: DatabaseSync,

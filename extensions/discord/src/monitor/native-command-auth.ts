@@ -241,13 +241,7 @@ export async function resolveDiscordGuildNativeCommandAuthorized(params: {
   if (!policyAuthorizer.allowed) {
     return false;
   }
-  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-    channelConfig: params.channelConfig,
-    guildInfo: params.guildInfo,
-    memberRoleIds: params.memberRoleIds,
-    sender: params.sender,
-    allowNameMatching: params.allowNameMatching,
-  });
+  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState(params);
   const ownerAuthorizer = {
     configured: params.ownerAllowListConfigured,
     allowed: params.ownerAllowed,
@@ -316,12 +310,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     return false;
   }
   const sender = resolveDiscordSenderIdentity({ author: user, pluralkitInfo: null });
-  const channelContext = await resolveDiscordNativeInteractionChannelContext({
-    channel: interaction.channel,
-    client: interaction.client,
-    hasGuild: Boolean(interaction.guild),
-    channelIdFallback: interaction.rawData.channel_id ?? "",
-  });
+  const channelContext = await resolveDiscordNativeInteractionChannelContext(interaction, "");
   const {
     isDirectMessage,
     isGroupDm,

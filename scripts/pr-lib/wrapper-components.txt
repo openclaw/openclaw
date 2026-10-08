@@ -731,6 +731,7 @@ src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
+src/gateway/worker-environments/placement-read-authority.ts
 src/gateway/worker-environments/placement-record.ts
 src/gateway/worker-environments/placement-row-codec.ts
 src/gateway/worker-environments/placement-state.ts
@@ -1677,6 +1678,7 @@ src/state/openclaw-agent-transcript-payload-migration.ts
 src/state/openclaw-agent-write-admission.ts
 src/state/openclaw-database-preflight-agent-scheduler.ts
 src/state/openclaw-database-preflight-cleanup.ts
+src/state/openclaw-database-preflight-state-path.ts
 src/state/openclaw-database-preflight-targets.ts
 src/state/openclaw-database-preflight.messages.ts
 src/state/openclaw-database-preflight.ts
