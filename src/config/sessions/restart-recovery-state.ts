@@ -553,21 +553,6 @@ export function hasMainSessionRecoveryClaim(entry: InternalSessionEntry | undefi
   );
 }
 
-/**
- * Recovery or delivery debt that must keep fencing work admission even when a yielded
- * continuation is still the current owner: an interrupted run, an assigned recovery cycle,
- * an outstanding final delivery, or client delivery custody. A retained run fence alone is
- * not debt, because a yielded run keeps its own fence as continuation custody (#166771).
- */
-export function hasMainSessionRecoveryDebt(entry: InternalSessionEntry | undefined): boolean {
-  return Boolean(
-    entry?.abortedLastRun === true ||
-    entry?.mainRestartRecovery ||
-    entry?.pendingFinalDelivery ||
-    entry?.restartRecoveryDeliveryRunId,
-  );
-}
-
 /** Matches durable source ownership regardless of the surrounding run status. */
 export function hasRestartRecoverySourceClaim(
   entry: SessionEntry | null | undefined,

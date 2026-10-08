@@ -140,24 +140,6 @@ describe("main session recovery store", () => {
     return result.transition.reservation;
   }
 
-  it("keeps fencing a yield-shaped fence with no current continuation owner", async () => {
-    // The persisted shape alone cannot prove custody is live: with no matching batch in the
-    // subagent registry this row is an orphaned fence, so admission must stay fenced (#166771).
-    await write({
-      sessionId: "session-1",
-      updatedAt: 100,
-      abortedLastRun: false,
-      endedAt: 1000,
-      activeWriterRunId: "yielded-run",
-      lifecycleRunId: "yielded-run",
-      restartRecoveryRuns: [{ runId: "yielded-run", lifecycleGeneration }],
-      restartRecoveryTerminalRunIds: ["previous-terminal-run"],
-    });
-
-    await expect(claimRecovery()).resolves.toMatchObject({ kind: "invalidated" });
-    expect(read().restartRecoveryRuns).toEqual([{ runId: "yielded-run", lifecycleGeneration }]);
-  });
-
   it.each(["interrupted", "killed"] as const)(
     "does not infer recovery authority from a %s outcome",
     async (status) => {

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   hasMainSessionRecoveryClaim,
-  hasMainSessionRecoveryDebt,
+  hasRestartRecoveryTerminalRun,
   isMainRestartRecoveryCandidate,
 } from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
@@ -81,11 +81,22 @@ export async function commitMainSessionRecovery(params: {
     params.command.kind === "validate_foreground" || params.command.kind === "release_foreground"
       ? params.command.claim
       : undefined;
+  let yieldedContinuation: (() => boolean) | undefined;
   const result = await applySessionEntryReplacements<MainSessionRecoveryStoreResult | undefined>({
     agentId: params.target.agentId,
     requireWriteSuccess: params.requireWriteSuccess,
     ...(params.scanAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
     storePath: params.target.storePath,
+    assertCommitAllowed: () => {
+      if (
+        yieldedContinuation &&
+        (!yieldedContinuation() ||
+          ownerClaim?.lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
+          params.shouldContinue?.() === false)
+      ) {
+        throw new Error("Yielded requester continuation changed before recovery handoff");
+      }
+    },
     update: (entries) => {
       // Recheck after entering write admission: shutdown can begin while this
       // recovery owner is waiting, including between exact and moved-key lookups.
@@ -168,6 +179,31 @@ export async function commitMainSessionRecovery(params: {
         params.command.sessionKey !== candidate.sessionKey
           ? { ...params.command, sessionKey: candidate.sessionKey }
           : params.command;
+      if (
+        ownerClaim &&
+        entry.sessionId === ownerClaim.sessionId &&
+        isMainRestartRecoveryCandidate(entry, candidate.sessionKey) &&
+        entry.abortedLastRun !== true &&
+        !entry.mainRestartRecovery &&
+        !entry.pendingFinalDelivery &&
+        !entry.restartRecoveryDeliveryRunId &&
+        entry.restartRecoveryRuns?.length &&
+        entry.restartRecoveryRuns.every(
+          (run) =>
+            run.runId === entry.lifecycleRunId || hasRestartRecoveryTerminalRun(entry, run.runId),
+        )
+      ) {
+        yieldedContinuation = captureYieldedMainSessionContinuation({
+          storeAgentId: params.target.agentId,
+          entry,
+          sessionKey: candidate.sessionKey,
+          storePath: params.target.storePath,
+        });
+        if (yieldedContinuation?.()) {
+          // The durable child batch takes custody before the successor gets its own fence.
+          transitionMainSessionRecovery(entry, { kind: "clear" });
+        }
+      }
       const transition = transitionMainSessionRecovery(entry, command);
       const changed =
         previousRecoveryState !== entry.mainRestartRecovery ||
@@ -209,31 +245,6 @@ export async function refreshMainSessionRecoveryOwner(
         sessionKey: result.sessionKey,
       }
     : undefined;
-}
-
-/**
- * A yielded run keeps its own nonterminal fence as continuation custody, and nothing retires
- * it: `claim_foreground` leaves a non-interrupted row unchanged and startup reconciliation
- * skips it for the same reason. Admit such a row only while the subagent registry still shows
- * that exact yielded batch as the current owner, so a rearmed, removed, or merely orphaned
- * fence keeps fencing work instead of starting a turn against stale custody (#166771).
- */
-function retainsCurrentYieldedContinuation(params: {
-  entry: SessionEntry;
-  sessionKey: string;
-  target: MainSessionRecoveryStoreTarget;
-}): boolean {
-  if (hasMainSessionRecoveryDebt(params.entry)) {
-    return false;
-  }
-  return (
-    captureYieldedMainSessionContinuation({
-      storeAgentId: params.target.agentId,
-      entry: params.entry,
-      sessionKey: params.sessionKey,
-      storePath: params.target.storePath,
-    })?.() === true
-  );
 }
 
 export async function claimMainSessionRecoveryOwner(params: {
@@ -281,14 +292,8 @@ export async function claimMainSessionRecoveryOwner(params: {
   const healthyExpectedSession =
     claim.entry &&
     (claim.entry.abortedLastRun !== true || !hasMainSessionRecoveryClaim(claim.entry)) &&
-    ((claim.entry.restartRecoveryRuns === undefined &&
-      claim.entry.mainRestartRecovery === undefined) ||
-      (claim.sessionKey !== undefined &&
-        retainsCurrentYieldedContinuation({
-          entry: claim.entry,
-          sessionKey: claim.sessionKey,
-          target: params.target,
-        }))) &&
+    claim.entry.restartRecoveryRuns === undefined &&
+    claim.entry.mainRestartRecovery === undefined &&
     (claim.entry.sessionId === params.sessionId ||
       claim.entry.sessionId === params.replacementSessionId);
   if (
