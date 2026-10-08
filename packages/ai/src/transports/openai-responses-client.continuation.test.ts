@@ -3,7 +3,10 @@ import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toToolDefinitions } from "../../../../src/agents/agent-tool-definition-adapter.js";
 import { SessionManager } from "../../../../src/agents/sessions/session-manager.js";
+import { wrapToolDefinition } from "../../../../src/agents/sessions/tools/tool-definition-wrapper.js";
+import { createSessionsYieldTool } from "../../../../src/agents/tools/sessions-yield-tool.js";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
 import { useSessionStoreTempDirs } from "../../../../src/test-utils/session-state-cleanup.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
@@ -774,6 +777,31 @@ describe("native OpenAI Responses SSE continuation", () => {
       );
     },
   );
+
+  it("keeps the session's sessions_yield synchronous so a yield pauses the response", async () => {
+    sseState.outcomes.push(sdkCompletion("resp_wait", "waiting"));
+    const sessionTools = toToolDefinitions([
+      createSessionsYieldTool({ sessionId: "session", onYield: async () => {} }),
+      {
+        ...functionTool("exec"),
+        label: "exec",
+        execute: async () => ({ content: [], details: {} }),
+      },
+    ]).map((definition) => wrapToolDefinition(definition));
+    await run(
+      { messages: [userMessage("wait", 1)], tools: sessionTools },
+      { asyncToolExecution: true, onPayload: (payload) => payload },
+      astra,
+    );
+    expect(
+      (sseState.requests[0]?.tools as Array<{ name: string; async?: boolean }>).map(
+        ({ name, async }) => ({ name, async }),
+      ),
+    ).toEqual([
+      { name: "exec", async: true },
+      { name: "sessions_yield", async: undefined },
+    ]);
+  });
 
   it("keeps async tools on full-history encrypted-content recovery", async () => {
     sseState.outcomes.push(
