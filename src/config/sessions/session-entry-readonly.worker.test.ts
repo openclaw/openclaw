@@ -2,14 +2,20 @@ import { mkdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   invalidateRegisteredAgentDatabasesMemo,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
 } from "../../state/openclaw-agent-db-registry-listing.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as entryReads from "./session-accessor.sqlite-entry-read.js";
@@ -27,6 +33,7 @@ import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "./session-entry-read-runtime.js";
+import { readSessionEntryWorkerRequest } from "./session-entry-read.worker.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
 
@@ -43,6 +50,50 @@ function createEntryFixture(env: NodeJS.ProcessEnv) {
   };
   return { database, scope };
 }
+
+it("resolves runtime targets through one fresh admitted reader", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionId = "runtime-target-session";
+    const sessionKey = "agent:main:persisted-target";
+    replaceSessionEntrySync({ agentId: "main", env, sessionKey }, { sessionId, updatedAt: 1 });
+    const read = () =>
+      readSessionEntryWorkerRequest({
+        kind: "session-runtime-target",
+        database: { agentId: database.agentId, path: database.path },
+        scope: {
+          agentId: "main",
+          env,
+          sessionId,
+          sessionKey: "agent:main:fallback",
+          storePath: database.path,
+        },
+      });
+    await read();
+    const queries = trackSqliteStatementExecutions(database.db, ["freshness"], (sql) =>
+      /^PRAGMA data_version;?$/iu.test(sql) ? "freshness" : null,
+    );
+    try {
+      expect(await read()).toMatchObject({
+        kind: "session-runtime-target",
+        target: { agentId: "main", sessionId, sessionKey, storePath: database.path },
+        source: { agentId: database.agentId, path: database.path },
+      });
+      expect(queries.counts.freshness).toBe(1);
+    } finally {
+      queries.restore();
+    }
+
+    const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(database.path);
+    try {
+      peer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+      await expect(read()).rejects.toThrow("newer schema version");
+    } finally {
+      peer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+      peer.close();
+    }
+  });
+});
 
 it("reads session projections in the worker and observes the next foreign commit", async () => {
   await withOpenClawTestState({ label: "readonly-entry-projection-boundary" }, async ({ env }) => {

@@ -8,6 +8,7 @@ import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import {
   adoptSqliteSchemaFacts,
   getAdmittedSqliteSchemaFacts,
+  getSqliteReadOperationRevision,
   registerSqliteSchemaMutationListener,
   type SqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
@@ -125,11 +126,17 @@ export function adoptOpenClawAgentDatabaseSchema(
 ): boolean {
   const validation = getOpenClawAgentDatabaseValidation(database);
   const schema = validation?.schema;
+  // The physical receipt is checked above; current read admission supplies the same
+  // schema markers as native adoption, even when a sibling retained its own catalog.
+  const admitted =
+    reuseIntegrity && schema ? getSqliteReadOperationRevision(database.db)?.schema : undefined;
   const adopted = Boolean(
     reuseIntegrity &&
     schema &&
     Atomics.load(new Int32Array(schema.valid), 0) === 1 &&
-    adoptSqliteSchemaFacts(database.db, schema.facts) &&
+    ((admitted?.schemaVersion === schema.facts.schemaVersion &&
+      admitted.userVersion === schema.facts.userVersion) ||
+      adoptSqliteSchemaFacts(database.db, schema.facts)) &&
     Atomics.load(new Int32Array(schema.valid), 0) === 1,
   );
   if (required && !adopted) {
@@ -293,23 +300,40 @@ function captureValidationTransfer(
       return "invalid";
     }
     if (
+      (schemaRequired && schemaValid !== 1) ||
       validatedPaths.get(pathname) !== captured ||
       (capturedValidation &&
         wasValid === 1 &&
         Atomics.load(new Int32Array(capturedValidation.valid), 0) !== 1) ||
       (captured.validation !== capturedValidation &&
         captured.validation &&
-        Atomics.load(new Int32Array(captured.validation.valid), 0) !== 1) ||
+        (captured.validation.identity !== identity ||
+          Atomics.load(new Int32Array(captured.validation.valid), 0) !== 1)) ||
       Atomics.load(new Int32Array(received.valid), 0) !== 1
     ) {
       return "stale";
     }
     if (
-      wasValid === 1 &&
       captured.integrityVerified &&
       captured.validation?.agentId === database.agentId &&
-      captured.validation?.identity === identity
+      captured.validation.identity === identity &&
+      Atomics.load(new Int32Array(captured.validation.valid), 0) === 1
     ) {
+      const currentSchema = captured.validation.schema;
+      if (
+        currentSchema &&
+        schema &&
+        schemaValid === 1 &&
+        Atomics.load(new Int32Array(currentSchema.valid), 0) === 1 &&
+        currentSchema.facts.schemaVersion === schema.facts.schemaVersion &&
+        currentSchema.facts.userVersion === schema.facts.userVersion
+      ) {
+        // Retain the cell already shared with borrowers, including structured-clone aliases.
+        return "accepted";
+      }
+      if (currentSchema) {
+        Atomics.store(new Int32Array(currentSchema.valid), 0, 0);
+      }
       captured.validation.schema = schema;
       return "accepted";
     }
@@ -538,15 +562,35 @@ export function setOpenClawAgentDatabaseValidation(
   database: ValidationDatabase,
 ): OpenClawAgentDatabaseValidation {
   const revoked = hasRevokedOpenClawAgentDatabaseValidation(database.path);
-  const validation = createValidationReceipt(
+  let validation = createValidationReceipt(
     database,
     isOpenClawAgentCanonicalStoreEmpty(database) ||
       (!revoked &&
         !database.db.isTransaction &&
         hasPersistedOpenClawAgentCanonicalValidation(database)),
   );
-  invalidateOpenClawAgentDatabaseValidation(database.path);
-  validatedPaths.set(path.resolve(database.path), { validation, integrityVerified: true });
+  const entry = validatedPaths.get(path.resolve(database.path));
+  if (
+    !revoked &&
+    entry &&
+    (entry.agentId === undefined || entry.agentId === database.agentId) &&
+    (!entry.validation || matchesValidation(database, entry.validation))
+  ) {
+    // Successful admission promotes this owner; only revocation retires pending handoffs.
+    if (entry.validation) {
+      Atomics.store(
+        new Int32Array(entry.validation.canonicalReady),
+        0,
+        Atomics.load(new Int32Array(validation.canonicalReady), 0),
+      );
+      validation = entry.validation;
+    }
+    entry.validation = validation;
+    entry.integrityVerified = true;
+  } else {
+    invalidateOpenClawAgentDatabaseValidation(database.path);
+    validatedPaths.set(path.resolve(database.path), { validation, integrityVerified: true });
+  }
   bindValidationLifetime(database, validation);
   publishOpenClawAgentDatabaseSchema(database);
   return validation;

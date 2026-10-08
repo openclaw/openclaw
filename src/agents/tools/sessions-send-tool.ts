@@ -27,11 +27,13 @@ import {
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { bindRequesterYieldCronAuthority } from "../cron-creator-authority-context.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
 import { isTerminalAgentWaitTimeout, waitForAgentRunReply } from "../run-wait.js";
 import { isSubagentSessionFromEntry } from "../subagents/spawn/subagent-depth-policy.js";
 import {
@@ -200,7 +202,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
           ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
         };
-        let resolvedKey;
+        let resolvedKey = "";
         try {
           const resolved = await gatewayCall<{ agentId?: string; key: string }>({
             method: "sessions.resolve",
@@ -210,9 +212,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           resolvedKey = normalizeOptionalString(resolved?.key) ?? "";
           resolvedTargetAgentId = normalizeOptionalString(resolved?.agentId);
         } catch (err) {
-          if (isExpectedSessionLookupMiss(err)) {
-            resolvedKey = "";
-          } else {
+          if (!isExpectedSessionLookupMiss(err)) {
             const failure = sessionOwnershipLookupFailure(err);
             logSessionOwnershipLookupFailure({
               requesterSessionKey: effectiveRequesterKey,
@@ -527,6 +527,9 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             lane: resolveNestedAgentLaneForSession(resolvedKey),
             inputProvenance,
           };
+          if (!targetAcpMeta && targetIsSubagent && targetSessionEntry?.status === "interrupted") {
+            sendParams.message = `${formatSystemTurnPrompt(RESTART_RECOVERY_INTERRUPTION_NOTE)}\n\n${sendParams.message}`;
+          }
           if (
             mode === "resume" ||
             (mode === undefined &&

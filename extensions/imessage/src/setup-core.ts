@@ -155,7 +155,7 @@ export function createIMessageCliPathTextInput(
     helpLines: [
       "imsg CLI path required to enable iMessage.",
       `Install imsg on the Messages Mac: ${IMESSAGE_INSTALL_COMMAND}`,
-      `Update imsg when channel probes report missing RPC or private API capabilities: ${IMESSAGE_UPDATE_COMMAND}`,
+      `Update imsg when channel checks report missing RPC or private API capabilities: ${IMESSAGE_UPDATE_COMMAND}`,
     ],
   });
 }

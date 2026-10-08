@@ -156,7 +156,7 @@ export class PluginInstance {
   run<T>(run: () => T): T {
     const current = this.activeCall();
     if (current) {
-      return this.enter(current.token, run);
+      return this.invoke(run, { token: current.token, release: () => undefined });
     }
     const scoped = pluginInvocationContext.getStore()?.lookup(this);
     if (scoped) {
@@ -175,7 +175,7 @@ export class PluginInstance {
   ): T {
     const current = this.activeCall();
     if (current) {
-      return this.enter(current.token, run);
+      return this.invoke(run, { token: current.token, release: () => undefined });
     }
     // Fresh ordinary calls never inherit a scope's retained-consumer admission.
     if (!this.accepting || this.owner?.revoked) {
@@ -377,50 +377,59 @@ export class PluginInstance {
     cleanupFailures?: Set<unknown>,
   ): T {
     const cleanup = this.calls.get(token)?.cleanup === true;
+    const held: { registry?: PluginRegistry } = {};
     try {
-      return this.enter(token, () => {
-        const value = run();
-        const completion = resolvePluginReturnPromise(value);
-        if (completion) {
-          const settled = mapPluginReturnPromise(
-            completion,
-            async (result) => {
-              await release();
-              if (this.forcedRetirement && !cleanup && !this.hasToken(token)) {
-                throw new PluginInstanceUnavailableError(this.pluginId);
-              }
-              return result;
-            },
-            async (error: unknown) => {
-              cleanupFailures?.add(error);
-              // Preserve the call's failure; lifecycle observers still receive cleanup failures.
-              await release()?.catch(() => {});
-              throw error;
-            },
-          );
-          if (settled.host) {
-            valueInstances.setHost(settled.value, this);
-          } else {
-            valueInstances.set(settled.value, this);
+      return this.enter(
+        token,
+        () => {
+          const value = run();
+          const completion = resolvePluginReturnPromise(value);
+          if (completion) {
+            const settled = mapPluginReturnPromise(
+              completion,
+              async (result) => {
+                held.registry = undefined;
+                await release();
+                if (this.forcedRetirement && !cleanup && !this.hasToken(token)) {
+                  throw new PluginInstanceUnavailableError(this.pluginId);
+                }
+                return result;
+              },
+              async (error: unknown) => {
+                held.registry = undefined;
+                cleanupFailures?.add(error);
+                // Preserve the call's failure; lifecycle observers still receive cleanup failures.
+                await release()?.catch(() => {});
+                throw error;
+              },
+            );
+            if (settled.host) {
+              valueInstances.setHost(settled.value, this);
+            } else {
+              valueInstances.set(settled.value, this);
+            }
+            // Then getters and assimilation can execute plugin code; retain the admitting scope.
+            // SAFETY: Promise-like calls retain their resolved value while joining owner cleanup.
+            return settled.value as T;
           }
-          // Then getters and assimilation can execute plugin code; retain the admitting scope.
-          // SAFETY: Promise-like calls retain their resolved value while joining owner cleanup.
-          return settled.value as T;
-        }
-        void release();
-        if (this.forcedRetirement && !cleanup && !this.hasToken(token)) {
-          throw new PluginInstanceUnavailableError(this.pluginId);
-        }
-        return value;
-      });
+          held.registry = undefined;
+          void release();
+          if (this.forcedRetirement && !cleanup && !this.hasToken(token)) {
+            throw new PluginInstanceUnavailableError(this.pluginId);
+          }
+          return value;
+        },
+        held,
+      );
     } catch (error) {
+      held.registry = undefined;
       cleanupFailures?.add(error);
       void release();
       throw error;
     }
   }
 
-  private enter<T>(token: object, run: () => T): T {
+  private enter<T>(token: object, run: () => T, held?: { registry?: PluginRegistry }): T {
     pluginInvocationContext.getStore()?.lookup(this);
     const current = invocation.getStore();
     const call =
@@ -441,6 +450,9 @@ export class PluginInstance {
       (generation?.plugins.includes(record) ? generation : this.owner.registry);
     if (!registry) {
       throw new PluginInstanceUnavailableError(record.id);
+    }
+    if (held) {
+      held.registry = registry;
     }
     return withPluginRuntimePluginScope(this.runtimeScope, run, registry, call);
   }
