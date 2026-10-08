@@ -27,6 +27,8 @@ delegated task status visible without a detailed tool log or utility model.
 Intermediate tool failures and nonzero command exits stay out of the draft.
 Set `streaming.progress.toolProgress: true` to add a rolling tool log,
 including tool failures, with rows such as `Bash: run tests`.
+Telegram prefixes tool-log rows with per-tool emojis, such as `🛠️ Bash` and
+`🔎 Web Search`, in both standard and rich-message previews.
 
 <Note>
   Discord and Telegram default to `progress` without additional config. Set
