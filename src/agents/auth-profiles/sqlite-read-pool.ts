@@ -165,16 +165,17 @@ export function acquireAuthProfileReadDatabase(
   } catch {
     // Invalid readers are disposed below, where native close failures propagate.
   }
+  const closeCandidate = () =>
+    inspection ? db.close() : closeAuthProfileReadDatabase(resolvedPath);
   if (!readable) {
-    if (inspection) {
-      db.close();
-    } else {
-      closeAuthProfileReadDatabase(resolvedPath);
-    }
+    closeCandidate();
     return { status: "unreadable" };
   }
+  if (inspection) {
+    return { status: "readable", db };
+  }
   try {
-    while (!inspection && authProfileReadDatabases.size > AUTH_PROFILE_READ_HANDLE_CAP) {
+    while (authProfileReadDatabases.size > AUTH_PROFILE_READ_HANDLE_CAP) {
       const oldestPath = authProfileReadDatabases.keys().next().value;
       if (oldestPath === undefined) {
         break;
@@ -183,7 +184,7 @@ export function acquireAuthProfileReadDatabase(
     }
   } catch (error) {
     try {
-      closeAuthProfileReadDatabase(resolvedPath);
+      closeCandidate();
     } catch (closeError) {
       throw new AggregateError([error, closeError], "Unable to close auth profile readers", {
         cause: closeError,

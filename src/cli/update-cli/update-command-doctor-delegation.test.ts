@@ -438,7 +438,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
     const steps: UpdateStepResult[] = [];
     const reportingError = new Error("settlement progress could not be recorded");
     let reportedFailure: unknown;
-    const ready = createDeferred<void>();
+    const ready = createDeferred();
     const cleanup = new AbortController();
     let deadline: ReturnType<typeof controlDoctorDeadline> | undefined;
     let execution: Promise<void> | undefined;
@@ -759,7 +759,8 @@ function controlDoctorDeadline() {
   };
 }
 
-async function settleBusyDoctorWriter(writer: CommandProcessIdentity | undefined) {
+async function settleBusyDoctorWriter(input: CommandProcessIdentity | undefined) {
+  let writer = input;
   const receiptPath = path.join(root, "writer-cleanup.json");
   if (!writer && fs.existsSync(receiptPath)) {
     const receipt: unknown = JSON.parse(fs.readFileSync(receiptPath, "utf8"));

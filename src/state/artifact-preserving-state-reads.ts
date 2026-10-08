@@ -17,7 +17,6 @@ export const artifactPreservingReads = resolveGlobalSingleton(
     >(),
 );
 
-/** Admission scopes every nested reader without changing normal live-read semantics. */
 export function withArtifactPreservingStateReads<T>(
   operation: () => T,
   options?: { agentDatabases?: true },
