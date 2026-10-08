@@ -13,6 +13,11 @@ export function resolveWorkerPoolSize(kind: WorkerPoolClass): number {
   return Math.min(cap, resolveWorkerComputeLimit());
 }
 
+export function resolveStateReadWorkerCount(): number {
+  // A retained settlement read must leave capacity for a fresh catalog read before release.
+  return Math.max(2, resolveWorkerPoolSize("reader"));
+}
+
 // These hosts multiplex independent database owners, never writers for the same database.
 export const AGENT_DATABASE_PREFLIGHT_CONCURRENCY = 2;
 export function resolveSqliteBrokerWorkerCount(): number {

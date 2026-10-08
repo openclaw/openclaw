@@ -146,7 +146,9 @@ does not create additional writers for a database.
 
 Foreground transcript history and context each retain half the host's CPU
 headroom, capped at eight workers per pool. Background transcript owners remain
-serial. Inventory hashing retains its CPU and available-memory admission budget,
+serial. Shared-state readers retain a minimum of two workers so a held settlement
+read can admit a fresh catalog read before release, and scale up to eight.
+Inventory hashing retains its CPU and available-memory admission budget,
 including its in-process fallback on low-memory and Bun/Linux hosts.
 
 Reader, file-reader, and compute classes default to a 512 MiB V8 old-generation limit per
