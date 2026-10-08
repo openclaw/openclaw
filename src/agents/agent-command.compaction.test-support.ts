@@ -116,11 +116,10 @@ vi.mock("./agent-scope.js", async () => {
 });
 
 vi.mock("./model-catalog.js", async () => {
-  const { buildPreparedModelCatalogSnapshot, loadManifestModelProviderConfigs } =
+  const { buildPreparedModelCatalogSnapshot } =
     await vi.importActual<typeof import("./model-catalog.js")>("./model-catalog.js");
   return {
     buildPreparedModelCatalogSnapshot,
-    loadManifestModelProviderConfigs,
     loadManifestModelCatalog: (params: LoadManifestModelCatalogParams) =>
       compactionTestState.loadManifestModelCatalogMock(params),
   };

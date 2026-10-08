@@ -35,7 +35,7 @@ import {
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
-import { loadManifestModelProviderConfigs } from "./model-catalog.js";
+import { loadManifestModelProviderConfigs } from "./model-catalog-manifest.js";
 import {
   buildConfiguredModelCatalog,
   parseConfiguredModelVisibilityEntries,

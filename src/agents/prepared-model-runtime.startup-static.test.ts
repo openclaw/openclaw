@@ -263,14 +263,11 @@ vi.mock("./auth-profiles/runtime-snapshots.js", async (importOriginal) => ({
   registerRuntimeAuthProfileStoreMutationListener: () => () => {},
 }));
 
-vi.mock("./model-catalog.js", async () => {
-  const actual = await vi.importActual<typeof ModelCatalog>("./model-catalog.js");
-  return {
-    loadManifestModelCatalog: actual.loadManifestModelCatalog,
-    loadManifestModelProviderConfigs: actual.loadManifestModelProviderConfigs,
-    buildPreparedModelCatalogSnapshot: mocks.buildPreparedModelCatalogSnapshot,
-  };
-});
+vi.mock("./model-catalog.js", async () => ({
+  loadManifestModelCatalog: (await vi.importActual<typeof ModelCatalog>("./model-catalog.js"))
+    .loadManifestModelCatalog,
+  buildPreparedModelCatalogSnapshot: mocks.buildPreparedModelCatalogSnapshot,
+}));
 
 vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: mocks.ensureOpenClawModelsJson,

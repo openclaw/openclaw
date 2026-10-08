@@ -652,7 +652,6 @@ vi.mock("./lanes.js", () => ({
 
 vi.mock("./model-catalog.js", () => ({
   loadManifestModelCatalog: state.loadManifestModelCatalogMock,
-  loadManifestModelProviderConfigs: () => ({}),
 }));
 
 vi.mock("./model-catalog.runtime.js", () => ({
