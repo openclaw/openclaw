@@ -64,7 +64,7 @@ export async function writeWorkspaceGitInput(params: {
       yield Buffer.from("\n");
     }
     yield Buffer.from(
-      `commit ${params.ref}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${params.message?.byteLength ?? 0}\n`,
+      `commit ${params.ref}\nmark :${entries.length + 1}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${params.message?.byteLength ?? 0}\n`,
     );
     yield* params.message?.chunks ?? [];
     yield Buffer.from("\ndeleteall\n");
@@ -84,7 +84,7 @@ export async function writeWorkspaceGitInput(params: {
           .join(""),
       );
     }
-    yield Buffer.from("done\n");
+    yield Buffer.from(`\nget-mark :${entries.length + 1}\ndone\n`);
   }
   const directory = await fsRoot(path.dirname(params.inputPath));
   await directory.create(path.basename(params.inputPath), chunks(), {

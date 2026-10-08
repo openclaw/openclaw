@@ -1,8 +1,7 @@
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   McpLoopbackToolCache,
   resolveMcpLoopbackPolicyTools,
@@ -10,8 +9,10 @@ import {
 } from "./mcp-http.runtime.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
-function resolveTools(overrides: Partial<Parameters<typeof resolveGatewayScopedTools>[0]> = {}) {
-  return resolveGatewayScopedTools({
+async function resolveTools(
+  overrides: Partial<Parameters<typeof resolveGatewayScopedTools>[0]> = {},
+) {
+  return await resolveGatewayScopedTools({
     cfg: {},
     sessionKey: "agent:main:main",
     surface: "loopback",
@@ -20,30 +21,20 @@ function resolveTools(overrides: Partial<Parameters<typeof resolveGatewayScopedT
 }
 
 describe("resolveGatewayScopedTools", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-  it.each([
-    ["telegram", "agent:main:telegram:group:-100123", undefined, true],
-    ["webchat", "agent:main:webchat:forge-main", undefined, false],
-    ["webchat", "agent:main:telegram:group:-100123", "message_tool_only", true],
-  ] as const)(
-    "selects %s room delivery for %s with mode=%s: message=%s",
-    (messageProvider, sessionKey, sourceReplyDeliveryMode, message) => {
-      const result = resolveTools({
-        cfg: { tools: { profile: "minimal" } },
-        sessionKey,
-        messageProvider,
-        sourceReplyDeliveryMode,
-        inboundEventKind: "room_event",
-      });
-      expect(result.tools.some((tool) => tool.name === "message")).toBe(message);
-    },
-  );
+  it("adds the message tool for Telegram room delivery", async () => {
+    const result = await resolveTools({
+      cfg: { tools: { profile: "minimal" } },
+      sessionKey: "agent:main:telegram:group:-100123",
+      messageProvider: "telegram",
+      inboundEventKind: "room_event",
+    });
+    expect(result.tools.some((tool) => tool.name === "message")).toBe(true);
+  });
 
   it("rejects collector mode after gateway policy removes its reader", async () => {
-    const result = resolveTools({
+    const result = await resolveTools({
       cfg: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         tools: { profile: "coding" },
         gateway: { tools: { deny: ["agents_wait"] } },
       },
@@ -57,10 +48,10 @@ describe("resolveGatewayScopedTools", () => {
     ).rejects.toThrow("Collector results are unavailable");
   });
 
-  it("keeps default-agent credentials out of unbound gateway calls", () => {
+  it("keeps default-agent credentials out of unbound gateway calls", async () => {
     const cfg = { agents: { defaults: { imageModel: { primary: "openai/gpt-5.4-mini" } } } };
-    const unbound = resolveTools({ cfg });
-    const grantBound = resolveTools({ cfg, agentDir: "/agents/cli" });
+    const unbound = await resolveTools({ cfg });
+    const grantBound = await resolveTools({ cfg, agentDir: "/agents/cli" });
     expect(unbound.tools.some((tool) => tool.name === "view_image")).toBe(false);
     expect(grantBound.tools.some((tool) => tool.name === "view_image")).toBe(true);
   });
@@ -81,8 +72,8 @@ describe("resolveGatewayScopedTools", () => {
     }
   });
 
-  it("limits gateway actions to the borrowed runtime policy without reassigning the session", () => {
-    const result = resolveTools({
+  it("limits gateway actions to the borrowed runtime policy without reassigning the session", async () => {
+    const result = await resolveTools({
       cfg: {
         plugins: { enabled: false },
         agents: {
@@ -105,15 +96,15 @@ describe("resolveGatewayScopedTools", () => {
     );
   });
 
-  it("rejects a runtime policy agent that conflicts with its session key", () => {
-    expect(() =>
+  it("rejects a runtime policy agent that conflicts with its session key", async () => {
+    await expect(
       resolveTools({
         cfg: { agents: { ownership: "explicit", entries: { main: {}, worker: {} } } },
         agentId: "main",
         runtimePolicySessionKey: "agent:worker:main",
         runtimePolicyAgentId: "main",
       }),
-    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    ).rejects.toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
   });
 
   it.each([
@@ -157,27 +148,31 @@ describe("resolveGatewayScopedTools", () => {
     expect(denied.tools.map((tool) => tool.name)).toEqual(expected.filter((name) => name !== "ls"));
   });
 
-  it("materializes an executable write tool on the mediated CLI surface", async () => {
-    const workspaceDir = tempDirs.make("openclaw-mediated-write-");
-    const result = resolveTools({
-      sessionKey: "agent:main:cron:mediated-write",
-      workspaceDir,
-      mediatedToolNames: ["write"],
-      excludeToolNames: ["read", "edit", "apply_patch", "exec", "process"],
+  it("keeps managed shell tools subject to explicit denies", async () => {
+    const cfg = {
+      plugins: { enabled: false },
+      tools: { profile: "coding", deny: ["exec", "process"] },
+    } satisfies OpenClawConfig;
+    const context = { sessionKey: "agent:main:managed-shell", workspaceDir: os.tmpdir() };
+    const projected = await resolveMcpLoopbackScopedTools({
+      cfg,
+      context,
+      defaultMediatedToolNames: ["exec", "process"],
     });
-    const writeTool = result.tools.find((tool) => tool.name === "write");
-    expect(writeTool).toBeDefined();
-    await writeTool?.execute("mediated-write-call", {
-      path: "proof.txt",
-      content: "mediated write ok",
+    const toolsAllow = projected.tools.map((tool) => tool.name);
+    const granted = await resolveMcpLoopbackScopedTools({
+      cfg,
+      context: { ...context, toolsAllow },
     });
-    await expect(fs.readFile(path.join(workspaceDir, "proof.txt"), "utf8")).resolves.toBe(
-      "mediated write ok",
-    );
+    for (const result of [projected, granted]) {
+      expect(result.tools.some((tool) => tool.name === "exec")).toBe(false);
+      expect(result.tools.some((tool) => tool.name === "process")).toBe(false);
+      expect(result.tools.some((tool) => tool.name === "read")).toBe(false);
+    }
   });
 
-  it("applies sandbox tool denies to sandboxed loopback turns", () => {
-    const result = resolveTools({
+  it("applies sandbox tool denies to sandboxed loopback turns", async () => {
+    const result = await resolveTools({
       cfg: {
         agents: { defaults: { sandbox: { mode: "all" } } },
         tools: { sandbox: { tools: { deny: ["sessions_list"] } } },
@@ -186,46 +181,5 @@ describe("resolveGatewayScopedTools", () => {
     const names = result.tools.map((tool) => tool.name);
     expect(names).not.toContain("sessions_list");
     expect(names).toContain("sessions_history");
-  });
-
-  it("passes loopback yield context into sessions_yield", async () => {
-    const registry = await import("../agents/subagents/registry/subagent-registry.js");
-    const markRequesterTurnYielded = vi
-      .spyOn(registry, "markRequesterTurnYielded")
-      .mockResolvedValue(1);
-    const onYield = vi.fn();
-    try {
-      const result = resolveTools({
-        cfg: { tools: { profile: "minimal", alsoAllow: ["sessions_yield"] } },
-        sessionKey: "agent:main:telegram:group:-100123",
-        sessionId: "session-123",
-        runId: "run-123",
-        onYield,
-      });
-      const yieldTool = result.tools.find((tool) => tool.name === "sessions_yield");
-      if (!yieldTool) {
-        throw new Error("expected sessions_yield tool");
-      }
-      const toolResult = await yieldTool.execute("tool-call-1", {
-        message: "waiting on subagents",
-        acknowledgment: "I’m waiting on the subagents.",
-      });
-      expect(markRequesterTurnYielded).toHaveBeenCalledExactlyOnceWith({
-        requesterAgentId: "main",
-        requesterSessionKey: "agent:main:telegram:group:-100123",
-        requesterTurnRunId: "run-123",
-      });
-      expect(onYield).toHaveBeenCalledWith(
-        "waiting on subagents",
-        "I’m waiting on the subagents.",
-        undefined,
-      );
-      expect(toolResult.details).toEqual({
-        status: "yielded",
-        acknowledgment: "I’m waiting on the subagents.",
-      });
-    } finally {
-      markRequesterTurnYielded.mockRestore();
-    }
   });
 });

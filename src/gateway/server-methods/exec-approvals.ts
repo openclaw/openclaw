@@ -26,11 +26,15 @@ import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-comma
 import type { NodeSession } from "../node-registry.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
+  captureLocalStateMutationGuard,
+  localStateOwnerChangedError,
+} from "./local-state-owner.js";
+import {
   respondUnavailableOnNodeInvokeErrorWithProvenance,
   parseGatewayPayload,
 } from "./nodes.helpers.js";
 import { respondUnavailableOnThrow } from "./response.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 function requireApprovalsBaseHash(
@@ -41,36 +45,18 @@ function requireApprovalsBaseHash(
   // Approval allowlists are admin-editable state. Require the caller's last
   // observed hash before writing so stale UI tabs cannot overwrite changes.
   const baseHash = resolveBaseHashParam(params);
-  if (!snapshot.exists) {
-    if (baseHash && baseHash !== snapshot.hash) {
-      respondApprovalsChanged(respond);
-      return false;
-    }
-    return true;
-  }
-  if (!snapshot.hash) {
+  if (snapshot.exists && (!snapshot.hash || !baseHash)) {
     respond(
       false,
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "exec approvals base hash unavailable; re-run exec.approvals.get and retry",
+        `exec approvals base hash ${snapshot.hash ? "required" : "unavailable"}; re-run exec.approvals.get and retry`,
       ),
     );
     return false;
   }
-  if (!baseHash) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "exec approvals base hash required; re-run exec.approvals.get and retry",
-      ),
-    );
-    return false;
-  }
-  if (baseHash !== snapshot.hash) {
+  if (baseHash && baseHash !== snapshot.hash) {
     respondApprovalsChanged(respond);
     return false;
   }
@@ -93,6 +79,21 @@ function toExecApprovalsPayload(snapshot: ExecApprovalsSnapshot) {
     ...redactExecApprovals(snapshot),
     resolvedDefaults: resolveExecApprovalsFromFile({ file: snapshot.file }).defaults,
   };
+}
+
+function captureExecApprovalsOwnerGuard(
+  expectedOwnerId: string | undefined,
+  options: GatewayRequestHandlerOptions,
+): (() => void) | undefined | null {
+  if (!expectedOwnerId) {
+    return undefined;
+  }
+  try {
+    return captureLocalStateMutationGuard(expectedOwnerId, options);
+  } catch (error) {
+    options.respond(false, undefined, localStateOwnerChangedError(error));
+    return null;
+  }
 }
 
 function isMacAppNode(session: NodeSession | undefined): boolean {
@@ -187,38 +188,45 @@ function execApprovalsNodeHandler<TParams extends { nodeId: string }>(definition
 }
 
 export const execApprovalsHandlers: GatewayRequestHandlers = {
-  "exec.approvals.get": async ({ params, respond }) => {
+  "exec.approvals.get": async (options) => {
+    const { params, respond } = options;
     if (!assertValidParams(params, validateExecApprovalsGetParams, "exec.approvals.get", respond)) {
       return;
     }
+    const assertCurrent = captureExecApprovalsOwnerGuard(params.expectedOwnerId, options);
+    if (assertCurrent === null) {
+      return;
+    }
     await respondUnavailableOnThrow(respond, async () => {
-      const snapshot = await ensureExecApprovalsSnapshot();
+      assertCurrent?.();
+      const snapshot = params.expectedOwnerId
+        ? readExecApprovalsSnapshot()
+        : await ensureExecApprovalsSnapshot();
+      assertCurrent?.();
       respond(true, toExecApprovalsPayload(snapshot), undefined);
     });
   },
-  "exec.approvals.set": async ({ params, respond }) => {
+  "exec.approvals.set": async (options) => {
+    const { params, respond } = options;
     if (!assertValidParams(params, validateExecApprovalsSetParams, "exec.approvals.set", respond)) {
+      return;
+    }
+    const assertCurrent = captureExecApprovalsOwnerGuard(params.expectedOwnerId, options);
+    if (assertCurrent === null) {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
       // Do not ensure/create state before checking freshness: a rejected stale
       // save must not recreate a file that an operator deleted.
+      assertCurrent?.();
       const snapshot = readExecApprovalsSnapshot();
       if (!requireApprovalsBaseHash(params, snapshot, respond)) {
         return;
       }
-      const incoming = (params as { file?: unknown }).file;
-      if (!incoming || typeof incoming !== "object") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "exec approvals file is required"),
-        );
-        return;
-      }
-      const normalized = normalizeExecApprovals(incoming as ExecApprovalsFile);
+      const normalized = normalizeExecApprovals(params.file as ExecApprovalsFile);
       const nextSnapshot = await updateExecApprovals({
         baseHash: snapshot.hash,
+        assertCurrent,
         update: (current) => mergeExecApprovalsSocketDefaults({ normalized, current }),
       });
       if (!nextSnapshot) {

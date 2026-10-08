@@ -9,7 +9,7 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
-import { repoName } from "../lib/session-display.ts";
+import { pathDisplayName } from "../lib/path-display.ts";
 import type {
   CatalogSessionContinuedDetail,
   CatalogSessionKey,
@@ -79,11 +79,11 @@ export function findCatalogSessionHovercardRow(params: {
             ? branch || session.pullRequest
               ? {
                   kind: "project",
-                  name: repoName(cwd),
+                  name: pathDisplayName(cwd),
                   path: cwd,
                   ...(branch ? { branch } : {}),
                 }
-              : { kind: "workspace", name: repoName(cwd), path: cwd }
+              : { kind: "workspace", name: pathDisplayName(cwd), path: cwd }
             : params.liveRow?.workContext,
         };
       }
@@ -140,42 +140,27 @@ export function projectSidebarSessionCatalogs(
   // The current list wins over cached agent lists, including an unset live owner.
   const liveRowsByKey = new Map(liveRows.toReversed().map((row) => [row.key, row]));
   return catalogs.flatMap((catalog) => {
-    const visibleHosts = visibleCatalogHosts(
-      catalog.hosts,
-      ownerId,
-      liveRowsByKey,
-      isSessionHidden,
-    );
+    const visibleHosts: SessionCatalogHost[] = [];
+    for (const host of catalog.hosts) {
+      const sessions = host.sessions.filter((session) => {
+        const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
+        // A committed archive can leave the loaded roster before the catalog refreshes.
+        // Its adopted key still belongs to the canonical session lifecycle owner.
+        if (session.sessionKey && isSessionHidden?.(adoptedRow ?? { key: session.sessionKey })) {
+          return false;
+        }
+        if (!ownerId) {
+          return true;
+        }
+        const effectiveOwnerId = adoptedRow ? adoptedRow.owner?.actor.id : session.createdActor?.id;
+        return effectiveOwnerId === ownerId;
+      });
+      if (sessions.length > 0) {
+        visibleHosts.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
+      }
+    }
     return visibleHosts.length > 0 ? [{ ...catalog, visibleHosts }] : [];
   });
-}
-
-function visibleCatalogHosts(
-  hosts: readonly SessionCatalogHost[],
-  ownerId: string | null,
-  liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
-  isSessionHidden?: (row: SessionVisibilityRow) => boolean,
-): SessionCatalogHost[] {
-  const visible: SessionCatalogHost[] = [];
-  for (const host of hosts) {
-    const sessions = host.sessions.filter((session) => {
-      const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
-      // A committed archive can leave the loaded roster before the catalog refreshes.
-      // Its adopted key still belongs to the canonical session lifecycle owner.
-      if (session.sessionKey && isSessionHidden?.(adoptedRow ?? { key: session.sessionKey })) {
-        return false;
-      }
-      if (!ownerId) {
-        return true;
-      }
-      const effectiveOwnerId = adoptedRow ? adoptedRow.owner?.actor.id : session.createdActor?.id;
-      return effectiveOwnerId === ownerId;
-    });
-    if (sessions.length > 0) {
-      visible.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
-    }
-  }
-  return visible;
 }
 
 export type CatalogBackingSessionDisplay = {

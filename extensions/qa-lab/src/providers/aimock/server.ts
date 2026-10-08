@@ -46,46 +46,6 @@ function requestMessages(body: ChatCompletionRequest | null | undefined) {
   return Array.isArray(body?.messages) ? body.messages : [];
 }
 
-function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
-  const messages = requestMessages(body);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "user") {
-      const text = getTextContent(message.content) ?? "";
-      if (!isInternalRuntimeContextCarrierText(text)) {
-        return text;
-      }
-    }
-  }
-  return "";
-}
-
-function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
-  return requestMessages(body)
-    .map((message) => getTextContent(message.content) ?? "")
-    .filter(Boolean)
-    .join("\n");
-}
-
-function extractToolOutput(body: ChatCompletionRequest | null | undefined) {
-  const message = requestMessages(body).findLast((entry) => entry?.role === "tool");
-  return message ? (getTextContent(message.content) ?? "") : "";
-}
-
-function extractToolOutputCallId(body: ChatCompletionRequest | null | undefined) {
-  const message = requestMessages(body).findLast(
-    (entry) => entry?.role === "tool" && typeof entry.tool_call_id === "string",
-  );
-  return message?.tool_call_id ?? "";
-}
-
-function extractToolOutputStructuredError(body: ChatCompletionRequest | null | undefined) {
-  const message = asOptionalObjectRecord(
-    requestMessages(body).findLast((entry) => entry?.role === "tool"),
-  );
-  return message?.isError === true || message?.is_error === true;
-}
-
 function countImageInputs(value: unknown): number {
   if (Array.isArray(value)) {
     return value.reduce((sum, entry) => sum + countImageInputs(entry), 0);
@@ -112,10 +72,13 @@ function extractToolFacts(entry: AimockChatJournalEntry): AimockToolFacts {
     | undefined;
   const call = response?.toolCalls?.[0];
   const callId = call?.id ?? call?.callId ?? call?.toolCallId;
+  const output = requestMessages(entry.body).findLast(
+    (message) => message?.role === "tool" && typeof message.tool_call_id === "string",
+  );
   return {
     plannedToolName: typeof call?.name === "string" && call.name.length > 0 ? call.name : undefined,
     plannedToolCallId: typeof callId === "string" && callId.length > 0 ? callId : undefined,
-    toolOutputCallId: extractToolOutputCallId(entry.body) || undefined,
+    toolOutputCallId: output?.tool_call_id || undefined,
   };
 }
 
@@ -124,15 +87,28 @@ function extractRequestFacts(
   tools: AimockToolFacts,
 ): AimockRequestFacts {
   const model = typeof body?.model === "string" ? body.model : "";
+  const messages = requestMessages(body);
+  const user = messages.findLast(
+    (message) =>
+      message?.role === "user" &&
+      !isInternalRuntimeContextCarrierText(getTextContent(message.content) ?? ""),
+  );
+  const output = messages.findLast((message) => message?.role === "tool");
+  const outputRecord = asOptionalObjectRecord(output);
   return {
     ...tools,
     model,
-    prompt: extractLastUserText(body),
+    prompt: user ? (getTextContent(user.content) ?? "") : "",
     providerVariant: resolveMockProviderVariant(model, "aimock"),
-    imageInputCount: countImageInputs(requestMessages(body)),
-    ...(extractToolOutputStructuredError(body) ? { toolOutputStructuredError: true } : {}),
-    toolOutput: extractToolOutput(body),
-    allInputText: extractAllInputText(body),
+    imageInputCount: countImageInputs(messages),
+    ...(outputRecord?.isError === true || outputRecord?.is_error === true
+      ? { toolOutputStructuredError: true }
+      : {}),
+    toolOutput: output ? (getTextContent(output.content) ?? "") : "",
+    allInputText: messages
+      .map((message) => getTextContent(message.content) ?? "")
+      .filter(Boolean)
+      .join("\n"),
   };
 }
 

@@ -1,6 +1,9 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { scanDoctorSessionEntriesTolerant } from "../config/sessions/session-accessor.js";
-import { hasLegacySessionEntryState } from "../config/sessions/session-entry-state-format.js";
+import {
+  hasLegacySessionEntryState,
+  hasLegacySessionProviderState,
+} from "../config/sessions/session-entry-state-format.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-entry-shape.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,19 +37,15 @@ import {
 } from "./doctor/shared/session-entry-rewrite.js";
 import { migrateLegacySessionEntryState } from "./doctor/shared/session-entry-shape.js";
 
-export type SessionDeliveryStateRepairReport = {
-  found: number;
-  repaired: number;
-  scannedStores: number;
-};
+export type SessionDeliveryStateRepairReport = ReturnType<typeof repairCanonicalSessionEntries>;
+
+type CanonicalSessionRepairOptions = Omit<
+  Parameters<typeof repairCanonicalSessionEntries>[0],
+  "transform" | "updateDeliveryProjection"
+>;
 
 /** Scan or rewrite legacy delivery fields inside existing session row JSON. */
-export function repairCanonicalSessionDeliveryStates(params: {
-  apply: boolean;
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  targets?: readonly ExistingAgentDatabaseTarget[];
-}): SessionDeliveryStateRepairReport {
+export function repairCanonicalSessionDeliveryStates(params: CanonicalSessionRepairOptions) {
   return repairCanonicalSessionEntries({
     ...params,
     transform: normalizeLegacySessionEntryDelivery,
@@ -54,12 +53,7 @@ export function repairCanonicalSessionDeliveryStates(params: {
   });
 }
 
-export function repairCanonicalSessionResolvedSkills(params: {
-  apply: boolean;
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  targets?: readonly ExistingAgentDatabaseTarget[];
-}): SessionDeliveryStateRepairReport {
+export function repairCanonicalSessionResolvedSkills(params: CanonicalSessionRepairOptions) {
   return repairCanonicalSessionEntries({
     ...params,
     transform: stripRuntimeOnlySessionSkillsFields,
@@ -183,7 +177,7 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
 
 export function repairCanonicalSessionEntries(
   params: SessionEntryRepairParams & { apply: boolean },
-): SessionDeliveryStateRepairReport {
+) {
   const plan = prepareSessionEntryRepairs({ ...params, source: "canonical" });
   return {
     found: plan.found,
@@ -206,11 +200,16 @@ export async function repairLegacySessionEntryStates(params: {
       ...params,
       source: "raw",
       rawNeedsRepair: hasLegacySessionEntryState,
-      rawTransform: (entry, _sessionKey, updatedAt) =>
-        hasLegacySessionEntryState(entry)
-          ? migrateLegacySessionEntryState(entry, updatedAt)
-          : entry,
-      updateDeliveryProjection: false,
+      rawTransform: (entry, sessionKey, updatedAt) => {
+        if (!hasLegacySessionEntryState(entry)) {
+          return entry;
+        }
+        const next = migrateLegacySessionEntryState(entry, updatedAt, sessionKey);
+        return hasLegacySessionProviderState(entry)
+          ? normalizeLegacySessionEntryDelivery(next)
+          : next;
+      },
+      updateDeliveryProjection: true,
     });
     const report = { found: plan.found, repaired: 0, scannedStores: plan.scannedStores };
     if (!params.apply || plan.found === 0) {

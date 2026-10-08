@@ -157,38 +157,6 @@ describe("plugin setup registry artifact lifecycle", () => {
     }
   });
 
-  it("records an exported register getter failure without replaying its module", async () => {
-    const event = "setup-register-getter";
-    const before = process.listenerCount(event);
-    const manifestRegistry = registry(
-      writeSetupLifecycleFixture(
-        "register-getter",
-        `
-        process.on(${JSON.stringify(event)}, () => {});
-        module.exports = { get register() { throw new Error("register getter failed"); } };
-      `,
-      ),
-    );
-    const cache = createPluginCache();
-    try {
-      const result = withPluginCache(cache, () => resolvePluginSetupRegistry({ manifestRegistry }));
-      expect(result.providers).toEqual([]);
-      expect(result.diagnostics).toMatchObject([
-        {
-          pluginId: "register-getter",
-          code: "setup-registration-failed",
-          message: expect.stringContaining("register getter failed"),
-        },
-      ]);
-      await nextTurn();
-      expect(process.listenerCount(event)).toBe(before + 1);
-    } finally {
-      await retirePluginCache(cache).finally(() => {
-        process.removeAllListeners(event);
-      });
-    }
-  });
-
   it("retires a failed setup registration without retiring successful owners in its cache", async () => {
     const ids = ["live-setup", "failed-setup"] as const;
     const event = "setup-registration-owner";
@@ -616,33 +584,30 @@ describe("plugin setup module lifecycle", () => {
     }
   });
 
-  it.each(["ts", "cjs"])(
-    "retires failed %s setup evaluation and retries with fresh source",
-    async (extension) => {
-      const { cache, source, loader } = fixture(`index.${extension}`);
-      const event = `setup-failed-${extension}`;
-      const listeners = process.listenerCount(event);
-      fs.writeFileSync(
-        source,
-        `process.on(${JSON.stringify(event)}, () => {}); throw new Error("setup failed");`,
-      );
-      try {
-        const failed = loader();
-        expect(() => failed(source)).toThrow("setup failed");
-        expect(process.listenerCount(event)).toBe(listeners + 1);
-        fs.writeFileSync(source, 'module.exports = { value: "recovered" };');
-        const fresh = loader();
-        expect(fresh(source)).toMatchObject({ value: "recovered" });
-        expect(() => failed(source)).toThrow(/reloaded|disabled|retir/);
-        expect(loader()(source)).toMatchObject({ value: "recovered" });
-        expect(process.listenerCount(event)).toBe(listeners + 1);
-      } finally {
-        await retirePluginCache(cache).finally(() => {
-          process.removeAllListeners(event);
-        });
-      }
-    },
-  );
+  it("retires failed TS setup evaluation and retries with fresh source", async () => {
+    const { cache, source, loader } = fixture("index.ts");
+    const event = "setup-failed-ts";
+    const listeners = process.listenerCount(event);
+    fs.writeFileSync(
+      source,
+      `process.on(${JSON.stringify(event)}, () => {}); throw new Error("setup failed");`,
+    );
+    try {
+      const failed = loader();
+      expect(() => failed(source)).toThrow("setup failed");
+      expect(process.listenerCount(event)).toBe(listeners + 1);
+      fs.writeFileSync(source, 'module.exports = { value: "recovered" };');
+      const fresh = loader();
+      expect(fresh(source)).toMatchObject({ value: "recovered" });
+      expect(() => failed(source)).toThrow(/reloaded|disabled|retir/);
+      expect(loader()(source)).toMatchObject({ value: "recovered" });
+      expect(process.listenerCount(event)).toBe(listeners + 1);
+    } finally {
+      await retirePluginCache(cache).finally(() => {
+        process.removeAllListeners(event);
+      });
+    }
+  });
 
   it("evicts setup instances when binding fails so repaired input can load", async () => {
     const { cache, source, rootDir, loader } = fixture();

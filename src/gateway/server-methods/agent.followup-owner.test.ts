@@ -192,7 +192,7 @@ describe("Gateway followup owner final effect", () => {
         return input
           ? {
               ...input,
-              complete: (terminal: AgentRunTerminalOutcome) => {
+              completeAsync: async (terminal: AgentRunTerminalOutcome) => {
                 options.assertCompletionCurrent?.();
                 return terminal;
               },

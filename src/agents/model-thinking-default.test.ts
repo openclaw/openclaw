@@ -143,7 +143,7 @@ describe("resolveThinkingDefault", () => {
             ? {}
             : {
                 [PREPARED_THINKING_POLICY]:
-                  source === "prepared-null" ? null : resolveThinkingProfile,
+                  source === "prepared-null" ? null : { resolve: resolveThinkingProfile },
               }),
         },
       ];

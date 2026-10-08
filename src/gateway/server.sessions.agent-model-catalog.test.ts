@@ -83,15 +83,12 @@ function configureAgentModels(
     models: scenario.globalAlias ? { [workRef]: { alias: scenario.globalAlias } } : {},
   };
   testState.agentsConfig = {
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         modelPolicy: { allow: [mainRef] },
         models: { [mainRef]: { alias: "agent-choice" } },
       },
-      {
-        id: "work",
+      work: {
         subagents: scenario.subagentModel ? { model: scenario.subagentModel } : undefined,
         ...(scenario.agentAllow ? { modelPolicy: { allow: scenario.agentAllow } } : {}),
         models: {
@@ -101,7 +98,7 @@ function configureAgentModels(
             : {}),
         },
       },
-    ],
+    },
   };
 }
 

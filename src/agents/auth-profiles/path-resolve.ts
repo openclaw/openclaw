@@ -12,10 +12,9 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
+import type { SharedAuthStoreOwnership } from "./types.js";
 
 const SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT = 256;
-
-export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location: "state-db" };
 
 /** Pure producer facts; capturing a supplied runtime snapshot must not open SQLite. */
 export type AuthProfileOwnerScope = { stateDir: string; sharedMainDir: string };
@@ -60,6 +59,17 @@ function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership
   throw new InvalidSharedAuthStoreOwnershipError(value);
 }
 
+function cacheSharedOwnership(databasePath: string, read: () => unknown): SharedAuthStoreOwnership {
+  if (sharedAuthStoreOwnershipByDatabasePath.size >= SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT) {
+    throw new Error(
+      "Shared auth store ownership cache exceeded its process root limit; restart OpenClaw.",
+    );
+  }
+  const ownership = parseSharedAuthStoreOwnership(read());
+  sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
+  return ownership;
+}
+
 /** Resolve the process-stable owner of the shared auth store. */
 export function resolveSharedAuthStoreOwnership(
   env: NodeJS.ProcessEnv = process.env,
@@ -69,16 +79,9 @@ export function resolveSharedAuthStoreOwnership(
   if (cached) {
     return cached;
   }
-  if (sharedAuthStoreOwnershipByDatabasePath.size >= SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT) {
-    throw new Error(
-      "Shared auth store ownership cache exceeded its process root limit; restart OpenClaw.",
-    );
-  }
-  const ownership = parseSharedAuthStoreOwnership(
+  return cacheSharedOwnership(databasePath, () =>
     readConfigMachineState<unknown>(SHARED_AUTH_STORE_STATE_KEY, { env, path: databasePath }),
   );
-  sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
-  return ownership;
 }
 
 /** Fill the same process-stable owner cache without reading SQLite on the caller. */
@@ -105,14 +108,7 @@ export async function resolveSharedAuthStoreOwnershipAsync(
   if (current) {
     return current;
   }
-  if (sharedAuthStoreOwnershipByDatabasePath.size >= SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT) {
-    throw new Error(
-      "Shared auth store ownership cache exceeded its process root limit; restart OpenClaw.",
-    );
-  }
-  const ownership = parseSharedAuthStoreOwnership(value);
-  sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
-  return ownership;
+  return cacheSharedOwnership(databasePath, () => value);
 }
 
 /** Inspect copied state without pinning a runtime owner or changing SQLite artifacts. */

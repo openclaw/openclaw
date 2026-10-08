@@ -49,11 +49,7 @@ function normalizeExecApprovalThreadValue(
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined;
   }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return normalized ? normalized : undefined;
+  return normalizeOptionalString(value);
 }
 
 function toExecLikeApprovalRequest(request: ApprovalRequestLike): ExecApprovalRequest {
@@ -97,16 +93,7 @@ export function resolveApprovalRequestSessionConversation(params: {
   if (expectedChannel && normalizeMessageChannel(resolved.channel) !== expectedChannel) {
     return null;
   }
-  return {
-    channel: resolved.channel,
-    kind: resolved.kind,
-    id: resolved.id,
-    rawId: resolved.rawId,
-    threadId: resolved.threadId,
-    baseSessionKey: resolved.baseSessionKey,
-    baseConversationId: resolved.baseConversationId,
-    parentConversationCandidates: resolved.parentConversationCandidates,
-  };
+  return resolved;
 }
 
 /** Resolves the best known message target for an exec approval request. */
@@ -118,10 +105,6 @@ export function resolveExecApprovalSessionTarget(params: {
   turnSourceAccountId?: string | null;
   turnSourceThreadId?: string | number | null;
 }): ExecApprovalSessionTarget | null {
-  const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
-  if (!sessionKey) {
-    return null;
-  }
   const persisted = resolvePersistedApprovalRequestSessionEntry({
     cfg: params.cfg,
     request: params.request,

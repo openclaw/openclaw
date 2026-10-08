@@ -17,23 +17,30 @@ const inputs = [
   "\ud83d😀\ude00",
   "a\ud83db\ude00c",
   "\ud83d\ud83d\ude00\ude00",
-];
+].map((text) => ({
+  text,
+  indices: Array.from({ length: text.length + 2 }, (_, index) => index - 1),
+}));
+inputs.push({
+  text: "😀😀",
+  indices: [-Infinity, -1.5, -0.5, 0.5, 0.9999999999999999, 1.5, 2.5, Number.NaN, Infinity],
+});
 
 describe("containingSegment", () => {
   it.each(["grapheme", "word", "sentence"] as const)(
-    "matches %s iteration at every UTF-16 index in either query order",
+    "matches %s iteration at integer and coerced indices in either query order",
     (granularity) => {
-      for (const text of inputs) {
+      for (const { text, indices } of inputs) {
         const segments = new Intl.Segmenter("en", { granularity }).segment(text);
         const expected = Array.from(segments);
-        const indices = Array.from({ length: text.length + 2 }, (_, index) => index - 1);
         for (const order of [indices, indices.toReversed()]) {
           for (const index of order) {
+            const offset = Number.isNaN(index) ? 0 : Math.trunc(index);
             const actual = containingSegment(segments, text, index);
             expect(actual).toEqual(
               expected.find(
                 (segment) =>
-                  segment.index <= index && index < segment.index + segment.segment.length,
+                  segment.index <= offset && offset < segment.index + segment.segment.length,
               ),
             );
             if (!process.versions.bun) {
@@ -44,27 +51,6 @@ describe("containingSegment", () => {
       }
     },
   );
-
-  it.each([
-    Number.NEGATIVE_INFINITY,
-    -1.5,
-    -0.5,
-    0.5,
-    0.9999999999999999,
-    1.5,
-    2.5,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-  ])("preserves numeric index coercion for %s", (index) => {
-    const text = "😀😀";
-    const segments = new Intl.Segmenter("en", { granularity: "grapheme" }).segment(text);
-    const offset = Number.isNaN(index) ? 0 : Math.trunc(index);
-    expect(containingSegment(segments, text, index)).toEqual(
-      Array.from(segments).find(
-        (segment) => segment.index <= offset && offset < segment.index + segment.segment.length,
-      ),
-    );
-  });
 });
 
 describe("findGraphemeChunkEnd", () => {

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { SessionMembershipFact } from "../config/sessions/session-membership-facts.types.js";
+import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import {
   deferSqlitePostCommitPublication,
   stageSqliteTransactionState,
@@ -9,6 +10,14 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 export type SessionRowFacts =
   | { kind: "unchanged" }
+  | { kind: "replacement"; membership: SessionMembershipFact }
+  | {
+      kind: "acp";
+      sessionId: string | undefined;
+      lifecycleRevision: string | null;
+      sessionStartedAt?: number;
+      acp: SessionAcpMeta | null;
+    }
   | {
       kind: "entry";
       previousSessionId: string | undefined;
@@ -36,7 +45,7 @@ export type SessionRowChange =
       sessionKey: string;
       agentId?: string;
       storePath?: string;
-      scope?: "automation" | "runtime" | "session-entry";
+      scope?: "automation" | "runtime" | "session-entry" | "acp" | "transcript";
       /** Category uncertainty cannot change identity or lineage; other storage outcomes can. */
       factsInvalidated?: true | "category";
       /** Omission is a metadata notification; storage owners publish their changed facts. */
@@ -85,6 +94,11 @@ export const sessionChanges = {
   /** Refresh resident rows after all committed facts, before public observers can broadcast. */
   subscribeProjection(listener: (change: SessionRowChange) => void): () => void {
     return registerListener(projectionListeners, listener);
+  },
+  /** Pending or indeterminate work fences facts without announcing a committed change. */
+  invalidate(change: SessionRowChange): void {
+    notifyListeners(factListeners, change);
+    notifyListeners(projectionListeners, change);
   },
   /** SQLite observers run only after all committed owner state has settled. */
   emit(change: SessionRowChange, database?: DatabaseSync): void {

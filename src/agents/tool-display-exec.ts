@@ -1,8 +1,3 @@
-/**
- * Exec tool display summaries.
- *
- * Turns common shell commands into short redacted labels for tool timelines and transcripts.
- */
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -10,10 +5,8 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import {
   binaryName,
-  firstPositional,
   hasShellCompoundCommand,
   optionValue,
-  positionalArgs,
   parseHeredocMarker,
   scanTopLevelChars,
   parseShellWords,
@@ -61,7 +54,7 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
         continue;
       }
       if (token === "--") {
-        sub = firstPositional(words, i + 1);
+        sub = parseShellOptions(words, i + 1).positional[0];
         break;
       }
       if (token.startsWith("-")) {
@@ -196,7 +189,7 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
   const fileCommand = FILE_COMMAND_LABELS.get(bin);
   if (fileCommand) {
     const [prefix, fallback] = fileCommand;
-    const target = firstPositional(words, 1);
+    const target = parseShellOptions(words).positional[0];
     return target ? `${prefix} ${target}` : fallback;
   }
 
@@ -207,7 +200,7 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
         .slice(1)
         .find((token) => /^-\d+$/.test(token))
         ?.slice(1);
-    const positional = positionalArgs(words, 1, ["-n", "--lines"]);
+    const { positional } = parseShellOptions(words, 1, ["-n", "--lines"]);
     let target = positional.at(-1);
     if (target && /^\d+$/.test(target) && positional.length === 1) {
       target = undefined;
@@ -228,7 +221,7 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
 
   if (bin === "sed") {
     const expression = optionValue(words, ["-e", "--expression"]);
-    const positional = positionalArgs(words, 1, ["-e", "--expression", "-f", "--file"]);
+    const { positional } = parseShellOptions(words, 1, ["-e", "--expression", "-f", "--file"]);
     const script = expression ?? positional[0];
     const target = expression ? positional[0] : positional[1];
 
@@ -254,7 +247,12 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
   }
 
   if (bin === "cp" || bin === "mv") {
-    const positional = positionalArgs(words, 1, ["-t", "--target-directory", "-S", "--suffix"]);
+    const { positional } = parseShellOptions(words, 1, [
+      "-t",
+      "--target-directory",
+      "-S",
+      "--suffix",
+    ]);
     const src = positional[0];
     const dst = positional[1];
     const action = bin === "cp" ? "copy" : "move";
@@ -273,7 +271,7 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
   }
 
   if (bin === "npm" || bin === "pnpm" || bin === "yarn" || bin === "bun") {
-    const positional = positionalArgs(words, 1, ["--prefix", "-C", "--cwd", "--config"]);
+    const { positional } = parseShellOptions(words, 1, ["--prefix", "-C", "--cwd", "--config"]);
     const sub = positional[0] ?? "command";
     const map: Record<string, string> = {
       install: "install dependencies",
@@ -303,11 +301,11 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
 
     const nodeOptsWithValue = ["-e", "--eval", "-m"];
     const otherOptsWithValue = ["-c", "-e", "--eval", "-m"];
-    const script = firstPositional(
+    const script = parseShellOptions(
       words,
       1,
       bin === "node" ? nodeOptsWithValue : otherOptsWithValue,
-    );
+    ).positional[0];
     if (!script) {
       return `run ${bin}`;
     }
@@ -324,11 +322,11 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
   }
 
   if (bin === "openclaw") {
-    const sub = firstPositional(words, 1);
+    const sub = parseShellOptions(words).positional[0];
     return sub ? `run openclaw ${sub}` : "run openclaw";
   }
 
-  const arg = firstPositional(words, 1);
+  const arg = parseShellOptions(words).positional[0];
   if (!arg || arg.length > 48) {
     return `run ${bin}`;
   }

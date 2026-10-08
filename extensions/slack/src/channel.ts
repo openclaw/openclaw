@@ -8,7 +8,6 @@ import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-h
 import {
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
-  type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import {
   createChannelMessageAdapterFromOutbound,
@@ -56,7 +55,7 @@ import { slackApprovalCapability } from "./approval-native.js";
 import { createSlackActions } from "./channel-actions.js";
 import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
 import { getSlackWriteClient } from "./client.js";
-import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.js";
+import { slackConversationRouteOwners } from "./conversation-route-owner.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { resolveSlackEnterpriseUserTeamId } from "./enterprise-user-route.js";
 import { formatSlackError } from "./errors.js";
@@ -71,9 +70,8 @@ import { getOptionalSlackRuntime } from "./runtime.js";
 import type { SlackScopesResult } from "./scopes.js";
 import { slackSecurityAdapter } from "./security.js";
 import { setSlackSessionStatus } from "./session-status.js";
-import { createSlackSetupWizardProxy, slackSetupContract } from "./setup-core.js";
 import {
-  createSlackPluginBase,
+  slackPluginBase,
   isSlackPluginAccountConfigured,
   SLACK_CHANNEL,
   slackConfigAdapter,
@@ -93,66 +91,13 @@ import {
 } from "./thread-ts.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
-// Lazy SDK loaders. The dynamic import is hidden behind a string-literal
-// module id and typed by a hand-written structural alias so TypeScript does
-// not have to crawl the SDK module's type graph just to type the loader.
-//
-// `openclaw/plugin-sdk/channel-policy` is intentionally NOT lazy here —
-// `./group-policy.js` already imports it eagerly, so deferring it from
-// `channel.ts` would not change the load graph.
-
-type ExtensionSharedSurface = {
-  buildPassiveProbedChannelStatusSummary: <TExtra extends object>(
-    snapshot: {
-      configured?: boolean;
-      running?: boolean;
-      lastStartAt?: number | null;
-      lastStopAt?: number | null;
-      lastError?: string | null;
-      probe?: unknown;
-      lastProbeAt?: number | null;
-    },
-    extra?: TExtra,
-  ) => {
-    configured: boolean;
-    running: boolean;
-    lastStartAt: number | null;
-    lastStopAt: number | null;
-    lastError: string | null;
-    probe: unknown;
-    lastProbeAt: number | null;
-  } & TExtra;
-};
-
-type TargetResolverRuntimeSurface = {
-  resolveTargetsWithOptionalToken: <TResult>(params: {
-    token?: string | null;
-    inputs: string[];
-    missingTokenNote: string;
-    resolveWithToken: (params: { token: string; inputs: string[] }) => Promise<TResult[]>;
-    mapResolved: (entry: TResult) => {
-      input: string;
-      resolved: boolean;
-      id?: string;
-      name?: string;
-      note?: string;
-    };
-  }) => Promise<
-    Array<{ input: string; resolved: boolean; id?: string; name?: string; note?: string }>
-  >;
-};
-
-const EXTENSION_SHARED_MODULE_ID = "openclaw/plugin-sdk/extension-shared";
-const TARGET_RESOLVER_RUNTIME_MODULE_ID = "openclaw/plugin-sdk/target-resolver-runtime";
-
 const loadExtensionSharedSdk = createLazyRuntimeModule(
-  () => import(EXTENSION_SHARED_MODULE_ID) as Promise<ExtensionSharedSurface>,
+  () => import("openclaw/plugin-sdk/extension-shared"),
 );
 const loadTargetResolverRuntimeSdk = createLazyRuntimeModule(
-  () => import(TARGET_RESOLVER_RUNTIME_MODULE_ID) as Promise<TargetResolverRuntimeSurface>,
+  () => import("openclaw/plugin-sdk/target-resolver-runtime"),
 );
 
-const loadSlackSetupSurfaceModule = createLazyRuntimeModule(() => import("./setup-surface.js"));
 const loadSlackScopesModule = createLazyRuntimeModule(() => import("./scopes.js"));
 const loadSlackOutboundAdapterModule = createLazyRuntimeModule(
   () => import("./outbound-adapter.js"),
@@ -498,15 +443,9 @@ const slackMessageAdapter = {
   },
 } satisfies typeof slackMessageAdapterBase;
 
-export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = createChatChannelPlugin<
-  ResolvedSlackAccount,
-  SlackProbe
->({
+export const slackPlugin = createChatChannelPlugin<ResolvedSlackAccount, SlackProbe, unknown, 2>({
   base: {
-    ...createSlackPluginBase({
-      setupWizard: createSlackSetupWizardProxy(loadSlackSetupSurfaceModule),
-      setupContract: slackSetupContract,
-    }),
+    ...slackPluginBase,
     allowlist: {
       ...buildLegacyDmAccountAllowlistAdapter({
         channelId: "slack",
@@ -540,7 +479,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         isSlackWorkspaceInstallation(accountId),
     },
     messaging: {
-      resolveConversationRouteOwner: inspectSlackConversationRouteOwner,
+      ...slackConversationRouteOwners,
       targetPrefixes: ["slack"],
       directTargetStyle: "user-prefixed",
       targetIdComparison: "lowercase",
@@ -608,33 +547,26 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         });
         const account = resolveSlackAccount({ cfg, accountId });
         const { resolveTargetsWithOptionalToken } = await loadTargetResolverRuntimeSdk();
-        if (kind === "group") {
-          return resolveTargetsWithOptionalToken({
-            token:
-              normalizeOptionalString(account.userToken) ??
-              normalizeOptionalString(account.botToken),
-            inputs,
-            missingTokenNote: "missing Slack token",
-            resolveWithToken: async ({ token, inputs: inputsValue }) =>
-              (await loadSlackResolveChannelsModule()).resolveSlackChannelAllowlist({
-                token,
-                entries: inputsValue,
-              }),
-            mapResolved: (entry) =>
-              toResolvedTarget(entry, entry.archived ? "archived" : undefined),
-          });
-        }
         return resolveTargetsWithOptionalToken({
           token:
             normalizeOptionalString(account.userToken) ?? normalizeOptionalString(account.botToken),
           inputs,
           missingTokenNote: "missing Slack token",
-          resolveWithToken: async ({ token, inputs: inputsLocal }) =>
-            (await loadSlackResolveUsersModule()).resolveSlackUserAllowlist({
-              token,
-              entries: inputsLocal,
-            }),
-          mapResolved: (entry) => toResolvedTarget(entry, entry.note),
+          resolveWithToken: async ({ token, inputs: entries }) => {
+            if (kind === "group") {
+              const resolved = await (
+                await loadSlackResolveChannelsModule()
+              ).resolveSlackChannelAllowlist({ token, entries });
+              return resolved.map((entry) =>
+                toResolvedTarget(entry, entry.archived ? "archived" : undefined),
+              );
+            }
+            const resolved = await (
+              await loadSlackResolveUsersModule()
+            ).resolveSlackUserAllowlist({ token, entries });
+            return resolved.map((entry) => toResolvedTarget(entry, entry.note));
+          },
+          mapResolved: (entry) => entry,
         });
       },
     },
@@ -748,12 +680,14 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
     }),
     gateway: {
+      apiVersion: 2,
       startAccount: async (ctx) => {
         const account = ctx.account;
         const botToken = account.botToken?.trim();
         const appToken = account.appToken?.trim();
         ctx.log?.info(`[${account.accountId}] starting provider`);
         return (await loadSlackMonitorModule()).monitorSlackProvider({
+          scheduler: ctx.scheduler,
           botToken: botToken ?? "",
           appToken: appToken ?? "",
           accountId: account.accountId,

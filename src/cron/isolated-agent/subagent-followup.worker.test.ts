@@ -5,11 +5,10 @@ import {
   observeParentSqlite,
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
-import {
-  clearSubagentRunsReadCacheForTest,
-  persistSubagentRunsToDiskOrThrow,
-} from "../../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.test-support.js";
+import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
+import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
@@ -140,9 +139,16 @@ it.each(["update", "delete", "successor", "other requester"] as const)(
             : {}),
           ...(change === "other requester" ? { requesterSessionKey: "agent:main:other" } : {}),
         };
-        persistSubagentRunsToDiskOrThrow(
-          change === "delete" ? new Map() : new Map([[replacement.runId, replacement]]),
-          [replacement.runId],
+        await mutateSubagentRuns(
+          [child.runId, replacement.runId],
+          () => ({
+            value: undefined,
+            postimages: new Map<string, SubagentRunRecord | null>([
+              [child.runId, null],
+              ...(change === "delete" ? [] : [[replacement.runId, replacement] as const]),
+            ]),
+          }),
+          { runs: new Map([[child.runId, child]]) },
         );
         gate.release();
         expect(await pending).toBe(

@@ -8,6 +8,7 @@ import {
 import { GatewaySessionMessageSubscriptionCoordinator } from "../../../packages/gateway-client/src/session-subscriptions.js";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../../packages/gateway-client/src/timeouts.js";
 import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
 import type {
   GatewayClient,
@@ -56,7 +57,7 @@ function createContext(params: {
   replay?: SessionApprovalReplay;
   globalScope?: boolean;
   mainKey?: string;
-  agents?: Array<{ id: string; default?: boolean }>;
+  agents?: OpenClawConfig["agents"];
 }) {
   const rollbackSubscription = Object.assign(vi.fn(), { commit: vi.fn() });
   const subscribeSessionMessageEvents = vi.fn(() => rollbackSubscription);
@@ -67,7 +68,7 @@ function createContext(params: {
   });
   const context = {
     getRuntimeConfig: () => ({
-      agents: { list: params.agents ?? [{ id: "main", default: true }] },
+      agents: params.agents ?? { entries: { main: {} } },
       ...(params.globalScope || params.mainKey
         ? {
             session: {
@@ -230,7 +231,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     const client = createClient();
     const { context, listSessionPendingApprovals } = createContext({
       globalScope: true,
-      agents: [{ id: "main", default: true }, { id: "work" }],
+      agents: { entries: { main: {}, work: {} } },
       replay: approvalReplay(key),
     });
     context.subscribeSessionMessageEvents = registry.subscribe;

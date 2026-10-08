@@ -40,9 +40,12 @@ describe("runGatewayConversationList", () => {
         from: `reef:${target}`,
         to: `reef:${target}`,
       })),
-      registerConversationAddresses: vi.fn((_scope, identities) => {
-        discovered = [...identities];
-      }),
+      registerConversationAddresses: vi.fn(
+        (_scope, identities: readonly ConversationIdentity[], _at, isEligible) => {
+          const eligible = isEligible(identities);
+          discovered = identities.filter((_, index) => eligible[index]);
+        },
+      ),
       listConversations: vi.fn(() => []),
     };
 
@@ -159,9 +162,12 @@ describe("runGatewayConversationList", () => {
         directory: { listPeers, listGroups: async () => [] },
       })),
       resolveOutboundSessionRoute,
-      registerConversationAddresses: vi.fn((_scope, identities) => {
-        discovered = [...identities];
-      }),
+      registerConversationAddresses: vi.fn(
+        (_scope, identities: readonly ConversationIdentity[], _at, isEligible) => {
+          const eligible = isEligible(identities);
+          discovered = identities.filter((_, index) => eligible[index]);
+        },
+      ),
       listConversations: vi.fn(() =>
         discovered.map((identity) => ({
           conversationRef: identity.conversationRef,
@@ -238,9 +244,12 @@ describe("runGatewayConversationList", () => {
         from: "discord:canonical-peer-123",
         to: "user:delivery-alias-456",
       })),
-      registerConversationAddresses: vi.fn((_scope, identities) => {
-        discovered = [...identities];
-      }),
+      registerConversationAddresses: vi.fn(
+        (_scope, identities: readonly ConversationIdentity[], _at, isEligible) => {
+          const eligible = isEligible(identities);
+          discovered = identities.filter((_, index) => eligible[index]);
+        },
+      ),
       listConversations: vi.fn(() => []),
     };
 
@@ -281,9 +290,12 @@ describe("runGatewayConversationList", () => {
         },
       })),
       resolveOutboundSessionRoute,
-      registerConversationAddresses: vi.fn((_scope, identities) => {
-        discovered = [...identities];
-      }),
+      registerConversationAddresses: vi.fn(
+        (_scope, identities: readonly ConversationIdentity[], _at, isEligible) => {
+          const eligible = isEligible(identities);
+          discovered = identities.filter((_, index) => eligible[index]);
+        },
+      ),
       listConversations: vi.fn(() => []),
     };
 

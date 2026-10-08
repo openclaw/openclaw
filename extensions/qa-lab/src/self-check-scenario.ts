@@ -1,6 +1,6 @@
+import type { QaBusMessage } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import type { QaTransportState } from "./qa-transport.js";
-import type { QaBusMessage } from "./runtime-api.js";
 import type { QaScenarioDefinition } from "./scenario.js";
 import { waitForOutboundMessage } from "./suite-runtime-transport.js";
 
@@ -78,46 +78,43 @@ export function createQaSelfCheckScenario(options?: {
             throw new Error("threaded outbound message and target not found");
           }
           const { target, threadId, message: outboundMessage } = lifecycle;
-
-          await performAction("react", {
-            to: target,
-            threadId,
-            messageId: outboundMessage.id,
-            emoji: "white_check_mark",
-          });
-          const reacted = await state.readMessage({ messageId: outboundMessage.id });
-          if (!reacted) {
-            throw new Error("reacted message not found");
-          }
-          if (reacted.reactions.length === 0) {
-            throw new Error("reaction not recorded");
-          }
-
-          await performAction("edit", {
-            to: target,
-            threadId,
-            messageId: outboundMessage.id,
-            text: "qa-echo: inside thread (edited)",
-          });
-          const edited = await state.readMessage({ messageId: outboundMessage.id });
-          if (!edited) {
-            throw new Error("edited message not found");
-          }
-          if (!edited.text.includes("(edited)")) {
-            throw new Error("edit not recorded");
-          }
-
-          await performAction("delete", {
-            to: target,
-            threadId,
-            messageId: outboundMessage.id,
-          });
-          const deleted = await state.readMessage({ messageId: outboundMessage.id });
-          if (!deleted) {
-            throw new Error("deleted message not found");
-          }
-          if (!deleted.deleted) {
-            throw new Error("delete not recorded");
+          const actions = [
+            {
+              action: "react",
+              args: { emoji: "white_check_mark" },
+              missing: "reacted message not found",
+              unrecorded: "reaction not recorded",
+              recorded: (message: QaBusMessage) => message.reactions.length !== 0,
+            },
+            {
+              action: "edit",
+              args: { text: "qa-echo: inside thread (edited)" },
+              missing: "edited message not found",
+              unrecorded: "edit not recorded",
+              recorded: (message: QaBusMessage) => message.text.includes("(edited)"),
+            },
+            {
+              action: "delete",
+              args: {},
+              missing: "deleted message not found",
+              unrecorded: "delete not recorded",
+              recorded: (message: QaBusMessage) => message.deleted,
+            },
+          ] as const;
+          for (const { action, args, missing, unrecorded, recorded } of actions) {
+            await performAction(action, {
+              to: target,
+              threadId,
+              messageId: outboundMessage.id,
+              ...args,
+            });
+            const message = await state.readMessage({ messageId: outboundMessage.id });
+            if (!message) {
+              throw new Error(missing);
+            }
+            if (!recorded(message)) {
+              throw new Error(unrecorded);
+            }
           }
         },
       },

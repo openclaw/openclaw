@@ -52,6 +52,7 @@ vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", async (importOrig
     resolveSessionAsync: async ({ sessionKey }: { sessionKey: string }) => ({
       kind: "ready",
       sessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta({ agent: "main" }),
       entry: loadSessionEntryReadOnly({
         agentId: "main",
@@ -378,7 +379,10 @@ describe("Gateway ACP completion ownership", () => {
           },
           { timeout: 10_000 },
         );
-        expect.soft(replayPayload).toMatchObject({ runId, status: expectedStatus });
+        expect.soft(replayPayload, JSON.stringify(replayPayload)).toMatchObject({
+          runId,
+          status: expectedStatus,
+        });
         if (scenario.cancel) {
           expect
             .soft(replayPayload)
@@ -445,11 +449,26 @@ describe("Gateway ACP completion ownership", () => {
         );
         expect
           .soft(lifecycle.map((frame) => frame.payload?.data?.phase))
-          .toEqual(
-            scenario.rpcAbort
-              ? ["start", "end", scenario.persistFail ? "error" : "end"]
-              : ["start", expectedState === "error" ? "error" : "end"],
-          );
+          .toEqual(["start", expectedState === "error" ? "error" : "end"]);
+        if (scenario.rpcAbort) {
+          expect.soft(lifecycle.at(-1)?.payload?.data).toMatchObject({
+            phase: "end",
+            status: "cancelled",
+            aborted: true,
+            stopReason: "rpc",
+          });
+          // This terminal-only reply was never shown; there is no visible partial to save.
+          expect
+            .soft(
+              frames.filter(
+                (frame) =>
+                  frame.payload?.runId === runId &&
+                  (frame.payload.stream === "assistant" || frame.payload.state === "delta"),
+              ),
+            )
+            .toEqual([]);
+          expect.soft(finals[0]?.payload?.message).toBeUndefined();
+        }
         expect
           .soft(
             frames.filter(

@@ -16,13 +16,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
   errorPrefix: string;
 }): Promise<number[][]> {
   return await postJson({
-    url: params.url,
-    headers: params.headers,
-    ssrfPolicy: params.ssrfPolicy,
-    fetchImpl: params.fetchImpl,
-    signal: params.signal,
-    body: params.body,
-    errorPrefix: params.errorPrefix,
+    ...params,
     parse: (payload) => {
       const input = asOptionalRecord(params.body)?.input;
       return readEmbeddingVectors(

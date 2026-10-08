@@ -13,11 +13,6 @@ import { baseConfigSnapshot } from "./test-runtime-config-helpers.js";
 const pluginRegistryMocks = vi.hoisted(() => ({
   listPluginContributionIds: vi.fn(() => ["external-chat"]),
 }));
-vi.mock("../agents/agent-scope.js", () => ({
-  listAgentEntries: (cfg: OpenClawConfig) => cfg.agents?.list ?? [],
-  resolveDefaultAgentId: (cfg: OpenClawConfig) =>
-    cfg.agents?.list?.find((agent) => agent.default)?.id ?? "main",
-}));
 vi.mock("../config/bindings.js", () => ({
   isRouteBinding: (binding: { match?: unknown }) => Boolean(binding.match),
   listRouteBindings: (cfg: OpenClawConfig) =>
@@ -61,7 +56,7 @@ const route = (channel: string, accountId?: string, agentId = "main") => ({
   match: { channel, ...(accountId ? { accountId } : {}) },
 });
 const conflictConfig: OpenClawConfig = {
-  agents: { list: [{ id: "ops", workspace: "/tmp/ops" }] },
+  agents: { entries: { ops: { workspace: "/tmp/ops" } } },
   bindings: [route("telegram", "ops")],
 };
 const jsonRuntime = () => ({ ...runtime, writeStdout: vi.fn(), writeJson: vi.fn() });
@@ -83,6 +78,57 @@ describe("agents bind/unbind commands", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Routing bindings:\n- main <- matrix\n- ops <- telegram accountId=work",
     );
+  });
+
+  it.each(["ops", "main"])("uses the persisted default %s for bind and unbind", async (agentId) => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId } },
+        entries: { main: {}, ops: {} },
+      },
+    };
+    setConfig(config);
+    await commands.agentsBindCommand({ bind: ["telegram:work"] }, runtime);
+    const bound = { ...config, bindings: [route("telegram", "work", agentId)] };
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith(bound);
+
+    setConfig(bound);
+    await commands.agentsUnbindCommand({ bind: ["telegram:work"] }, runtime);
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit agent when a fleet has no default", async () => {
+    setConfig({ agents: { ownership: "explicit", entries: { main: {}, ops: {} } } });
+    await expect(commands.agentsBindCommand({ bind: ["telegram"] }, runtime)).rejects.toThrow(
+      "Multiple agents are configured",
+    );
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("matches normalized account identities for conflicts, repeats, and removal", async () => {
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+      bindings: [route("telegram", "Work", "ops")],
+    };
+    setConfig(config);
+    const output = jsonRuntime();
+    await commands.agentsBindCommand(
+      { agent: "main", bind: ["telegram:work"], json: true },
+      output,
+    );
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(output.exit).toHaveBeenCalledWith(1);
+    expect(output.writeJson).toHaveBeenLastCalledWith(
+      expect.objectContaining({ conflicts: ["telegram accountId=work (agent=ops)"] }),
+      2,
+    );
+
+    await commands.agentsBindCommand({ agent: "ops", bind: ["telegram:WORK"] }, runtime);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    await commands.agentsUnbindCommand({ agent: "ops", bind: ["telegram:work"] }, runtime);
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
   });
 
   it("binds a mixed batch using one manifest inventory per invocation", async () => {

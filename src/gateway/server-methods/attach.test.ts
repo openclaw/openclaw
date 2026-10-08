@@ -31,7 +31,7 @@ const grantWithAgentOpts = (agentId: string, respond: ReturnType<typeof vi.fn>) 
     respond,
     context: {
       getRuntimeConfig: () => ({
-        agents: { ownership: "explicit", list: [{ id: agentId }, { id: "other" }] },
+        agents: { ownership: "explicit", entries: { [agentId]: {}, other: {} } },
       }),
     },
   }) as unknown as GatewayRequestHandlerOptions;

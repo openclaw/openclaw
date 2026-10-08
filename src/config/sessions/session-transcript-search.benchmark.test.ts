@@ -1,10 +1,13 @@
 import { performance } from "node:perf_hooks";
 import { expect, it } from "vitest";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import {
+  reconcileSessionTranscriptIndexes,
+  waitForSessionTranscriptIndexReconcile,
+} from "./session-transcript-reconcile.js";
 import { searchSessionTranscripts } from "./session-transcript-search.js";
 
 it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1")(
@@ -15,28 +18,31 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1")(
       const viewers = 50;
       const sessionKeys = Array.from({ length: rows }, (_, index) => `agent:main:bench-${index}`);
       runOpenClawAgentWriteTransaction(
-        ({ db }) => {
-          const kysely = getNodeSqliteKysely<DB>(db);
+        () => {
           for (const [index, sessionKey] of sessionKeys.entries()) {
             const sessionId = `bench-${index}`;
             replaceSessionEntrySync(
               { agentId: "main", sessionKey },
               { sessionId, updatedAt: index + 1, visibility: "shared" },
             );
-            executeSqliteQuerySync(
-              db,
-              kysely.insertInto("session_transcript_fts").values({
-                session_id: sessionId,
-                message_id: `message-${index}`,
-                role: "assistant",
-                text: `Deployment needle context for session ${index}`,
-                timestamp: String(index + 1),
-              }),
-            );
+            expect(
+              appendTranscriptMessageSync(
+                { agentId: "main", sessionKey, sessionId },
+                {
+                  eventId: `message-${index}`,
+                  message: {
+                    role: "assistant",
+                    content: `Deployment needle context for session ${index}`,
+                  },
+                },
+              ).ok,
+            ).toBe(true);
           }
         },
         { agentId: "main" },
       );
+      await reconcileSessionTranscriptIndexes({ agentId: "main" });
+      await waitForSessionTranscriptIndexReconcile({ agentId: "main" });
       const request = async () =>
         await searchSessionTranscripts({
           agentId: "main",

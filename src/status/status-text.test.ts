@@ -1,6 +1,8 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -145,7 +147,7 @@ describe("buildStatusText global subagent scope", () => {
 
   it("shows the selected global agent's children instead of the default agent's", async () => {
     for (const agentId of ["research", "ops"]) {
-      addSubagentRunForTests({
+      seedSubagentRunForReadTest({
         runId: `status-global-${agentId}`,
         childSessionKey: `agent:${agentId}:subagent:status-worker`,
         controllerSessionKey: "global",
@@ -162,9 +164,10 @@ describe("buildStatusText global subagent scope", () => {
     const text = await renderTelegramStatus({
       cfg: {
         agents: {
+          defaults: { systemAgent: { agentId: "ops" } },
           entries: {
             research: {},
-            ops: { default: true },
+            ops: {},
           },
         },
         session: { scope: "global" },
@@ -237,13 +240,15 @@ describe("Codex usage after runtime fallback", () => {
 });
 
 describe("session status cost line", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  let storePath: string;
   const sessionEntry = {
     sessionId: "cost-session",
     updatedAt: 0,
     sessionFile: formatSqliteSessionFileMarker({
       agentId: "main",
       sessionId: "cost-session",
-      storePath: "/tmp/openclaw-status-cost/sessions.json",
+      storePath: "/tmp/retired-status-cost/agents/main/agent/openclaw-agent.sqlite",
     }),
   };
 
@@ -261,6 +266,13 @@ describe("session status cost line", () => {
   };
 
   beforeEach(() => {
+    storePath = path.join(
+      tempDirs.make("status-cost-"),
+      "agents",
+      "main",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
     mocks.loadSessionCostSummariesFromCache.mockReset();
   });
 
@@ -280,8 +292,15 @@ describe("session status cost line", () => {
       ],
     });
 
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
+    await expect(appendSessionCostLine(null, {}, "main", sessionEntry, storePath)).resolves.toBe(
       "💵 $1.23 · 456k tok (today)",
+    );
+    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessions: [
+          { sessionId: "cost-session", sessionFile: `sqlite:main:cost-session:${storePath}` },
+        ],
+      }),
     );
   });
 
@@ -306,7 +325,9 @@ describe("session status cost line", () => {
       ],
     });
 
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBeNull();
+    await expect(
+      appendSessionCostLine(null, {}, "main", sessionEntry, storePath),
+    ).resolves.toBeNull();
   });
 
   it("marks incomplete pricing", async () => {
@@ -329,7 +350,7 @@ describe("session status cost line", () => {
       ],
     });
 
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
+    await expect(appendSessionCostLine(null, {}, "main", sessionEntry, storePath)).resolves.toBe(
       "💵 missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2) · 456k tok (today)",
     );
   });

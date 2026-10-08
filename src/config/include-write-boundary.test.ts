@@ -26,6 +26,19 @@ describe("collectChangedConfigPaths", () => {
     });
   });
 
+  it("treats an absent key and an undefined value as equal", () => {
+    expect(
+      collectChangedConfigPaths({ a: { b: 1 } }, { a: { b: 1, c: undefined }, d: undefined }),
+    ).toEqual({
+      paths: [],
+      rootChanged: false,
+    });
+    expect(collectChangedConfigPaths({ a: { b: 1, c: undefined } }, { a: { b: 1 } })).toEqual({
+      paths: [],
+      rootChanged: false,
+    });
+  });
+
   it("reports no change for equal values", () => {
     expect(collectChangedConfigPaths({ a: 1 }, { a: 1 })).toEqual({
       paths: [],

@@ -6,7 +6,6 @@ import {
   SignatureKind,
   type Checker,
   type Printer,
-  type Type,
 } from "typescript/unstable/sync";
 import { normalizePluginSdkApiDeclarationText } from "./api-baseline-normalization.js";
 
@@ -18,16 +17,6 @@ function declarationModifiers(node: ts.ModifiersBase): readonly ts.Modifier[] | 
   return node.modifiers?.filter(ts.isModifier);
 }
 
-function declarationType(checker: Checker, declaration: ts.Node): Type {
-  const type = checker.getTypeAtLocation(declaration);
-  if (!type) {
-    throw new Error(
-      `Unable to resolve declaration type in ${declaration.getSourceFile().fileName}`,
-    );
-  }
-  return type;
-}
-
 function inferDeclarationTypeNode(
   checker: Checker,
   declaration: ts.Declaration,
@@ -36,7 +25,7 @@ function inferDeclarationTypeNode(
   return (
     explicitType ??
     checker.typeToTypeNode(
-      declarationType(checker, declaration),
+      checker.getTypeAtLocation(declaration),
       declaration,
       DECLARATION_NODE_BUILDER_FLAGS,
     )
@@ -212,7 +201,7 @@ export function formatPluginSdkApiTypeAlias(
   checker: Checker,
   declaration: ts.TypeAliasDeclaration,
 ): string {
-  const type = declarationType(checker, declaration);
+  const type = checker.getTypeAtLocation(declaration);
   if (
     type.isUnionType() &&
     ts.isIndexedAccessTypeNode(declaration.type) &&
@@ -220,7 +209,7 @@ export function formatPluginSdkApiTypeAlias(
   ) {
     const tuple = checker.getTypeFromTypeNode(declaration.type.objectType);
     const members =
-      tuple?.isTypeReference() && checker.isTupleType(tuple)
+      tuple.isTypeReference() && checker.isTupleType(tuple)
         ? [...new Set(checker.getTypeArguments(tuple))]
         : [];
     if (
@@ -248,7 +237,7 @@ export function printPluginSdkExportDeclaration(
 ): string | null {
   if (ts.isFunctionDeclaration(declaration)) {
     const signatures = checker.getSignaturesOfType(
-      declarationType(checker, declaration),
+      checker.getTypeAtLocation(declaration),
       SignatureKind.Call,
     );
     if (signatures.length === 0) {
@@ -288,7 +277,7 @@ export function printPluginSdkExportDeclaration(
   }
 
   if (ts.isVariableDeclaration(declaration)) {
-    const type = declarationType(checker, declaration);
+    const type = checker.getTypeAtLocation(declaration);
     const prefix =
       declaration.parent && (declaration.parent.flags & ts.NodeFlags.Const) !== 0 ? "const" : "let";
     return normalizePluginSdkApiDeclarationText(

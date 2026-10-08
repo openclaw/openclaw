@@ -135,6 +135,7 @@ enum ManagedNodeGatewayMigration {
             return .migrated(runtime)
         } catch {
             let migrationError = error.localizedDescription
+            if migrationError.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) { throw error }
             // Pause/quit may cancel the original operation. Its drain still owns recovery until
             // the previous same-version Node service is restored and verified.
             let restoration = Task { @MainActor in
@@ -176,7 +177,7 @@ enum ManagedNodeGatewayMigration {
         else { return nil }
         guard var captured = try await self.capture(profile: profile, retainedCLI: retainedCLI) else { return nil }
         if hasService, profile.isActive {
-            guard allowNamedServiceRetry, let retainedCLI, captured.matchesRetainedCLI(retainedCLI) else { return nil }
+            guard let retainedCLI, captured.matchesRetainedCLI(retainedCLI) else { return nil }
             captured.allowsNamedServiceRetry = true
         }
         if let coreRepairVerifiedCLI {
@@ -193,7 +194,7 @@ enum ManagedNodeGatewayMigration {
         installPolicy: String?,
         gatewayUpdateChannel: String?,
         hasService: Bool,
-        allowNamedServiceRetry: Bool = false) -> Bool
+        allowNamedServiceRetry: Bool) -> Bool
     {
         onboardingSeen && (installPolicy == "exact" ||
             (installPolicy == nil && (!hasService || allowNamedServiceRetry))) &&
@@ -410,8 +411,9 @@ enum ManagedNodeGatewayMigration {
         resolveLegacyCLI: @escaping @MainActor @Sendable () throws -> GatewayLaunchAgentManager.InstalledServiceCLI? = {
             nil
         },
-        allowNamedServiceRetry: Bool = false,
-        coreRepairVerifiedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
+        restorationInstaller: @escaping @MainActor () throws -> BundledRuntime = {
+            try BundledRuntime.resolve(bundle: .main)
+        },
         verifyHealth: @escaping () async throws -> Void,
         setServiceHosting: @escaping (Candidate) -> Void,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) -> Operations
@@ -468,8 +470,8 @@ enum ManagedNodeGatewayMigration {
                 }
                 return try await self.recaptureEligibleCandidate(
                     retainedCLI: retained,
-                    allowNamedServiceRetry: allowNamedServiceRetry,
-                    coreRepairVerifiedCLI: coreRepairVerifiedCLI)
+                    allowNamedServiceRetry: previous.allowsNamedServiceRetry,
+                    coreRepairVerifiedCLI: previous.hasVerifiedCoreRepair ? previous.cli : nil)
             },
             seed: { candidate in
                 let original = try await self.captureServiceCustody(requireService: candidate.snapshot != nil)
@@ -535,17 +537,16 @@ enum ManagedNodeGatewayMigration {
                 let verified = try await self.captureServiceCustody(requireService: false)
                 if try custody.action(current: verified) == .verifyOriginalNode { return }
                 if verified.definition.plist == nil { try await self.checkAbsentService(candidate) }
-                // --runtime node clears the newly selected Bun pin. PATH starts with the captured
-                // Node directory; the retained package and environment are from the same version.
+                // --runtime node clears the newly selected Bun pin without pinning the restored Node.
                 var arguments = ["install", "--force", "--port", String(candidate.port), "--runtime", "node"]
                 if candidate.allowUnconfigured { arguments.append("--allow-unconfigured") }
                 let expectedAuthority = try verified.serviceAuthority()
-                if let error = await GatewayLaunchAgentManager
+                if let error = try await GatewayLaunchAgentManager
                     .runDaemonCommand(
                         arguments,
                         timeout: self.serviceInstallTimeout,
-                        installedCLI: candidate.cli,
-                        legacyAuthority: candidate.cli,
+                        runtime: restorationInstaller(),
+                        restoring: candidate.cli,
                         expectedServiceAuthority: expectedAuthority,
                         checkCurrent: {
                             if verified.definition.plist == nil { try await self.checkAbsentService(candidate) }

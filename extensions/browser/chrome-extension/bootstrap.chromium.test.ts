@@ -6,15 +6,16 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type BrowserContext } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getChromeMcpPid } from "../src/browser/chrome-mcp-session.js";
 import {
   chromeProductRoots,
-  generateChromeExtensionIdForPath,
+  installChromeExtensionBootstrap,
   stableChromeExtensionDir,
-} from "../src/browser/extension-install-layout.js";
-import { installChromeExtensionBootstrap } from "../src/browser/extension-install.js";
+} from "../src/browser/extension-install-fixture.test-support.js";
+import { generateChromeExtensionIdForPath } from "../src/browser/extension-install-layout.js";
 import { useNativeHostLaunchFixture } from "../src/browser/extension-install.test-support.js";
 import { getGatewayExtensionRelayModule } from "../src/browser/extension-relay.runtime.js";
 import { getPageForTargetId } from "../src/browser/pw-session.js";
@@ -153,7 +154,9 @@ function decodeSingleNativeResponse(frame: Buffer): Record<string, unknown> {
 }
 
 describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
-  it("pre-registers before the first native call, auto-pairs, and revokes a paused tab", async () => {
+  it("pre-registers before the first native call, auto-pairs, and revokes a paused tab", async ({
+    signal,
+  }) => {
     const diagnostic = createBootstrapDiagnostic();
     cleanups.push(async () => {
       diagnostic.dispose();
@@ -208,6 +211,8 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           root,
           path.resolve("dist/extensions/browser/native-host-entry.js"),
         );
+        const pluginRoot = path.join(root, "browser-plugin");
+        await fs.mkdir(pluginRoot, { mode: 0o700 });
         const deps = {
           platform: process.platform,
           homeDir,
@@ -305,21 +310,29 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           .map((productRoot) =>
             path.join(productRoot.nativeManifestDir, "ai.openclaw.browser_bootstrap.json"),
           );
+        const registered = Promise.withResolvers<void>();
         const installPromise = installChromeExtensionBootstrap({
           bundledDir: extensionSource,
-          pluginRoot: path.resolve("extensions/browser"),
+          pluginRoot,
           waitMs: 15_000,
           deps,
+          signal,
+          onProgress: (message) => {
+            if (message.startsWith("Native bootstrap is ready.")) {
+              registered.resolve();
+            }
+          },
         });
         try {
-          await expect
-            .poll(
-              async () => await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins),
-              {
-                timeout: 15_000,
-              },
-            )
-            .toBe(true);
+          await withinTest(
+            awaitGateBeforeSettlement(
+              registered.promise,
+              installPromise,
+              "Native host pre-registration failed",
+            ),
+            signal,
+          );
+          expect(await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins)).toBe(true);
         } catch (error) {
           const status = await installPromise;
           const modes = await Promise.all(

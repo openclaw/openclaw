@@ -76,7 +76,7 @@ it("refuses synchronous writes to cold current history without mutating or resto
   expect(
     await runSessionColdStorageMaintenance({
       config: {
-        agents: { list: [{ id: scope.agentId }] },
+        agents: { entries: { [scope.agentId]: {} } },
         session: {
           store: scope.storePath,
           maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

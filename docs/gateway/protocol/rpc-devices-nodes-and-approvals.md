@@ -75,6 +75,24 @@ account authority while storage work is pending. Disconnecting the socket alone 
 Revoking that authority before commit admission prevents the verdict and withholds
 approval details; the pending approval remains available to another authorized reviewer.
 A verdict that already committed remains recorded and settles its waiting action.
+Resolution replies do not wait for best-effort channel or push notifications after
+the decision is recorded. A slow or failed notification cannot reopen the approval
+or delay acknowledgement of its verdict.
+
+`exec.approvals.get` accepts optional `expectedOwnerId`; `exec.approvals.set`
+accepts `file`, optional `baseHash`, and optional `expectedOwnerId`. Existing
+snapshots require the hash returned by `get`; a stale or missing hash refuses the
+save. For an absent snapshot, an omitted hash is accepted, but a supplied hash
+must match. The default local CLI always carries its observed hash. Both methods
+return the existing redacted snapshot (`path`, `exists`, `hash`, `file`) plus
+`resolvedDefaults`; omitted socket defaults retain their existing merge behavior.
+
+Default local CLI reads and writes negotiate their separate
+[owner capabilities](/gateway/protocol/versioning#local-state-owner-routing)
+and send `expectedOwnerId`. Reading participates because it can initialize missing
+state. Existing RPC clients may omit the owner field; explicit Gateway and node
+targets retain their current transport and response contracts. This changes no
+exec policy, standing-grant, or execution-authorization semantics.
 
 ## Control UI commands
 

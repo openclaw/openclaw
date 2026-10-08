@@ -45,8 +45,11 @@ it.each([false, true])(
   },
 );
 
-it("fetches selected history with the initial checkout before the test worker runs", async () => {
+it("fetches selected history with the initial checkout before the test worker runs", async ({
+  signal,
+}) => {
   const report = await runCiGitStep({
+    signal,
     job: "checks-node-core-test-nondist-shard",
     env: { CHECKOUT_GIT_COMMITS_JSON: JSON.stringify([reader.commit]) },
     fetchResults: [0, 0],
@@ -56,10 +59,11 @@ it("fetches selected history with the initial checkout before the test worker ru
   expect(report.fetches).toHaveLength(2);
 });
 
-it.each(["{}", '"main"', '["--upload-pack=bad"]', '["abc"]', "[null]"])(
+it.for(["{}", '"main"', '["--upload-pack=bad"]', '["abc"]', "[null]"])(
   "rejects malformed immutable history before checkout mutation: %s",
-  async (input) => {
+  async (input, { signal }) => {
     const report = await runCiGitStep({
+      signal,
       job: "checks-node-core-test-nondist-shard",
       env: { CHECKOUT_GIT_COMMITS_JSON: input },
       fetchResults: [],

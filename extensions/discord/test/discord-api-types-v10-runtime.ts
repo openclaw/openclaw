@@ -9,6 +9,7 @@ export default discordApiTypes;
 export const {
   ApplicationCommandOptionType,
   ApplicationCommandType,
+  ApplicationFlags,
   ButtonStyle,
   ChannelType,
   ComponentType,

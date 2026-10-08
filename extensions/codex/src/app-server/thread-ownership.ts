@@ -103,11 +103,12 @@ export async function retainCodexAppServerBindingSubscription(
     client,
     threadId,
     ownership?.release ??
-      (async (releasedThreadId, assertCurrent) => {
+      (async (releasedThreadId, assertCurrent, withCurrent) => {
         const unsubscribed = await unsubscribeCodexThreadBestEffort(client, {
           threadId: releasedThreadId,
           timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
           assertCurrent,
+          withCurrent,
         });
         if (!unsubscribed) {
           assertCurrent?.();
@@ -152,7 +153,12 @@ export async function rollbackCodexAppServerBindingSubscription(
 /** Releases only the physical client and native thread recorded by the displaced binding owner. */
 export async function releaseCodexAppServerBindingSubscription(
   binding: Pick<CodexAppServerThreadBinding, "threadId" | "clientId">,
-  options: { allowUntracked?: boolean; assertCurrent?: () => void; retainedClientId?: string } = {},
+  options: {
+    allowUntracked?: boolean;
+    assertCurrent?: () => void;
+    withCurrent?: (write: () => void) => Promise<void>;
+    retainedClientId?: string;
+  } = {},
 ): Promise<void> {
   options.assertCurrent?.();
   const clientLease = await retainSharedCodexAppServerClientByInstanceId(binding.clientId);
@@ -165,6 +171,7 @@ export async function releaseCodexAppServerBindingSubscription(
         clientLease.client,
         binding.threadId,
         options.assertCurrent,
+        options.withCurrent,
       )
     ) {
       return;
@@ -184,6 +191,7 @@ export async function releaseCodexAppServerBindingSubscription(
       threadId: binding.threadId,
       timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
       assertCurrent: options.assertCurrent,
+      withCurrent: options.withCurrent,
     });
     if (!unsubscribed) {
       await closeCodexStartupClientBestEffort(clientLease.client);
@@ -260,12 +268,11 @@ export async function retireCodexConversationThreadBinding(params: {
             });
           }
         } catch (restorationError) {
-          const recoveryError = new AggregateError(
+          throw new AggregateError(
             [error, restorationError],
             `Codex conversation detachment failed and native thread ${current.threadId} could not be restored; run /codex resume ${current.threadId} to recover it`,
             { cause: restorationError },
           );
-          throw recoveryError;
         }
         throw error;
       }

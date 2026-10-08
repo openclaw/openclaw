@@ -55,6 +55,7 @@ describe("SDK run reconciliation over reconnect", () => {
         await disconnected.promise;
         await vi.advanceTimersByTimeAsync(1_000);
         await reconnected.promise;
+        expect(hellos).toBe(2);
       },
     };
   }
@@ -72,66 +73,102 @@ describe("SDK run reconciliation over reconnect", () => {
     return events;
   }
 
-  it.each(["agent-lifecycle", "chat-delta"])(
-    "recovers an exact full reply when %s reveals the gap before the lost final",
-    async (gapFrame) => {
-      const outputText = `    ${"complete answer ".repeat(400)}\n`;
+  it.each(["agent-lifecycle", "chat-delta", "accepted", "chat-final"])(
+    "preserves the full terminal reply across a %s reconnect",
+    async (mode) => {
+      const outputText =
+        mode === "accepted" ? "complete output" : `    ${"complete answer ".repeat(400)}\n`;
       const methods: string[] = [];
       gateway.setRequestHandler((socket, request) => {
         methods.push(request.method);
         gateway.reply(
           socket,
           request.id,
-          request.method === "agent.wait"
-            ? {
-                runId: scope.runId,
-                status: "ok",
-                endedAt: 123,
-                terminalReply: { disposition: "visible", text: outputText.slice(0, 4_096) },
-              }
-            : {
-                sessionId: "physical-session",
-                messages: [
-                  { role: "assistant", content: outputText, __openclaw: { runId: scope.runId } },
-                ],
-              },
+          request.method === "chat.send"
+            ? { runId: scope.runId, status: "started" }
+            : request.method === "agent.wait"
+              ? {
+                  runId: scope.runId,
+                  status: "ok",
+                  endedAt: 123,
+                  terminalReply:
+                    mode === "accepted"
+                      ? { text: "clipped summary" }
+                      : { disposition: "visible", text: outputText.slice(0, 4_096) },
+                }
+              : {
+                  sessionId: "physical-session",
+                  messages: [
+                    { role: "assistant", content: outputText, __openclaw: { runId: scope.runId } },
+                  ],
+                },
         );
       });
       const connection = await connect();
-      const events = await baseline();
-      const terminal = events.next();
+      if (mode === "accepted") {
+        await oc.request("chat.send", {
+          sessionKey: scope.sessionKey,
+          message: "hello",
+          idempotencyKey: scope.runId,
+        });
+      }
+      const events =
+        mode === "accepted" ? oc.runEvents(scope.runId)[Symbol.asyncIterator]() : await baseline();
+      const terminal = mode === "accepted" ? undefined : events.next();
       const socket = gateway.socket();
-      socket.send(
-        JSON.stringify({
-          type: "event",
-          seq: 3,
-          event: gapFrame === "agent-lifecycle" ? "agent" : "chat",
-          payload:
-            gapFrame === "agent-lifecycle"
-              ? { ...scope, stream: "lifecycle", data: { phase: "end" } }
-              : { ...scope, state: "delta", deltaText: " lost suffix" },
-        }),
-      );
-      socket.send(
-        JSON.stringify({
-          type: "event",
-          event: "chat",
-          seq: 4,
-          payload: {
-            ...scope,
-            state: "final",
-            message: { role: "assistant", content: outputText },
-          },
-        }),
-      );
+      if (mode === "accepted") {
+        socket.close();
+      } else {
+        socket.send(
+          JSON.stringify({
+            type: "event",
+            seq: 3,
+            event: mode === "agent-lifecycle" ? "agent" : "chat",
+            payload:
+              mode === "agent-lifecycle"
+                ? { ...scope, stream: "lifecycle", data: { phase: "end" } }
+                : mode === "chat-final"
+                  ? {
+                      ...scope,
+                      state: "final",
+                      message: { role: "assistant", content: outputText },
+                    }
+                  : { ...scope, state: "delta", deltaText: " lost suffix" },
+          }),
+        );
+        if (mode !== "chat-final") {
+          socket.send(
+            JSON.stringify({
+              type: "event",
+              event: "chat",
+              seq: 4,
+              payload: {
+                ...scope,
+                state: "final",
+                message: { role: "assistant", content: outputText },
+              },
+            }),
+          );
+        }
+      }
+      const delivered = mode === "chat-final" ? await terminal : undefined;
       await connection.reconnect();
-      const recovered = await terminal;
+      const recovered = delivered ?? (await (terminal ?? events.next()));
       expect(recovered.value).toMatchObject({
         type: "run.completed",
-        data: { outputText, recovery: { status: "recovered" } },
+        data: {
+          outputText,
+          ...(mode === "chat-final" ? {} : { recovery: { status: "recovered" } }),
+        },
       });
-      expect(recovered.value?.raw).toBeUndefined();
-      expect(methods).toEqual(["agent.wait", "chat.history"]);
+      if (mode !== "chat-final") {
+        expect(recovered.value?.raw).toBeUndefined();
+      }
+      expect(methods).toEqual(
+        mode === "chat-final"
+          ? []
+          : [...(mode === "accepted" ? ["chat.send"] : []), "agent.wait", "chat.history"],
+      );
       await events.return?.();
     },
   );
@@ -271,121 +308,59 @@ describe("SDK run reconciliation over reconnect", () => {
     },
   );
 
-  it("recovers a started acknowledgment before the first output without fabricating a raw terminal", async () => {
-    gateway.setRequestHandler((socket, request) => {
-      gateway.reply(
-        socket,
-        request.id,
-        request.method === "chat.send"
-          ? { runId: scope.runId, status: "started" }
-          : request.method === "agent.wait"
-            ? {
-                runId: scope.runId,
-                status: "ok",
-                endedAt: 123,
-                terminalReply: { text: "clipped summary" },
-              }
-            : {
-                sessionId: "physical-session",
-                messages: [
-                  {
-                    role: "assistant",
-                    content: "complete output",
-                    __openclaw: { runId: scope.runId },
-                  },
-                ],
-              },
-      );
-    });
-    const connection = await connect();
-    await oc.request("chat.send", {
-      sessionKey: scope.sessionKey,
-      message: "hello",
-      idempotencyKey: scope.runId,
-    });
-    gateway.socket().close();
-    await connection.reconnect();
-    const events = oc.runEvents(scope.runId)[Symbol.asyncIterator]();
-    const terminal = await events.next();
-    expect(terminal.value).toMatchObject({
-      type: "run.completed",
-      data: {
-        outputText: "complete output",
-        recovery: { status: "recovered" },
-      },
-    });
-    expect(terminal.value?.raw).toBeUndefined();
-    await events.return?.();
-  });
-
-  it("reports an expired observation without converting bare wait timeout into completion", async () => {
-    let waits = 0;
-    const rearmed = createDeferred();
-    gateway.setRequestHandler((socket, request) => {
-      if (request.method === "agent.wait" && ++waits === 3) {
-        rearmed.resolve();
-        return;
-      }
-      gateway.reply(
-        socket,
-        request.id,
-        request.method === "agent.wait"
-          ? { runId: scope.runId, status: "timeout" }
-          : { sessionId: "physical-session", messages: [] },
-      );
-    });
-    const connection = await connect();
-    const events = await baseline();
-    gateway.socket().close();
-    await connection.reconnect();
-    const unavailable = await events.next();
-    expect(unavailable.value).toMatchObject({
-      type: "raw",
-      data: {
-        recovery: { status: "unavailable", reason: "run-state-unavailable" },
-      },
-    });
-    expect(unavailable.value?.raw).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await rearmed.promise;
-    await events.return?.();
-  });
-
-  it.each(["queued", "pending-error"])(
+  it.each(["queued", "pending-error", "unavailable"])(
     "backs off and rearms %s observations without settling",
     async (mode) => {
       const connection = await connect();
       const events = await baseline();
       let waits = 0;
+      const rearmed = createDeferred();
       gateway.setRequestHandler((socket, request) => {
         if (request.method === "agent.wait") {
+          if (++waits === 3 && mode === "unavailable") {
+            rearmed.resolve();
+            return;
+          }
           gateway.reply(socket, request.id, {
             runId: scope.runId,
             ...(mode === "queued"
               ? { status: "pending" }
-              : { status: "timeout", pendingError: true }),
+              : { status: "timeout", ...(mode === "pending-error" ? { pendingError: true } : {}) }),
           });
-          if (++waits > 1) {
+          if (waits > 1 && mode !== "unavailable") {
             gateway.sendEvent(socket, "probe.wait", { ...scope, waits });
           }
         } else {
           gateway.reply(socket, request.id, { sessionId: "physical-session", messages: [] });
-          gateway.sendEvent(socket, "probe.history", scope);
+          if (mode !== "unavailable") {
+            gateway.sendEvent(socket, "probe.history", scope);
+          }
         }
       });
       gateway.socket().close();
       await connection.reconnect();
-      await expect(events.next()).resolves.toMatchObject({
-        value: { raw: { event: "probe.history" } },
-      });
-      for (const [count, delay] of [
-        [2, 1_000],
-        [3, 2_000],
-      ] as const) {
-        await vi.advanceTimersByTimeAsync(delay);
-        await expect(events.next()).resolves.toMatchObject({
-          value: { raw: { event: "probe.wait" }, data: { waits: count } },
+      if (mode === "unavailable") {
+        const unavailable = await events.next();
+        expect(unavailable.value).toMatchObject({
+          type: "raw",
+          data: { recovery: { status: "unavailable", reason: "run-state-unavailable" } },
         });
+        expect(unavailable.value?.raw).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await rearmed.promise;
+      } else {
+        await expect(events.next()).resolves.toMatchObject({
+          value: { raw: { event: "probe.history" } },
+        });
+        for (const [count, delay] of [
+          [2, 1_000],
+          [3, 2_000],
+        ] as const) {
+          await vi.advanceTimersByTimeAsync(delay);
+          await expect(events.next()).resolves.toMatchObject({
+            value: { raw: { event: "probe.wait" }, data: { waits: count } },
+          });
+        }
       }
       await events.return?.();
       expect(waits).toBe(3);

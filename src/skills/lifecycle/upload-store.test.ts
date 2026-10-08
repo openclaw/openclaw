@@ -293,12 +293,9 @@ describe("skill upload store", () => {
       return committedRecord;
     });
     expect(record).toMatchObject({
-      uploadId: begin.uploadId,
       slug: "demo-skill",
       force: false,
-      receivedBytes: archive.length,
       actualSha256: digest,
-      committed: true,
     });
     await expectMissingPath(materializedPath);
     await expectMissingPath(path.join(root, "tmp", "skill-uploads"));

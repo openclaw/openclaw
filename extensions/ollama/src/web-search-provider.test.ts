@@ -1,4 +1,5 @@
 // Ollama tests cover web search provider plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";

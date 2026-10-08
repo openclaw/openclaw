@@ -3,6 +3,11 @@ import { ref } from "lit/directives/ref.js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../../lib/ime.ts";
 import type { ChatSessionCompanionThread } from "../chat-session-companion.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import {
@@ -54,7 +59,7 @@ export function createSessionRailComposer(options: {
       }
     },
     handleKeydown: (event: KeyboardEvent) => {
-      if (event.isComposing || event.keyCode === 229) {
+      if (isComposingKeyboardEvent(event)) {
         return;
       }
       const sendShortcutMatches =
@@ -119,6 +124,9 @@ export function renderSessionRailComposer(options: {
               }
             }}
             @keydown=${composer.handleKeydown}
+            @compositionend=${recordCompositionEnd}
+            @keyup=${clearCompositionEnd}
+            @blur=${clearCompositionEnd}
             @input=${composer.handleInput}
             ${ref(composer.ref)}
           ></textarea>

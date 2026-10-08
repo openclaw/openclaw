@@ -11,6 +11,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "./native-tool-policy.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
@@ -123,6 +124,9 @@ export function createCodexAppServerAgentHarness(
     resolvePluginConfigObject(config, "codex") ??
     options.resolvePluginConfig?.() ??
     options.pluginConfig;
+  const resolveIsolatedCompletionRuntime: NonNullable<
+    AgentHarnessV2["resolveIsolatedCompletionRuntime"]
+  > = ({ authorizationOwner }) => (authorizationOwner === "host" ? "openclaw" : "self");
   const harness: AgentHarnessV2 = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
@@ -144,6 +148,7 @@ export function createCodexAppServerAgentHarness(
       visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
+    resolveIsolatedCompletionRuntime,
     resolveSessionRuntimeOwnership: (params) => {
       const assertCurrent = () => {
         params.assertCurrent();
@@ -236,18 +241,36 @@ export function createCodexAppServerAgentHarness(
     },
     readModelCatalogReadiness: (params) =>
       modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),
+    filterModelServiceTiers: ({ config, serviceTiers }) => {
+      const appServer = asOptionalRecord(
+        asOptionalRecord(resolveAttemptPluginConfig(config))?.appServer,
+      );
+      return appServer?.enableUltrafast === false
+        ? serviceTiers.filter((tier) => tier !== "ultrafast")
+        : serviceTiers;
+    },
+    acquireMcpAppRuntime: async (params) => {
+      const { acquireCodexMcpAppRuntime } =
+        await import("./src/app-server/effective-mcp-catalog.js");
+      if (disposed) {
+        return undefined;
+      }
+      params.assertCurrent();
+      return await acquireCodexMcpAppRuntime(params, {
+        bindingStore: options.bindingStore,
+        pluginConfig: resolveAttemptPluginConfig(params.config),
+      });
+    },
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =
         await import("./src/app-server/effective-mcp-catalog.js");
       return await loadCodexEffectiveMcpCatalog(params, { bindingStore: options.bindingStore });
     },
     supports: (ctx) => {
+      const unsupported = (reason: string) => ({ supported: false as const, reason });
       const provider = ctx.provider.trim().toLowerCase();
       if (!providerIds.has(provider)) {
-        return {
-          supported: false,
-          reason: `provider is not one of: ${[...providerIds].toSorted().join(", ")}`,
-        };
+        return unsupported(`provider is not one of: ${[...providerIds].toSorted().join(", ")}`);
       }
       if (ctx.modelProvider?.requestTransportOverrides === "present") {
         return {
@@ -276,26 +299,17 @@ export function createCodexAppServerAgentHarness(
           (id) => id.trim().toLowerCase() === normalizedHarnessRuntimeId,
         );
         if (!compatible) {
-          return {
-            supported: false,
-            reason: "Codex cannot reproduce the prepared provider route",
-          };
+          return unsupported("Codex cannot reproduce the prepared provider route");
         }
       } else if (ctx.modelProvider && provider !== "codex" && !nativeAccountOwnsUnobservedModel) {
-        return {
-          supported: false,
-          reason: "provider route compatibility with Codex is not declared",
-        };
+        return unsupported("provider route compatibility with Codex is not declared");
       }
       if (preparedAuth?.requirement === "subscription") {
         const reproducibleSubscription =
           preparedAuth.source === "profile" &&
           (preparedAuth.mode === "oauth" || preparedAuth.mode === "token");
         if (!reproducibleSubscription) {
-          return {
-            supported: false,
-            reason: "Codex subscription auth requires a prepared OAuth or token profile",
-          };
+          return unsupported("Codex subscription auth requires a prepared OAuth or token profile");
         }
       } else if (preparedAuth?.requirement === "api-key") {
         const reproducibleApiKey =
@@ -303,10 +317,7 @@ export function createCodexAppServerAgentHarness(
           preparedAuth.source !== "harness" &&
           (preparedAuth.mode === "api-key" || preparedAuth.mode === "api_key");
         if (!reproducibleApiKey) {
-          return {
-            supported: false,
-            reason: "Codex Platform auth requires a prepared API key",
-          };
+          return unsupported("Codex Platform auth requires a prepared API key");
         }
       }
       return { supported: true, priority: 100 };
@@ -409,7 +420,10 @@ export function createCodexAppServerAgentHarness(
       return escalated;
     },
     runIsolatedCompletionV2: async (params) => {
-      if (params.authorization.owner === "host") {
+      if (
+        resolveIsolatedCompletionRuntime({ authorizationOwner: params.authorization.owner }) ===
+        "openclaw"
+      ) {
         const { runHostPreparedIsolatedCompletion } =
           await import("openclaw/plugin-sdk/simple-completion-runtime");
         return runHostPreparedIsolatedCompletion(params);

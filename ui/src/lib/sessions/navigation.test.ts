@@ -189,6 +189,26 @@ describe("resolveSessionNavigation", () => {
     expect(navigation.activeRowKey).toBe("agent:main:explicit:incident-debug");
   });
 
+  it("keeps a selected dock conversation readable without adding it to the sidebar", () => {
+    const dock: GatewaySessionRow = {
+      key: "agent:main:board-agent",
+      kind: "direct",
+      isDock: true,
+      createdVia: "operator",
+      createdSurface: "plugin-dock",
+    };
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult([{ key: "agent:main:chat", kind: "direct" }, dock]),
+      resultAgentId: "main",
+      sessionKey: dock.key,
+      activeSession: dock,
+      showSystem: true,
+    });
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual(["agent:main:chat"]);
+    expect(navigation.selectedSession?.key).toBe(dock.key);
+    expect(navigation.activeRowKey).toBeNull();
+  });
+
   it("uses the caller's sort order before applying the recent-session projection", () => {
     const navigation = resolveSessionNavigation({
       result: sessionsResult([

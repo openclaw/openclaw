@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql, type RawBuilder } from "kysely";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   prepareSqliteQuerySync,
@@ -132,23 +132,19 @@ function selectVisibleHistoryBoundaries(
 
 type HistoryCountParameters = { sessionId: string; boundaryActivePosition: number };
 
-const historyCountReaders = new WeakMap<
-  DatabaseSync,
-  Map<
-    HistoryBoundaryQueryShape,
-    (params: HistoryCountParameters) => { event_count: number } | undefined
-  >
->();
+const historyCountReaders = createSqliteQueryCache(
+  () =>
+    new Map<
+      HistoryBoundaryQueryShape,
+      (params: HistoryCountParameters) => { event_count: number } | undefined
+    >(),
+);
 
 function getHistoryCountReader(
   database: CurrentTranscriptProjection["database"],
   shape: HistoryBoundaryQueryShape,
 ) {
-  let readers = historyCountReaders.get(database.db);
-  if (!readers) {
-    readers = new Map();
-    historyCountReaders.set(database.db, readers);
-  }
+  const readers = historyCountReaders(database.db);
   let read = readers.get(shape);
   if (!read) {
     // Retain compilation only; each snapshot supplies its current session and reset bound.
@@ -380,14 +376,7 @@ export function resolveHistoryReadWindowChange(
   if (!anchor) {
     return expected.latestResetRawSeq === history.latestResetRawSeq ? undefined : {};
   }
-  const row = executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    getActiveTranscriptKysely(projection.database)
-      .selectFrom("session_transcript_active_events")
-      .select("message_position")
-      .where("session_id", "=", projection.resolved.sessionId)
-      .where("event_seq", "=", anchor.rawSeq),
-  );
+  const row = readActiveTranscriptCoordinate(projection, { eventSeq: anchor.rawSeq });
   const position = row?.message_position;
   const boundary =
     position === null
@@ -406,4 +395,21 @@ export function resolveHistoryReadWindowChange(
   return seq === anchor.seq && expected.latestResetRawSeq === history.latestResetRawSeq
     ? undefined
     : { anchorSeq: seq };
+}
+
+/** Resolve an indexed coordinate without decoding its message or control payload. */
+export function readActiveTranscriptCoordinate(
+  projection: CurrentTranscriptProjection,
+  selection: { eventSeq: number } | { activePosition: number },
+) {
+  const query = getActiveTranscriptKysely(projection.database)
+    .selectFrom("session_transcript_active_events")
+    .select(["event_seq", "message_position", "active_position"])
+    .where("session_id", "=", projection.resolved.sessionId);
+  return executeSqliteQueryTakeFirstSync(
+    projection.database.db,
+    "eventSeq" in selection
+      ? query.where("event_seq", "=", selection.eventSeq)
+      : query.where("active_position", "=", selection.activePosition),
+  );
 }

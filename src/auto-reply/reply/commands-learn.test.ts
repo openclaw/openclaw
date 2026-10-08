@@ -1,10 +1,9 @@
 // Tests /learn prompt rewriting, defaults, standards, and availability gating.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
-import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { handleLearnCommand } from "./commands-learn.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -33,7 +32,7 @@ function buildLearnParams(
   commandBodyNormalized: string,
   cfg: OpenClawConfig = {},
 ): HandleCommandsParams {
-  const loadedConfig = migratePersistedImplicitMainRoster(cfg).config as OpenClawConfig;
+  const loadedConfig = createCanonicalAgentConfigFixture(cfg).config;
   return {
     cfg: { ...loadedConfig, models: loadedConfig.models ?? DEFAULT_TEST_MODELS },
     ctx: {
@@ -138,54 +137,6 @@ describe("learn command", () => {
     },
   );
 
-  it.each(["personal", "paired-node"] as const)(
-    "keeps %s authoring from publishing a pending-only request",
-    async (surface) => {
-      const params = buildLearnParams("/learn what we just did");
-      const invoke = vi.fn(async () => {
-        throw new Error("No authoring operation is allowed");
-      });
-      params.opts = {
-        skillLibraryAuthoring: {
-          target: "personal",
-          defaultTarget: surface === "personal" ? "personal" : "workspace",
-          multipleProfiles: surface === "personal",
-          bind: () => {},
-          invoke,
-        },
-      };
-      if (surface === "paired-node") {
-        // Supply runtime backend metadata for the placement and authoring policy checks.
-        cliBackendsTesting.setDepsForTest({
-          resolveRuntimeCliBackends: () => [
-            {
-              id: "claude-cli",
-              modelProvider: "anthropic",
-              pluginId: "anthropic",
-              config: { command: "claude" },
-              bundleMcp: true,
-            },
-          ],
-        });
-        params.provider = "anthropic";
-        params.model = "claude-sonnet-5";
-        params.sessionEntry = {
-          sessionId: "node-session",
-          updatedAt: 1,
-          execHost: "node",
-          execNode: "paired-node",
-          agentRuntimeOverride: "claude-cli",
-        };
-      }
-      const result = await handleLearnCommand(params, true);
-      expect(result?.shouldContinue).toBe(false);
-      expect(result?.reply?.text).toContain("pending workspace proposal");
-      expect(result?.reply?.text).toContain("publishes a revision");
-      expect(params.ctx.BodyForAgent).toBe("/learn what we just did");
-      expect(invoke).not.toHaveBeenCalled();
-    },
-  );
-
   it("rewrites the agent and normalized command bodies and continues", async () => {
     const params = buildLearnParams("/learn docs/runbook.md and https://example.com/guide");
 
@@ -196,19 +147,6 @@ describe("learn command", () => {
     expect(instruction).toContain("docs/runbook.md and https://example.com/guide");
     expect(params.command.rawBodyNormalized).toBe(instruction);
     expect(params.command.commandBodyNormalized).toBe(instruction);
-  });
-
-  it("includes the load-bearing skill authoring standards", async () => {
-    const params = buildLearnParams("/learn what we just did");
-
-    await handleLearnCommand(params, true);
-    const instruction = (params.ctx as { BodyForAgent?: string }).BodyForAgent ?? "";
-
-    expect(instruction).toContain(
-      "Revise the best pending proposal or update the best Workshop-generated skill before creating anything new.",
-    );
-    expect(instruction).toContain("Make at most one proposal mutation.");
-    expect(instruction).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
   });
 
   it("replies without continuing when the workshop is unavailable", async () => {

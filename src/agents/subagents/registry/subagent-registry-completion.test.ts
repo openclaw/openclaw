@@ -7,6 +7,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const lifecycleMocks = vi.hoisted(() => ({
   getGlobalHookRunner: vi.fn(),
@@ -41,7 +42,7 @@ describe("emitSubagentEndedHookOnce", () => {
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
       sendFarewell: true,
       accountId: "acct-1",
-      inFlightRunIds: new Set<string>(),
+      inFlightOwners: new Set<object>(),
       recordEmitted: vi.fn(() => {
         entry.endedHookEmittedAt = Date.now();
       }),
@@ -120,10 +121,10 @@ describe("emitSubagentEndedHookOnce", () => {
     expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
   });
 
-  it("returns false when runId is already in flight", async () => {
+  it("returns false when the execution owner is already in flight", async () => {
     const entry = createRunEntry();
-    const inFlightRunIds = new Set<string>([entry.runId]);
-    const params = createEmitParams({ entry, inFlightRunIds });
+    const inFlightOwners = new Set<object>([getSubagentRunRuntimeKey(entry)]);
+    const params = createEmitParams({ entry, inFlightOwners });
     const emitted = await mod.emitSubagentEndedHookOnce(params);
     expect(emitted).toBe(false);
     expect(params.recordEmitted).not.toHaveBeenCalled();
@@ -138,13 +139,13 @@ describe("emitSubagentEndedHookOnce", () => {
     });
 
     const entry = createRunEntry();
-    const inFlightRunIds = new Set<string>();
-    const params = createEmitParams({ entry, inFlightRunIds });
+    const inFlightOwners = new Set<object>();
+    const params = createEmitParams({ entry, inFlightOwners });
     const emitted = await mod.emitSubagentEndedHookOnce(params);
 
     expect(emitted).toBe(false);
     expect(params.recordEmitted).not.toHaveBeenCalled();
-    expect(inFlightRunIds.has(entry.runId)).toBe(false);
+    expect(inFlightOwners.has(getSubagentRunRuntimeKey(entry))).toBe(false);
     expect(entry.endedHookEmittedAt).toBeUndefined();
   });
 
@@ -173,7 +174,7 @@ describe("emitSubagentEndedHookOnce", () => {
         (error: unknown) => ({ error }),
       );
       await entered.promise;
-      expect(params.inFlightRunIds.has(params.entry.runId)).toBe(true);
+      expect(params.inFlightOwners.has(getSubagentRunRuntimeKey(params.entry))).toBe(true);
       expect(params.entry.endedHookEmittedAt).toEqual(expect.any(Number));
       await expect(mod.emitSubagentEndedHookOnce(params)).resolves.toBe(false);
       if (outcome === "committed") {
@@ -184,7 +185,7 @@ describe("emitSubagentEndedHookOnce", () => {
       expect(await pending).toEqual(
         outcome === "unknown" ? { error: failure } : { result: outcome === "committed" },
       );
-      expect(params.inFlightRunIds.has(params.entry.runId)).toBe(false);
+      expect(params.inFlightOwners.has(getSubagentRunRuntimeKey(params.entry))).toBe(false);
       expect(params.entry.endedHookEmittedAt).toEqual(expect.any(Number));
       await expect(mod.emitSubagentEndedHookOnce(params)).resolves.toBe(false);
       expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledOnce();

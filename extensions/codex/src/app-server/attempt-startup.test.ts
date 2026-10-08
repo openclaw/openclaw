@@ -44,7 +44,7 @@ import {
   retainSharedCodexAppServerClientIfCurrent,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
 import { createCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 
@@ -137,6 +137,7 @@ describe("startCodexAttemptThread", () => {
     vi.useRealTimers();
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
+    stubCodexInferenceTransportEnv();
     await clearSharedCodexAppServerClientAndWait();
     // Direct runtime tests supply the plugin root normally owned by loader registration.
     setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
@@ -308,6 +309,7 @@ describe("startCodexAttemptThread", () => {
     expect(readHarnessRequestMethods(first)).toEqual([
       "initialize",
       "account/login/start",
+      "skills/list",
       "config/read",
       "configRequirements/read",
       "account/read",
@@ -316,6 +318,7 @@ describe("startCodexAttemptThread", () => {
       [
         "initialize",
         "account/login/start",
+        "skills/list",
         "config/read",
         "configRequirements/read",
         "thread/start",
@@ -323,6 +326,7 @@ describe("startCodexAttemptThread", () => {
       [
         "initialize",
         "account/login/start",
+        "skills/list",
         "config/read",
         "configRequirements/read",
         "account/read",
@@ -386,6 +390,7 @@ describe("startCodexAttemptThread", () => {
       expect(readHarnessRequestMethods(second)).toEqual([
         "initialize",
         "account/login/start",
+        "skills/list",
         "config/read",
         "configRequirements/read",
         "account/read",
@@ -536,6 +541,7 @@ describe("startCodexAttemptThread", () => {
     expect(continued.client).toBe(harness.client);
     expect(continued.thread.threadId).toBe(previous.thread.threadId);
     expect(readHarnessMessages(harness.writes.slice(before)).map(({ method }) => method)).toEqual([
+      "skills/list",
       "config/read",
       "configRequirements/read",
     ]);

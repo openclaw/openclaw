@@ -9,6 +9,7 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import { WebSocket, type RawData } from "../../packages/gateway-client/src/websocket.js";
 import {
   type HelloOk,
@@ -30,8 +31,7 @@ import {
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
-import type { TestPortClaim } from "../test-utils/port-claims.js";
-import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -39,16 +39,10 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
-import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
-import { reserveGatewayTestListener } from "./test-helpers.listener.js";
-
-/** Reserve a deterministic free port block for Gateway E2E tests. */
-export async function getGatewayE2ePortBlock(): Promise<number> {
-  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
+import { reserveGatewayTestListener, startClaimedGateway } from "./test-helpers.listener.js";
 
 /** Connect a GatewayClient with test defaults and resolve after hello-ok. */
 export async function connectGatewayClient(params: {
@@ -56,6 +50,8 @@ export async function connectGatewayClient(params: {
   token?: string;
   deviceToken?: string;
   origin?: string;
+  edgeAuthHeaders?: Readonly<Record<string, string>>;
+  tlsFingerprint?: string;
   clientName?: GatewayClientName;
   modelCatalog?: ModelCatalogTarget;
   clientDisplayName?: string;
@@ -106,6 +102,8 @@ export async function connectGatewayClient(params: {
       token: params.token,
       deviceToken: params.deviceToken,
       origin: params.origin,
+      edgeAuthHeaders: params.edgeAuthHeaders,
+      tlsFingerprint: params.tlsFingerprint,
       ...(params.connectChallengeTimeoutMs !== undefined
         ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
         : {}),
@@ -292,7 +290,11 @@ export async function startGatewayWithClient(
   params: {
     cfg: unknown;
     configPath: string;
-    token: string;
+    token?: string;
+    auth?: GatewayServerOptions["auth"];
+    edgeAuthHeaders?: Readonly<Record<string, string>>;
+    secure?: boolean;
+    tlsFingerprint?: string;
     clientName?: GatewayClientName;
     modelCatalog?: ModelCatalogTarget;
     mode?: GatewayClientMode;
@@ -316,20 +318,31 @@ export async function startGatewayWithClient(
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    listener = await reserveGatewayTestListener(params.portClaim ?? params.port);
-    const port = listener.port;
+    // The retained listener is HTTP-only; TLS must create its own secure server.
+    const secureClaim = params.secure
+      ? (params.portClaim ??
+        (await acquireTestPortBlock({ port: params.port, offsets: [0, 1, 2, 3, 4] })))
+      : undefined;
+    listener = secureClaim
+      ? undefined
+      : await reserveGatewayTestListener(params.portClaim ?? params.port);
+    const port = secureClaim?.port ?? listener!.port;
     const start = () =>
       startGatewayServer(port, {
         bind: "loopback",
-        auth: { mode: "token", token: params.token },
+        auth: params.auth ?? { mode: "token", token: params.token },
         controlUiEnabled: false,
         hotReloadRecovery: params.hotReloadRecovery,
       });
-    const startedServer = await listener.start(start);
+    const startedServer = secureClaim
+      ? await startClaimedGateway(secureClaim, start)
+      : await listener!.start(start);
     server = startedServer;
     const client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
+      url: `${params.secure ? "wss" : "ws"}://127.0.0.1:${port}`,
       token: params.token,
+      edgeAuthHeaders: params.edgeAuthHeaders,
+      tlsFingerprint: params.tlsFingerprint,
       clientName: params.clientName,
       modelCatalog: params.modelCatalog,
       mode: params.mode,

@@ -72,12 +72,7 @@ export function resolveMemorySessionSyncPlan(params: {
   targetSessionFiles: Set<string> | null;
   existingRows?: MemorySourceFileStateRow[] | null;
   sessionPathForFile: (file: string) => string;
-}): {
-  activePaths: Set<string> | null;
-  existingRows: MemorySourceFileStateRow[] | null;
-  existingHashes: Map<string, string> | null;
-  indexAll: boolean;
-} {
+}) {
   const activePaths = params.targetSessionFiles
     ? null
     : new Set(params.files.map((file) => params.sessionPathForFile(file)));

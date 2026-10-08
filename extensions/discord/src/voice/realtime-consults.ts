@@ -41,7 +41,7 @@ const DISCORD_REALTIME_FORCED_CONSULT_REASON =
 const CANCELLED_CONSULT_RESULT = {
   status: "cancelled",
   message: "OpenClaw cancelled this consult before completion. Do not restart it.",
-};
+} satisfies AgentProxyConsultResult;
 
 type AgentProxyConsultResult =
   | { text: string }
@@ -207,7 +207,7 @@ export class DiscordRealtimeConsults {
       nativeConsult.kind === "already_delivered" &&
       this.params.harness.forcedConsults.isCancelled(nativeConsult.handle)
     ) {
-      await this.submitTerminalRealtimeToolResult(callId, session, CANCELLED_CONSULT_RESULT);
+      await this.submitAgentProxyConsultResult(callId, session, CANCELLED_CONSULT_RESULT);
       return;
     }
     const pendingConsult = nativeConsult.kind === "pending" ? nativeConsult.handle : undefined;
@@ -550,20 +550,6 @@ export class DiscordRealtimeConsults {
     return tracked;
   }
 
-  private async submitTerminalRealtimeToolResult(
-    callId: string,
-    session: RealtimeVoiceBridgeSession,
-    result: Record<string, string>,
-  ): Promise<void> {
-    // Providers without suppressed results still need a terminal result; the payload tells the
-    // model not to repeat audio that Discord already played or restart cancelled work.
-    if (session.bridge.supportsToolResultSuppression === false) {
-      await session.submitToolResult(callId, result);
-      return;
-    }
-    await session.submitToolResult(callId, result, { suppressResponse: true });
-  }
-
   private async submitRecentAgentProxyConsultResult(
     callId: string,
     recent: AgentProxyConsultHandle,
@@ -651,15 +637,21 @@ export class DiscordRealtimeConsults {
     result: AgentProxyConsultResult,
     alreadyDelivered = false,
   ): Promise<void> {
-    if ("status" in result) {
-      await this.submitTerminalRealtimeToolResult(callId, session, CANCELLED_CONSULT_RESULT);
-    } else if (alreadyDelivered) {
-      await this.submitTerminalRealtimeToolResult(callId, session, {
-        status: "already_delivered",
-        message: "OpenClaw already delivered this answer to Discord voice. Do not repeat it.",
-      });
+    const terminal = "status" in result || alreadyDelivered;
+    const payload =
+      "status" in result
+        ? CANCELLED_CONSULT_RESULT
+        : alreadyDelivered
+          ? {
+              status: "already_delivered",
+              message: "OpenClaw already delivered this answer to Discord voice. Do not repeat it.",
+            }
+          : result;
+    // Unsupported suppression still needs a terminal payload that prevents replay.
+    if (terminal && session.bridge.supportsToolResultSuppression !== false) {
+      await session.submitToolResult(callId, payload, { suppressResponse: true });
     } else {
-      await session.submitToolResult(callId, result);
+      await session.submitToolResult(callId, payload);
     }
   }
 

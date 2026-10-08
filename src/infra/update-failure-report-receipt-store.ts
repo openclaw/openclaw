@@ -36,7 +36,7 @@ const ARTIFACT_SWEEP_STALE_AFTER_MS = 2 * 60_000;
 function isCanonicalGithubUrl(
   value: unknown,
   pathname: RegExp,
-  options: { allowSearch: boolean },
+  allowSearch: boolean,
 ): value is string {
   if (typeof value !== "string") {
     return false;
@@ -48,7 +48,7 @@ function isCanonicalGithubUrl(
       !parsed.username &&
       !parsed.password &&
       !parsed.hash &&
-      (options.allowSearch || !parsed.search) &&
+      (allowSearch || !parsed.search) &&
       pathname.test(parsed.pathname)
     );
   } catch {
@@ -74,18 +74,14 @@ function isValidTerminalReceipt(receipt: UpdateFailureReportReceipt): boolean {
     return (
       receipt.cleanup === "pending" &&
       receipt.fallbackUrl === undefined &&
-      isCanonicalGithubUrl(receipt.url, /^\/openclaw\/openclaw\/issues\/\d+$/u, {
-        allowSearch: false,
-      })
+      isCanonicalGithubUrl(receipt.url, /^\/openclaw\/openclaw\/issues\/\d+$/u, false)
     );
   }
   if (receipt.status === "fallback") {
     return (
       receipt.cleanup === undefined &&
       receipt.url === undefined &&
-      isCanonicalGithubUrl(receipt.fallbackUrl, /^\/openclaw\/openclaw\/issues\/new$/u, {
-        allowSearch: true,
-      })
+      isCanonicalGithubUrl(receipt.fallbackUrl, /^\/openclaw\/openclaw\/issues\/new$/u, true)
     );
   }
   return (
@@ -137,13 +133,9 @@ function parseReceipt(sentinel: RestartSentinel | null): UpdateFailureReportRece
       (typeof value.sweepSinceMs !== "number" || !Number.isFinite(value.sweepSinceMs))) ||
     (value.sweepOwnerId !== undefined && value.artifactSweep !== "pending") ||
     (value.status === "created" &&
-      !isCanonicalGithubUrl(value.url, /^\/openclaw\/openclaw\/issues\/\d+$/u, {
-        allowSearch: false,
-      })) ||
+      !isCanonicalGithubUrl(value.url, /^\/openclaw\/openclaw\/issues\/\d+$/u, false)) ||
     (value.status === "fallback" &&
-      !isCanonicalGithubUrl(value.fallbackUrl, /^\/openclaw\/openclaw\/issues\/new$/u, {
-        allowSearch: true,
-      })) ||
+      !isCanonicalGithubUrl(value.fallbackUrl, /^\/openclaw\/openclaw\/issues\/new$/u, true)) ||
     (value.cleanup !== undefined && value.status !== "created" && value.status !== "retryable") ||
     (value.status !== "created" && value.url !== undefined) ||
     (value.status !== "fallback" && value.fallbackUrl !== undefined)
@@ -301,56 +293,38 @@ export function refreshUpdateFailureReportReceiptPreparationRowSync(
   });
 }
 
-/** Fences final artifact publication behind one process-owned preparation. */
-export function markUpdateFailureReportReceiptPreparedRowSync(
-  db: DatabaseSync,
-  attemptId: string,
-  reservationId: string,
-  previewDigest: string,
-): boolean {
-  return mutateReceipt(db, attemptId, (currentReceipt) => {
-    if (
-      currentReceipt.status !== "preparing" ||
-      currentReceipt.sweepOwnerId !== undefined ||
-      currentReceipt.reservationId !== reservationId ||
-      currentReceipt.previewDigest !== previewDigest
-    ) {
-      return false;
-    }
-    return {
-      preparingSinceMs: Date.now(),
-      previewDigest,
-      ...retainedArtifactSweep(currentReceipt),
-      reservationId,
-      status: "prepared",
-    };
-  });
+function preparationTransition(status: "prepared" | "pending") {
+  const priorStatus = status === "prepared" ? "preparing" : "prepared";
+  return (
+    db: DatabaseSync,
+    attemptId: string,
+    reservationId: string,
+    previewDigest: string,
+  ): boolean =>
+    mutateReceipt(db, attemptId, (currentReceipt) => {
+      if (
+        currentReceipt.status !== priorStatus ||
+        currentReceipt.sweepOwnerId !== undefined ||
+        currentReceipt.reservationId !== reservationId ||
+        currentReceipt.previewDigest !== previewDigest
+      ) {
+        return false;
+      }
+      return {
+        ...(status === "prepared" ? { preparingSinceMs: Date.now() } : {}),
+        previewDigest,
+        ...retainedArtifactSweep(currentReceipt),
+        reservationId,
+        status,
+      };
+    });
 }
 
+/** Fences final artifact publication behind one process-owned preparation. */
+export const markUpdateFailureReportReceiptPreparedRowSync = preparationTransition("prepared");
+
 /** Makes one published preparation ambiguity-safe immediately before issue creation starts. */
-export function markUpdateFailureReportReceiptPendingRowSync(
-  db: DatabaseSync,
-  attemptId: string,
-  reservationId: string,
-  previewDigest: string,
-): boolean {
-  return mutateReceipt(db, attemptId, (currentReceipt) => {
-    if (
-      currentReceipt.status !== "prepared" ||
-      currentReceipt.sweepOwnerId !== undefined ||
-      currentReceipt.reservationId !== reservationId ||
-      currentReceipt.previewDigest !== previewDigest
-    ) {
-      return false;
-    }
-    return {
-      ...(currentReceipt.previewDigest ? { previewDigest: currentReceipt.previewDigest } : {}),
-      ...retainedArtifactSweep(currentReceipt),
-      reservationId,
-      status: "pending",
-    };
-  });
-}
+export const markUpdateFailureReportReceiptPendingRowSync = preparationTransition("pending");
 
 /** Finalizes only a process-owned reservation in the required prior phase. */
 export function finalizeUpdateFailureReportReceiptRowSync(
@@ -414,32 +388,26 @@ export function beginStaleUpdateFailureReportReceiptCleanupRowSync(
   attemptId: string,
   reservationId: string,
 ): boolean {
-  const sentinelKey = receiptKey(attemptId);
-  const current = readRestartSentinelRowForKeySync(db, sentinelKey);
-  const currentReceipt = parseReceipt(current.kind === "valid" ? current.sentinel : null);
-  const nowMs = Date.now();
-  if (
-    current.kind !== "valid" ||
-    !currentReceipt ||
-    currentReceipt.sweepOwnerId !== undefined ||
-    (currentReceipt.status !== "preparing" && currentReceipt.status !== "prepared") ||
-    currentReceipt.preparingSinceMs === undefined ||
-    currentReceipt.preparingSinceMs > nowMs - PREPARING_RECEIPT_STALE_AFTER_MS ||
-    currentReceipt.reservationId !== reservationId
-  ) {
-    return false;
-  }
-  if (!currentReceipt.previewDigest) {
-    return false;
-  }
-  const cleanupReceipt: UpdateFailureReportReceipt = {
-    artifactSweep: "pending",
-    cleanup: "pending",
-    previewDigest: currentReceipt.previewDigest,
-    reservationId,
-    status: "retryable",
-  };
-  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, cleanupReceipt);
+  return mutateReceipt(db, attemptId, (currentReceipt) => {
+    const nowMs = Date.now();
+    if (
+      currentReceipt.sweepOwnerId !== undefined ||
+      (currentReceipt.status !== "preparing" && currentReceipt.status !== "prepared") ||
+      currentReceipt.preparingSinceMs === undefined ||
+      currentReceipt.preparingSinceMs > nowMs - PREPARING_RECEIPT_STALE_AFTER_MS ||
+      currentReceipt.reservationId !== reservationId ||
+      !currentReceipt.previewDigest
+    ) {
+      return false;
+    }
+    return {
+      artifactSweep: "pending",
+      cleanup: "pending",
+      previewDigest: currentReceipt.previewDigest,
+      reservationId,
+      status: "retryable",
+    };
+  });
 }
 
 /** Serializes one attempt-wide retired-artifact sweep against successor publication. */
@@ -450,28 +418,24 @@ export function claimUpdateFailureReportArtifactSweepRowSync(
   sweepOwnerId: string,
   sweepGeneration: string,
 ): boolean {
-  const sentinelKey = receiptKey(attemptId);
-  const current = readRestartSentinelRowForKeySync(db, sentinelKey);
-  const currentReceipt = parseReceipt(current.kind === "valid" ? current.sentinel : null);
-  const nowMs = Date.now();
-  if (
-    current.kind !== "valid" ||
-    !currentReceipt ||
-    currentReceipt.artifactSweep !== "pending" ||
-    currentReceipt.reservationId !== expectedReservationId ||
-    (currentReceipt.sweepOwnerId !== undefined &&
-      currentReceipt.sweepSinceMs !== undefined &&
-      currentReceipt.sweepSinceMs > nowMs - ARTIFACT_SWEEP_STALE_AFTER_MS)
-  ) {
-    return false;
-  }
-  const claimed: UpdateFailureReportReceipt = {
-    ...currentReceipt,
-    sweepGeneration,
-    sweepOwnerId,
-    sweepSinceMs: nowMs,
-  };
-  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, claimed);
+  return mutateReceipt(db, attemptId, (currentReceipt) => {
+    const nowMs = Date.now();
+    if (
+      currentReceipt.artifactSweep !== "pending" ||
+      currentReceipt.reservationId !== expectedReservationId ||
+      (currentReceipt.sweepOwnerId !== undefined &&
+        currentReceipt.sweepSinceMs !== undefined &&
+        currentReceipt.sweepSinceMs > nowMs - ARTIFACT_SWEEP_STALE_AFTER_MS)
+    ) {
+      return false;
+    }
+    return {
+      ...currentReceipt,
+      sweepGeneration,
+      sweepOwnerId,
+      sweepSinceMs: nowMs,
+    };
+  });
 }
 
 /** Checks the exact sweep generation without renewing or otherwise mutating it. */

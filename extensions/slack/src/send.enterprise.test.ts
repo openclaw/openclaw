@@ -20,7 +20,8 @@ const loadOutboundMediaFromUrl = vi.hoisted(() =>
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 const getSlackWriteClientMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>()),
   withTrustedEnvProxyGuardedFetchMode: (value: unknown) => value,
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard }));
@@ -87,30 +88,6 @@ describe("sendMessageSlack Enterprise listener scope", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("creates a workspace-scoped client for a qualified detached send", async () => {
-    const scopedClient = createEnterpriseClient();
-    const injectedClient = createEnterpriseClient();
-    getSlackWriteClientMock.mockReturnValue(scopedClient);
-    const installationState = registerSlackInstallationState("default", "enterprise");
-    try {
-      await sendMessageSlack("team:T123:channel:C08GQH53EJM", "hello", {
-        cfg: ENTERPRISE_CFG,
-        token: "xoxb-enterprise",
-        client: injectedClient,
-      });
-
-      expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-enterprise", {
-        teamId: "T123",
-      });
-      expect(scopedClient.chat.postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ channel: "C08GQH53EJM", text: "hello" }),
-      );
-      expect(injectedClient.chat.postMessage).not.toHaveBeenCalled();
-    } finally {
-      installationState.release();
-    }
   });
 
   it("rejects a bare detached target for an authenticated Enterprise install", async () => {

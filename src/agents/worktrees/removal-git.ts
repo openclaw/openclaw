@@ -3,6 +3,7 @@ import { lstatSync } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
+import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
@@ -12,6 +13,7 @@ import {
   requireGit,
   resolveGitMetadataPath,
   runGit,
+  WORKTREE_CHECKOUT_TIMEOUT_MS,
 } from "./git.js";
 import { canonicalPathKey } from "./orphan-paths.js";
 import { WorktreeBranchMovedError } from "./removal-errors.js";
@@ -89,21 +91,35 @@ export async function prepareSnapshotBranchDeletion(
   return deletionOptions;
 }
 
-/** Once destructive deletion starts, its allocation owner joins it without a deadline. */
+/** Join admitted deletion through its own deadline, independently of caller cancellation. */
 export async function removeManagedCheckout(
   record: ManagedWorktreeRecord,
   git: WorktreeGitPolicy,
   requireLossless: boolean | undefined,
+  budget: "bounded" | "recovery",
   assertCurrent?: () => void,
+  queueSignal?: AbortSignal,
 ): Promise<void> {
-  const removed = await runOutsideCommandProcessScope(() =>
-    git.run(
-      record.repoRoot,
-      ["worktree", "remove", ...(requireLossless ? [] : ["--force"]), "--", record.path],
-      { beforeRun: assertCurrent, killProcessTree: true, waitForExit: true },
-    ),
+  const removed = await withContentGitSlot(
+    () =>
+      runOutsideCommandProcessScope(() =>
+        git.run(
+          record.repoRoot,
+          ["worktree", "remove", ...(requireLossless ? [] : ["--force"]), "--", record.path],
+          {
+            beforeRun: assertCurrent,
+            killProcessTree: true,
+            lowerPriority: true,
+            // Explicit recover-removal must not interrupt a previously partial deletion again.
+            ...(budget === "recovery"
+              ? { waitForExit: true }
+              : { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS }),
+          },
+        ),
+      ),
+    queueSignal,
   );
-  if (removed.code !== 0) {
+  if (removed.termination !== "exit" || removed.code !== 0) {
     throw commandError("git worktree remove", removed);
   }
 }
@@ -241,18 +257,15 @@ export async function retireExactWorktree<T>(params: {
       try {
         // Caller cancellation cannot abandon a complete source at a temporary name.
         // Allocation ownership, not the revoked caller, owns this joined rollback.
-        await requireGit(record.repoRoot, ["worktree", "move", "--", destination, record.path], {
-          beforeRun: params.assertRollbackCurrent,
-          killProcessTree: true,
-        });
-        await requireGit(
-          record.repoRoot,
+        for (const args of [
+          ["worktree", "move", "--", destination, record.path],
           ["update-ref", "-d", `refs/openclaw/removals/${record.id}`, params.snapshot],
-          {
+        ]) {
+          await requireGit(record.repoRoot, args, {
             beforeRun: params.assertRollbackCurrent,
             killProcessTree: true,
-          },
-        );
+          });
+        }
       } catch (rollbackError) {
         throw new AggregateError(
           [error, rollbackError],
@@ -329,12 +342,29 @@ export async function hasExactWorktreeIndex(
   return true;
 }
 
+/** Both restore routes verify repository and detached HEAD while retaining native Git locks. */
+export async function withExactSnapshotRestore<T>(
+  record: ManagedWorktreeRecord,
+  metadata: ExactStateSnapshot,
+  options: GitOptions,
+  assertCurrent: () => void,
+  restore: () => Promise<T>,
+): Promise<T> {
+  await requireExactWorktreeRepository(record, record.path, options);
+  const live = { ...record, removedAt: undefined };
+  return await withExactStateGitLocks(live, assertCurrent, async () => {
+    await requireExactManagedWorktreeHead(live, { ...record, ...metadata }, options);
+    return await restore();
+  });
+}
+
 /** Prefer the retained original tree, preserving even writes through old descriptors. */
 export async function restoreRetiredExactWorktree<T>(params: {
   record: ManagedWorktreeRecord;
   metadata: ExactStateSnapshot;
   options: GitOptions;
   assertCurrent: () => void;
+  admitCapacity: (requiredPaths: readonly string[]) => Promise<void>;
   finalize: () => Promise<T>;
 }): Promise<T | undefined> {
   const { record, metadata, options, assertCurrent } = params;
@@ -348,15 +378,11 @@ export async function restoreRetiredExactWorktree<T>(params: {
   ]);
   const retainedRegistered = registrations.some((entry) => entry.path === retained);
   const liveRegistered = registrations.some((entry) => entry.path === record.path);
-  if (!retainedStat && !retainedRegistered && !liveStat && !liveRegistered) {
-    return undefined;
-  }
   if (
     !retainedStat &&
     !retainedRegistered &&
-    liveStat?.isDirectory() &&
     !liveRegistered &&
-    (await fs.readdir(record.path)).length === 0
+    (!liveStat || (liveStat.isDirectory() && (await fs.readdir(record.path)).length === 0))
   ) {
     return undefined;
   }
@@ -377,41 +403,33 @@ export async function restoreRetiredExactWorktree<T>(params: {
       "Retained exact-state source identity or registration changed; source preserved",
     );
   }
-  await requireExactWorktreeRepository(record, sourcePath, options);
-  const archived = { ...record, path: sourcePath, removedAt: undefined };
-  return await withExactStateGitLocks(archived, assertCurrent, async () => {
-    await requireExactManagedWorktreeHead(
-      archived,
-      {
-        ownerKind: record.ownerKind,
-        ownerId: record.ownerId,
-        createdAt: record.createdAt,
-        lastActiveAt: record.lastActiveAt,
-        head: metadata.head,
-        branchHead: metadata.branchHead,
-        indexSha256: metadata.indexSha256,
-      },
-      options,
-    );
-    if (!(await hasExactWorktreeIndex(sourcePath, metadata, options))) {
-      throw new Error("Retained exact-state index missing; source and snapshot preserved");
-    }
-    const beforeMove = () => {
+  return await withExactSnapshotRestore(
+    { ...record, path: sourcePath },
+    metadata,
+    options,
+    assertCurrent,
+    async () => {
+      if (!(await hasExactWorktreeIndex(sourcePath, metadata, options))) {
+        throw new Error("Retained exact-state index missing; source and snapshot preserved");
+      }
+      const beforeMove = () => {
+        assertCurrent();
+        assertExactStateSourceIdentity(sourcePath, metadata);
+      };
+      await params.admitCapacity([record.repoRoot, record.path, sourcePath]);
+      beforeMove();
+      // Native move never overlays a recreated live path. Once admitted, join it;
+      // cancellation must not strand a partially completed filesystem rename.
+      if (!alreadyMoved) {
+        await requireGit(record.repoRoot, ["worktree", "move", "--", retained, record.path], {
+          beforeRun: beforeMove,
+          killProcessTree: true,
+        });
+      }
       assertCurrent();
-      assertExactStateSourceIdentity(sourcePath, metadata);
-    };
-    beforeMove();
-    // Native move never overlays a recreated live path. Once admitted, join it;
-    // cancellation must not strand a partially completed filesystem rename.
-    if (!alreadyMoved) {
-      await requireGit(record.repoRoot, ["worktree", "move", "--", retained, record.path], {
-        beforeRun: beforeMove,
-        killProcessTree: true,
-      });
-    }
-    assertCurrent();
-    assertExactStateSourceIdentity(record.path, metadata);
-    // Native writers remain excluded until the registry publishes the restored lifecycle.
-    return await params.finalize();
-  });
+      assertExactStateSourceIdentity(record.path, metadata);
+      // Native writers remain excluded until the registry publishes the restored lifecycle.
+      return await params.finalize();
+    },
+  );
 }

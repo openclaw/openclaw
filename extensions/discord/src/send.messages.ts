@@ -139,14 +139,11 @@ export async function readMessagesDiscord(
   if (limit) {
     params.limit = limit;
   }
-  if (messageQuery.before) {
-    params.before = messageQuery.before;
-  }
-  if (messageQuery.after) {
-    params.after = messageQuery.after;
-  }
-  if (messageQuery.around) {
-    params.around = messageQuery.around;
+  for (const key of ["before", "after", "around"] as const) {
+    const value = messageQuery[key];
+    if (value) {
+      params[key] = value;
+    }
   }
   return assertDiscordResponseArray<APIMessage>(
     await rest.get(Routes.channelMessages(channelId), params),
@@ -179,35 +176,17 @@ export async function editMessageDiscord(
   });
 }
 
-export async function deleteMessageDiscord(
-  channelId: string,
-  messageId: string,
-  opts: DiscordReactOpts,
-) {
-  const rest = resolveDiscordRest(opts);
-  await deleteChannelMessage(rest, channelId, messageId);
-  return { ok: true };
+function messageMutation(operation: typeof deleteChannelMessage) {
+  return async (channelId: string, messageId: string, opts: DiscordReactOpts) => {
+    const rest = resolveDiscordRest(opts);
+    await operation(rest, channelId, messageId);
+    return { ok: true };
+  };
 }
 
-export async function pinMessageDiscord(
-  channelId: string,
-  messageId: string,
-  opts: DiscordReactOpts,
-) {
-  const rest = resolveDiscordRest(opts);
-  await pinChannelMessage(rest, channelId, messageId);
-  return { ok: true };
-}
-
-export async function unpinMessageDiscord(
-  channelId: string,
-  messageId: string,
-  opts: DiscordReactOpts,
-) {
-  const rest = resolveDiscordRest(opts);
-  await unpinChannelMessage(rest, channelId, messageId);
-  return { ok: true };
-}
+export const deleteMessageDiscord = messageMutation(deleteChannelMessage);
+export const pinMessageDiscord = messageMutation(pinChannelMessage);
+export const unpinMessageDiscord = messageMutation(unpinChannelMessage);
 
 export async function listPinsDiscord(
   channelId: string,
@@ -231,11 +210,8 @@ export async function createThreadDiscord(
   }
   let channel: APIChannel | undefined;
   if (!payload.messageId) {
-    try {
-      channel = await getChannel(rest, channelId);
-    } catch {
-      // Channel metadata only enriches standalone creation; Discord still validates it.
-    }
+    // Channel metadata only enriches standalone creation; Discord still validates it.
+    channel = await getChannel(rest, channelId).catch(() => undefined);
   }
   // Discord clients preselect the parent default, but REST thread creation needs
   // it explicitly. Keep a caller override authoritative when one was supplied.

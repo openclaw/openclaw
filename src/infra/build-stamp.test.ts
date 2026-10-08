@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mts";
 import {
   writeBuildStamp,
@@ -57,6 +57,23 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
     await write("package.json", '{"name":"openclaw"}');
     await write("src/index.ts", "export const value = 1;\n");
     await write("src/index.test.ts", "original fixture\n");
+    const testUtilities = ["src/index.test-utils.ts", "src/index.test-utils.tsx"];
+    for (const file of testUtilities) {
+      await write(file, "original fixture\n");
+    }
+    const runtimeSupport = [
+      "src/test-utils.ts",
+      "src/runtime.test-support.ts",
+      "src/runtime.test-harness.ts",
+      "src/test-api.ts",
+    ];
+    for (const file of runtimeSupport) {
+      await write(file, "export const value = 1;\n");
+    }
+    await write(
+      "src/runtime-entry.ts",
+      runtimeSupport.map((file) => `import "./${path.basename(file, ".ts")}.js";`).join("\n"),
+    );
     await write("src/stable.ts", "export const stable = 1;\n");
     await write("pnpm-lock.yaml", "original lockfile\n");
     for (const args of [
@@ -89,6 +106,25 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
       sourceRoots: [],
       configFiles: [],
     };
+    const originalRead = fsSync.readFileSync;
+    const read = vi.spyOn(fsSync, "readFileSync").mockImplementation((...args) => {
+      const contents = originalRead(...args);
+      if (args[0] === path.join(cwd, "src/stable.ts")) {
+        fsSync.writeFileSync(path.join(cwd, "src/index.ts"), "export const value = 2;\n");
+        fsSync.writeFileSync(path.join(cwd, "src/index.ts"), "export const value = 1;\n");
+      }
+      return contents;
+    });
+    let changedDuringCapture;
+    try {
+      changedDuringCapture = captureRunNodeInputState(deps, "build");
+    } finally {
+      read.mockRestore();
+    }
+    expect(changedDuringCapture).not.toBeNull();
+    expect(() => writeBuildStamp({ cwd, inputState: changedDuringCapture })).toThrow(
+      "Build inputs changed",
+    );
     await write("src/index.ts", "export const value = 2;\n");
     const inputState = captureRunNodeInputState(deps, "build");
     expect(inputState?.signature).toMatch(/^[a-f0-9]{64}$/u);
@@ -128,6 +164,22 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
     await fs.unlink(path.join(cwd, "deployment.json"));
     await write("src/index.test.ts", "corrected fixture\n");
     expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(false);
+    for (const file of testUtilities) {
+      await write(file, "corrected fixture\n");
+      expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(
+        false,
+      );
+    }
+    for (const file of runtimeSupport) {
+      await write(file, "export const value = 2;\n");
+      expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).reason).toBe(
+        "build_inputs_changed",
+      );
+      await write(file, "export const value = 1;\n");
+      expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(
+        false,
+      );
+    }
     await fs.rename(path.join(cwd, "src/index.ts"), path.join(cwd, "src/renamed.ts"));
     expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(true);
     await fs.rename(path.join(cwd, "src/renamed.ts"), path.join(cwd, "src/index.ts"));
