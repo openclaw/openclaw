@@ -110,8 +110,7 @@ export function sessionPullRequestsForGateway(
   let lastHello: object | null = null;
   let lastSignature: string | null = null;
   let syncRequestGeneration = 0;
-  let refreshingGeneration: number | null = null;
-  let refreshingKeys: readonly string[] = [];
+  let refreshing: { generation: number; keys: readonly string[] } | null = null;
   let requestController: AbortController | null = null;
 
   const canReadPullRequests = () =>
@@ -138,6 +137,28 @@ export function sessionPullRequestsForGateway(
       resolve(snapshot);
     }
   };
+
+  const clearSnapshotsAndWaiters = () => {
+    const hadSnapshots = snapshots.size > 0;
+    snapshots.clear();
+    for (const key of waiters.keys()) {
+      settle(key);
+    }
+    if (hadSnapshots) {
+      notify();
+    }
+  };
+
+  const matchesSession = (sessionKey: string, eventKey: string, agentId?: string | null) =>
+    uiSessionEventMatches(
+      {
+        assistantAgentId: gateway.snapshot.assistantAgentId,
+        hello: gateway.snapshot.hello,
+        sessionKey,
+      },
+      eventKey,
+      agentId,
+    );
 
   const watchedKeys = (): string[] => {
     if (orderedWatchedKeys) {
@@ -196,7 +217,7 @@ export function sessionPullRequestsForGateway(
   const isActive = () => watchedByOwner.size > 0 || listeners.size > 0 || waiters.size > 0;
 
   const retainRefreshIntent = (keys: readonly string[]) => {
-    for (const key of refreshingKeys) {
+    for (const key of refreshing?.keys ?? []) {
       if (keys.includes(key)) {
         pendingRefreshKeys.add(key);
       }
@@ -207,18 +228,10 @@ export function sessionPullRequestsForGateway(
     retainRefreshIntent(watchedKeys());
     syncRequestGeneration += 1;
     retireRequest();
-    refreshingGeneration = null;
-    refreshingKeys = [];
+    refreshing = null;
     lastHello = null;
     lastSignature = null;
-    const hadSnapshots = snapshots.size > 0;
-    snapshots.clear();
-    for (const key of waiters.keys()) {
-      settle(key);
-    }
-    if (hadSnapshots) {
-      notify();
-    }
+    clearSnapshotsAndWaiters();
   };
 
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
@@ -247,12 +260,8 @@ export function sessionPullRequestsForGateway(
       }
       for (const sessionKey of requestedKeys()) {
         if (
-          uiSessionEventMatches(
-            {
-              assistantAgentId: gateway.snapshot.assistantAgentId,
-              hello: gateway.snapshot.hello,
-              sessionKey,
-            },
+          matchesSession(
+            sessionKey,
             payload.sessionKey,
             typeof payload.agentId === "string" ? payload.agentId : undefined,
           )
@@ -269,15 +278,7 @@ export function sessionPullRequestsForGateway(
         return;
       }
       const matchingKeys = watchedKeys().filter((sessionKey) =>
-        uiSessionEventMatches(
-          {
-            assistantAgentId: gateway.snapshot.assistantAgentId,
-            hello: gateway.snapshot.hello,
-            sessionKey,
-          },
-          changed.key,
-          changed.agentId,
-        ),
+        matchesSession(sessionKey, changed.key, changed.agentId),
       );
       if (matchingKeys.length === 0) {
         return;
@@ -351,8 +352,7 @@ export function sessionPullRequestsForGateway(
     onDetach: () => {
       syncRequestGeneration += 1;
       retireRequest();
-      refreshingGeneration = null;
-      refreshingKeys = [];
+      refreshing = null;
       lastHello = null;
       lastSignature = null;
       snapshots.clear();
@@ -372,14 +372,7 @@ export function sessionPullRequestsForGateway(
       lastHello = null;
       lastSignature = null;
       retireRequest();
-      const hadSnapshots = snapshots.size > 0;
-      snapshots.clear();
-      for (const key of waiters.keys()) {
-        settle(key);
-      }
-      if (hadSnapshots) {
-        notify();
-      }
+      clearSnapshotsAndWaiters();
       if (!isActive()) {
         lifecycle.detach();
       }
@@ -389,10 +382,7 @@ export function sessionPullRequestsForGateway(
     const sessionKeys =
       typeof document !== "undefined" && document.visibilityState === "hidden" ? [] : desiredKeys;
     const signature = JSON.stringify(sessionKeys.toSorted());
-    if (
-      refreshingGeneration !== null &&
-      (signature !== lastSignature || snapshot.hello !== lastHello)
-    ) {
+    if (refreshing !== null && (signature !== lastSignature || snapshot.hello !== lastHello)) {
       // A replacement retires the old acknowledgement, not its retained intent.
       // Hidden tabs keep desired keys so their refresh resumes when shown again.
       retainRefreshIntent(desiredKeys);
@@ -411,11 +401,7 @@ export function sessionPullRequestsForGateway(
     }
     // Repeated hints for the same watched union coalesce behind its current
     // request. Membership changes still supersede immediately (notably hide).
-    if (
-      refreshingGeneration !== null &&
-      snapshot.hello === lastHello &&
-      signature === lastSignature
-    ) {
+    if (refreshing !== null && snapshot.hello === lastHello && signature === lastSignature) {
       return;
     }
     lastHello = snapshot.hello;
@@ -431,8 +417,7 @@ export function sessionPullRequestsForGateway(
       snapshot.hello === lastHello &&
       signature === lastSignature;
     retry.cancel();
-    refreshingGeneration = requestGeneration;
-    refreshingKeys = refreshSessionKeys;
+    refreshing = { generation: requestGeneration, keys: refreshSessionKeys };
     for (const key of refreshSessionKeys) {
       pendingRefreshKeys.delete(key);
     }
@@ -467,9 +452,8 @@ export function sessionPullRequestsForGateway(
         }
       })
       .finally(() => {
-        if (refreshingGeneration === requestGeneration) {
-          refreshingGeneration = null;
-          refreshingKeys = [];
+        if (refreshing?.generation === requestGeneration) {
+          refreshing = null;
           if (isCurrentRequest() && pendingRefreshKeys.size > 0) {
             lifecycle.schedule();
           }

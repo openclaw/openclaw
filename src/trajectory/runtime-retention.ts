@@ -8,6 +8,7 @@ import {
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { captureCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -229,7 +230,12 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
               database.path,
               {
                 type: "trajectoryRetention.read",
-                input: { ...input, agentId: database.agentId, now },
+                input: {
+                  ...input,
+                  agentId: database.agentId,
+                  now,
+                  schemaContract: captureCanonicalSessionValidationSchema(),
+                },
               },
               {
                 source: "canonical",

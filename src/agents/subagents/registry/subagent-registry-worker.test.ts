@@ -114,6 +114,9 @@ it("streams bounded restore batches in one read and retains snapshot row version
   );
   const fixtureRows = new Map(entries.map((row) => [row.runId, row]));
   saveSubagentRegistryChangesToSqlite(fixtureRows, [...fixtureRows.keys()]);
+  openOpenClawStateDatabase()
+    .db.prepare("UPDATE subagent_runs SET payload_json = payload_json || ' ' WHERE run_id = ?")
+    .run("paged-0");
   const read = stateReads.executeExistingOpenClawStateRead;
   const payloadBytes: number[] = [];
   const observe = vi
@@ -149,6 +152,12 @@ it("streams bounded restore batches in one read and retains snapshot row version
   } finally {
     observe.mockRestore();
   }
+  const updateRestored = vi.fn((rows: ReadonlyMap<string, SubagentRunRecord>) => ({
+    value: undefined,
+    postimages: new Map([["paged-0", { ...rows.get("paged-0")!, label: "restored metadata" }]]),
+  }));
+  await mutateSubagentRuns(["paged-0"], updateRestored);
+  expect(updateRestored).toHaveBeenCalledOnce();
   await change("paged-2", (row) => {
     row.label = "after snapshot";
   });
@@ -318,6 +327,9 @@ it.each([false, true])(
       }
       // This fixture's admitted native handle is a different SQLite connection from the worker.
       saveSubagentRegistryChangesToSqlite(new Map([[foreign.runId, foreign]]), [foreign.runId]);
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE subagent_runs SET payload_json = payload_json || ' ' WHERE run_id = ?")
+        .run(foreign.runId);
     });
     const plan = vi.fn((rows: ReadonlyMap<string, SubagentRunRecord>) => {
       const current = rows.get("foreign")!;

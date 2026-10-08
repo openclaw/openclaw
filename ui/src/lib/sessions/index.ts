@@ -185,10 +185,7 @@ export function createSessionCapability(
     const annotated = swarmActivity.decorate(projected);
     // Preserve receipts before a pending intent makes another tracked copy.
     roster.observations.inherit(annotated, projected);
-    const decorated = deletions.apply(
-      mutations.applyPendingRows(mutations.applyConfirmedArchives(annotated), owner.scope.agentId),
-      owner,
-    );
+    const decorated = deletions.apply(mutations.applyRows(annotated, owner.scope.agentId), owner);
     roster.observations.inherit(decorated, result);
     return decorated;
   };

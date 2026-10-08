@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { embeddedAgentLog, type AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { readCodexSessionContext } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
@@ -10,6 +11,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { runOpenClawAgentWriteAdmission } from "openclaw/plugin-sdk/sqlite-runtime";
+import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { readCodexNativeHistory } from "./session-history-read.js";
@@ -173,15 +176,22 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       for (const message of settledMessages) {
         await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
       }
-      const captured = await captureCodexSettledTurnFinalizationContext({
-        ...sessionTarget,
-        sessionTarget,
-        sessionFile: marker,
-        model: "gpt-5.6-luna",
-        settledMessages,
-        mirroredMessages: settledMessages,
-        turnId: "settled",
-      });
+      const sql = incognito ? undefined : observeHostDataSql();
+      let captured: CodexSettledTurnContext | undefined;
+      try {
+        captured = await captureCodexSettledTurnFinalizationContext({
+          ...sessionTarget,
+          sessionTarget,
+          sessionFile: marker,
+          model: "gpt-5.6-luna",
+          settledMessages,
+          mirroredMessages: settledMessages,
+          turnId: "settled",
+        });
+        expect(sql?.queries ?? []).toEqual([]);
+      } finally {
+        sql?.restore();
+      }
       {
         expect(captured).toBeInstanceOf(CodexSettledTurnContext);
         expect(captured?.data).toContainEqual({
@@ -212,6 +222,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     { mutation: "rewrite", oversized: false, reason: "snapshot_invalidated" },
     { mutation: "append", oversized: false, reason: undefined },
     { mutation: "other-session", oversized: false, reason: undefined },
+    { mutation: "foreign-rewrite", oversized: false, reason: "snapshot_invalidated" },
     { mutation: "rewrite", oversized: true, reason: "snapshot_invalidated" },
     { mutation: "append", oversized: true, reason: "field_limit" },
     { mutation: "other-session", oversized: true, reason: "field_limit" },
@@ -240,14 +251,22 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
       const readFinished = createDeferred<void>();
       const acceptResult = createDeferred<void>();
-      const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
+      const runWorker = vi.spyOn(WorkerTaskPool.prototype, "run");
+      runWorker.mockRestore();
+      const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async function (
         this: WorkerTaskPool<unknown, unknown>,
         ...args
       ) {
-        spy.mockRestore();
-        const value = await this.run(...args);
-        readFinished.resolve();
-        await acceptResult.promise;
+        const [input] = args;
+        const projection = input && typeof input === "object" && "evidence" in input;
+        if (projection) {
+          spy.mockRestore();
+        }
+        const value = await runWorker.call(this, ...args);
+        if (projection) {
+          readFinished.resolve();
+          await acceptResult.promise;
+        }
         return value;
       });
       try {
@@ -268,6 +287,24 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
               (entry) => entry.type === "message" && entry.message.role === "toolResult",
             ),
           ).toBe(1);
+        } else if (mutation === "foreign-rewrite") {
+          await runOpenClawAgentWriteAdmission(
+            { agentId: sessionTarget.agentId, path: sessionTarget.storePath },
+            () => {
+              const foreign = new DatabaseSync(sessionTarget.storePath);
+              try {
+                expect(
+                  foreign
+                    .prepare(
+                      "UPDATE transcript_rewrite_watermarks SET generation = generation || ':foreign' WHERE session_id = ?",
+                    )
+                    .run(sessionTarget.sessionId).changes,
+                ).toBe(1);
+              } finally {
+                foreign.close();
+              }
+            },
+          );
         } else {
           const target =
             mutation === "other-session"

@@ -3,6 +3,8 @@ import { dualRoutes } from "../agents/model-auth-availability.test-support.js";
 import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
 import * as openaiRoutes from "../agents/openai-model-routes.js";
 import { bindPreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
+import { prepareModelCatalogPublication } from "../agents/prepared-model-runtime.catalog-publication.js";
+import { materializePreparedModelCatalog } from "../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -77,12 +79,163 @@ describe("passive session context owner", () => {
   );
 
   it.each([
-    { authored: 200_000, synthetic: true, expected: 200_000 },
-    { authored: 64_000, synthetic: true, expected: 64_000 },
-    { authored: 200_000, synthetic: false, expected: 128_000 },
+    {
+      name: "same-account retained inventory",
+      previous: true,
+      sameAccount: true,
+      expected: 272_000,
+    },
+    { name: "different-account inventory", previous: true, sameAccount: false, expected: null },
+    { name: "first failed acquisition", previous: false, sameAccount: true, expected: null },
   ])(
-    "projects authored $authored with current owner synthetic=$synthetic",
-    async ({ authored, synthetic, expected }) => {
+    "recovers saved Synthetic capacity from $name",
+    async ({ previous, sameAccount, expected }) => {
+      const provider = "openai";
+      const model = "retained-fixture";
+      const profileId = "openai:fixture";
+      const cfg: OpenClawConfig = { agents: { defaults: { model: `${provider}/${model}` } } };
+      const row = {
+        provider,
+        id: model,
+        name: "Retained fixture",
+        api: "openai-responses" as const,
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 272_000,
+      };
+      const fallback = {
+        ...row,
+        contextWindow: 128_000,
+        contextWindowSource: "synthetic" as const,
+      };
+      const auth = (key: string) => ({
+        authStore: {
+          version: 1 as const,
+          profiles: {
+            [profileId]: { type: "api_key" as const, provider, key },
+          },
+        },
+        authModes: {},
+        providerAuthLabels: new Map(),
+        credentials: { [provider]: { type: "api_key" as const, key } },
+      });
+      const accepted = prepareModelCatalogPublication(
+        {
+          entries: [row],
+          routeVariants: [row],
+          providerOutcomes: [{ provider, profileId, status: "ready" }],
+        },
+        new Map(),
+        undefined,
+        auth("synthetic-account-a"),
+        (value) => value,
+        new Map(),
+      );
+      const currentAuth = auth(sameAccount ? "synthetic-account-a" : "synthetic-account-b");
+      const failed = prepareModelCatalogPublication(
+        {
+          entries: [],
+          routeVariants: [],
+          staticEntries: [fallback],
+          providerOutcomes: [{ provider, profileId, status: "unavailable" }],
+        },
+        new Map(),
+        previous ? { ...accepted, providers: new Map() } : undefined,
+        currentAuth,
+        (value) => value,
+        new Map(),
+      );
+      expect(failed.discoveryOrigins).toEqual(
+        previous && sameAccount ? [{ provider, profileId }] : [],
+      );
+      const catalog = materializePreparedModelCatalog(
+        failed.catalog,
+        [],
+        [fallback],
+        new Set(failed.discoveryOrigins.map((origin) => origin.provider)),
+      );
+      prepared.owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
+        modelCatalog: catalog,
+      });
+      bindPreparedModelRuntimeAuth(prepared.owner, { store: currentAuth.authStore });
+      vi.stubEnv("OPENAI_API_KEY", undefined);
+      vi.spyOn(openaiRoutes, "resolveOpenAIModelRoutes").mockReturnValue(dualRoutes);
+      const saved = {
+        ...entry,
+        model,
+        agentRuntimeOverride: "openclaw",
+        authProfileOverride: profileId,
+        authProfileOverrideSource: "user" as const,
+      };
+      const resolution = await createStatusModelResolver({
+        cfg,
+        agentId: "main",
+        agentDir: "/tmp/runtime-choice/agent",
+        workspaceDir: "/tmp/runtime-choice",
+        sessionEntry: saved,
+        owner: prepared.owner,
+      })({ provider, model, runtimeId: "openclaw", acceptedProviderIds: [] });
+      expect(resolution.endpoint).toBe(row.baseUrl);
+      expect(resolution.authLabel).toContain("api-key");
+      const store = await writeStore({ "agent:main:main": saved });
+      try {
+        const summary = await getStatusSummary({
+          includeChannelSummary: false,
+          config: { ...cfg, session: { store } },
+        });
+        expect(summary.sessions.recent[0]?.contextTokens).toBe(expected);
+      } finally {
+        await closeOpenClawAgentDatabaseByPathAsync(store);
+        cleanupStore(store);
+      }
+    },
+  );
+
+  it.each([
+    {
+      authored: 200_000,
+      synthetic: true,
+      current: true,
+      configuredWindow: undefined,
+      expected: 200_000,
+    },
+    {
+      authored: 64_000,
+      synthetic: true,
+      current: true,
+      configuredWindow: undefined,
+      expected: 64_000,
+    },
+    {
+      authored: 200_000,
+      synthetic: false,
+      current: true,
+      configuredWindow: undefined,
+      expected: 128_000,
+    },
+    {
+      authored: 200_000,
+      synthetic: true,
+      current: false,
+      configuredWindow: 64_000,
+      expected: 64_000,
+    },
+    {
+      authored: 200_000,
+      synthetic: true,
+      current: false,
+      configuredWindow: undefined,
+      expected: 200_000,
+    },
+    {
+      authored: undefined,
+      synthetic: true,
+      current: false,
+      configuredWindow: 64_000,
+      expected: 64_000,
+    },
+  ])(
+    "projects authored $authored with owner current=$current synthetic=$synthetic configured window=$configuredWindow",
+    async ({ authored, synthetic, current, configuredWindow, expected }) => {
       const provider = "openai";
       const model = "fixture-model";
       const route = {
@@ -109,6 +262,7 @@ describe("passive session context owner", () => {
                   input: ["text"],
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextTokens: authored,
+                  ...(configuredWindow !== undefined ? { contextWindow: configuredWindow } : {}),
                   maxTokens: 4096,
                 },
               ],
@@ -116,7 +270,7 @@ describe("passive session context owner", () => {
           },
         },
       };
-      prepared.owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
+      prepared.owner = createModelRuntimeChoiceOwnerFixture(cfg, () => current, {
         modelCatalog: {
           entries: [route],
           routeVariants: [route],
@@ -168,20 +322,42 @@ describe("passive session context owner", () => {
   it.each([
     {
       name: "ready matching native inventory",
+      source: "synthetic" as const,
       catalogRuntime: "codex",
       current: true,
       expected: 272_000,
     },
     {
       name: "mismatched native inventory",
+      source: "synthetic" as const,
       catalogRuntime: "another-native",
       current: true,
       expected: null,
     },
-    { name: "retired native owner", catalogRuntime: "codex", current: false, expected: null },
+    {
+      name: "retired native owner",
+      source: "synthetic" as const,
+      catalogRuntime: "codex",
+      current: false,
+      expected: null,
+    },
+    {
+      name: "ready native inventory with resolved saved capacity",
+      source: "resolved" as const,
+      catalogRuntime: "codex",
+      current: true,
+      expected: 272_000,
+    },
+    {
+      name: "retired native owner with resolved saved capacity",
+      source: "resolved" as const,
+      catalogRuntime: "codex",
+      current: false,
+      expected: null,
+    },
   ])(
-    "projects saved Synthetic context through $name without a host route",
-    async ({ catalogRuntime, current, expected }) => {
+    "projects saved $source context through $name without a host route",
+    async ({ source, catalogRuntime, current, expected }) => {
       const provider = "openai";
       const model = "gpt-5.4";
       const cfg: OpenClawConfig = {
@@ -227,7 +403,13 @@ describe("passive session context owner", () => {
       bindPreparedModelRuntimeAuth(prepared.owner, { store: { version: 1, profiles: {} } });
       vi.stubEnv("OPENAI_API_KEY", undefined);
       vi.spyOn(openaiRoutes, "resolveOpenAIModelRoutes").mockReturnValue(dualRoutes);
-      const saved = { ...entry, model, agentHarnessId: "codex", agentRuntimeOverride: "codex" };
+      const saved = {
+        ...entry,
+        model,
+        contextTokensSource: source,
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "codex",
+      };
       const runtimeId = resolveEffectiveAgentRuntime({
         cfg,
         provider,

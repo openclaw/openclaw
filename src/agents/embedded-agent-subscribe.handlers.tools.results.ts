@@ -13,10 +13,7 @@ import type {
   ExecApprovalUnavailableReplyParams,
 } from "../infra/exec-approval-reply.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
-import {
-  parseInteractiveParam,
-  parseJsonMessageParam,
-} from "../infra/outbound/message-action-params.js";
+import { parseJsonMessageParam } from "../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
@@ -359,7 +356,7 @@ export function hasMessagingRichContent(record: Record<string, unknown>): boolea
   };
   try {
     parseJsonMessageParam(payload, "presentation");
-    parseInteractiveParam(payload);
+    parseJsonMessageParam(payload, "interactive");
   } catch {
     return false;
   }

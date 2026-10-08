@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -994,6 +995,25 @@ describe("admitFollowupTurn", () => {
       turn: { sendPolicy: "deny", preflightFailurePayload: { text: "preflight failed" } },
     });
     expect(operation.fail).toHaveBeenCalledWith("run_failed", expect.any(Error));
+  });
+
+  it("retains the preflight owner's public recovery guidance for a queued turn", async () => {
+    const userMessage = "The saved history exceeds its limit. Use /new, then resend your message.";
+    state.preflight.mockRejectedValue(
+      new AgentHarnessPreflightError(
+        "Preflight compaction required but failed: private diagnostic",
+        {
+          userMessage,
+        },
+      ),
+    );
+    const result = await admitFollowupTurn({ queued: createRun(), defaults: createDefaults() });
+
+    expect(result).toMatchObject({
+      kind: "admitted",
+      turn: { preflightFailurePayload: { text: userMessage } },
+    });
+    expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
   });
 
   it.each([undefined, "full"] as const)(

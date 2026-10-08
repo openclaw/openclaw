@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredContextTokenLimits } from "./context-resolution.js";
 import type { ModelCatalogSnapshot, ModelCatalogEntry } from "./model-catalog.types.js";
@@ -11,7 +11,13 @@ import { normalizeProviderId } from "./model-selection.js";
  * prepared owner. This is deliberately separate from the last run's persisted budget.
  */
 export type SessionContextCapacity =
-  | { state: "ready"; contextTokens: number; synthetic: boolean; contextTokenLimit?: number }
+  | {
+      state: "ready";
+      contextTokens: number;
+      synthetic: boolean;
+      contextTokensSource?: "resolved";
+      contextTokenLimit?: number;
+    }
   /** Owner-scoped negative state: this owner cannot answer; never another owner's value. */
   | { state: "unavailable" };
 
@@ -19,10 +25,10 @@ export type SessionContextCapacityOwner = {
   config?: OpenClawConfig;
   isCurrent: () => boolean;
   modelCatalog: Pick<ModelCatalogSnapshot, "entries" | "staticEntries" | "providerOutcomes"> &
-    Partial<Pick<ModelCatalogSnapshot, "routeVariants">>;
+    Partial<Pick<ModelCatalogSnapshot, "routeVariants" | "acceptedDiscoveryOrigins">>;
   readFullModelCatalog?: () =>
     | (Pick<ModelCatalogSnapshot, "entries" | "staticEntries" | "providerOutcomes"> &
-        Partial<Pick<ModelCatalogSnapshot, "routeVariants">>)
+        Partial<Pick<ModelCatalogSnapshot, "routeVariants" | "acceptedDiscoveryOrigins">>)
     | undefined;
 };
 
@@ -30,7 +36,7 @@ export type SessionContextCapacityResolver = (
   provider: string | undefined,
   model: string | undefined,
   selection?: {
-    profileId?: string;
+    profileId?: string | null;
     route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
     nativeRuntime?: string;
     contextWindow?: string;
@@ -47,13 +53,13 @@ export function createSessionContextCapacityResolver(
 ): SessionContextCapacityResolver {
   return (provider, model, selection) => {
     const providerId = provider ? normalizeProviderId(provider) : "";
-    const modelId = normalizeLowercaseStringOrEmpty(model);
+    const modelId = normalizeOptionalString(model) ?? "";
     if (!providerId || !modelId) {
       return undefined;
     }
     let catalog:
       | (Pick<ModelCatalogSnapshot, "entries" | "staticEntries" | "providerOutcomes"> &
-          Partial<Pick<ModelCatalogSnapshot, "routeVariants">>)
+          Partial<Pick<ModelCatalogSnapshot, "routeVariants" | "acceptedDiscoveryOrigins">>)
       | undefined;
     try {
       // Failed, cancelled, retired or unbound preparation settles here as unavailable.
@@ -69,11 +75,16 @@ export function createSessionContextCapacityResolver(
       return { state: "unavailable" };
     }
     if (
-      selection?.profileId &&
+      selection?.profileId !== undefined &&
+      !catalog?.acceptedDiscoveryOrigins?.some(
+        (origin) =>
+          normalizeProviderId(origin.provider) === providerId &&
+          origin.profileId === (selection.profileId ?? undefined),
+      ) &&
       !catalog?.providerOutcomes?.some(
         (outcome) =>
           normalizeProviderId(outcome.provider) === providerId &&
-          outcome.profileId === selection.profileId &&
+          outcome.profileId === (selection.profileId ?? undefined) &&
           outcome.status === "ready",
       )
     ) {
@@ -87,6 +98,7 @@ export function createSessionContextCapacityResolver(
     });
     let reported: number | undefined;
     let estimate: number | undefined;
+    let selectable = false;
     let contextTokenLimit: number | undefined;
     let nativeRoute: ModelCatalogEntry | undefined;
     for (const entry of [
@@ -99,7 +111,7 @@ export function createSessionContextCapacityResolver(
         (selection?.nativeRuntime && entry.nativeRuntime !== selection.nativeRuntime) ||
         (!selection?.nativeRuntime && Boolean(entry.nativeRuntime)) ||
         normalizeProviderId(entry.provider) !== providerId ||
-        normalizeLowercaseStringOrEmpty(entry.id) !== modelId
+        entry.id !== modelId
       ) {
         continue;
       }
@@ -113,6 +125,7 @@ export function createSessionContextCapacityResolver(
         }
         nativeRoute ??= entry;
       }
+      selectable ||= Boolean(entry.contextWindows?.length);
       const tokens = positive(entry.contextTokens);
       const profile = resolveModelContextWindowProfile({
         catalogEntry: entry,
@@ -147,6 +160,7 @@ export function createSessionContextCapacityResolver(
         state: "ready",
         contextTokens: reported,
         synthetic: false,
+        ...(selectable ? { contextTokensSource: "resolved" as const } : {}),
         ...(contextTokenLimit !== undefined ? { contextTokenLimit } : {}),
       };
     }

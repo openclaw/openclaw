@@ -1,13 +1,13 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import {
-  resolveContextTokenBudgetForModel,
-  resolveModelContextTokenProjection,
-} from "../../agents/context.js";
+import { resolveContextTokenBudgetForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { resolveModelContextWindowProfile } from "../../agents/model-context-window.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
-import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
+import {
+  resolveProjectedSessionContextTokenBudget,
+  resolveProjectedSessionContextTokens,
+} from "../../config/sessions/context-token-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FollowupRun } from "./queue.js";
@@ -60,25 +60,31 @@ export async function resolveFollowupContextTokens(
       : catalogModel?.contextWindowSource,
     allowAsyncLoad: false,
   };
-  let projection = resolveModelContextTokenProjection(contextParams);
-  const projectBudget = () => {
-    const projected = resolveProjectedSessionContextTokens({
-      entry: sessionEntry,
-      provider,
-      model,
-      agentHarnessId: runtimeId,
-      resolvedContextTokens:
-        projection.source === "fallback" ? undefined : projection.contextTokens,
-      authoredContextTokens: projection.authoredContextTokens,
-    });
-    return projected !== undefined && selectedContextTokens !== undefined
+  const selection = {
+    provider,
+    model,
+    agentHarnessId: runtimeId,
+    authProfileId: followupRun.run.authProfileId,
+  };
+  const knownContextBudget = resolveProjectedSessionContextTokenBudget({
+    entry: sessionEntry,
+    ...selection,
+    resolvedContextTokens: undefined,
+  });
+  const projection = await resolveContextTokenBudgetForModel({
+    ...contextParams,
+    knownContextBudget,
+  });
+  const projected = resolveProjectedSessionContextTokens({
+    entry: sessionEntry,
+    ...selection,
+    resolvedContextTokens: projection.source === "fallback" ? undefined : projection.contextTokens,
+    resolvedContextTokensSource: projection.contextTokensSource,
+    authoredContextTokens: projection.authoredContextTokens,
+  });
+  const budget =
+    projected !== undefined && selectedContextTokens !== undefined
       ? Math.min(projected, selectedContextTokens)
       : projected;
-  };
-  const retained = projectBudget();
-  if (retained !== undefined) {
-    return retained;
-  }
-  projection = await resolveContextTokenBudgetForModel(contextParams);
-  return projectBudget() ?? projection.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
+  return budget ?? projection.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
 }

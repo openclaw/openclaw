@@ -305,6 +305,7 @@ export async function runAcpAgentCommand(params: {
       threadId: params.opts.threadId,
       sessionCwd: resolveAcpSessionCwd(params.acpResolution.meta) ?? params.workspaceDir,
       config: params.cfg,
+      runId: params.runId,
     });
     if (!internalTarget) {
       sessionEntry = transcriptResult.sessionEntry;

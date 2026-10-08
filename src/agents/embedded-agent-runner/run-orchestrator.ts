@@ -152,9 +152,6 @@ async function runEmbeddedAgentForSession(
     contextEngineAgentId,
     queuedLifecycleGeneration,
   } = prepared;
-  const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
-    ? (paramsBase.skillWorkshopProposalMutationBudget ?? { remaining: 1 })
-    : undefined;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
@@ -164,7 +161,6 @@ async function runEmbeddedAgentForSession(
       (paramsBase.sessionPersistence === "detached"
         ? SessionManager.inMemory(paramsBase.cwd ?? paramsBase.workspaceDir)
         : undefined),
-    skillWorkshopProposalMutationBudget,
   });
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane, params);

@@ -280,15 +280,6 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           agentId,
           sessionKey: key,
         });
-        const contextProjection = resolveModelContextTokenProjection({
-          cfg,
-          provider: lookupModel.provider,
-          model: lookupModelId,
-          nativeRuntime: runtime.id,
-          ...(runtime.id && runtime.id !== "openclaw" ? {} : modelContext),
-          fallbackContextTokens: configContextTokens,
-          allowAsyncLoad: false,
-        });
         const owner = agentId
           ? getPublishedPreparedModelCatalogOwnerSnapshot({ config: cfg, agentId })
           : undefined;
@@ -311,6 +302,27 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
                 })
               ).ownerCapacity
             : { state: "unavailable" as const };
+        const reportedOwnerCapacity =
+          ownerCapacity?.state === "ready" && !ownerCapacity.synthetic
+            ? ownerCapacity.contextTokens
+            : undefined;
+        const contextProjection = resolveModelContextTokenProjection(
+          {
+            cfg,
+            provider: lookupModel.provider,
+            model: lookupModelId,
+            nativeRuntime: runtime.id,
+            ...(reportedOwnerCapacity !== undefined
+              ? { modelContextTokens: reportedOwnerCapacity }
+              : runtime.id && runtime.id !== "openclaw"
+                ? {}
+                : modelContext),
+            fallbackContextTokens: configContextTokens,
+            allowAsyncLoad: false,
+          },
+          reportedOwnerCapacity !== undefined ? () => undefined : undefined,
+          reportedOwnerCapacity !== undefined ? () => undefined : undefined,
+        );
         const contextTokens =
           resolveProjectedSessionContextTokens({
             entry,
@@ -325,6 +337,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
               provider: lookupModel.provider,
               modelProvider: contextModelProvider,
               model: lookupModelId,
+              nativeRuntime: runtime.id,
             }),
           }) ?? null;
         const total = resolveSessionTotalTokens(entry);

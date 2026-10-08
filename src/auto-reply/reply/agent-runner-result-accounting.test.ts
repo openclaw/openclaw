@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelContextTokenProjection } from "../../agents/context-resolution.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
@@ -7,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   persistSessionUsageUpdate: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
   scalarContextTokens: undefined as number | undefined,
+  preparedContextTokensSource: undefined as ModelContextTokenProjection["contextTokensSource"],
   resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
 }));
 
@@ -18,6 +20,7 @@ vi.mock("../../agents/context.js", () => ({
     source: mocks.scalarContextTokens === undefined ? "fallback" : "model",
   }),
   resolveContextTokenBudgetForModel: async () => ({
+    contextTokensSource: mocks.preparedContextTokensSource,
     contextTokens: mocks.resolveContextTokensForModel(),
     authoredContextTokens: undefined,
     source: "model",
@@ -182,6 +185,7 @@ describe("accountFollowupTurn", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.scalarContextTokens = undefined;
+    mocks.preparedContextTokensSource = undefined;
     mocks.resolveContextTokensForModel.mockReturnValue(200_000);
   });
 
@@ -236,8 +240,9 @@ describe("accountFollowupTurn", () => {
     );
   });
 
-  it("persists the selected window instead of an already-known model scalar", async () => {
+  it("accounts for a prepared selectable budget instead of an already-known model scalar", async () => {
     mocks.scalarContextTokens = 1_000_000;
+    mocks.preparedContextTokensSource = "resolved";
     const params = createParams();
     const current = params.turn.session.current();
     if (!current) {
@@ -246,7 +251,7 @@ describe("accountFollowupTurn", () => {
     params.turn.session.adopt({ ...current, contextWindow: "small" });
     await accountFollowupTurn(params);
     expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ contextTokensUsed: 200_000, contextTokensSource: "resolved-v1" }),
+      expect.objectContaining({ contextTokensUsed: 200_000, contextTokensSource: "resolved" }),
     );
   });
 

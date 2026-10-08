@@ -54,6 +54,9 @@ it.each([
   "unbound account",
   "unbound route",
   "matching account and route",
+  "rejected account with authored cap",
+  "rejected account with genuine caller metadata",
+  "matching account with a smaller donor cache",
 ] as const)("does not acquire alternate API inventory for %s", async (binding) => {
   const provider = "fixture-accounting";
   const model = "unknown-admission-model";
@@ -65,8 +68,12 @@ it.each([
     baseUrl: "https://other.example.test/v1",
     contextWindow: 777_000,
   };
+  getContextWindowCaches().discoveredTokenCache.set(
+    providerContextTokenCacheKey(provider, model),
+    binding === "matching account with a smaller donor cache" ? 64_000 : 987_000,
+  );
   facts.load.mockResolvedValue({ entries: [donor], routeVariants: [donor] });
-  if (binding === "different account" || binding === "matching account and route") {
+  if (binding !== "unbound account" && binding !== "unbound route" && binding !== "retired owner") {
     facts.owner = {
       isCurrent: () => true,
       modelCatalog: {
@@ -75,7 +82,11 @@ it.each([
         providerOutcomes: [
           {
             provider,
-            profileId: binding === "different account" ? "fixture:other" : "fixture:current",
+            profileId:
+              binding === "matching account and route" ||
+              binding === "matching account with a smaller donor cache"
+                ? "fixture:current"
+                : "fixture:other",
             status: "ready",
           },
         ],
@@ -86,13 +97,36 @@ it.each([
   }
   expect(
     await resolveContextTokenBudgetForModel({
-      cfg: {},
+      cfg:
+        binding === "rejected account with authored cap"
+          ? {
+              models: {
+                providers: {
+                  [provider]: {
+                    baseUrl: "https://other.example.test/v1",
+                    models: [
+                      {
+                        id: model,
+                        name: "Configured",
+                        reasoning: false,
+                        input: ["text"],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextTokens: 32_000,
+                        maxTokens: 4096,
+                      },
+                    ],
+                  },
+                },
+              },
+            }
+          : {},
       provider,
       model,
       nativeRuntime: "openclaw",
-      ...(binding === "different account" ||
-      binding === "unbound account" ||
-      binding === "matching account and route"
+      ...(binding === "rejected account with genuine caller metadata"
+        ? { modelContextWindow: 1_000_000, modelContextTokens: 900_000 }
+        : {}),
+      ...(binding !== "retired owner" && binding !== "unbound route"
         ? { profileId: "fixture:current" }
         : {}),
       ...(binding === "unbound route" || binding === "matching account and route"
@@ -108,9 +142,14 @@ it.each([
         : {}),
     }),
   ).toMatchObject(
-    binding === "matching account and route"
+    binding === "matching account and route" ||
+      binding === "matching account with a smaller donor cache"
       ? { contextTokens: 777_000, source: "model" }
-      : { contextTokens: undefined, source: "fallback" },
+      : binding === "rejected account with authored cap"
+        ? { contextTokens: 32_000, source: "configured" }
+        : binding === "rejected account with genuine caller metadata"
+          ? { contextTokens: 900_000, source: "model" }
+          : { contextTokens: undefined, source: "fallback" },
   );
   expect(facts.load).not.toHaveBeenCalled();
 });
@@ -330,7 +369,7 @@ it.each([
     authored: undefined,
     runtime: undefined,
     expected: 200_000,
-    source: "resolved-v1",
+    source: "resolved",
   },
   {
     name: "declared default",
@@ -342,7 +381,7 @@ it.each([
     authored: undefined,
     runtime: undefined,
     expected: 200_000,
-    source: "resolved-v1",
+    source: "resolved",
   },
   {
     name: "authored prompt bound",
@@ -378,7 +417,7 @@ it.each([
     authored: undefined,
     runtime: undefined,
     expected: 200_000,
-    source: "resolved-v1",
+    source: "resolved",
   },
   {
     name: "cold declared default",
@@ -390,7 +429,7 @@ it.each([
     authored: undefined,
     runtime: undefined,
     expected: 200_000,
-    source: "resolved-v1",
+    source: "resolved",
   },
   {
     name: "cold authored prompt below fixed model but above declared default",
@@ -528,7 +567,11 @@ it.each([
             resolvedContextTokens: undefined,
             authoredContextTokens: authored,
           }),
-        ).toEqual({ contextTokens: expected, contextTokensSource: source });
+        ).toEqual(
+          declaredOptions && authored === undefined && runtime === undefined
+            ? undefined
+            : { contextTokens: expected, contextTokensSource: source },
+        );
       }
       if (cold) {
         if (declaredOptions || prompt !== undefined) {
@@ -537,6 +580,59 @@ it.each([
       } else {
         expect(facts.load).not.toHaveBeenCalled();
       }
+    });
+  },
+);
+
+it.each(["selected", "default"] as const)(
+  "refreshes a persisted %s option budget from changed cold catalog facts",
+  async (selection) => {
+    const provider = "fixture-accounting";
+    const model = "changing-options";
+    const catalogEntry: ModelCatalogEntry = {
+      provider,
+      id: model,
+      name: "Changing options",
+      contextWindow: 1_000_000,
+      contextWindows: [
+        { id: "small", label: "Small", contextWindow: 200_000 },
+        { id: "wide", label: "Wide", contextWindow: 1_000_000 },
+      ],
+      contextWindowDefault: "small",
+    };
+    publish([catalogEntry]);
+    await withSession(async ({ seed, update, read }) => {
+      const seeded = await seed({ contextWindow: selection === "selected" ? "small" : undefined });
+      const run = () =>
+        update({
+          defaultProvider: provider,
+          defaultModel: model,
+          result: createRunResult({
+            sessionId: seeded.sessionId,
+            provider,
+            model,
+            agentHarnessId: "openclaw",
+          }),
+        });
+      await run();
+      expect(read()?.contextTokens).toBe(200_000);
+      expect.soft(read()?.contextTokensSource).toBe("resolved");
+      facts.owner = undefined;
+      resetContextWindowCacheForTest();
+      const changed: ModelCatalogEntry =
+        selection === "selected"
+          ? {
+              ...catalogEntry,
+              contextWindows: [
+                { id: "small", label: "Small", contextWindow: 1_000_000 },
+                { id: "wide", label: "Wide", contextWindow: 1_000_000 },
+              ],
+            }
+          : { ...catalogEntry, contextWindowDefault: "wide" };
+      facts.load.mockResolvedValue({ entries: [changed], routeVariants: [changed] });
+      await run();
+      expect.soft(facts.load).toHaveBeenCalledOnce();
+      expect(read()).toMatchObject({ contextTokens: 1_000_000, contextTokensSource: "resolved" });
     });
   },
 );
@@ -696,7 +792,7 @@ it.each([
         });
         expect(read()).toMatchObject({
           contextTokens: expected,
-          contextTokensSource: "resolved-v1",
+          contextTokensSource: selected ? "resolved" : "resolved-v1",
         });
         expect(facts.load).not.toHaveBeenCalled();
       });
@@ -704,5 +800,128 @@ it.each([
       caches.contextWindowCache.delete(key);
       caches.discoveredTokenCache.delete(key);
     }
+  },
+);
+
+it.each([
+  {
+    name: "matching successful account",
+    successful: "fixture:catalog",
+    expected: 777_000,
+    source: "resolved-v1",
+    runtime: undefined,
+    locked: false,
+    ambientOwner: false,
+  },
+  {
+    name: "different successful account",
+    successful: "fixture:run",
+    expected: 200_000,
+    source: "resolved",
+    runtime: undefined,
+    locked: false,
+    ambientOwner: false,
+  },
+  {
+    name: "matching successful runtime account",
+    successful: "fixture:catalog",
+    expected: 900_000,
+    source: "runtime",
+    runtime: 900_000,
+    locked: false,
+    ambientOwner: false,
+  },
+  {
+    name: "different successful runtime account",
+    successful: "fixture:run",
+    expected: 900_000,
+    source: "resolved",
+    runtime: 900_000,
+    locked: false,
+    ambientOwner: false,
+  },
+  {
+    name: "observed ambient runtime account",
+    successful: null,
+    expected: 900_000,
+    source: "resolved",
+    runtime: 900_000,
+    locked: false,
+    ambientOwner: false,
+  },
+  {
+    name: "locked native runtime account",
+    successful: "fixture:run",
+    expected: 900_000,
+    source: "runtime",
+    runtime: 900_000,
+    locked: true,
+    ambientOwner: false,
+  },
+  {
+    name: "observed ambient account without runtime capacity",
+    successful: null,
+    expected: 200_000,
+    source: "resolved",
+    runtime: undefined,
+    locked: false,
+    ambientOwner: false,
+  },
+  {
+    name: "matching observed ambient catalog account",
+    successful: null,
+    expected: 777_000,
+    source: "resolved-v1",
+    runtime: undefined,
+    locked: false,
+    ambientOwner: true,
+  },
+])(
+  "persists only the actual $name capacity through command accounting",
+  async ({ successful, expected, source, runtime, locked, ambientOwner }) => {
+    const provider = "fixture-accounting";
+    const model = "account-bound-model";
+    facts.owner = {
+      isCurrent: () => true,
+      modelCatalog: {
+        entries: [
+          {
+            provider,
+            id: model,
+            name: "Account model",
+            contextWindow: 1_000_000,
+            contextTokens: 777_000,
+          },
+        ],
+        providerOutcomes: [
+          { provider, profileId: ambientOwner ? undefined : "fixture:catalog", status: "ready" },
+        ],
+      },
+    };
+    await withSession(async ({ seed, update, read }) => {
+      const seeded = await seed({
+        authProfileOverride: ambientOwner ? undefined : "fixture:catalog",
+        modelProvider: provider,
+        model,
+        agentHarnessId: "openclaw",
+        contextTokens: 888_000,
+        contextTokensSource: "resolved-v1",
+        modelSelectionLocked: locked,
+      });
+      await update({
+        defaultProvider: provider,
+        defaultModel: model,
+        authProfileId: successful,
+        result: createRunResult({
+          sessionId: seeded.sessionId,
+          provider,
+          model,
+          agentHarnessId: "openclaw",
+          contextTokens: runtime,
+        }),
+      });
+      expect(read()).toMatchObject({ contextTokens: expected, contextTokensSource: source });
+    });
+    expect(facts.load).not.toHaveBeenCalled();
   },
 );

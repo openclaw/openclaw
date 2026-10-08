@@ -637,7 +637,16 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     const deleted = "incognitoDeleted" in result;
     if (deleted) {
-      respond(true, { ok: true, key: result.key, deleted: true }, undefined);
+      respond(
+        true,
+        {
+          ok: true,
+          key: result.key,
+          deleted: true,
+          ...(result.worktreePreserved ? { worktreePreserved: result.worktreePreserved } : {}),
+        },
+        undefined,
+      );
     } else {
       respond(
         true,

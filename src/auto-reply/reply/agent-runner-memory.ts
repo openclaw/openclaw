@@ -59,6 +59,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPreflightCompactionError } from "./agent-runner-failure-reply.js";
 import { resolveFollowupContextTokens } from "./agent-runner-memory-context.js";
 import {
   readPreflightTranscriptContextMessages,
@@ -547,8 +548,7 @@ export async function runSessionCompactionIfNeeded(params: {
       tokenCount: tokenCountForCompaction,
       threshold,
     });
-  const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
-  if (!shouldCompact) {
+  if (!shouldCompactByTokens && !shouldCompactByTranscriptBytes) {
     return entry;
   }
 
@@ -765,8 +765,8 @@ export async function runSessionCompactionIfNeeded(params: {
         return entry;
       }
       await notifyCompaction("incomplete");
-      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+      preflightCompactionLog.warn(`preflight compaction failed: ${reason}`);
+      throw createPreflightCompactionError(reason, isCodexRuntime);
     }
 
     if (!hostAccountingCommitted) {

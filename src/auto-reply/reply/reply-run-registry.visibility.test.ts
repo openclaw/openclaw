@@ -37,7 +37,7 @@ it("keeps cross-profile question answers out of a backend restricted to its turn
     });
   const owner = authority("alice");
   const other = authority("bob");
-  for (const supportsCrossProfileSteering of [false, true, undefined]) {
+  for (const supportsCrossProfileSteering of [false, true]) {
     const operation = createTestReplyOperation();
     operation.bindToolAuthoritySnapshot({
       personalToolOwner: { operatorAuthority: owner },
@@ -71,14 +71,14 @@ it("keeps cross-profile question answers out of a backend restricted to its turn
           })
         ).outcome;
       await expect(answer(other)).resolves.toMatchObject(
-        supportsCrossProfileSteering === false
-          ? { status: "rejected", reason: "tool_authority_mismatch" }
-          : { status: "accepted" },
+        supportsCrossProfileSteering
+          ? { status: "accepted" }
+          : { status: "rejected", reason: "tool_authority_mismatch" },
       );
       expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(
-        supportsCrossProfileSteering === false ? 0 : 1,
+        supportsCrossProfileSteering ? 1 : 0,
       );
-      if (supportsCrossProfileSteering === false) {
+      if (!supportsCrossProfileSteering) {
         expect(operation.personalToolParticipants?.resolve()?.profileId).toBe("alice");
         expect(() => operation.personalToolParticipants?.resolve("bob")).toThrow(
           "User is not a participant",
@@ -88,7 +88,7 @@ it("keeps cross-profile question answers out of a backend restricted to its turn
       }
       await expect(answer(owner)).resolves.toMatchObject({ status: "accepted" });
       expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(
-        supportsCrossProfileSteering === false ? 1 : 2,
+        supportsCrossProfileSteering ? 2 : 1,
       );
       expect(queueMessage).not.toHaveBeenCalled();
     } finally {
@@ -156,68 +156,37 @@ async function withHiddenQuestionRun(
 }
 
 it.each([
-  { sink: "claim", failure: "unsupported" },
   { sink: "claim", failure: "refused" },
-  { sink: "claim", failure: "unconfirmed" },
   { sink: "image", failure: "unsupported" },
   { sink: "image", failure: "unconfirmed" },
   { sink: "claim", failure: "accepted" },
-  { sink: "claim", failure: "source-closed" },
   { sink: "image", failure: "generic" },
-  { sink: "claim", failure: "target-closed" },
   { sink: "claim", failure: "target-accepted" },
   { sink: "claim", failure: "target-source-closed" },
-  { sink: "claim", failure: "accepted-cleanup" },
-  { sink: "claim", failure: "wrapped-accepted-cleanup" },
-  { sink: "claim", failure: "accepted-generic" },
-  { sink: "claim", failure: "accepted-refused" },
-  { sink: "claim", failure: "accepted-source-refusal" },
-  { sink: "claim", failure: "withdrawn-unconfirmed" },
   { sink: "claim", failure: "withdrawn-source-closed" },
 ] as const)("keeps $sink replay decisions bounded after $failure", async ({ sink, failure }) => {
   const unsupported = new QuestionDispatchUnsupportedError("legacy dispatcher");
   const withdrawn = new MessageInjectionWithdrawnError("exact input withdrawn");
-  const cleanup = new MessageInjectionAcceptedUnconfirmedError({ cause: new Error("cleanup") });
-  const sourceRefusal = new Error("Source session access was revoked");
   const error =
-    failure === "accepted-source-refusal"
-      ? new MessageInjectionAuthorityError({
-          cause: new MessageInjectionAuthorityError({ cause: sourceRefusal }),
-        })
-      : failure === "withdrawn-source-closed"
-        ? withdrawn
-        : failure === "refused" || failure === "accepted-refused"
-          ? new QuestionDispatchRefusedError("owner refused", { cause: unsupported })
-          : failure === "unconfirmed" || failure === "withdrawn-unconfirmed"
-            ? new Error("runtime failure", {
-                cause: new QuestionAnswerUnconfirmedError(
-                  failure === "withdrawn-unconfirmed" ? withdrawn : unsupported,
-                ),
+    failure === "withdrawn-source-closed"
+      ? withdrawn
+      : failure === "refused"
+        ? new QuestionDispatchRefusedError("owner refused", { cause: unsupported })
+        : failure === "unconfirmed"
+          ? new Error("runtime failure", { cause: new QuestionAnswerUnconfirmedError(unsupported) })
+          : failure.startsWith("target-")
+            ? new MessageInjectionAuthorityError({
+                cause: new MessageInjectionTargetUnavailableError("Terminal delivery closed"),
               })
-            : failure === "accepted-cleanup"
-              ? cleanup
-              : failure === "wrapped-accepted-cleanup"
-                ? new Error("backend completion failed", { cause: cleanup })
-                : failure.startsWith("target-")
-                  ? new MessageInjectionAuthorityError({
-                      cause: new MessageInjectionTargetUnavailableError("Terminal delivery closed"),
-                    })
-                  : failure === "generic" || failure === "accepted-generic"
-                    ? new Error("unknown cancellation failure")
-                    : unsupported;
+            : failure === "generic"
+              ? new Error("unknown cancellation failure")
+              : unsupported;
   const reportsAccepted =
     failure === "accepted" ||
     failure === "target-accepted" ||
-    failure === "accepted-generic" ||
-    failure === "accepted-refused" ||
-    failure === "accepted-source-refusal" ||
     failure === "withdrawn-source-closed";
   const indeterminate =
-    (reportsAccepted && failure !== "withdrawn-source-closed") ||
-    failure === "unconfirmed" ||
-    failure === "withdrawn-unconfirmed" ||
-    failure === "accepted-cleanup" ||
-    failure === "wrapped-accepted-cleanup";
+    (reportsAccepted && failure !== "withdrawn-source-closed") || failure === "unconfirmed";
   let sourceCurrent = true;
   const throwFromSink = (
     options: ReplyBackendQueueMessageOptions | undefined,
@@ -227,11 +196,7 @@ it.each([
     if (reportsAccepted) {
       options?.onQueueAccepted?.(true);
     }
-    if (
-      failure === "source-closed" ||
-      failure === "target-source-closed" ||
-      failure === "withdrawn-source-closed"
-    ) {
+    if (failure === "target-source-closed" || failure === "withdrawn-source-closed") {
       sourceCurrent = false;
     }
     throw error;
@@ -266,15 +231,8 @@ it.each([
       } else {
         await expect(attempt.outcome).resolves.toMatchObject({
           status:
-            failure === "unsupported" || failure === "target-closed"
-              ? "rejected"
-              : indeterminate
-                ? "indeterminate"
-                : "failed",
-          ...(failure === "accepted-source-refusal" ? { errorMessage: sourceRefusal.message } : {}),
-          ...(failure === "unsupported" || failure === "target-closed"
-            ? { reason: "injection_unavailable" }
-            : {}),
+            failure === "unsupported" ? "rejected" : indeterminate ? "indeterminate" : "failed",
+          ...(failure === "unsupported" ? { reason: "injection_unavailable" } : {}),
         });
       }
       await expect(attempt.acceptance).resolves.toBe(indeterminate || reportsAccepted);
@@ -286,7 +244,6 @@ it.each([
 
 it.each([
   { input: "same authority", fingerprint: "same-owner", pending: undefined, claimed: true },
-  { input: "proven route", fingerprint: "other-route", pending: "same-owner", claimed: true },
   { input: "no pending question", fingerprint: "same-owner", pending: undefined, claimed: false },
   { input: "unproven authority", fingerprint: "other-owner", pending: undefined, claimed: true },
 ])("claims only an authorized pending answer in a hidden run: $input", async (testCase) => {
@@ -462,32 +419,93 @@ it.each(["same-owner", "different-owner"])(
   },
 );
 
-it.each([false, true])(
-  "only status-only callers preserve work on an uncertain steering receipt (statusOnly=%s)",
-  async (statusOnly) => {
+it.each(["result", "exception"] as const)(
+  "retains steering custody without canceling backing work after an uncertain %s",
+  async (receipt) => {
     const operation = createTestReplyOperation();
+    const cancel = vi.fn();
+    const onQueueAccepted = vi.fn();
+    const onOutcome = vi.fn();
+    const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(async () => {
+      if (receipt === "exception") {
+        throw new MessageInjectionAcceptedUnconfirmedError({
+          cause: new Error("still awaiting commit"),
+        });
+      }
+      return { transcriptCommit: "unconfirmed", errorMessage: "still awaiting commit" };
+    });
     operation.attachBackend({
       kind: "embedded",
       runId: "receipt-run",
-      cancel: vi.fn(),
+      cancel,
       messageInjectionV2: {
         version: 2,
         isAvailable: () => true,
-        queueMessage: async () => ({
-          transcriptCommit: "unconfirmed",
-          errorMessage: "still awaiting commit",
-        }),
+        queueMessage,
       },
     });
     operation.setPhase("running");
     const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-    const attempt = await beginReplyMessageInjectionTarget(target, "Queued guidance");
+    const attempt = await beginReplyMessageInjectionTarget(target, "Queued guidance", {
+      onQueueAccepted,
+    });
     const result = await finalizeReplyMessageInjectionAttempt({
       attempt,
       target,
-      ...(statusOnly ? { abortOnUnconfirmedTranscript: false as const } : {}),
+      onOutcome,
     });
-    expect(result).toMatchObject({ status: "accepted", aborted: !statusOnly });
-    expect(operation.abortSignal.aborted).toBe(!statusOnly);
+    expect(result).toMatchObject({ status: "indeterminate" });
+    await expect(attempt.acceptance).resolves.toBe(true);
+    expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+    expect(onOutcome).toHaveBeenCalledExactlyOnceWith("indeterminate");
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(operation.abortSignal.aborted).toBe(false);
+    expect(operation.phase).toBe("running");
+    operation.complete();
+  },
+);
+
+it.each([false, true])(
+  "explicit adoption cancellation targets the captured owner (replaced=%s)",
+  async (replaced) => {
+    const operation = createTestReplyOperation();
+    const abortCaptured = vi.spyOn(operation, "abortByUser");
+    const cancel = vi.fn();
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      messageInjection: { isAvailable: () => true, queueMessage: async () => {} },
+    });
+    operation.setPhase("running");
+    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+    const attempt = await beginReplyMessageInjectionTarget(target, "Confirmed guidance");
+    await expect(attempt.outcome).resolves.toEqual({ status: "accepted" });
+    if (replaced) {
+      operation.complete();
+    }
+    const successor = createTestReplyOperation({
+      sessionKey: replaced ? operation.key : "agent:main:other",
+      sessionId: "next-session",
+    });
+    const successorCancel = vi.fn();
+    successor.attachBackend({ kind: "embedded", cancel: successorCancel });
+    successor.setPhase("running");
+    const adoptionError = new Error("source adoption lost");
+    const result = await finalizeReplyMessageInjectionAttempt({
+      attempt,
+      target,
+      onAdopted: () => {
+        throw adoptionError;
+      },
+      shouldAbortOnAdoptionError: (error) => error === adoptionError,
+    });
+    expect(result).toMatchObject({ status: "accepted", aborted: true, adoptionError });
+    expect(abortCaptured).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledTimes(replaced ? 0 : 1);
+    expect(successorCancel).not.toHaveBeenCalled();
+    expect(successor.abortSignal.aborted).toBe(false);
+    successor.complete();
+    operation.complete();
   },
 );

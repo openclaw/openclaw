@@ -12,7 +12,10 @@ import {
 } from "../../agents/embedded-agent-runner/terminal-tool-failure.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
-import { resolveProjectedSessionContextTokenBudget } from "../../config/sessions/context-token-provenance.js";
+import {
+  qualifySessionContextTokenSource,
+  resolveProjectedSessionContextTokenBudget,
+} from "../../config/sessions/context-token-provenance.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
@@ -103,7 +106,7 @@ export async function finalizeCronRun(params: {
     runtimeContextTokens === undefined ? await cronContextRuntimeLoader.load() : undefined;
   const contextParams = {
     contextWindow: prepared.cronSession.sessionEntry.contextWindow,
-    profileId: prepared.liveSelection.authProfileId,
+    profileId: execution.authProfileId,
 
     nativeRuntime: agentHarnessId,
     cfg: prepared.cfgWithAgentDefaults,
@@ -117,6 +120,7 @@ export async function finalizeCronRun(params: {
   };
   let resolution = contextRuntime?.resolveModelContextTokenProjection(contextParams);
   const contextSelection = {
+    authProfileId: execution.authProfileId,
     provider: providerUsed,
     model: modelUsed,
     agentHarnessId,
@@ -151,12 +155,16 @@ export async function finalizeCronRun(params: {
     projected?.contextTokens ??
     resolution?.contextTokens ??
     DEFAULT_CONTEXT_TOKENS;
-  const contextTokensSource =
-    runtimeContextTokens !== undefined
-      ? (finalRunResult.meta?.agentMeta?.contextTokensSource ?? "runtime")
-      : projected
-        ? projected.contextTokensSource
-        : "resolved";
+  const contextTokensSource = qualifySessionContextTokenSource({
+    entry: prepared.cronSession.sessionEntry,
+    authProfileId: execution.authProfileId,
+    source:
+      runtimeContextTokens !== undefined
+        ? (finalRunResult.meta?.agentMeta?.contextTokensSource ?? "runtime")
+        : projected
+          ? projected.contextTokensSource
+          : "resolved",
+  });
 
   if (!params.isAborted()) {
     setCronSessionRuntimeModel({

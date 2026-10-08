@@ -742,10 +742,8 @@ function mergeRollbackAuthStoreCredentials(
       const profileMutationStatus = profileMutationDecision.status;
       const profileMutated = profileMutationStatus === "mutated";
       const currentOwner = profileOwner(currentStore, profileId);
-      let credential: AuthProfileCredential | undefined;
       let selectedSource: AuthProfileStore | undefined;
       if (currentOwner !== profileMutationDecision.candidateOwner) {
-        credential = currentCredential;
         selectedSource = currentStore;
       } else if (profileMutationDecision.ownerChanged) {
         if (
@@ -754,21 +752,17 @@ function mergeRollbackAuthStoreCredentials(
         ) {
           invalidateStore = true;
         } else {
-          credential = baselineCredential;
           selectedSource = baselineStore;
         }
       } else if (profileMutationStatus === "unknown") {
         if (isDeepStrictEqual(baselineCredential, candidateCredential)) {
-          credential = currentCredential;
           selectedSource = currentStore;
         } else {
           invalidateStore = true;
         }
       } else if (!profileMutated && isDeepStrictEqual(currentCredential, candidateCredential)) {
-        credential = baselineCredential;
         selectedSource = baselineStore;
       } else {
-        credential = currentCredential;
         selectedSource = currentStore;
       }
       const baselineRef = credentialSecretRef(baselineCredential);
@@ -784,7 +778,6 @@ function mergeRollbackAuthStoreCredentials(
       ) {
         // Candidate activation owns the ref transition. Descendant resolution may refresh the
         // literal, but without a persisted write rollback still restores the previous owner/ref.
-        credential = baselineCredential;
         selectedSource = baselineStore;
       }
       if (
@@ -800,23 +793,21 @@ function mergeRollbackAuthStoreCredentials(
           profileMutationStatus !== "unchanged"
         ) {
           invalidateStore = true;
-          credential = undefined;
           selectedSource = undefined;
         } else {
-          credential = baselineCredential;
           selectedSource = baselineStore;
         }
       }
-      const selectedRef = credentialSecretRef(credential);
+      const selectedRef = credentialSecretRef(selectedSource?.profiles[profileId]);
       if (
         selectedSource === currentStore &&
         selectedRef &&
         !hasSameSecretProviderDefinition(selectedRef, [configs[0], configs[1]])
       ) {
         invalidateStore = true;
-        credential = undefined;
         selectedSource = undefined;
       }
+      const credential = selectedSource?.profiles[profileId];
       if (credential && selectedSource) {
         const clonedCredential = structuredClone(credential);
         copyCanonicalAuthProfileCredentialObservations(

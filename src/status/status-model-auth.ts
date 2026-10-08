@@ -102,17 +102,14 @@ export function createStatusModelResolver(params: {
     if (evaluation.runtimeAuth && evaluation.runtimeAuth.id !== runtimeId) {
       return { authLabel, ownerCapacity: { state: "unavailable" } };
     }
-    const ownerCapacity =
-      evaluation.selectedRoute || evaluation.runtimeAuth
-        ? resolveCapacity(provider, model, {
-            profileId: evaluation.selectedProfileId,
-            route: evaluation.selectedRoute,
-            contextWindow: sessionEntry?.contextWindow,
-            ...(runtimeId && runtimeId !== "openclaw" && runtimeId !== "auto"
-              ? { nativeRuntime: runtimeId }
-              : {}),
-          })
-        : { state: "unavailable" as const };
+    const nativeRuntime =
+      runtimeId && runtimeId !== "openclaw" && runtimeId !== "auto" ? runtimeId : undefined;
+    const ownerCapacity = resolveCapacity(provider, model, {
+      profileId: evaluation.selectedProfileId ?? (evaluation.runtimeAuth ? undefined : null),
+      route: nativeRuntime ? undefined : (evaluation.selectedRoute ?? entry),
+      contextWindow: sessionEntry?.contextWindow,
+      ...(nativeRuntime ? { nativeRuntime } : {}),
+    });
     const endpoint = evaluation.selectedRoute?.baseUrl
       ? formatModelEndpointUrl(evaluation.selectedRoute.baseUrl)
       : undefined;

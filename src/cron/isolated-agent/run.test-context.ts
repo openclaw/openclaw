@@ -1,11 +1,14 @@
 import {
   type ContextTokenResolutionParams,
+  type ModelContextTokenProjection,
   resolveAuthoredModelContextTokens,
 } from "../../agents/context-resolution.js";
 
 export function createCronContextRuntimeFixture(
   lookup: (params: ContextTokenResolutionParams) => number | undefined,
-  lookupBudget = lookup,
+  lookupBudget: (
+    params: ContextTokenResolutionParams,
+  ) => number | ModelContextTokenProjection | undefined = lookup,
 ) {
   const project = (params: ContextTokenResolutionParams) => ({
     contextTokens: lookup(params),
@@ -14,9 +17,9 @@ export function createCronContextRuntimeFixture(
   });
   return {
     resolveModelContextTokenProjection: project,
-    resolveContextTokenBudgetForModel: async (params: ContextTokenResolutionParams) => ({
-      ...project(params),
-      contextTokens: lookupBudget(params),
-    }),
+    resolveContextTokenBudgetForModel: async (params: ContextTokenResolutionParams) => {
+      const budget = lookupBudget(params);
+      return typeof budget === "object" ? budget : { ...project(params), contextTokens: budget };
+    },
   };
 }

@@ -648,6 +648,12 @@ async function acquirePickerModelCatalogView(
               ...(acquired.providerOutcomes
                 ? { providerOutcomes: acquired.providerOutcomes.filter(matchesProvider) }
                 : {}),
+              ...(acquired.acceptedDiscoveryOrigins
+                ? {
+                    acceptedDiscoveryOrigins:
+                      acquired.acceptedDiscoveryOrigins.filter(matchesProvider),
+                  }
+                : {}),
             },
           };
         }

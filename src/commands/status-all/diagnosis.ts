@@ -151,6 +151,14 @@ export async function appendStatusAllDiagnosis(params: {
 }) {
   const { lines, muted, ok, warn, fail } = params;
   const emitDetail = (text: string) => lines.push(`  ${muted(text)}`);
+  const emitLimited = <T>(items: T[], limit: number, format: (item: T) => string) => {
+    for (const item of items.slice(0, limit)) {
+      lines.push(format(item));
+    }
+    if (items.length > limit) {
+      emitDetail(`… +${items.length - limit} more`);
+    }
+  };
 
   const emitCheck = (label: string, status: "ok" | "warn" | "fail") => {
     const icon = status === "ok" ? ok("✓") : status === "warn" ? warn("!") : fail("✗");
@@ -186,12 +194,7 @@ export async function appendStatusAllDiagnosis(params: {
       [...(params.snap.legacyIssues ?? []), ...(params.snap.issues ?? [])],
       (issue) => `${issue.path.length}:${issue.path}${issue.message}`,
     );
-    for (const issue of uniqueIssues.slice(0, 12)) {
-      lines.push(`  ${formatConfigIssueLine(issue, "-")}`);
-    }
-    if (uniqueIssues.length > 12) {
-      emitDetail(`… +${uniqueIssues.length - 12} more`);
-    }
+    emitLimited(uniqueIssues, 12, (issue) => `  ${formatConfigIssueLine(issue, "-")}`);
   } else {
     emitCheck("Config: read failed", "warn");
   }
@@ -206,12 +209,11 @@ export async function appendStatusAllDiagnosis(params: {
     `Secret diagnostics (${params.secretDiagnostics.length})`,
     params.secretDiagnostics.length === 0 ? "ok" : "warn",
   );
-  for (const diagnostic of params.secretDiagnostics.slice(0, 10)) {
-    lines.push(`  - ${muted(redactStatusSecrets(diagnostic))}`);
-  }
-  if (params.secretDiagnostics.length > 10) {
-    emitDetail(`… +${params.secretDiagnostics.length - 10} more`);
-  }
+  emitLimited(
+    params.secretDiagnostics,
+    10,
+    (diagnostic) => `  - ${muted(redactStatusSecrets(diagnostic))}`,
+  );
 
   if (params.sentinel?.payload) {
     emitCheck("Restart sentinel present", "warn");
@@ -293,13 +295,10 @@ export async function appendStatusAllDiagnosis(params: {
     `Plugin compatibility (${params.pluginCompatibility.length || "none"})`,
     params.pluginCompatibility.length === 0 ? "ok" : "warn",
   );
-  for (const notice of params.pluginCompatibility.slice(0, 12)) {
+  emitLimited(params.pluginCompatibility, 12, (notice) => {
     const severity = notice.severity === "warn" ? "warn" : "info";
-    lines.push(`  - [${severity}] ${formatPluginCompatibilityNotice(notice)}`);
-  }
-  if (params.pluginCompatibility.length > 12) {
-    emitDetail(`… +${params.pluginCompatibility.length - 12} more`);
-  }
+    return `  - [${severity}] ${formatPluginCompatibilityNotice(notice)}`;
+  });
 
   if (params.agentStatus) {
     const recentSessions = countActiveStatusAgents({
@@ -443,15 +442,10 @@ export async function appendStatusAllDiagnosis(params: {
       `Channel issues (${params.channelIssues.length || "none"})`,
       params.channelIssues.length === 0 ? "ok" : "warn",
     );
-    for (const issue of params.channelIssues.slice(0, 12)) {
+    emitLimited(params.channelIssues, 12, (issue) => {
       const fixText = issue.fix ? ` · fix: ${issue.fix}` : "";
-      lines.push(
-        `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`,
-      );
-    }
-    if (params.channelIssues.length > 12) {
-      emitDetail(`… +${params.channelIssues.length - 12} more`);
-    }
+      return `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`;
+    });
   } else if (params.nodeOnlyGateway) {
     emitCheck(
       `Channel issues skipped (node-only mode; query ${params.nodeOnlyGateway.gatewayTarget})`,

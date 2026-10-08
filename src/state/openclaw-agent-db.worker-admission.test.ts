@@ -19,7 +19,12 @@ import {
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import {
+  openOpenClawAgentDatabaseReadOnly,
+  hasOpenClawAgentReadOnlySchema,
+} from "./openclaw-agent-db-readonly-open.js";
 import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import * as validationCache from "./openclaw-agent-db-validation-cache.js";
 import {
   getOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidationForTransfer,
@@ -99,6 +104,47 @@ it("retains the schema receipt after first-use TEMP generation tracking", () => 
     expect(Atomics.load(new Int32Array(schema!.valid), 0)).toBe(1);
   } finally {
     observed.restore();
+  }
+});
+
+it("adopts worker admission after a retained reader observes an already-revalidated schema", async () => {
+  const options = {
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-reader-readmission-") },
+  };
+  const database = await withOpenClawAgentDatabaseWrite(options, (opened) => opened);
+  const reader = openOpenClawAgentDatabaseReadOnly(options);
+  assert(reader.found);
+  expect(validationCache.hasOpenClawAgentCanonicalValidation(reader.database)).toBe(true);
+  const foreign = openNodeSqliteDatabase(database.path);
+  foreign.exec("CREATE TABLE late_reader_fixture(value TEXT)");
+  foreign.close();
+  closeCachedOpenClawAgentDatabase(database, { eviction: true });
+  const capture = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
+  const observeReader = vi.fn(() => {
+    expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
+  });
+  const publication = vi
+    .spyOn(validationCache, "captureOpenClawAgentDatabaseAdmissionPublication")
+    .mockImplementation((target) => {
+      const publish = capture(target);
+      return (identity, received) => {
+        publish(identity, received);
+        // A retained read can run after worker publication, before the awaiting host adopts it.
+        observeReader();
+      };
+    });
+  try {
+    await expect(
+      withOpenClawAgentDatabaseWrite(options, ({ db }) => {
+        expect(getAdmittedSqliteSchemaFacts(db)?.tables.has("late_reader_fixture")).toBe(true);
+        return db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count;
+      }),
+    ).resolves.toBe(0);
+    expect(observeReader).toHaveBeenCalled();
+  } finally {
+    publication.mockRestore();
+    reader.database.close();
   }
 });
 

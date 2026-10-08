@@ -116,6 +116,7 @@ export function resolveStatusContextCapacity(params: {
       provider: contextLookupProvider,
       modelProvider: activeModelProvider,
       model: contextLookupModel,
+      nativeRuntime: args.resolvedHarness,
     }),
     ownerCapacity: args.resolveOwnerContextCapacity?.(contextLookupProvider, contextLookupModel),
   });

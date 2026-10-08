@@ -160,6 +160,7 @@ export async function applyInlineDirectiveOverrides(params: {
   let { contextTokens } = params;
   let directiveAck: ReplyPayload | undefined;
   let selectionCatalog = modelState.allowedModelCatalog;
+  let committedCatalog: typeof selectionCatalog | undefined;
 
   // Fire on the reason, not the boolean: a temporarily-unavailable override
   // surfaces a notice without destroying the pin, so resetModelOverride stays false.
@@ -475,7 +476,8 @@ export async function applyInlineDirectiveOverrides(params: {
       return directiveRejection("session-directive-rejected", persistenceState.outcome.errorText);
     }
     ({ provider, model } = persistenceState.outcome);
-    selectionCatalog = persistenceState.outcome.modelCatalog ?? selectionCatalog;
+    committedCatalog = persistenceState.outcome.modelCatalog;
+    selectionCatalog = committedCatalog ?? selectionCatalog;
   }
 
   const runtimeModelEntry = selectionCatalog.find(
@@ -492,10 +494,12 @@ export async function applyInlineDirectiveOverrides(params: {
     sessionEntry: sessionStore[sessionKey] ?? sessionEntry,
   });
   assertReplyPreprocessingActive(params.abortSignal);
-  const contextCatalog = await racePromiseWithAbortSignal(
-    modelState.resolveThinkingCatalog({ provider, model, agentRuntime }),
-    params.abortSignal,
-  );
+  const contextCatalog =
+    committedCatalog ??
+    (await racePromiseWithAbortSignal(
+      modelState.resolveThinkingCatalog({ provider, model, agentRuntime }),
+      params.abortSignal,
+    ));
   assertReplyPreprocessingActive(params.abortSignal);
   const selectedCatalogEntry = contextCatalog?.find(
     (entry) =>

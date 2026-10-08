@@ -1,13 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { copyProviderCatalogResultEntries } from "../plugins/provider-catalog-result.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { buildStatusMessageParts, statusModelRefs } from "../status/status-message.test-support.js";
-import { prepareContextWindowCaches } from "./context-cache-projection.js";
-import { replaceContextWindowCaches } from "./context-cache.js";
+import { resolveModelContextTokenProjectionFromCache } from "./context-resolution.js";
 import { resetContextWindowCacheForTest } from "./context.test-support.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { orderModelCatalogForPicker } from "./model-catalog-order.js";
@@ -15,11 +13,9 @@ import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { mergeProviderModels } from "./models-config.merge.js";
+import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
-import {
-  materializePreparedModelCatalog,
-  prepareModelCatalogPublication,
-} from "./prepared-model-runtime.full-catalog.js";
+import { materializePreparedModelCatalog } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import { createSessionContextCapacityResolver } from "./session-context-capacity.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
@@ -77,7 +73,7 @@ describe("configured catalog registry composition", () => {
         config,
         agentDir: "captured:agent",
         authCredentials: {},
-        modelRegistry: registry,
+        models: registry.getAll(),
         metadataSnapshot,
         includeProviderPluginAugmentation: false,
       });
@@ -389,14 +385,24 @@ describe("synthetic configured context publication", () => {
       [staticEntry],
       new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
     );
-    replaceContextWindowCaches(await prepareContextWindowCaches({ config, modelCatalog: catalog }));
-    return resolveContextTokens({
-      cfg: config,
-      provider: "fixture",
-      model: "new-model",
-      modelContextTokens: entries[0]?.contextTokens,
-      modelContextWindow: entries[0]?.contextWindow,
-    });
+    const selected =
+      catalog.staticEntries?.find(
+        (entry) => entry.provider === "fixture" && entry.id === "new-model",
+      ) ??
+      catalog.entries.find((entry) => entry.provider === "fixture" && entry.id === "new-model");
+    expect(selected).toBeDefined();
+    return resolveModelContextTokenProjectionFromCache(
+      {
+        cfg: config,
+        provider: "fixture",
+        model: "new-model",
+        modelContextTokens: selected?.contextTokens,
+        modelContextWindow: selected?.contextWindow,
+        modelContextWindowSource: selected?.contextWindowSource,
+      },
+      () => undefined,
+      () => undefined,
+    ).contextTokens;
   }
   it("preserves provider synthetic provenance through the catalog row projection", () => {
     expect(modelCatalogRowToEntry(fallback)).toHaveProperty("contextWindowSource", "synthetic");
@@ -417,6 +423,35 @@ describe("synthetic configured context publication", () => {
       thinkingCatalog: [discovered],
     });
     expect(status.text).toContain("/872k");
+  });
+  it.each([
+    ["matching physical route", discovered, false],
+    ["different physical endpoint", { ...discovered, baseUrl: "https://other.example/v1" }, true],
+  ] as const)("replaces only the %s synthetic fallback", (_name, physical, retained) => {
+    const logical = { ...discovered, api: "openai-completions" as const };
+    const publication = prepareModelCatalogPublication(
+      {
+        entries: [logical],
+        routeVariants: [logical, physical],
+        providerOutcomes: [{ provider: "fixture", status: "ready" }],
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
+      new Map(),
+    );
+    const catalog = materializePreparedModelCatalog(
+      publication.catalog,
+      [],
+      [{ ...fallback, baseUrl: discovered.baseUrl }],
+      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
+    );
+    expect(catalog.entries[0]?.api).toBe("openai-completions");
+    expect(catalog.routeVariants).toContainEqual(physical);
+    expect(catalog.staticEntries?.some((entry) => entry.contextWindowSource === "synthetic")).toBe(
+      retained,
+    );
   });
   it.each([
     ["curated static", { ...fallback, contextWindowSource: undefined }],
@@ -464,12 +499,9 @@ describe("synthetic configured context publication", () => {
       [fallback],
       new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
     );
-    replaceContextWindowCaches(
-      await prepareContextWindowCaches({ config: {}, modelCatalog: catalog }),
-    );
-    expect(resolveContextTokens({ cfg: {}, provider: "fixture", model: "new-model" })).toBe(
-      128_000,
-    );
+    expect(publication.discoveryOrigins).toEqual([]);
+    expect(catalog.staticEntries).toContainEqual(fallback);
+    expect(catalog.entries).toContainEqual(discovered);
   });
 
   it("retains only same-account inventory after failure", async () => {
@@ -485,10 +517,7 @@ describe("synthetic configured context publication", () => {
       (provider) => provider,
       new Map(),
     );
-    for (const [account, expected] of [
-      ["account-a", 872_000],
-      ["account-b", 128_000],
-    ] as const) {
+    for (const account of ["account-a", "account-b"]) {
       const failed = prepareModelCatalogPublication(
         {
           entries: [],
@@ -507,12 +536,42 @@ describe("synthetic configured context publication", () => {
         [fallback],
         new Set(failed.discoveryOrigins.map(({ provider }) => provider)),
       );
-      replaceContextWindowCaches(
-        await prepareContextWindowCaches({ config: {}, modelCatalog: catalog }),
+      const resolveCapacity = createSessionContextCapacityResolver({
+        modelCatalog: catalog,
+        isCurrent: () => true,
+      });
+      expect(
+        resolveCapacity("fixture", "new-model", { profileId: "a", route: discovered }),
+      ).toMatchObject(
+        account === "account-a"
+          ? { state: "ready", contextTokens: 872_000, synthetic: false }
+          : { state: "unavailable" },
       );
-      expect(resolveContextTokens({ cfg: {}, provider: "fixture", model: "new-model" })).toBe(
-        expected,
-      );
+      expect(
+        resolveCapacity("fixture", "new-model", { profileId: "other", route: discovered }),
+      ).toEqual({ state: "unavailable" });
+      expect(
+        resolveCapacity("fixture", "new-model", {
+          profileId: "a",
+          route: { ...discovered, baseUrl: "https://other.example/v1" },
+        }),
+      ).toEqual({ state: "unavailable" });
+      expect(
+        createSessionContextCapacityResolver({ modelCatalog: catalog, isCurrent: () => false })(
+          "fixture",
+          "new-model",
+          { profileId: "a", route: discovered },
+        ),
+      ).toEqual({ state: "unavailable" });
+      if (account === "account-a") {
+        expect(catalog.entries).toContainEqual(discovered);
+        expect(catalog.staticEntries).not.toContainEqual(fallback);
+        expect(failed.discoveryOrigins).toEqual(accepted.discoveryOrigins);
+      } else {
+        expect(catalog.entries).not.toContainEqual(discovered);
+        expect(catalog.staticEntries).toContainEqual(fallback);
+        expect(failed.discoveryOrigins).toEqual([]);
+      }
     }
   });
 
@@ -642,7 +701,7 @@ describe("synthetic configured context publication", () => {
         config,
         agentDir: "captured:agent",
         authCredentials: {},
-        modelRegistry: registry,
+        models: registry.getAll(),
         metadataSnapshot,
         includeProviderPluginAugmentation: false,
       });
@@ -654,6 +713,7 @@ describe("synthetic configured context publication", () => {
         state: "ready",
         contextTokens: 200_000,
         synthetic: false,
+        contextTokenLimit: 200_000,
       });
     });
 
@@ -686,12 +746,8 @@ describe("synthetic configured context publication", () => {
       expect(
         catalog.staticEntries?.some((entry) => entry.contextWindowSource === "synthetic"),
       ).toBe(true);
-      replaceContextWindowCaches(
-        await prepareContextWindowCaches({ config: {}, modelCatalog: catalog }),
-      );
-      expect(resolveContextTokens({ cfg: {}, provider: "fixture", model: "new-model" })).toBe(
-        128_000,
-      );
+      expect(catalog.staticEntries).toContainEqual(fallback);
+      expect(catalog.entries).toContainEqual(missingNative);
     });
 
     it("(d) a retained inventory from another account cannot replace the fallback", async () => {
@@ -725,12 +781,9 @@ describe("synthetic configured context publication", () => {
         [fallback],
         new Set(failedOtherAccount.discoveryOrigins.map(({ provider }) => provider)),
       );
-      replaceContextWindowCaches(
-        await prepareContextWindowCaches({ config: {}, modelCatalog: catalog }),
-      );
-      expect(resolveContextTokens({ cfg: {}, provider: "fixture", model: "new-model" })).toBe(
-        128_000,
-      );
+      expect(failedOtherAccount.discoveryOrigins).toEqual([]);
+      expect(catalog.entries).not.toContainEqual(missingNative);
+      expect(catalog.staticEntries).toContainEqual(fallback);
     });
   });
 
@@ -754,8 +807,6 @@ describe("synthetic configured context publication", () => {
       contextTokensSource: "synthetic" | "runtime",
       resolveOwnerContextCapacity?: ReturnType<typeof createSessionContextCapacityResolver>,
     ) {
-      // Same process-global cache as a patched gateway after the synthetic row was superseded.
-      await budget();
       return buildStatusMessageParts({
         config: {},
         agent: {},

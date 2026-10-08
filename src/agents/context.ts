@@ -295,7 +295,7 @@ export function resolveModelContextTokenProjection(
 
 type ContextBudgetPreparationParams = ContextTokenResolutionParams &
   Pick<LoadPreparedModelCatalogParams, "agentId" | "agentDir" | "workspaceDir" | "env"> & {
-    profileId?: string;
+    profileId?: string | null;
     contextWindow?: string;
     route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
     knownContextBudget?: ReturnType<typeof resolveProjectedSessionContextTokenBudget>;
@@ -305,7 +305,14 @@ export async function resolveContextTokenBudgetForModel(
   params: ContextBudgetPreparationParams,
 ): Promise<ModelContextTokenProjection> {
   const input = { ...params, allowAsyncLoad: false };
-  const current = resolveModelContextTokenProjection(input);
+  let current =
+    params.profileId !== undefined || params.route
+      ? resolveModelContextTokenProjectionFromCache(
+          input,
+          () => undefined,
+          () => undefined,
+        )
+      : resolveModelContextTokenProjection(input);
   const provider = params.provider?.trim();
   const model = params.model?.trim();
   if (!provider || !model) {
@@ -321,6 +328,14 @@ export async function resolveContextTokenBudgetForModel(
       env: params.env,
     };
     const published = runtime.getPublishedPreparedModelCatalogOwnerSnapshot(request);
+    if (published) {
+      // The shared cache has no account or transport binding; consume this owner's facts directly.
+      current = resolveModelContextTokenProjectionFromCache(
+        input,
+        () => undefined,
+        () => undefined,
+      );
+    }
     const nativeRuntime = normalizeLowercaseStringOrEmpty(params.nativeRuntime);
     const { createSessionContextCapacityResolver } = await import("./session-context-capacity.js");
     const capacity = createSessionContextCapacityResolver(published)(provider, model, {
@@ -333,22 +348,32 @@ export async function resolveContextTokenBudgetForModel(
       const projection =
         capacity.synthetic && current.source !== "fallback"
           ? current
-          : resolveModelContextTokenProjection({
-              ...input,
-              modelContextTokens: capacity.synthetic ? undefined : capacity.contextTokens,
-              modelContextWindow: capacity.contextTokens,
-              modelContextWindowSource: capacity.synthetic ? "synthetic" : undefined,
-            });
+          : resolveModelContextTokenProjectionFromCache(
+              {
+                ...input,
+                modelContextTokens: capacity.synthetic ? undefined : capacity.contextTokens,
+                modelContextWindow: capacity.contextTokens,
+                modelContextWindowSource: capacity.synthetic ? "synthetic" : undefined,
+              },
+              () => undefined,
+              () => undefined,
+            );
       const contextTokens = minPositiveContextTokens(
         projection.contextTokens,
         current.source === "fallback" ? undefined : current.contextTokens,
         capacity.contextTokenLimit,
       );
-      return { ...projection, contextTokens };
+      return {
+        ...projection,
+        contextTokens,
+        ...(capacity.contextTokensSource && projection.contextTokensSource !== "synthetic"
+          ? { contextTokensSource: capacity.contextTokensSource }
+          : {}),
+      };
     }
     if (
       published ||
-      params.profileId ||
+      params.profileId !== undefined ||
       params.route ||
       (nativeRuntime && nativeRuntime !== "openclaw") ||
       (params.knownContextBudget && params.knownContextBudget.contextTokensSource !== "synthetic")
@@ -400,6 +425,9 @@ export async function resolveContextTokenBudgetForModel(
         : undefined;
     return {
       ...projection,
+      ...(profile.contextWindows && projection.contextTokensSource !== "synthetic"
+        ? { contextTokensSource: "resolved" as const }
+        : {}),
       contextTokens: minPositiveContextTokens(
         projection.contextTokens,
         current.source === "fallback" ? undefined : current.contextTokens,

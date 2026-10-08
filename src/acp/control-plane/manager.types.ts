@@ -66,6 +66,8 @@ export type AcpInitializeSessionInput = {
   agent: string;
   mode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
+  /** Re-read caller-owned resume authority after preparation and return its synchronous initialization guard. */
+  revalidateResume?: () => Promise<() => void>;
   runtimeOptions?: Partial<AcpSessionRuntimeOptions>;
   modelExplicit?: boolean;
   thinkingExplicit?: boolean;

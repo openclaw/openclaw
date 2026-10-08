@@ -39,6 +39,8 @@ For `models status`, `OPENCLAW_AGENT_DIR` overrides the inspected auth directory
 
 Default-model, alias, and fallback changes resolve provider-owned model aliases using the current plugin configuration. When stored entries resolve to the selected model, their settings move to its canonical key; existing canonical settings take precedence. Adding an alias replaces the model's previous alias. If config changes during that preparation, the command rejects the write; rerun it against the updated config.
 
+An explicit `provider/model` that matches a configured provider model keeps its literal identity, even when another model has a colliding alias. Bare aliases and noncolliding `provider/alias` selections still resolve normally.
+
 ### Status
 
 Bare `openclaw models` is equivalent to `openclaw models status`.

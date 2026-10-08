@@ -162,20 +162,6 @@ type ObserveResponsesPromptEgress = NonNullable<
   ReturnType<typeof createResponsesPromptEgressObserver>
 >;
 
-function buildRequestSignal(
-  baseSignal: AbortSignal | undefined,
-  timeoutMs: number | undefined,
-): AbortSignal | undefined {
-  if (timeoutMs === undefined) {
-    return baseSignal;
-  }
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  if (!baseSignal) {
-    return timeoutSignal;
-  }
-  return AbortSignal.any([baseSignal, timeoutSignal]);
-}
-
 function isRequestTimeoutError(
   error: unknown,
   callerSignal: AbortSignal | undefined,
@@ -292,7 +278,13 @@ export const streamOpenAICodexResponses: StreamFunction<
       // Without a session id, each WebSocket request gets independent affinity.
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
       requestTimeoutMs = clampPositiveTimerTimeoutMs(options?.timeoutMs);
-      requestTimeoutSignal = buildRequestSignal(options?.signal, requestTimeoutMs);
+      requestTimeoutSignal = options?.signal;
+      if (requestTimeoutMs !== undefined) {
+        const timeoutSignal = AbortSignal.timeout(requestTimeoutMs);
+        requestTimeoutSignal = options?.signal
+          ? AbortSignal.any([options.signal, timeoutSignal])
+          : timeoutSignal;
+      }
       firstEventAbort = createFirstStreamEventAbortController(requestTimeoutSignal);
       activeSignal = firstEventAbort.signal;
       const requestOptions =
@@ -415,12 +407,18 @@ export const streamOpenAICodexResponses: StreamFunction<
               retriedWebSocketConnectionLimit = true;
               continue;
             }
-            if (aborted || (isCodexNonTransportError(error) && !connectionLimitBeforeStart)) {
-              throw error;
+            // After output starts, the runner must continue the transcript instead of replaying.
+            const transportError = isWebSocketConnectionLimitReachedError(error)
+              ? Object.assign(new Error(error.message, { cause: error }), {
+                  code: WEBSOCKET_TRANSPORT_ERROR_CODE,
+                })
+              : error;
+            if (aborted || isCodexNonTransportError(transportError)) {
+              throw transportError;
             }
             appendAssistantMessageDiagnostic(
               output,
-              createAssistantMessageDiagnostic("provider_transport_failure", error, {
+              createAssistantMessageDiagnostic("provider_transport_failure", transportError, {
                 configuredTransport: transport,
                 fallbackTransport: transport === "auto" && !websocketStarted ? "sse" : undefined,
                 eventsEmitted: websocketStarted,
@@ -439,7 +437,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               );
             }
             if (websocketStarted || transport !== "auto") {
-              throw error;
+              throw transportError;
             }
             break;
           }
@@ -819,7 +817,7 @@ function isCodexNonTransportError(error: unknown): boolean {
   );
 }
 
-function isWebSocketConnectionLimitReachedError(error: unknown): boolean {
+function isWebSocketConnectionLimitReachedError(error: unknown): error is CodexApiError {
   return error instanceof CodexApiError && error.code === WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE;
 }
 

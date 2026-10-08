@@ -173,6 +173,7 @@ export function registerChatAbortController(params: {
     entry: ChatAbortControllerEntry,
   ) => ReturnType<NonNullable<ChatAbortControllerEntry["resolveTerminalProducer"]>>;
   onRemoved?: () => void;
+  onQueueTimeout?: (entry: ChatAbortControllerEntry) => void;
   kind?: ChatAbortControllerEntry["kind"];
   turnKind?: ChatAbortControllerEntry["turnKind"];
   lifecycleGeneration?: string;
@@ -180,7 +181,20 @@ export function registerChatAbortController(params: {
   now?: number;
   expiresAtMs?: number;
 }): RegisteredChatAbortController {
+  const rawNow = params.now ?? Date.now();
+  const queueDeadlineMs = resolveExpiresAtMsFromDurationMs(params.timeoutMs, { nowMs: rawNow });
   const controller = new AbortController();
+  let queueTimer: ReturnType<typeof setTimeout> | undefined;
+  const isStopped = (entry: ChatAbortControllerEntry) =>
+    entry.registrationCleanupRequested ||
+    controller.signal.aborted ||
+    entry.abortStopReason !== undefined ||
+    entry.projectSessionTerminalPending === true ||
+    entry.projectSessionTerminalObservedAt !== undefined;
+  const onAbort = () => {
+    clearTimeout(queueTimer);
+    notifyGatewayWorkMetricsChanged();
+  };
   const bindAgentRunDelegatedAuthority = (authority: AgentRunDelegatedAuthority) => {
     const entry = params.chatAbortControllers.get(params.runId);
     if (
@@ -202,15 +216,16 @@ export function registerChatAbortController(params: {
       return false;
     }
     const entry = params.chatAbortControllers.get(params.runId);
-    if (
-      entry?.controller !== controller ||
-      entry.registrationCleanupRequested ||
-      controller.signal.aborted
-    ) {
+    if (entry?.controller !== controller || isStopped(entry)) {
+      return false;
+    }
+    if (params.onQueueTimeout && !isFutureDateTimestampMs(queueDeadlineMs, { nowMs: Date.now() })) {
+      params.onQueueTimeout(entry);
       return false;
     }
     executionStarted = true;
     entry.executionStarted = true;
+    clearTimeout(queueTimer);
     if (entry.kind !== "agent") {
       return true;
     }
@@ -225,6 +240,7 @@ export function registerChatAbortController(params: {
     return true;
   };
   const cleanup = () => {
+    clearTimeout(queueTimer);
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
       // This registration carries the exact operational instance. Close its
@@ -280,7 +296,6 @@ export function registerChatAbortController(params: {
     };
   }
 
-  const rawNow = params.now ?? Date.now();
   const now = resolveDateTimestampMs(rawNow, 0);
   const explicitExpiresAtMs =
     params.expiresAtMs === undefined ? undefined : (asDateTimestampMs(params.expiresAtMs) ?? 0);
@@ -306,7 +321,8 @@ export function registerChatAbortController(params: {
       ? () => params.resolveTerminalProducer?.(entry)
       : undefined,
     onRemoved: () => {
-      controller.signal.removeEventListener("abort", notifyGatewayWorkMetricsChanged);
+      clearTimeout(queueTimer);
+      controller.signal.removeEventListener("abort", onAbort);
       notifyGatewayWorkMetricsChanged();
       params.onRemoved?.();
     },
@@ -315,7 +331,20 @@ export function registerChatAbortController(params: {
     turnKind: params.turnKind,
   };
   params.chatAbortControllers.set(params.runId, entry);
-  controller.signal.addEventListener("abort", notifyGatewayWorkMetricsChanged, { once: true });
+  if (params.onQueueTimeout) {
+    // The maintenance expiry includes execution grace and cannot own a queued deadline.
+    queueTimer = setTimeout(() => {
+      if (
+        params.chatAbortControllers.get(params.runId) === entry &&
+        entry.executionStarted === false &&
+        !isStopped(entry)
+      ) {
+        params.onQueueTimeout?.(entry);
+      }
+    }, params.timeoutMs);
+    queueTimer.unref();
+  }
+  controller.signal.addEventListener("abort", onAbort, { once: true });
   notifyGatewayWorkMetricsChanged();
   return {
     controller,

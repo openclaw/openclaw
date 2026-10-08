@@ -5,7 +5,10 @@ import {
   setSessionRuntimeModel,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { resolveProjectedSessionContextTokenBudget } from "../../config/sessions/context-token-provenance.js";
+import {
+  qualifySessionContextTokenSource,
+  resolveProjectedSessionContextTokenBudget,
+} from "../../config/sessions/context-token-provenance.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "../../config/sessions/session-entry-projection.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
@@ -37,6 +40,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   agentId: string;
   cfg: OpenClawConfig;
   agentDir: string;
+  authProfileId?: string | null;
   sessionId: string;
   sessionKey: string;
   storePath: string;
@@ -91,7 +95,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextParams = {
     contextWindow: sessionStore[sessionKey]?.contextWindow,
-
+    profileId: params.authProfileId,
     nativeRuntime: agentHarnessId,
     cfg,
     provider: providerUsed,
@@ -106,6 +110,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       ? resolveModelContextTokenProjection(contextParams)
       : undefined;
   const contextSelection = {
+    authProfileId: params.authProfileId,
     provider: providerUsed,
     model: modelUsed,
     agentHarnessId,
@@ -140,12 +145,16 @@ export async function updateSessionStoreAfterAgentRun(params: {
     projected?.contextTokens ??
     resolution?.contextTokens ??
     DEFAULT_CONTEXT_TOKENS;
-  const contextTokensSource =
-    runtimeContextTokens !== undefined
-      ? (result.meta.agentMeta?.contextTokensSource ?? "runtime")
-      : projected
-        ? projected.contextTokensSource
-        : "resolved";
+  const contextTokensSource = qualifySessionContextTokenSource({
+    entry: sessionStore[sessionKey],
+    authProfileId: params.authProfileId,
+    source:
+      runtimeContextTokens !== undefined
+        ? (result.meta.agentMeta?.contextTokensSource ?? "runtime")
+        : projected
+          ? projected.contextTokensSource
+          : "resolved",
+  });
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;

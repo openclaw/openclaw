@@ -188,52 +188,20 @@ export function renewDeliveryQueueEntryPlatformSendLeaseInDatabase(
     : undefined;
 }
 
-/** Atomically fence the exact unexpired owner at the real provider boundary. */
-export function promoteDeliveryQueueEntryPlatformSendInDatabase(
+function startDeliveryQueuePlatformSend(
   database: OpenClawStateDatabase,
-  params: PlatformClaimParams & {
-    claimId: string;
-    route?: { replyToId?: string | null };
-  },
+  params: Parameters<typeof promoteDeliveryQueueEntryPlatformSendInDatabase>[1],
+  operation: "promote" | "dispatch",
 ): boolean {
   return transitionDeliveryQueueEntryPlatformSendInDatabase(
     database,
     params,
-    "promote",
-    (entry, now) =>
-      entry.recoveryState === "producer_claimed" &&
-      hasLiveDeliveryQueueClaim(entry, params.claimId, now)
-        ? {
-            ...entry,
-            // Only an explicitly leased owner keeps its cross-process fence;
-            // legacy recovery must remain immediately eligible after a crash.
-            availableAt:
-              entry.requiresProducerClaim === true ? now + PLATFORM_SEND_OWNER_LEASE_MS : undefined,
-            producerClaimId: undefined,
-            platformSendAttemptId: params.claimId,
-            platformSendStartedAt: now,
-            ...(params.route && "replyToId" in params.route
-              ? { effectiveReplyToId: params.route.replyToId ?? null }
-              : {}),
-            recoveryState: "send_attempt_started",
-          }
-        : undefined,
-  );
-}
-
-export function dispatchDeliveryQueueEntryPlatformSendInDatabase(
-  database: OpenClawStateDatabase,
-  params: PlatformClaimParams & {
-    claimId: string;
-    route?: { replyToId?: string | null };
-  },
-): boolean {
-  return transitionDeliveryQueueEntryPlatformSendInDatabase(
-    database,
-    params,
-    "dispatch",
+    operation,
     (entry, now) => {
-      if (!hasLiveDeliveryQueueClaim(entry, params.claimId, now)) {
+      if (
+        (operation === "promote" && entry.recoveryState !== "producer_claimed") ||
+        !hasLiveDeliveryQueueClaim(entry, params.claimId, now)
+      ) {
         return undefined;
       }
       return {
@@ -259,4 +227,25 @@ export function dispatchDeliveryQueueEntryPlatformSendInDatabase(
       };
     },
   );
+}
+
+/** Atomically fence the exact unexpired owner at the real provider boundary. */
+export function promoteDeliveryQueueEntryPlatformSendInDatabase(
+  database: OpenClawStateDatabase,
+  params: PlatformClaimParams & {
+    claimId: string;
+    route?: { replyToId?: string | null };
+  },
+): boolean {
+  return startDeliveryQueuePlatformSend(database, params, "promote");
+}
+
+export function dispatchDeliveryQueueEntryPlatformSendInDatabase(
+  database: OpenClawStateDatabase,
+  params: PlatformClaimParams & {
+    claimId: string;
+    route?: { replyToId?: string | null };
+  },
+): boolean {
+  return startDeliveryQueuePlatformSend(database, params, "dispatch");
 }

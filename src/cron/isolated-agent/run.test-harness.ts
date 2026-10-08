@@ -77,7 +77,7 @@ export const runCliAgentMock = vi.fn();
 export const lookupModelContextTokensMock =
   vi.fn<(params: ContextTokenResolutionParams) => number | undefined>();
 export const lookupModelContextBudgetTokensMock =
-  vi.fn<(params: ContextTokenResolutionParams) => number | undefined>();
+  vi.fn<NonNullable<Parameters<typeof createCronContextRuntimeFixture>[1]>>();
 export const getCliSessionBindingMock = vi.fn();
 export const loadSessionEntryMock = vi.fn();
 const replaceSessionEntryMock = vi.fn();

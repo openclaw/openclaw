@@ -6,7 +6,10 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import { resolveProjectedSessionContextTokenBudget } from "../../config/sessions/context-token-provenance.js";
+import {
+  qualifySessionContextTokenSource,
+  resolveProjectedSessionContextTokenBudget,
+} from "../../config/sessions/context-token-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -261,9 +264,12 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     typeof ctxTokens === "number" && Number.isFinite(ctxTokens) && ctxTokens > 0
       ? Math.floor(ctxTokens)
       : undefined;
+  const authProfileId = execution.maintenanceAuthProfile
+    ? (execution.maintenanceAuthProfile.authProfileId ?? null)
+    : undefined;
   const contextParams = {
     contextWindow: activeSessionEntry?.contextWindow,
-    profileId: followupRun.run.authProfileId,
+    profileId: authProfileId,
 
     nativeRuntime: runResult.meta?.agentMeta?.agentHarnessId,
     cfg,
@@ -280,6 +286,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       ? resolveModelContextTokenProjection(contextParams)
       : undefined;
   const contextSelection = {
+    authProfileId,
     provider: sessionModel.provider,
     model: sessionModel.model,
     agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
@@ -314,12 +321,16 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     projected?.contextTokens ??
     resolution?.contextTokens ??
     DEFAULT_CONTEXT_TOKENS;
-  const contextTokensSource =
-    runtimeContextTokens !== undefined
-      ? (runResult.meta?.agentMeta?.contextTokensSource ?? "runtime")
-      : projected
-        ? projected.contextTokensSource
-        : "resolved";
+  const contextTokensSource = qualifySessionContextTokenSource({
+    entry: activeSessionEntry,
+    authProfileId,
+    source:
+      runtimeContextTokens !== undefined
+        ? (runResult.meta?.agentMeta?.contextTokensSource ?? "runtime")
+        : projected
+          ? projected.contextTokensSource
+          : "resolved",
+  });
 
   // Count first: terminal usage restores billing buckets without guessing context chronology.
   const compactionCount = await accountAgentTurnCompaction({
@@ -349,6 +360,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     runtimeModelSelection,
     contextTokensUsed,
     contextTokensSource,
+    authProfileId,
     contextBudgetStatus:
       compactionCount === undefined ? runResult.meta?.agentMeta?.contextBudgetStatus : undefined,
     systemPromptReport: runResult.meta?.systemPromptReport,

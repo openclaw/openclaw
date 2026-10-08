@@ -58,6 +58,7 @@ export function resolveEmbeddedRunEffectiveModel(
           cfg: params.runParams.config,
           provider: contextConfigProvider,
           model: params.modelId,
+          nativeRuntime: params.agentHarnessId,
         });
   return {
     ...resolved,

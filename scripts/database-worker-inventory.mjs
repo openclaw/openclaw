@@ -692,17 +692,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/agents/workspace-state-store.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["retireWorkspaceRelocationAttestation"],
-        evidence:
-          "Only commands/doctor-skill-workshop-workspaces.ts:266 retires migration attestations",
-      },
-    ],
-  ],
-  [
     "src/agents/workspace-state-store.kernel.ts",
     [
       {
@@ -1720,23 +1709,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/skills/workshop/store-sqlite-record.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["readStoredProposalInDatabase", "updateProposal"],
-        evidence:
-          "Doctor native read/update src/commands/doctor-skill-workshop-sqlite.ts:333,349; other callers use src/skills/workshop/store.worker.ts:68,129,149,167,182,188.",
-      },
-      {
-        tier: "W",
-        operations: ["insertProposal"],
-        evidence:
-          "Only src/skills/workshop/store-proposal.kernel.ts:73,168 inserts; sole executors store.worker.ts:139,157.",
-      },
-    ],
-  ],
-  [
     "src/state/agent-deletion-journal.read.ts",
     [
       {
@@ -2065,13 +2037,6 @@ const workerModules = new Set([
   "src/skills/lifecycle/upload-store-commit.ts", // Skill-upload worker commit command only.
   "src/skills/lifecycle/upload-store.kernel.ts", // Skill-upload worker dispatcher only.
   "src/skills/lifecycle/upload-store.sqlite.ts", // Skill-upload worker kernels; host imports pure options only.
-
-  "src/skills/workshop/collection-review.kernel.ts", // Skill-workshop worker collection-review reads only.
-  "src/skills/workshop/curator.kernel.ts", // Skill-workshop worker curator and usage commands only.
-  "src/skills/workshop/store-proposal.kernel.ts", // Skill-workshop worker proposal commands only.
-  "src/skills/workshop/store-sqlite-event.ts", // Skill-workshop and shared-state Doctor worker commands only.
-  "src/skills/workshop/store-sqlite-rollback.ts", // Skill-workshop worker rollback commands only.
-  "src/skills/workshop/store-sqlite-transition.ts", // Skill-workshop worker transition commands only.
 
   "src/state/backup-run-records.kernel.ts", // Backup record writes are called only by the shared-state worker runtime.
   "src/state/github-personal-publication-lifecycle.ts", // Receipt SQL runs in shared-state worker dispatch; host helper enqueues commands.

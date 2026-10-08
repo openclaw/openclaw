@@ -204,7 +204,6 @@ packages/ai/src/providers/openai-completions.test.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
 packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/gateway-client/src/client.ts
-packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/tool-call-repair/src/stream-normalizer.ts
@@ -389,7 +388,6 @@ src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
-src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.test-harness.ts
 src/daemon/launchd.test.ts
 src/daemon/schtasks.startup-fallback.test.ts
@@ -553,7 +551,6 @@ src/security/audit-extra.sync.ts
 src/security/audit.ts
 src/shared/json-schema-defaults.ts
 src/skills/lifecycle/clawhub.test.ts
-src/skills/workshop/service.test.ts
 src/snapshot/local-repository.test.ts
 src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
