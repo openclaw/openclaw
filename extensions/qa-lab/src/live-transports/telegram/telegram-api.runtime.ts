@@ -122,7 +122,7 @@ export async function waitForTelegramChannelRunning(
   const details = lastStatus
     ? `; last status: ${JSON.stringify(lastStatus)}`
     : lastProbeError
-      ? `; last probe error: ${lastProbeError}`
+      ? `; last check error: ${lastProbeError}`
       : "";
   throw new Error(`telegram account "${accountId}" did not become ready${details}`);
 }

@@ -657,13 +657,10 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
 
   private isFinalToolResult(event: GatewayRelayEvent): boolean {
     const talkEvent = event.talkEvent;
-    if (talkEvent?.type === "tool.progress") {
-      return false;
-    }
-    if (talkEvent?.type === "tool.result" && talkEvent.final === false) {
-      return false;
-    }
-    return true;
+    return (
+      talkEvent?.type !== "tool.progress" &&
+      !(talkEvent?.type === "tool.result" && talkEvent.final === false)
+    );
   }
 
   private cancelOutput(reason: string, requirePlayback = true): void {

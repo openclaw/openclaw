@@ -88,13 +88,9 @@ import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
-const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
-const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
-const CODEX_ACCESS_TOKEN_ENV_VAR = "CODEX_ACCESS_TOKEN";
 const CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS = [
-  CODEX_API_KEY_ENV_VAR,
-  OPENAI_API_KEY_ENV_VAR,
-  CODEX_ACCESS_TOKEN_ENV_VAR,
+  ...CODEX_APP_SERVER_API_KEY_ENV_VARS,
+  "CODEX_ACCESS_TOKEN",
 ];
 const CODEX_APP_SERVER_HOME_ENV_VARS = new Set([CODEX_HOME_ENV_VAR, HOME_ENV_VAR]);
 const MAX_COMPUTER_USE_ARTIFACT_OWNERS = 128;
@@ -108,17 +104,16 @@ const scopedOAuthRefreshQueues = new WeakMap<
   Map<string, Promise<OAuthCredential>>
 >();
 
-export async function bridgeCodexAppServerStartOptions(params: {
-  startOptions: CodexAppServerStartOptions;
-  agentId?: string;
-  agentDir?: string;
-  authProfileId?: string | null;
-  authProfileStore?: AuthProfileStore;
-  preparedAuth?: CodexAppServerPreparedAuth;
-  authRequirement?: CodexAppServerAuthRequirement;
-  config?: AuthProfileOrderConfig;
-  pluginConfig?: unknown;
-}): Promise<CodexAppServerStartOptions> {
+export async function bridgeCodexAppServerStartOptions(
+  params: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> & {
+    startOptions: CodexAppServerStartOptions;
+    agentId?: string;
+    authProfileId?: string | null;
+    preparedAuth?: CodexAppServerPreparedAuth;
+    authRequirement?: CodexAppServerAuthRequirement;
+    pluginConfig?: unknown;
+  },
+): Promise<CodexAppServerStartOptions> {
   if (params.startOptions.transport !== "stdio") {
     return params.startOptions;
   }
@@ -767,14 +762,13 @@ function createCodexAppServerAuthError(message: string): Error & { status: 401 }
   return Object.assign(new Error(message), { status: 401 as const });
 }
 
-export async function refreshCodexAppServerAuthTokens(params: {
-  agentDir: string;
-  authProfileId?: string;
-  authProfileStore?: AuthProfileStore;
-  authHandoff?: CodexAppServerAuthHandoff;
-  previousAccountId?: string | null;
-  config?: AuthProfileOrderConfig;
-}): Promise<CodexChatgptAuthTokensRefreshResponse> {
+export async function refreshCodexAppServerAuthTokens(
+  params: CodexAppServerAuthProfileLookup & {
+    agentDir: string;
+    authHandoff?: CodexAppServerAuthHandoff;
+    previousAccountId?: string | null;
+  },
+): Promise<CodexChatgptAuthTokensRefreshResponse> {
   const previousAccountId = params.previousAccountId?.trim();
   const handoffAccountId = params.authHandoff?.chatgptAccountId.trim();
   if (previousAccountId && handoffAccountId && previousAccountId !== handoffAccountId) {
@@ -822,15 +816,14 @@ export async function refreshCodexAppServerAuthTokens(params: {
   };
 }
 
-async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
-  agentDir: string;
-  authProfileId?: string;
-  authProfileStore?: AuthProfileStore;
-  authHandoff?: CodexAppServerAuthHandoff;
-  previousAccountId?: string | null;
-  forceOAuthRefresh?: boolean;
-  config?: AuthProfileOrderConfig;
-}): Promise<CodexLoginAccountParams | undefined> {
+async function resolveCodexAppServerAuthProfileLoginParamsInternal(
+  params: CodexAppServerAuthProfileLookup & {
+    agentDir: string;
+    authHandoff?: CodexAppServerAuthHandoff;
+    previousAccountId?: string | null;
+    forceOAuthRefresh?: boolean;
+  },
+): Promise<CodexLoginAccountParams | undefined> {
   const store = resolveCodexAppServerAuthProfileStore(params);
   const profileId = resolveCodexAppServerAuthProfileId({ ...params, store });
   if (!profileId) {
@@ -848,7 +841,9 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
     );
   }
   const preferStoreCredential = Boolean(params.authProfileStore?.profiles[profileId]);
-  let loginParams: CodexLoginAccountParams | undefined;
+  let loginCredential = credential;
+  let value: string | undefined;
+  let useApiKey = false;
   // Runtime honors the persisted type; credential-entry owners remediate legacy shapes.
   if (credential.type === "api_key" || credential.type === "token") {
     const resolved = await resolveApiKeyForProfile({
@@ -863,35 +858,25 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
       profileId,
       agentDir: params.agentDir,
     });
-    const value = resolved?.apiKey?.trim();
-    if (value) {
-      loginParams =
-        credential.type === "api_key"
-          ? { type: "apiKey", apiKey: value }
-          : buildChatgptAuthTokensParams(profileId, credential, value);
-    }
+    value = resolved?.apiKey?.trim();
+    useApiKey = credential.type === "api_key";
   } else {
-    const resolvedCredential = await resolveOAuthCredentialForCodexAppServer(
-      profileId,
-      credential,
-      {
-        ...params,
-        store,
-        preferStoreCredential,
-        forceRefresh: params.forceOAuthRefresh === true,
-      },
-    );
-    const accessToken = resolvedCredential.access?.trim();
-    if (accessToken) {
-      loginParams = buildChatgptAuthTokensParams(profileId, resolvedCredential, accessToken);
-    }
+    loginCredential = await resolveOAuthCredentialForCodexAppServer(profileId, credential, {
+      ...params,
+      store,
+      preferStoreCredential,
+      forceRefresh: params.forceOAuthRefresh === true,
+    });
+    value = loginCredential.access?.trim();
   }
-  if (!loginParams) {
+  if (!value) {
     throw new CodexAppServerAuthProfileUnavailableError(
       `Codex app-server auth profile "${profileId}" does not contain usable credentials. Repair or replace the selected OpenAI credential, then retry.`,
     );
   }
-  return loginParams;
+  return useApiKey
+    ? { type: "apiKey", apiKey: value }
+    : buildChatgptAuthTokensParams(profileId, loginCredential, value);
 }
 
 async function resolveCodexAppServerFallbackApiKeyLoginParams(params: {
@@ -1008,9 +993,6 @@ async function resolveOAuthCredentialForCodexAppServer(
     });
   }
   if (params.forceRefresh && !persistedOAuthCredential && overlaidOAuthCredential) {
-    if (reuseCompletedRotation) {
-      return overlaidOAuthCredential;
-    }
     const refreshedRuntimeCredential = await refreshOAuthCredentialForRuntime({
       credential: overlaidOAuthCredential,
       cfg: params.config,

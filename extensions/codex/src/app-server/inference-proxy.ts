@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { Writable, type Duplex } from "node:stream";
-import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
+import { createDeferred, createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 import {
@@ -356,10 +356,7 @@ export async function createCodexInferenceProxy(params: {
       let local: WebSocket | undefined;
       let proxyAgent: ReturnType<typeof createNodeProxyAgent>;
       let upstreamClosed = Promise.resolve();
-      let finishSetup = () => {};
-      const setupSettled = new Promise<void>((resolve) => {
-        finishSetup = resolve;
-      });
+      const { promise: setupSettled, resolve: finishSetup } = createDeferred();
       let resident: ReturnType<typeof reserveResident> = null;
       const controller = new AbortController();
       const deadlineAtMs = Date.now() + HANDSHAKE_TIMEOUT_MS;

@@ -57,11 +57,14 @@ export function resolveCodexNativeExecutionPolicy(params: {
     sessionKey &&
     params.readRuntimeSessionEntry &&
     (parseAgentIdFromSessionKey(sessionKey) ?? tryResolveDefaultAgentId(config)) === agentId;
-  const sessionEntry =
-    params.sessionEntry ??
-    (canReadSessionEntry && sessionKey && agentId
-      ? readRuntimeSessionEntryBestEffort({ sessionKey, agentId })
-      : undefined);
+  let sessionEntry = params.sessionEntry ?? undefined;
+  if (sessionEntry === undefined && canReadSessionEntry && sessionKey && agentId) {
+    try {
+      sessionEntry = getSessionEntry({ sessionKey, agentId, hydrateSkillPromptRefs: false });
+    } catch {
+      sessionEntry = undefined;
+    }
+  }
   const sandboxAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? agentId;
   const sandboxAvailable =
     params.sandboxAvailable ??
@@ -140,19 +143,4 @@ function normalizeExecTarget(value?: string | null): ExecTarget | undefined {
     return normalized;
   }
   return undefined;
-}
-
-function readRuntimeSessionEntryBestEffort(params: {
-  sessionKey: string;
-  agentId: string;
-}): SessionEntry | undefined {
-  try {
-    return getSessionEntry({
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      hydrateSkillPromptRefs: false,
-    });
-  } catch {
-    return undefined;
-  }
 }

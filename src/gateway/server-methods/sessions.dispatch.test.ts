@@ -855,7 +855,7 @@ describe("sessions.dispatch", () => {
     const moves = createWorkerPlacementMoveService({
       placements: {
         beginPlacementMove: async () => ({ intent, placement: draining, joined }),
-        getAsync: async () => existing,
+        getWithMoveAsync: async () => ({ placement: existing, move: joined ? intent : undefined }),
         getPlacementMoveAsync: async () => (joined ? intent : undefined),
         recordPlacementMoveError,
       } as never,

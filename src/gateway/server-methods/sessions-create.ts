@@ -242,7 +242,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       }
       // Mention validation and later creation must use the same real child target.
       sessionKey ??= buildDashboardSessionKey(explicitlyRequestedAgent.agentId);
-      const normalized = normalizeChatSendRequest({
+      const normalization = normalizeChatSendRequest({
         params: {
           sessionKey,
           message: message ?? "",
@@ -251,6 +251,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         },
         client,
       });
+      const normalized = normalization instanceof Promise ? await normalization : normalization;
       if (!normalized.ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, normalized.error));
         return;

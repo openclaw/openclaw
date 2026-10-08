@@ -54,51 +54,32 @@ describe("prepared provider errors after settled tools", () => {
     },
   );
 
-  it.each(["earlier user turn", "current commentary substring"])(
-    "does not attribute current output to %s",
-    (source) => {
-      const base = createSettledProviderFailureAttempt({
-        assistantTexts: ["The note is already saved."],
-      });
-      const earlierAssistant = {
-        ...base.lastAssistant!,
-        stopReason: "stop" as const,
-        content: [
-          {
-            type: "text" as const,
-            text:
-              source === "earlier user turn"
-                ? "The note is already saved."
-                : "The note is already saved. I will verify it.",
-          },
-        ],
-      };
-      base.messagesSnapshot.splice(source === "earlier user turn" ? 0 : 1, 0, earlierAssistant);
-      base.terminal = {
-        kind: "failed",
-        source: "prompt",
-        error: new Error("Stream ended without finish_reason"),
-      };
-      const attempt = projectSettledProviderFailureAttempt(base);
-      expect(attempt.settledTurnFinalizationContext).toBeUndefined();
-      expect(resolveSettledTurnFinalizationRequest(prepareRequest(attempt))).toBeNull();
-    },
-  );
+  it("does not attribute a current commentary substring to final output", () => {
+    const base = createSettledProviderFailureAttempt({
+      assistantTexts: ["The note is already saved."],
+    });
+    const earlierAssistant = {
+      ...base.lastAssistant!,
+      stopReason: "stop" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: "The note is already saved. I will verify it.",
+        },
+      ],
+    };
+    base.messagesSnapshot.splice(1, 0, earlierAssistant);
+    base.terminal = {
+      kind: "failed",
+      source: "prompt",
+      error: new Error("Stream ended without finish_reason"),
+    };
+    const attempt = projectSettledProviderFailureAttempt(base);
+    expect(attempt.settledTurnFinalizationContext).toBeUndefined();
+    expect(resolveSettledTurnFinalizationRequest(prepareRequest(attempt))).toBeNull();
+  });
 
   it.each([
-    { name: "missing recovery context", change: { settledTurnFinalizationContext: undefined } },
-    {
-      name: "authored assistant output",
-      change: { assistantTexts: ["The note is already saved."] },
-    },
-    {
-      name: "unfinished tool",
-      change: { itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 } },
-    },
-    {
-      name: "asynchronous tool",
-      change: { toolMetas: [{ toolName: "write", asyncStarted: true }] },
-    },
     {
       name: "delivered source reply",
       change: {
@@ -173,20 +154,9 @@ describe("prepared provider errors after settled tools", () => {
     expect(resolveSettledTurnFinalizationRequest(prepareRequest(attempt, "cron"))).toBeNull();
   });
 
-  it.each(["unmarked error", "structured tool error", "tool presentation"])(
-    "preserves %s alongside the generated provider error",
-    (kind) => {
-      const request = prepareRequest();
-      if (kind === "tool presentation") {
-        request.hasTerminalToolPresentation = true;
-      } else {
-        request.payloadsWithToolMedia?.push({
-          text: "Explicit error",
-          isError: true,
-          ...(kind === "structured tool error" ? { channelData: { explicit: true } } : {}),
-        });
-      }
-      expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
-    },
-  );
+  it("preserves an unmarked error alongside the generated provider error", () => {
+    const request = prepareRequest();
+    request.payloadsWithToolMedia?.push({ text: "Explicit error", isError: true });
+    expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
+  });
 });

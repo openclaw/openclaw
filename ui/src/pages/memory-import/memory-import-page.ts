@@ -322,10 +322,20 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     this.backfillTo = "";
     this.backfillBusy = null;
     this.backfillError = null;
+    this.clearBackfillResults();
+    this.backfillRollbackPending = false;
+  }
+
+  private clearBackfillResults() {
     this.backfillPreview = null;
     this.backfillProgress = null;
     this.backfillRollbackResult = null;
-    this.backfillRollbackPending = false;
+  }
+
+  private setBackfillDate(field: "backfillFrom" | "backfillTo", value: string) {
+    this[field] = value;
+    this.clearBackfillResults();
+    this.backfillError = null;
   }
 
   private backfillRequest(agentId: string) {
@@ -359,9 +369,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     this.backfillBusy = operation;
     this.backfillError = null;
     if (operation !== "rollback") {
-      this.backfillPreview = null;
-      this.backfillProgress = null;
-      this.backfillRollbackResult = null;
+      this.clearBackfillResults();
     }
     try {
       if (operation === "rollback") {
@@ -478,20 +486,8 @@ export class MemoryImportPage extends OpenClawLightDomElement {
           this.applyError = null;
         }
       },
-      onBackfillFromChange: (value) => {
-        this.backfillFrom = value;
-        this.backfillPreview = null;
-        this.backfillProgress = null;
-        this.backfillRollbackResult = null;
-        this.backfillError = null;
-      },
-      onBackfillToChange: (value) => {
-        this.backfillTo = value;
-        this.backfillPreview = null;
-        this.backfillProgress = null;
-        this.backfillRollbackResult = null;
-        this.backfillError = null;
-      },
+      onBackfillFromChange: (value) => this.setBackfillDate("backfillFrom", value),
+      onBackfillToChange: (value) => this.setBackfillDate("backfillTo", value),
       onBackfillPreview: () => void this.runBackfill("preview"),
       onBackfillApply: () => void this.runBackfill("apply"),
       onBackfillRollbackRequest: () => {

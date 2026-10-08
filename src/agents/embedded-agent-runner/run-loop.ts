@@ -62,18 +62,13 @@ export async function runPreparedEmbeddedLoop(
 ): Promise<EmbeddedAgentRunResult> {
   let { runParams: params, provider, modelId, preReplyGeneration } = input;
   const {
-    agentDir,
-    workspaceDir: resolvedWorkspace,
-    globalLane,
     hookRunner,
     hookContext: hookCtx,
     fallbackConfigured,
-    isProbeSession,
     resolvedSessionKey,
     startedAtMs: started,
     startupStages,
     lifecycleGeneration,
-    suspendForFailure,
   } = input;
   const { notifyExecutionPhase } = input.progressController;
   let startupStagesEmitted = false;
@@ -81,15 +76,8 @@ export async function runPreparedEmbeddedLoop(
     "runtime",
     () =>
       prepareEmbeddedRunRuntime({
+        ...input,
         assertCurrent: input.laneController.throwIfAborted,
-        runParams: params,
-        sessionAdmission: input.sessionAdmission,
-        provider,
-        modelId,
-        agentDir,
-        workspaceDir: resolvedWorkspace,
-        globalLane,
-        hookRunner,
         hookContext: preReplyGeneration?.assertCurrent
           ? withClaimingHookAdmission(
               { ...hookCtx },
@@ -98,8 +86,6 @@ export async function runPreparedEmbeddedLoop(
           : hookCtx,
         markStartupStage: (stage) => startupStages.mark(stage),
         notifyExecutionPhase,
-        fallbackConfigured,
-        preparedModelRuntime: input.preparedModelRuntime,
       }),
     { config: params.config },
   );
@@ -121,7 +107,6 @@ export async function runPreparedEmbeddedLoop(
     profileFailureStore,
     pluginHarnessOwnsAuthBootstrap,
     attemptedThinking,
-    maybeRefreshRuntimeAuthForAuthError,
     getApiKeyInfo,
   } = preparedRuntime;
   const initialHarness = preparedRuntime.snapshot().agentHarness;
@@ -209,19 +194,9 @@ export async function runPreparedEmbeddedLoop(
     !(params.sessionManager && !params.sessionManager.getSessionTarget());
   const permissionChanges = createEmbeddedRunPermissionChanges(params);
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
-    runParams: params,
-    provider,
-    modelId,
-    globalLane,
-    agentDir,
-    fallbackConfigured,
-    profileFailureStore,
-    getLastProfileId: () => preparedRuntime.snapshot().lastProfileId,
+    runInput: admittedRunInput,
+    preparedRuntime,
     getSessionId: () => sessionPromptState.sessionId,
-    harnessOwnsTransport: () => preparedRuntime.snapshot().pluginHarnessOwnsTransport,
-    getRuntimeAuthOwnerId: () => preparedRuntime.snapshot().agentHarness.id,
-    getApiKeyInfo,
-    advanceAuthProfile: preparedRuntime.advanceAttemptAuthProfile,
   });
   const { contextEngine, contextEngineLogicalTurnLease, ownsContextEngineLogicalTurnLease } =
     await admitEmbeddedContextEngine(admittedRunInput, initialHarness);
@@ -247,6 +222,7 @@ export async function runPreparedEmbeddedLoop(
       }
       assertAdmittedActive();
       providerReview.beginAttempt();
+      const attemptRuntimeSnapshot = preparedRuntime.snapshot();
       const {
         agentHarness,
         pluginHarnessOwnsTransport,
@@ -254,7 +230,7 @@ export async function runPreparedEmbeddedLoop(
         outerContextTokenMeta,
         lastProfileId,
         thinkLevel: initialThinkLevel,
-      } = preparedRuntime.snapshot();
+      } = attemptRuntimeSnapshot;
       let thinkLevel = initialThinkLevel;
       if (isRunRetryBudgetExhausted(runRetryBudget)) {
         const message =
@@ -424,7 +400,6 @@ export async function runPreparedEmbeddedLoop(
         attempt,
         sessionIdUsed,
         sessionFileUsed,
-        currentAttemptAssistant,
         currentAttemptCompletedAssistant,
         attemptAssistant,
         terminalState,
@@ -479,34 +454,19 @@ export async function runPreparedEmbeddedLoop(
         continue;
       }
       const assistantFailureOutcome = await handleEmbeddedAssistantFailure({
-        runParams: params,
-        attempt,
-        attemptAssistant,
-        currentAttemptAssistant,
-        terminalState,
-        activeErrorContext,
-        provider,
+        runInput: admittedRunInput,
+        preparedRuntime,
+        normalizedAttempt,
+        runtime: attemptRuntimeSnapshot,
         providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin,
-        modelId,
-        model: model.id,
-        thinkLevel,
         getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,
-        attemptedThinking,
-        fallbackConfigured,
-        pluginHarnessOwnsTransport,
-        authProfileId: lastProfileId,
-        authProfileStore: attemptAuthProfileStore,
         runtimeAuthRetry,
-        maybeRefreshRuntimeAuthForAuthError,
         emptyErrorRetries,
         overloadProfileRotations,
         previousRetryFailoverReason: lastRetryFailoverReason,
         failover: failoverRetryController,
         traceAttempts,
-        suspendForFailure,
         suspensionSessionId: sessionPromptState.sessionId ?? params.sessionId,
-        agentDir,
-        isProbeSession,
       });
       thinkLevel = assistantFailureOutcome.thinkLevel;
       preparedRuntime.setThinkLevel(thinkLevel);
@@ -576,19 +536,6 @@ export async function runPreparedEmbeddedLoop(
         assistantProfileFailureReason = null;
       }
 
-      const {
-        agentMeta,
-        reportedModelRef,
-        finalAssistantVisibleText,
-        finalAssistantRawText,
-        payloadsWithToolMedia,
-        replyDeliveryState,
-        recoveredFinalAssistantPayloadsAfterPromptTimeout,
-        attemptToolSummary,
-        failureSignal,
-        terminalToolFailure,
-      } = terminalPrepared;
-
       const terminalTimeoutResult = resolveEmbeddedRunTerminalTimeout({
         terminalPrepared,
         attempt: terminalAttempt,
@@ -607,6 +554,7 @@ export async function runPreparedEmbeddedLoop(
         terminalAuthPlan.deferredRouteSupport?.requestTransportOverrides ??
         "none";
       const terminalResolution = await resolveEmbeddedRunTerminal({
+        prepared: terminalPrepared,
         runParams: params,
         retryState: terminalRetryState,
         attempt: terminalAttempt,
@@ -615,15 +563,6 @@ export async function runPreparedEmbeddedLoop(
         modelApi: effectiveModel.api,
         executionContract,
         terminalState: resolvedTerminalState,
-        payloadsWithToolMedia,
-        replyDeliveryState,
-        recoveredFinalAssistantPayloadsAfterPromptTimeout,
-        finalAssistantVisibleText,
-        finalAssistantRawText,
-        agentMeta,
-        attemptToolSummary,
-        failureSignal,
-        terminalToolFailure,
         attemptCompactionCount: terminalAttemptCompactionCount,
         replayState: accumulatedReplayState,
         sessionPromptState,
@@ -648,7 +587,6 @@ export async function runPreparedEmbeddedLoop(
         settledTurnFinalizationOutcome,
         pluginHarnessOwnsTransport,
         pluginHarnessOwnsAuthBootstrap,
-        reportedModelRef,
         traceAttempts,
         thinkLevel,
         contextRecoveryState,

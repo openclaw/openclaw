@@ -4645,7 +4645,9 @@ jobs:
 
       - name: Install Chromium for native live browser tests
         if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'
-        run: pnpm --dir ui exec playwright install --with-deps chromium
+        uses: ./.release-harness/.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: restore
 
       - name: Hydrate live auth/profile inputs
         if: steps.selection.outputs.run == 'true'
@@ -5089,7 +5091,9 @@ jobs:
 
       - name: Install Chromium for A-K live browser tests
         if: contains(matrix.profiles, inputs.release_test_profile) && matrix.suite_id == 'native-live-extensions-a-k' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
-        run: pnpm --dir ui exec playwright install --with-deps chromium
+        uses: ./.release-harness/.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: restore
 
       - name: Hydrate live auth/profile inputs
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))

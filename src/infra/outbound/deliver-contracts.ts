@@ -43,6 +43,8 @@ type ConversationDeliveryAttemptAuthority = Omit<
 
 export type { PlatformSendRoute } from "./deliver-types.js";
 
+export type OutboundHandoff = <T>(initiate: () => Promise<T>) => Promise<T>;
+
 export type OutboundDeliveryIntent = {
   id: string;
   channel: string;
@@ -163,6 +165,8 @@ type OutboundChannelContext = {
   requiredUnknownSendReconciliation?: boolean;
   /** @internal Revalidate caller authority before direct adapter code can run. */
   onDirectAdapterHandoff?: () => Promise<void>;
+  /** @internal Initiates the platform method inside the caller's final authority grant. */
+  withDirectAdapterHandoff?: OutboundHandoff;
   /** @internal Synchronously fence authority at the final adapter invocation. */
   assertDirectAdapterHandoff?: () => void;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */

@@ -190,9 +190,22 @@ async function runModelRun(params: {
                 typeof providerErrorMessage === "string" && providerErrorMessage.trim()
                   ? `: ${providerErrorMessage.trim()}`
                   : "";
-              throw new Error(
-                `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
-              );
+              // Keep AI runtime imports out of command registration and help loading.
+              const { hasOnlyAssistantReasoningContent, isReasoningOnlyLengthAssistantTurn } =
+                await import("@openclaw/ai/internal/shared");
+              const target = `for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`;
+              // Failed or aborted streams can keep partial reasoning; report those as provider failures.
+              const completedWithoutError =
+                (result.stopReason === "stop" || result.stopReason === "length") && !detail;
+              if (completedWithoutError && hasOnlyAssistantReasoningContent(result)) {
+                const limitHint = isReasoningOnlyLengthAssistantTurn(result)
+                  ? " It stopped at the output token limit while reasoning; a lower --thinking level may leave room for text."
+                  : "";
+                throw new Error(
+                  `Model returned reasoning but no text output ${target}${limitHint}`,
+                );
+              }
+              throw new Error(`No text output returned ${target}`);
             }
             return {
               ok: true,

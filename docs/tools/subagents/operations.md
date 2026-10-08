@@ -168,6 +168,18 @@ matching child batch, so automatic delivery retries cannot start it again under
 a new run ID. Captured child results and their execution outcomes remain intact;
 you can inspect them or send a new instruction afterward.
 
+A parent Stop also drains ordinary commands retained by its selected native
+children, even after their model execution has completed. Completed child results
+remain completed; command cleanup does not add canceled model runs to the result.
+Commands deliberately started with `background: true` remain independent.
+A live command continuation retains the original request's child ownership when
+it runs in another session. Stop selects only that request's bound native children,
+leaving newer human work and replacement child generations alone.
+A fresh session Stop can still select those children after the continuation has
+completed and its notification has been consumed. It uses the current original
+session's authority and generation; a historical exact-run Stop does not regain
+authority after that request's active, process, and event ownership has ended.
+
 For Gateway callers, `chat.abort` with a `runId` uses this exact-parent scope.
 `sessions.abort` with a `runId` also targets that run. When it resolves a recovered
 native run without a chat controller, it cancels children only if the captured

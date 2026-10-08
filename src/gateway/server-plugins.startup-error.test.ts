@@ -30,6 +30,11 @@ vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal)
   }),
 }));
 
+vi.mock("./server-runtime-services.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-runtime-services.js")>()),
+  scheduleGatewayPostReadyMaintenance: () => {},
+}));
+
 vi.doUnmock("../plugins/loader.js");
 installGatewayTestHooks({ scope: "suite" });
 installInstanceBindingConfigIo();
@@ -175,6 +180,9 @@ it.each(["module-load", "entry-open"] as const)(
       const after = await rpcReq(socket, INSTANCE_BINDING_PROBE_METHOD, {});
       expect(after.ok, after.error?.message).toBe(true);
       expect(after.payload?.registryId).not.toBe(before.payload?.registryId);
+
+      // Successful reloads can leave config reconciliation queued after the RPC.
+      await waitForReloadSettlement();
 
       // Break only B's code; recovery must register captured A code under a fresh owner.
       await fs.writeFile(

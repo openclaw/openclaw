@@ -264,15 +264,6 @@ class SmsManager(
       return params.conversationReview && params.includeMms && (hasExplicitPhoneNumber || hasSingleResolvedPhoneNumber)
     }
 
-    internal fun effectiveSearchParams(
-      params: QueryParams,
-      resolvedPhoneNumbers: List<String> = emptyList(),
-    ): QueryParams {
-      if (!shouldUseConversationReviewByPhoneMode(params, resolvedPhoneNumbers)) return params
-      val reviewLimit = maxOf(params.limit, 25)
-      return params.copy(limit = reviewLimit)
-    }
-
     internal fun resolveSearchParams(
       params: QueryParams,
       normalizedPhoneNumber: String?,
@@ -280,7 +271,11 @@ class SmsManager(
     ): QueryParams {
       val effectivePhoneNumber = normalizedPhoneNumber ?: resolvedPhoneNumbers.singleOrNull()
       val normalizedParams = params.copy(phoneNumber = effectivePhoneNumber)
-      return effectiveSearchParams(normalizedParams, resolvedPhoneNumbers)
+      return if (shouldUseConversationReviewByPhoneMode(normalizedParams, resolvedPhoneNumbers)) {
+        normalizedParams.copy(limit = maxOf(params.limit, 25))
+      } else {
+        normalizedParams
+      }
     }
 
     internal fun toByPhoneLookupNumber(phone: String): String = phone.filter { it.isDigit() }
@@ -604,14 +599,17 @@ class SmsManager(
     val selections = mutableListOf<String>()
     val selectionArgs = mutableListOf<String>()
 
-    if (params.startTime != null) {
-      selections.add("${Telephony.Sms.DATE} >= ?")
-      selectionArgs.add(params.startTime.toString())
+    fun select(
+      clause: String,
+      value: String?,
+    ) {
+      if (value != null) {
+        selections.add(clause)
+        selectionArgs.add(value)
+      }
     }
-    if (params.endTime != null) {
-      selections.add("${Telephony.Sms.DATE} <= ?")
-      selectionArgs.add(params.endTime.toString())
-    }
+    select("${Telephony.Sms.DATE} >= ?", params.startTime?.toString())
+    select("${Telephony.Sms.DATE} <= ?", params.endTime?.toString())
 
     if (allPhoneNumbers.isNotEmpty()) {
       val addressSelection =
@@ -624,20 +622,9 @@ class SmsManager(
       }
     }
 
-    if (!params.keyword.isNullOrEmpty()) {
-      selections.add(buildKeywordLikeSelection())
-      selectionArgs.add(buildKeywordLikeArg(params.keyword))
-    }
-
-    if (params.type != null) {
-      selections.add("${Telephony.Sms.TYPE} = ?")
-      selectionArgs.add(params.type.toString())
-    }
-
-    if (params.isRead != null) {
-      selections.add("${Telephony.Sms.READ} = ?")
-      selectionArgs.add(if (params.isRead) "1" else "0")
-    }
+    select(buildKeywordLikeSelection(), params.keyword?.takeIf(String::isNotEmpty)?.let(::buildKeywordLikeArg))
+    select("${Telephony.Sms.TYPE} = ?", params.type?.toString())
+    select("${Telephony.Sms.READ} = ?", params.isRead?.let { if (it) "1" else "0" })
 
     // Android SMS providers still honor LIMIT/OFFSET through sortOrder on this path.
     // Keep the bounded interpolation here because parseQueryParams already clamps both values.

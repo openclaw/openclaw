@@ -1,5 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
+import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import "../../components/modal-dialog.ts";
 import type { SessionProgressCardRefreshAction } from "../../components/session-progress-card.ts";
@@ -357,10 +358,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (this.resetConfirmation) {
       return this.resetConfirmation.promise;
     }
-    let resolve!: (confirmed: boolean) => void;
-    const promise = new Promise<boolean>((next) => {
-      resolve = next;
-    });
+    const { promise, resolve } = createDeferredCore<boolean>();
     this.resetConfirmation = { scopeKey, promise, resolve };
     this.resetConfirmationOpen = true;
     return promise;

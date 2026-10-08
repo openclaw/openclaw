@@ -210,8 +210,13 @@ function createPluginHandler(
     // Keep the final authority check and adapter invocation in one synchronous
     // call stack. An awaited callback leaves a microtask gap where custody can
     // change after validation but before recipient-visible transport code runs.
-    assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-    return await send();
+    const initiate = () => {
+      assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+      return send();
+    };
+    return params.withDirectAdapterHandoff
+      ? await params.withDirectAdapterHandoff(initiate)
+      : await initiate();
   };
   // A prepared transport id identifies one atomic platform message. Splitting it
   // would either reuse the id or leave later chunks outside reply correlation.

@@ -378,7 +378,7 @@ export async function runRemoteGatewayInferenceOnboarding(
       await prompter.intro("OpenClaw");
       // One-shot RPCs have different connections. Preserve a signed device
       // owner across chat replies even when loopback shared auth needs no device.
-      const deviceIdentity = resolveDeviceIdentityForGatewayCall();
+      const deviceIdentity = await resolveDeviceIdentityForGatewayCall();
       const sessionId = randomUUID();
       let reply = await request<SystemAgentChatResult>({
         method: "openclaw.chat",

@@ -355,7 +355,7 @@ internal class VoiceWakeManager(
     sessionActive = true
     _isListening.value = false
     _statusText.value = nativeText("Starting…")
-    return RecognizerAction.Start(nextRecognizerOperationIdLocked(), generation)
+    return RecognizerAction.Start(++recognizerOperationId, generation)
   }
 
   private fun handleRecognitionEvent(
@@ -414,7 +414,7 @@ internal class VoiceWakeManager(
     _isListening.value = false
     _lastTriggeredCommand.value = match.command
     _statusText.value = nativeText("Triggered")
-    val action = RecognizerAction.Stop(nextRecognizerOperationIdLocked())
+    val action = RecognizerAction.Stop(++recognizerOperationId)
     commandJob =
       scope.launch {
         var delivered = false
@@ -478,12 +478,7 @@ internal class VoiceWakeManager(
     val wasActive = sessionActive
     sessionActive = false
     _isListening.value = false
-    return if (force || wasActive) RecognizerAction.Stop(nextRecognizerOperationIdLocked()) else null
-  }
-
-  private fun nextRecognizerOperationIdLocked(): Long {
-    recognizerOperationId += 1
-    return recognizerOperationId
+    return if (force || wasActive) RecognizerAction.Stop(++recognizerOperationId) else null
   }
 
   private fun performRecognizerAction(action: RecognizerAction?) {

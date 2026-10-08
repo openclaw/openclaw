@@ -537,14 +537,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     this.options.ensureListener();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     this.options.startSweeper();
-    void this.waitForSubagentCompletion(
-      nextRunId,
-      this.options.resolveSubagentWaitTimeoutMs(
-        this.options.getRuntimeConfig(),
-        next.runTimeoutSeconds,
-      ),
-      next,
-    );
+    void this.waitForSubagentCompletion(nextRunId, next);
     return true;
   };
 }

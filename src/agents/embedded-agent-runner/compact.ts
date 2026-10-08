@@ -27,13 +27,12 @@ import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
-import { resolveProjectKey } from "../project-memory-scope.js";
+import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
-import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
 import { runForegroundCompactionWork } from "./compact.foreground-work.js";
 import type {
   CompactEmbeddedAgentSessionParams,
@@ -49,7 +48,6 @@ import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compact
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { resolveSharedPluginRuntimeWorkspace } from "./run/prepared-runtime-context.js";
-import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import { consumeTranscriptBytePreflightClaim } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
@@ -403,23 +401,16 @@ export async function compactEmbeddedAgentSessionDirect(
       const preparedWorkspaceDir = sharedRuntimeWorkspace
         ? requestedWorkspaceDir
         : (preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir);
-      const repoRoot =
-        resolveSystemPromptRepoRoot({
-          config: preparedConfig,
-          workspaceDir: preparedWorkspaceDir,
-          cwd: requestedParams.cwd,
-        }) ?? null;
-      const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
-      const activeProjectKeys = prepareEmbeddedSessionActiveProjectKeys(
-        requestedParams.sessionId,
-        projectKey,
-      );
+      const projects = await prepareAgentPromptProjects({
+        config: preparedConfig,
+        workspaceDir: preparedWorkspaceDir,
+        cwd: requestedParams.cwd,
+        sessionId: requestedParams.sessionId,
+      });
       const preparedModelRuntime = Object.freeze({
         ...preparedModelRuntimeOwnerSnapshot,
         config: preparedConfig,
-        repoRoot,
-        projectKey,
-        activeProjectKeys,
+        ...projects,
       });
       // Fallback policy and every attempt consume the same generation as model/auth discovery.
       // A reload may have committed while session targeting was resolved above.
@@ -485,26 +476,22 @@ export async function compactEmbeddedAgentSessionDirect(
           config: params.config,
           agentId: params.sandboxAgentId ?? params.agentId,
         }).sessionAgentId;
-        const resolvedPrimaryCandidate = resolveModelCandidateChain({
+        const fallbackContext = {
           cfg: params.config,
           agentId: fallbackAgentId,
           manifestPlugins: preparedModelRuntime.metadataSnapshot,
           provider: primaryProvider,
           model: primaryModel,
-          requestedRouteResolution: "resolved",
+          requestedRouteResolution: "resolved" as const,
           fallbacksOverride,
-        })[0];
+        };
+        const resolvedPrimaryCandidate = resolveModelCandidateChain(fallbackContext)[0];
         const fallbackSessionKey =
           params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
         const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
-          cfg: params.config,
-          manifestPlugins: preparedModelRuntime.metadataSnapshot,
-          provider: primaryProvider,
-          model: primaryModel,
-          requestedRouteResolution: "resolved",
+          ...fallbackContext,
           runId: params.runId ?? params.sessionId,
           agentDir: params.agentDir,
-          agentId: fallbackAgentId,
           sessionId: params.sessionId,
           sessionKey: fallbackSessionKey,
           userLockedAuthProfileId:
@@ -522,7 +509,6 @@ export async function compactEmbeddedAgentSessionDirect(
               pluginRegistry: preparedModelRuntime.pluginRegistry!,
             });
           },
-          fallbacksOverride,
           classifyResult: ({ result, provider, model }) =>
             classifyCompactionFallbackResult(result, provider, model),
           run: async (provider, model) => {

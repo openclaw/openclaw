@@ -8,7 +8,7 @@ import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayCliOptions } from "../gateway/call.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { WizardSession } from "../wizard/session.js";
@@ -35,9 +35,9 @@ vi.mock("./onboard-guided.js", () => ({ runGuidedOnboarding: mocks.runGuidedOnbo
 // mock-isolation: Remote onboarding records its handoff without loading the local terminal runtime.
 vi.mock("../tui/tui.js", () => ({ runTui: mocks.runTui }));
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
-  loadOrCreateDeviceIdentity: vi.fn(() => ({
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateDeviceIdentityAsync: vi.fn(async () => ({
     deviceId: "remote-onboarding-device",
     publicKeyPem: "test-public-key",
     privateKeyPem: "test-private-key",
@@ -912,7 +912,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     "preserves remote chat identity selection: %s",
     async (identity) => {
       if (identity === "unavailable") {
-        vi.mocked(loadOrCreateDeviceIdentity).mockImplementationOnce(() => {
+        vi.mocked(loadOrCreateDeviceIdentityAsync).mockImplementationOnce(() => {
           throw new Error("read-only client state");
         });
       }

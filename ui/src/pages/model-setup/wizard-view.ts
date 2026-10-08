@@ -6,6 +6,23 @@ import "../../components/modal-dialog.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 
 const WIZARD_TEXT_INPUT_ID = "model-setup-wizard-text-input";
+const WIZARD_COPY = {
+  auth: {
+    dialog: "modelSetup.wizard.dialogLabel",
+    titleKey: "modelSetup.wizard.title",
+    starting: "modelSetup.wizard.starting",
+  },
+  prepare: {
+    dialog: "modelSetup.wizard.prepareDialogLabel",
+    titleKey: "modelSetup.wizard.prepareTitle",
+    starting: "modelSetup.wizard.prepareStarting",
+  },
+  activate: {
+    dialog: "modelSetup.heading",
+    titleKey: "modelSetup.heading",
+    starting: "modelSetup.wizard.checking",
+  },
+};
 
 type WizardViewProps = {
   mode: "auth" | "prepare" | "activate";
@@ -25,15 +42,10 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
     return nothing;
   }
   const canCancel = props.state.phase === "starting" || props.state.phase === "step";
+  const copy = WIZARD_COPY[props.mode];
   return html`
     <openclaw-modal-dialog
-      label=${t(
-        props.mode === "prepare"
-          ? "modelSetup.wizard.prepareDialogLabel"
-          : props.mode === "activate"
-            ? "modelSetup.heading"
-            : "modelSetup.wizard.dialogLabel",
-      )}
+      label=${t(copy.dialog)}
       @modal-cancel=${canCancel ? props.onCancel : props.onClose}
     >
       <div class="model-setup-wizard">
@@ -44,13 +56,7 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                 ? props.state.authLabel
                 : props.state.phase === "step" && props.state.step.title
                   ? props.state.step.title
-                  : t(
-                      props.mode === "prepare"
-                        ? "modelSetup.wizard.prepareTitle"
-                        : props.mode === "activate"
-                          ? "modelSetup.heading"
-                          : "modelSetup.wizard.title",
-                    )
+                  : t(copy.titleKey)
             }
           </h2>
         </div>
@@ -64,15 +70,7 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
           )}
           ${
             props.state.phase === "starting"
-              ? html`<div role="status">
-                  ${t(
-                    props.mode === "prepare"
-                      ? "modelSetup.wizard.prepareStarting"
-                      : props.mode === "activate"
-                        ? "modelSetup.wizard.checking"
-                        : "modelSetup.wizard.starting",
-                  )}
-                </div>`
+              ? html`<div role="status">${t(copy.starting)}</div>`
               : props.state.phase === "done"
                 ? html`<div role="status">
                     ${props.doneMessage ?? t(props.mode === "auth" ? "modelSetup.wizard.connected" : "modelSetup.wizard.checking")}

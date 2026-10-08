@@ -692,17 +692,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/agents/workspace-state-store.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["retireWorkspaceRelocationAttestation"],
-        evidence:
-          "Only commands/doctor-skill-workshop-workspaces.ts:266 retires migration attestations",
-      },
-    ],
-  ],
-  [
     "src/agents/workspace-state-store.kernel.ts",
     [
       {
@@ -763,10 +752,11 @@ const reviewedOperations = new Map([
         operations: [
           "readUserProfileEmailBindings",
           "readUserProfileSnapshotSync",
-          "readUserProfileAuthorityInDatabase",
+          "readUserProfileAuthorityCommand",
+          "readCurrentUserProfileAliasesInDatabase",
         ],
         evidence:
-          "Only registered user-profile-writes.worker.ts:126,187 / user-profiles.worker.ts:110,111 and state-read.worker.ts:566,592,605 call these readers; projects.ts:432 native aliases and admission fallbacks stay T1",
+          "Registered profile writers and openclaw-state-read.worker.ts execute these readers; projects.list prepares exact aliases through user-profile-reads.ts. Released SDK identity/display fallbacks retain native reads.",
       },
     ],
   ],
@@ -1466,21 +1456,37 @@ const reviewedOperations = new Map([
           "expireStagingAndLoadDeliveryQueueEntriesInDatabase",
           "expireStagingAndLoadDeliveryQueueEntriesInDatabase.read",
           "countFailedDeliveryQueueEntriesInDatabase",
+          "inspectDeliveryQueueReceiptInDatabase",
         ],
         evidence:
           "Expiry snapshot: src/infra/delivery-queue.worker.ts:487 → outbound/delivery-queue-media-staging.kernel.ts:74. Failed count: delivery-queue.worker.ts:455.",
       },
       {
         tier: "T2",
-        operations: ["loadDeliveryQueueEntriesInDatabase", "deleteDeliveryQueueEntryInDatabase"],
+        operations: [
+          "loadDeliveryQueueEntriesInDatabase",
+          "deleteDeliveryQueueEntryInDatabase",
+          "countPendingDeliveryQueueEntriesInDatabase",
+          "selectDeliveryQueueEntryOwners.readExact.readChunk",
+        ],
         evidence:
-          "Native loads/deletes are Doctor migration: src/commands/doctor-outbound-delivery.ts:47,48,52,137,162 and src/infra/outbound/delivery-queue-migration.ts:289,349,435,506,528,551. Remaining calls use queue workers.",
+          "Native loads/deletes/count and receipt ownership serve Doctor migration via commands/doctor-outbound-delivery.ts and infra/outbound/delivery-queue-migration.ts. Post-ready recovery count and cron receipt selection use delivery-queue.worker.ts; test-only status inspection lives in test support. Initial post-ready recovery is not boot admission.",
       },
     ],
   ],
   [
     "src/infra/device-identity-store.ts",
     [
+      {
+        tier: "T2",
+        operations: [
+          "readStoredIdentityRowFromDatabase",
+          "isEmptyBootstrapIdentityTableMiss",
+          "insertStoredDeviceIdentityIfAbsent",
+        ],
+        evidence:
+          "Live callers use device-identity-async.ts through openclaw-state.worker.ts. Native callers are startup-local-cli-pairing.ts (server-runtime-state-prepare boot), node-host/runner.ts and startup-state-readiness.ts (node boot/connect CLI), config-preflight-snapshot.ts, doctor-device-pairing.ts, heartbeat-schedule.ts (Doctor cadence migration only), and state-migrations.device-identity*.ts (Doctor).",
+      },
       {
         tier: "T2",
         operations: ["repairInvalidStoredDeviceIdentity"],
@@ -1699,23 +1705,6 @@ const reviewedOperations = new Map([
         operations: ["writePersonalGitHubSecret"],
         evidence:
           "Counted expression is null DELETE only: src/state/user-github-connections.ts:260 → user-profiles-merge.ts:58 → user-profile-writes.worker.ts:325,375,432. Other value callers pass JSON strings.",
-      },
-    ],
-  ],
-  [
-    "src/skills/workshop/store-sqlite-record.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["readStoredProposalInDatabase", "updateProposal"],
-        evidence:
-          "Doctor native read/update src/commands/doctor-skill-workshop-sqlite.ts:333,349; other callers use src/skills/workshop/store.worker.ts:68,129,149,167,182,188.",
-      },
-      {
-        tier: "W",
-        operations: ["insertProposal"],
-        evidence:
-          "Only src/skills/workshop/store-proposal.kernel.ts:73,168 inserts; sole executors store.worker.ts:139,157.",
       },
     ],
   ],
@@ -2000,8 +1989,6 @@ const workerModules = new Set([
   "src/cron/store/run-receipt-delivery.ts", // Cron admission and recovery workers own delivery-attempt SQL.
   "src/cron/store/run-receipt-trigger-state.ts", // Cron mutation, admission and recovery workers own trigger retirement SQL.
 
-  "src/fleet/registry.kernel.ts", // Fleet write dispatcher and shared-state registry read worker only.
-
   "src/gateway/github-publication-shared-read.kernel.ts", // Shared publication queries are called only by the state read worker.
   "src/gateway/managed-image-record-store.kernel.ts", // Shared-state worker dispatch only; host exports are row codecs.
   "src/gateway/operator-approval-store.receipts.ts", // Audit read worker alone reaches receipt readers through the approval-store barrel.
@@ -2050,13 +2037,6 @@ const workerModules = new Set([
   "src/skills/lifecycle/upload-store-commit.ts", // Skill-upload worker commit command only.
   "src/skills/lifecycle/upload-store.kernel.ts", // Skill-upload worker dispatcher only.
   "src/skills/lifecycle/upload-store.sqlite.ts", // Skill-upload worker kernels; host imports pure options only.
-
-  "src/skills/workshop/collection-review.kernel.ts", // Skill-workshop worker collection-review reads only.
-  "src/skills/workshop/curator.kernel.ts", // Skill-workshop worker curator and usage commands only.
-  "src/skills/workshop/store-proposal.kernel.ts", // Skill-workshop worker proposal commands only.
-  "src/skills/workshop/store-sqlite-event.ts", // Skill-workshop and shared-state Doctor worker commands only.
-  "src/skills/workshop/store-sqlite-rollback.ts", // Skill-workshop worker rollback commands only.
-  "src/skills/workshop/store-sqlite-transition.ts", // Skill-workshop worker transition commands only.
 
   "src/state/backup-run-records.kernel.ts", // Backup record writes are called only by the shared-state worker runtime.
   "src/state/github-personal-publication-lifecycle.ts", // Receipt SQL runs in shared-state worker dispatch; host helper enqueues commands.

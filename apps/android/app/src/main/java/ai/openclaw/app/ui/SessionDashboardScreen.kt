@@ -99,15 +99,15 @@ internal fun sessionDashboardUrl(
   fallbackAgentId: String? = null,
 ): String? {
   val rawKey = sessionKey.trim().takeIf(String::isNotEmpty) ?: return null
-  val parsed = parseAgentSessionKey(rawKey)
-  if (parsed == null && rawKey.startsWith("agent:", ignoreCase = true)) return null
-  val rawAgentId = (parsed?.first ?: fallbackAgentId)?.trim()?.takeIf(String::isNotEmpty) ?: return null
+  val parts = rawKey.split(':')
+  val canonical = rawKey.startsWith("agent:", ignoreCase = true)
+  if (canonical && parts.size < 3) return null
+  val rawAgentId = (if (canonical) parts[1] else fallbackAgentId)?.trim()?.takeIf(String::isNotEmpty) ?: return null
   val agentId = normalizeDashboardAgentId(rawAgentId)
-  val rest = parsed?.second ?: rawKey
-  val segments = rest.split(':')
+  val segments = if (canonical) parts.drop(2) else parts
   if (segments.any(String::isEmpty)) return null
   val routeSegments =
-    if (parsed == null && (rest.equals("main", ignoreCase = true) || rest.equals("global", ignoreCase = true))) {
+    if (!canonical && (rawKey.equals("main", ignoreCase = true) || rawKey.equals("global", ignoreCase = true))) {
       emptyList()
     } else {
       listOf("~key") + segments.map(::encodeDashboardPathSegment)
@@ -122,15 +122,6 @@ internal fun sessionDashboardUrl(
     .fragment(null)
     .build()
     .toString()
-}
-
-private fun parseAgentSessionKey(sessionKey: String): Pair<String, String>? {
-  val parts = sessionKey.split(':')
-  if (parts.size < 3 || !parts.first().equals("agent", ignoreCase = true)) return null
-  val agentId = parts[1].trim().takeIf(String::isNotEmpty) ?: return null
-  val rest = parts.drop(2)
-  if (rest.any(String::isEmpty)) return null
-  return agentId to rest.joinToString(":")
 }
 
 private fun normalizeDashboardAgentId(agentId: String): String {

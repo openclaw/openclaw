@@ -16,7 +16,7 @@ import type { DeliveryQueueWorkerOperations } from "../delivery-queue.worker-con
 import { generateSecureUuid } from "../secure-random.js";
 import { createSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../sqlite-worker-operation-settlement.js";
-import { OutboundDeliveryError } from "./deliver-types.js";
+import { OutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
 import { collectEntrySpoolPaths } from "./delivery-queue-media-spool.js";
 import {
@@ -168,7 +168,17 @@ async function enqueueQueuedDelivery(
     const error = new Error("Delivery queue publication failed");
     retainOpenClawStateWorkerErrorPayload(error, result.error);
     // A full rollback result proves nonpublication; do not reclassify it as uncertain execution.
-    throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+    const failure = new OutboundDeliveryError(
+      "Delivery queue admission rejected before publication",
+      {
+        cause: new PlatformMessageNotDispatchedError("Delivery was not queued or sent", {
+          cause: hydrateOpenClawStateWorkerError(error, { includeOrdinary: true }),
+        }),
+        stage: "queue",
+      },
+    );
+    failure.queueCustody = "released";
+    throw failure;
   }
   if (result === (input.kind === "prepared" ? "staging-missing" : "missing")) {
     throw new Error(`Delivery queue media stage expired before enqueue: ${input.mediaStageId}`);

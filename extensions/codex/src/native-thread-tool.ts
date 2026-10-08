@@ -177,12 +177,6 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         options.context.getRuntimeConfig?.() ??
         options.context.runtimeConfig ??
         options.context.config;
-      const baseRequestOptions = (): CodexControlRequestOptions => ({
-        agentDir: options.context.agentDir,
-        config: runtimeConfig(),
-        sessionId: options.context.sessionId,
-        sessionKey: options.context.sessionKey,
-      });
       const currentIdentity = (sessionId: string) =>
         sessionBindingIdentity({
           sessionId,
@@ -222,9 +216,12 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         const { resolveCodexSupervisionAppServerRuntimeOptions } =
           await import("./app-server/config-runtime.js");
         const requestOptions = async (): Promise<CodexControlRequestOptions> => {
-          const pluginConfig = admissionConfig;
-          const plugin = admissionPlugin;
-          const base = baseRequestOptions();
+          const base = {
+            agentDir: options.context.agentDir,
+            config: runtimeConfig(),
+            sessionId: options.context.sessionId,
+            sessionKey: options.context.sessionKey,
+          };
           const session = currentSession();
           const identity = session ? currentIdentity(session.sessionId) : undefined;
           const readBinding = () => (identity ? options.bindingStore.read(identity) : undefined);
@@ -235,7 +232,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             const current = currentSession();
             if (
               runtimeConfig() !== base.config ||
-              !isDeepStrictEqual(options.getPluginConfig(), pluginConfig) ||
+              !isDeepStrictEqual(options.getPluginConfig(), admissionConfig) ||
               current?.sessionId !== session?.sessionId ||
               current?.entry?.sessionId !== session?.entry?.sessionId ||
               isModelSelectionLocked(current?.entry) !== isModelSelectionLocked(session?.entry) ||
@@ -246,11 +243,11 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           };
           if (
             binding?.connectionScope === "supervision" ||
-            plugin.appServer?.homeScope === "user"
+            admissionPlugin.appServer?.homeScope === "user"
           ) {
             const connection = await resolveCodexBindingAppServerConnection({
               binding,
-              pluginConfig,
+              pluginConfig: admissionConfig,
               config: base.config,
               agentDir: base.agentDir,
               assertCurrent,
@@ -264,12 +261,14 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
               assertCurrent,
             };
           }
-          if (plugin.supervision?.enabled !== true) {
+          if (supervision?.enabled !== true) {
             throw new Error("Codex native thread access is disabled for this run.");
           }
           return {
             ...base,
-            startOptions: resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig }).start,
+            startOptions: resolveCodexSupervisionAppServerRuntimeOptions({
+              pluginConfig: admissionConfig,
+            }).start,
             authProfileId: null,
             assertCurrent,
           };
@@ -338,11 +337,14 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           }
           // App Server status is process-local, and archive is a separate RPC. This read blocks
           // known active/invalid state; `confirm` owns the remaining cross-client race.
-          const current = await scopedRequest(CODEX_CONTROL_METHODS.readThread, {
-            threadId,
-            includeTurns: false,
-          });
-          assertThreadIdle(current, threadId, "archive");
+          const assertArchiveThreadIdle = async (targetThreadId: string) => {
+            const current = await scopedRequest(CODEX_CONTROL_METHODS.readThread, {
+              threadId: targetThreadId,
+              includeTurns: false,
+            });
+            assertThreadIdle(current, targetThreadId, "archive");
+          };
+          await assertArchiveThreadIdle(threadId);
           if (await options.bindingStore.hasOtherThreadOwner(threadId, identity)) {
             throw new Error(
               "cannot archive a native Codex thread owned by another OpenClaw session",
@@ -353,13 +355,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             threadId,
             listPage: async (listParams) =>
               await scopedRequest(CODEX_CONTROL_METHODS.listThreads, listParams),
-            assertDescendantIdle: async (descendantThreadId) => {
-              const descendant = await scopedRequest(CODEX_CONTROL_METHODS.readThread, {
-                threadId: descendantThreadId,
-                includeTurns: false,
-              });
-              assertThreadIdle(descendant, descendantThreadId, "archive");
-            },
+            assertDescendantIdle: assertArchiveThreadIdle,
           });
           await scopedRequest(CODEX_CONTROL_METHODS.archiveThread, { threadId });
           if (archivedBinding?.threadId === threadId) {

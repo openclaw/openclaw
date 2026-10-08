@@ -41,10 +41,8 @@ export function buildPersistedMediaImageLayout(params: {
   const used = new Set<number>();
   const unsuppressedFactCount = imageFactIndexes.filter((index) => !suppressed.has(index)).length;
   const canInferByPosition = unsuppressedFactCount === (params.imageOrder?.length ?? 0);
-  const takeNextFactIndex = (): number | undefined =>
-    imageFactIndexes.find((index) => !suppressed.has(index) && !used.has(index));
-  const slots = (params.imageOrder ?? []).map((kind, index) => {
-    const sourceIndex = params.imageSourceIndexes?.[index];
+  const slots = (params.imageOrder ?? []).map((kind, slotIndex) => {
+    const sourceIndex = params.imageSourceIndexes?.[slotIndex];
     const sourceFact = sourceIndex === undefined ? undefined : params.media[sourceIndex];
     const factIndex =
       sourceIndex !== undefined
@@ -55,7 +53,7 @@ export function buildPersistedMediaImageLayout(params: {
           ? sourceIndex
           : undefined
         : canInferByPosition
-          ? takeNextFactIndex()
+          ? imageFactIndexes.find((index) => !suppressed.has(index) && !used.has(index))
           : undefined;
     if (factIndex !== undefined) {
       used.add(factIndex);
@@ -167,10 +165,8 @@ export function buildExecOverridePromptHint(params: {
 const embeddedAgentRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/embedded-agent.runtime.js"),
 );
-const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-runner.runtime.js"));
-const sessionUpdatesRuntimeLoader = createLazyImportLoader(
-  () => import("./session-updates.runtime.js"),
-);
+const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-runner-run.js"));
+const sessionUpdatesRuntimeLoader = createLazyImportLoader(() => import("./session-updates.js"));
 
 export async function prewarmReplyRunRuntimes(): Promise<void> {
   await Promise.all([

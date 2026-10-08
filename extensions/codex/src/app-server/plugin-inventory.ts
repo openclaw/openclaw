@@ -28,6 +28,18 @@ const CODEX_PLUGINS_API_MARKETPLACE_NAME = "openai-api-curated";
 
 export type CodexPluginRuntimeRequest = (method: string, params?: unknown) => Promise<unknown>;
 
+/** Adapts plugin discovery requests to the two app inventory methods and optional thread. */
+export function createCodexAppInventoryRequest(params: {
+  request: CodexPluginRuntimeRequest;
+  threadId?: string;
+}): CodexAppInventoryRequest {
+  return async (method, requestParams) =>
+    (await params.request(
+      method,
+      params.threadId ? { ...requestParams, threadId: params.threadId } : requestParams,
+    )) as CodexAppServerRequestResult<typeof method>;
+}
+
 type CodexPluginMarketplaceResponse = v2.PluginInstalledResponse | v2.PluginListResponse;
 
 export type CodexPluginMarketplaceRef = {
@@ -83,6 +95,7 @@ type ReadCodexPluginInventoryParams = {
   appCacheKey?: string;
   appInventoryCacheKey?: string;
   configCwd?: string;
+  threadId?: string;
   metadataCache?: CodexPluginMetadataCache;
   nowMs?: number;
   suppressAppInventoryRefresh?: boolean;
@@ -295,7 +308,7 @@ export async function listCodexPluginMetadata(
   if (!params.metadataCache || !params.appCacheKey) {
     return (await params.request("plugin/list", requestParams)) as v2.PluginListResponse;
   }
-  const snapshot = await params.metadataCache.load({
+  return await params.metadataCache.load({
     appCacheKey: params.appCacheKey,
     queryKind: "curated-global",
     requestParams,
@@ -309,7 +322,6 @@ export async function listCodexPluginMetadata(
         marketplaceMatchesConfiguredName(marketplace, marketplaceName),
       ),
   });
-  return snapshot.response;
 }
 
 async function readInstalledCodexPluginMetadata(
@@ -321,7 +333,7 @@ async function readInstalledCodexPluginMetadata(
   if (!params.metadataCache || !params.appCacheKey) {
     return (await params.request("plugin/installed", requestParams)) as v2.PluginInstalledResponse;
   }
-  const snapshot = await params.metadataCache.load({
+  return await params.metadataCache.load({
     appCacheKey: params.appCacheKey,
     queryKind: "installed",
     requestParams,
@@ -337,7 +349,6 @@ async function readInstalledCodexPluginMetadata(
         return Boolean(findConfiguredMarketplacePlugin(response, pluginPolicy));
       }),
   });
-  return snapshot.response;
 }
 
 function isSettledMissingPluginPolicy(params: {
@@ -363,7 +374,7 @@ function isSettledMissingPluginPolicy(params: {
     queryKind === "curated-global"
       ? pluginMetadataCatalogScope(params.pluginPolicy.marketplaceName)
       : undefined,
-  )?.response;
+  );
   if (!listed) {
     return false;
   }
@@ -398,11 +409,9 @@ function readCachedAppInventory(
   if (!params.appCache || !params.appCacheKey) {
     return undefined;
   }
-  const request: CodexAppInventoryRequest = async (method, requestParams) =>
-    (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
   return params.appCache.read({
     key: params.appInventoryCacheKey ?? params.appCacheKey,
-    request,
+    request: createCodexAppInventoryRequest(params),
     nowMs: params.nowMs,
     suppressRefresh: params.suppressAppInventoryRefresh,
   });

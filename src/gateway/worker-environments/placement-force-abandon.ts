@@ -30,8 +30,9 @@ export async function forceAbandonWorkerEnvironment(
     environmentId: string;
     onCleanupError?: (error: unknown) => void;
   },
-): Promise<void> {
+): Promise<ReadonlyMap<string, WorkerSessionPlacementRecord>> {
   const { environmentId, placements } = params;
+  const failedPlacements = new Map<string, WorkerSessionPlacementRecord>();
   const recoveryError = FORCED_WORKER_ABANDONMENT_ERROR;
   const journalOwners = (await params.placements.listWorkspaceReconciliationOwners()).filter(
     (owner) => owner.environmentId === environmentId,
@@ -134,12 +135,13 @@ export async function forceAbandonWorkerEnvironment(
       });
     }
     if (current && (current.state !== "failed" || current.recoveryError !== recoveryError)) {
-      await placements.fail({
+      current = await placements.fail({
         sessionId: current.sessionId,
         expectedGeneration: current.generation,
         recoveryError,
       });
     }
+    failedPlacements.set(current.sessionId, current);
   }
 
   // The durable fence is now closed. Filesystem rollback and ref cleanup are
@@ -191,4 +193,5 @@ export async function forceAbandonWorkerEnvironment(
       reportWorkerAbandonmentCleanupError(params.onCleanupError, error);
     }
   }
+  return failedPlacements;
 }

@@ -129,7 +129,10 @@ export function prepareSessionTurn(input: SessionTurnPlan, context: AgentWorkerO
   return {
     result,
     messages,
-    version: readTranscriptContextVersionInTransaction(database, scope.sessionId),
+    version:
+      !result && input.options.messages.length
+        ? readTranscriptContextVersionInTransaction(database, scope.sessionId)
+        : undefined,
     goalId:
       mutation && !result && expectedEntry && input.options.messages.length
         ? applySessionGoalOperation(expectedEntry, mutation.operation, Date.now())?.id

@@ -196,7 +196,6 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         sessionKey: input.sessionKey,
         agentId: input.agentId,
       });
-      assertRequester();
       const loaded = initialAuthority.loaded;
       const lifecycleRevision = loaded.entry?.lifecycleRevision ?? null;
       const session = {
@@ -205,7 +204,8 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         agentId: input.agentId,
         lifecycleRevision,
       };
-      const placement = params.placements.get(sessionId);
+      const placement = await params.placements.getAsync(sessionId);
+      assertRequester();
       const validateLocalExecution = () => {
         const current = params.placements.get(sessionId);
         return (!current || current.state === "local") && !current?.turnClaim;
@@ -360,7 +360,8 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         worktreeOwner.assertCurrent();
         return publicationResult(insertSessionRequest());
       }
-      const current = params.placements.get(sessionId);
+      const current = await params.placements.getAsync(sessionId);
+      assertRequester();
       if ((current && current.state !== "local") || current?.turnClaim) {
         throw new Error("GitHub publication session authority changed after verification.");
       }
@@ -402,11 +403,12 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       );
       const failures: Error[] = [];
       const blockedWorktrees = new Set<string>();
+      const placements = await params.placements.getManyAsync(rows.map((row) => row.session_id));
       for (const row of rows) {
         if (
           blockedWorktrees.has(row.worktree_id) ||
           pending.has(row.session_id) ||
-          params.placements.get(row.session_id)?.turnClaim
+          placements.get(row.session_id)?.turnClaim
         ) {
           continue;
         }

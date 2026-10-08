@@ -73,25 +73,15 @@ function renderToolSummaryText(
   event: Extract<AcpRuntimeEvent, { type: "tool_call" }>,
   shouldSendFullToolDetails: boolean,
 ): string {
-  const detailParts: string[] = [];
-  const commandBearing = normalizeOptionalLowercaseString(event.kind) === "execute";
-  const title =
-    shouldSendFullToolDetails || !commandBearing ? normalizeOptionalString(event.title) : undefined;
-  if (title) {
-    detailParts.push(title);
-  }
+  const showDetails =
+    shouldSendFullToolDetails || normalizeOptionalLowercaseString(event.kind) !== "execute";
+  const title = showDetails ? normalizeOptionalString(event.title) : undefined;
   const status = normalizeOptionalString(event.status);
-  if (status) {
-    detailParts.push(`status=${status}`);
-  }
-  const fallback =
-    shouldSendFullToolDetails || !commandBearing ? normalizeOptionalString(event.text) : undefined;
-  if (detailParts.length === 0 && fallback) {
-    detailParts.push(fallback);
-  }
+  const fallback = showDetails ? normalizeOptionalString(event.text) : undefined;
   const display = resolveToolDisplay({
     name: "tool_call",
-    meta: detailParts.join(" · ") || "tool call",
+    meta:
+      [title, status && `status=${status}`].filter(Boolean).join(" · ") || fallback || "tool call",
   });
   return formatToolSummary(display);
 }
@@ -213,6 +203,14 @@ export function createAcpReplyProjector(params: {
     }
     await blockReplyPipeline.flush({ force: true });
   };
+  const deliverTool = async (text: string, meta?: AcpDispatchDeliveryMeta) => {
+    if (settings.deliveryMode === "final_only") {
+      pendingToolDeliveries.push({ payload: { text }, ...(meta ? { meta } : {}) });
+    } else {
+      await flush();
+      await params.deliver("tool", { text }, meta);
+    }
+  };
 
   const emitSystemStatus = async (text: string, opts?: { dedupe?: boolean }) => {
     if (!(await params.shouldSendToolSummaries())) {
@@ -228,14 +226,7 @@ export function createAcpReplyProjector(params: {
     if (shouldDedupe && lastStatusHash === hash) {
       return;
     }
-    if (settings.deliveryMode === "final_only") {
-      pendingToolDeliveries.push({
-        payload: { text: formatted },
-      });
-    } else {
-      await flush();
-      await params.deliver("tool", { text: formatted });
-    }
+    await deliverTool(formatted);
     lastStatusHash = hash;
   };
 
@@ -289,15 +280,9 @@ export function createAcpReplyProjector(params: {
       ...(toolCallId ? { toolCallId } : {}),
       allowEdit: Boolean(toolCallId && event.tag === "tool_call_update"),
     };
+    await deliverTool(toolSummary, deliveryMeta);
     if (settings.deliveryMode === "final_only") {
-      pendingToolDeliveries.push({
-        payload: { text: toolSummary },
-        meta: deliveryMeta,
-      });
       markHiddenToolBoundary(event);
-    } else {
-      await flush();
-      await params.deliver("tool", { text: toolSummary }, deliveryMeta);
     }
     lastToolHash = hash;
   };

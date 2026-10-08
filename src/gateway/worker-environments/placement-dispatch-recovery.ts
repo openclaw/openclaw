@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { supportsCurrentWorkerLaunch } from "./admission.js";
+import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
 import { hasForcedWorkerEnvironmentAbandonment } from "./environment-errors.js";
 import {
-  isCurrentActiveWorkerEnvironment,
   isUnavailableEnvironment,
   workerDisappearanceError,
   type WorkerActiveDispatchPlacement,
@@ -26,7 +25,10 @@ import type {
   PlacementRecoveryDeps,
   WorkerPlacementRecoveryAdmission,
 } from "./placement-recovery-contract.js";
-import { matchesWorkerPlacementTarget } from "./placement-target.js";
+import {
+  isCurrentActiveWorkerEnvironment,
+  matchesWorkerPlacementTarget,
+} from "./placement-target.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { boundedWorkerError } from "./worker-error.js";
 
@@ -93,14 +95,17 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         try {
           await environments.stopTunnel(placement.environmentId, placement.activeOwnerEpoch);
           await placements.closeWorkerTurnToolState(claim);
-          const current = placements.get(placement.sessionId);
+          const currentFacts = await placements.readProjection([placement.sessionId], {
+            current: true,
+          });
+          const current = currentFacts.placements.get(placement.sessionId);
           const currentEnvironment = environments.get(placement.environmentId);
           if (
             current?.state !== "active" ||
             current.generation !== placement.generation ||
             currentEnvironment?.nodeDeviceId !== environment.nodeDeviceId ||
             !isCurrentActiveWorkerEnvironment(current, currentEnvironment) ||
-            placements.getPlacementMove(placement.sessionId)
+            currentFacts.moves.has(placement.sessionId)
           ) {
             throw new Error("Interrupted worker owner changed while stopping");
           }

@@ -48,6 +48,7 @@ import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.j
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import { prepareInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
+import { registerRawChildRestoreOwnershipTest } from "./subagent-orphan-recovery.raw-owner.test-support.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -152,7 +153,74 @@ describe("subagent orphan recovery — faithful restart path", () => {
   const fixture = useSubagentRestartRecoveryFixture();
   const { activateGatewayRuntime, dispatchAgent, gatewayRuntime } = fixture;
 
-  it("hands five retained predecessor sessions to restart recovery without startup warnings", async () => {
+  it("recovers a raw child key using its recorded owner without borrowing another agent's session", async () => {
+    const childSessionKey = "global";
+    const runId = "raw-owner-recovery";
+    const startedAt = Date.now() - 1_000;
+    for (const agentId of ["main", "research"]) {
+      await replaceSessionEntry(
+        { agentId, sessionKey: childSessionKey },
+        {
+          sessionId: `${agentId}-recovery-session`,
+          lifecycleRevision: `${agentId}-recovery-revision`,
+          lifecycleRunId: agentId === "research" ? runId : "unrelated-main-run",
+          startedAt,
+          updatedAt: startedAt,
+          abortedLastRun: true,
+        },
+      );
+    }
+    const mainBefore = loadExactSessionEntry({
+      agentId: "main",
+      sessionKey: childSessionKey,
+    })?.entry;
+    const entry = makeRunRecord({
+      runId,
+      childSessionKey,
+      childAgentId: "research",
+      execution: { status: "interrupted", startedAt },
+    });
+    const warn = vi.fn();
+    const result = await recoverInterruptedSubagentRow({
+      entry,
+      runId,
+      gatewayRuntime,
+      isCurrent: () => true,
+      warn,
+    });
+    expect(result).toMatchObject({ status: "terminal" });
+    if (result.status !== "terminal") {
+      throw new Error("Expected raw child recovery to retain its recorded agent");
+    }
+    expect(result.suppressSessionEffects).not.toBe(true);
+    expect(await result.sessionEffects?.isCurrent()).toBe(true);
+    expect(await result.recoveryCurrent?.prepare()).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+    expect(loadExactSessionEntry({ agentId: "main", sessionKey: childSessionKey })?.entry).toEqual(
+      mainBefore,
+    );
+    expect(dispatchAgent).not.toHaveBeenCalled();
+    const ownerless = await recoverInterruptedSubagentRow({
+      entry: { ...entry, childAgentId: undefined },
+      runId,
+      gatewayRuntime,
+      isCurrent: () => true,
+      warn,
+    });
+    expect(ownerless).toEqual({ status: "deferred" });
+    expect(warn).toHaveBeenCalledWith(
+      "failed to reconcile interrupted subagent execution",
+      expect.objectContaining({
+        error: expect.objectContaining({
+          message:
+            "Session key does not contain an agent id; resolve it with the configured default agent.",
+        }),
+      }),
+    );
+  });
+  registerRawChildRestoreOwnershipTest(fixture);
+
+  it("reconciles retained predecessor sessions during startup without waiting for a sweep", async () => {
     const startedAt = Math.floor(performance.timeOrigin) - 60_000;
     const generation = getAgentEventLifecycleGeneration();
     const records = Array.from({ length: 5 }, (_, index) =>
@@ -198,7 +266,6 @@ describe("subagent orphan recovery — faithful restart path", () => {
         });
         await initSubagentRegistry();
         await activateGatewayRuntime();
-        await testing.sweepOnceForTests();
         await fixture.settle();
         for (const entry of records) {
           expect(

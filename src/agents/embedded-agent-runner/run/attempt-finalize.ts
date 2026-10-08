@@ -76,7 +76,17 @@ export function finalizeEmbeddedAttempt(
     terminalState.cleanupYieldAborted && completionOutcome.status === "ok"
       ? "end_turn"
       : completionOutcome.stopReason;
+  const toolEvidence = () => ({
+    toolMetas: result.toolMetas,
+    didSendViaMessagingTool: result.didSendViaMessagingTool,
+    messagingToolSentTexts: result.messagingToolSentTexts,
+    messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
+    messagingToolSentTargets: result.messagingToolSentTargets,
+    successfulCronAdds: result.successfulCronAdds ?? 0,
+    lastToolError: result.lastToolError,
+  });
   const terminal = resolveAttemptTrajectoryTerminal({
+    ...toolEvidence(),
     failed: completionOutcome.status === "error",
     interrupted: isEmbeddedRunTerminalInterrupted(completionOutcome),
     assistantTexts: resolveTerminalAssistantTexts({
@@ -84,19 +94,12 @@ export function finalizeEmbeddedAttempt(
       lastAssistantStopReason: stopReason,
       lastAssistantVisibleText: resolveFinalAssistantVisibleText(assistant),
     }),
-    toolMetas: result.toolMetas,
-    didSendViaMessagingTool: result.didSendViaMessagingTool,
     didSendDeterministicApprovalPrompt: result.didSendDeterministicApprovalPrompt === true,
-    messagingToolSentTexts: result.messagingToolSentTexts,
-    messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
-    messagingToolSentTargets: result.messagingToolSentTargets,
-    successfulCronAdds: result.successfulCronAdds ?? 0,
     synthesizedPayloadCount: params.synthesizedPayloadCount,
     acceptedSessionSpawns: result.acceptedSessionSpawns,
     heartbeatToolResponse: result.heartbeatToolResponse,
     clientToolCalls: result.clientToolCalls,
     yieldDetected: result.yieldDetected,
-    lastToolError: result.lastToolError,
     silentExpected: params.silentExpected,
     emptyAssistantReplyIsSilent: params.emptyAssistantReplyIsSilent,
     lastAssistantStopReason: stopReason,
@@ -139,13 +142,7 @@ export function finalizeEmbeddedAttempt(
       ...modelFields,
       compactionCount: result.compactionCount ?? 0,
       itemLifecycle: result.itemLifecycle,
-      toolMetas: result.toolMetas,
-      didSendViaMessagingTool: result.didSendViaMessagingTool,
-      successfulCronAdds: result.successfulCronAdds ?? 0,
-      messagingToolSentTexts: result.messagingToolSentTexts,
-      messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
-      messagingToolSentTargets: result.messagingToolSentTargets,
-      lastToolError: result.lastToolError,
+      ...toolEvidence(),
     }),
   );
   const sessionEndData = {
@@ -361,9 +358,7 @@ function createAttemptAbortError(signal: AbortSignal): Error {
 }
 
 function createTimeoutAbortReason(): Error {
-  const error = new Error("request timed out");
-  error.name = "TimeoutError";
-  return error;
+  return Object.assign(new Error("request timed out"), { name: "TimeoutError" });
 }
 
 function recordAttemptAbort(

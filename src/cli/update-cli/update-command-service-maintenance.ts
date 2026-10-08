@@ -62,6 +62,7 @@ export type { PreManagedServiceStop } from "./update-command-service-context-typ
 export { UpdateCommandAbort } from "./update-command-windows-task.js";
 
 const JSON_MODE_SERVICE_STDOUT = createNullWriter();
+const UNINSPECTED = { stopped: false, inspected: false, runtimeInspected: false, running: false };
 
 export type UpdateCommandRecoveryState = {
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
@@ -123,11 +124,7 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   }
   await abortWindowsTaskUpdateIfInterrupted(recovery);
   if (!suspended) {
-    try {
-      await recovery.restore();
-    } finally {
-      await recovery.complete();
-    }
+    await restoreAndCompleteWindowsTask(recovery);
     return undefined;
   }
   return recovery;
@@ -139,12 +136,16 @@ async function abortWindowsTaskUpdateIfInterrupted(
   if (!recovery.interrupted()) {
     return;
   }
+  await restoreAndCompleteWindowsTask(recovery);
+  throw new UpdateCommandAbort();
+}
+
+async function restoreAndCompleteWindowsTask(recovery: WindowsTaskAutoStartRecovery) {
   try {
     await recovery.restore();
   } finally {
     await recovery.complete();
   }
-  throw new UpdateCommandAbort();
 }
 
 type ManagedServiceStopParams = {
@@ -182,10 +183,7 @@ function unavailableServiceState(
 ): PreManagedServiceStop {
   // Unverified records supply diagnostics, never selectors or later native authority.
   return {
-    stopped: false,
-    inspected: false,
-    runtimeInspected: false,
-    running: false,
+    ...UNINSPECTED,
     serviceMutationAllowed: false,
     serviceUpdateVerdict: verdict,
     serviceMutationSkipMessage: verdict.message,
@@ -271,6 +269,17 @@ async function stopManagedServiceBeforeMutableUpdate(
       }
     }
   };
+  const prepareSystemdMaintenance = async (state: GatewayServiceState, stopping: boolean) => {
+    const { prepareSystemdGatewayMaintenance } =
+      await import("../../daemon/systemd-maintenance.js");
+    return await prepareSystemdGatewayMaintenance({
+      state,
+      root: params.root,
+      stopping,
+      assertCurrent,
+      warn,
+    });
+  };
   // Only a verified live handoff lease admits a helper that retains Gateway ancestry.
   // Inspection uses the inherited run ID; a missing run ID is refused.
   const resolveAncestryBlock = async (state: GatewayServiceState) => {
@@ -290,7 +299,6 @@ async function stopManagedServiceBeforeMutableUpdate(
     return { blockMessage: block.message, blockFailureFacts: block.failureFacts };
   };
   assertCurrent();
-  const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
   // Preparation must keep using the manager route admitted during inspection.
   // Re-reading through process.env can select a different raw systemd route
   // (for example after the service snapshot fills in an explicit unit/profile),
@@ -299,7 +307,7 @@ async function stopManagedServiceBeforeMutableUpdate(
   const serviceMutationSkipMessage =
     resolveGatewayServiceManagementBlockMessageForUpdate(serviceEnv);
   if (serviceMutationSkipMessage) {
-    return { ...uninspected, serviceMutationAllowed: false, serviceMutationSkipMessage };
+    return { ...UNINSPECTED, serviceMutationAllowed: false, serviceMutationSkipMessage };
   }
   let service: ReturnType<typeof resolveGatewayService> | undefined;
   let serviceState: GatewayServiceState;
@@ -368,7 +376,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       assertCurrent();
       if (available) {
         return {
-          ...uninspected,
+          ...UNINSPECTED,
           serviceMutationAllowed: false,
           blockMessage: err.message,
           blockFailureFacts: err.failureFacts,
@@ -467,8 +475,8 @@ async function stopManagedServiceBeforeMutableUpdate(
     const block = params.handoffFromGateway ? await resolveAncestryBlock(serviceState) : undefined;
     return { ...inspected, ...block };
   }
-  const suspendTask = async () => {
-    return await maybeSuspendWindowsTaskAutoStartForUpdate({
+  const suspendTask = () =>
+    maybeSuspendWindowsTaskAutoStartForUpdate({
       serviceEnv: serviceState.env,
       updateRun,
       assertCurrentService: createWindowsTaskAutoStartGuard({
@@ -483,7 +491,6 @@ async function stopManagedServiceBeforeMutableUpdate(
         assertExecutor();
       },
     });
-  };
   // A loaded LaunchAgent can be between KeepAlive respawns. Other supervisors
   // need the handoff marker to distinguish that transition from operator-stopped state.
   const supervisorMayRespawn =
@@ -499,15 +506,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     (!serviceState.running && !supervisorMayRespawn)
   ) {
     if (process.platform === "linux" && serviceUpdateVerdict.kind === "owned") {
-      const { prepareSystemdGatewayMaintenance } =
-        await import("../../daemon/systemd-maintenance.js");
-      await prepareSystemdGatewayMaintenance({
-        state: serviceState,
-        root: params.root,
-        stopping: false,
-        assertCurrent,
-        warn,
-      });
+      await prepareSystemdMaintenance(serviceState, false);
     }
     if (params.phase === "refresh") {
       return inspected;
@@ -552,23 +551,18 @@ async function stopManagedServiceBeforeMutableUpdate(
       assertCurrent();
       return state;
     };
+    const assertAncestry = async (state: GatewayServiceState) => {
+      const ancestry = await resolveAncestryBlock(state);
+      if (ancestry) {
+        throw new UpdatePreMutationError("managed-service-preflight", ancestry.blockMessage, {
+          failureFacts: ancestry.blockFailureFacts,
+        });
+      }
+    };
     let currentState = await readCurrentService(serviceState.env);
-    const currentBlock = await resolveAncestryBlock(currentState);
-    if (currentBlock) {
-      throw new UpdatePreMutationError("managed-service-preflight", currentBlock.blockMessage, {
-        failureFacts: currentBlock.blockFailureFacts,
-      });
-    }
+    await assertAncestry(currentState);
     if (process.platform === "linux") {
-      const { prepareSystemdGatewayMaintenance } =
-        await import("../../daemon/systemd-maintenance.js");
-      const refreshed = await prepareSystemdGatewayMaintenance({
-        state: currentState,
-        root: params.root,
-        stopping: true,
-        assertCurrent,
-        warn,
-      });
+      const refreshed = await prepareSystemdMaintenance(currentState, true);
       if (refreshed) {
         // Policy refresh preserves the launcher; retain admitted installation drift.
         currentState = await readCurrentService(currentState.env);
@@ -623,16 +617,7 @@ async function stopManagedServiceBeforeMutableUpdate(
             "service-process-changed",
           );
         }
-        const membershipBlock = await resolveAncestryBlock(beforeStop);
-        if (membershipBlock) {
-          throw new UpdatePreMutationError(
-            "managed-service-preflight",
-            membershipBlock.blockMessage,
-            {
-              failureFacts: membershipBlock.blockFailureFacts,
-            },
-          );
-        }
+        await assertAncestry(beforeStop);
       }
       assertCurrent();
       if (updateRun) {

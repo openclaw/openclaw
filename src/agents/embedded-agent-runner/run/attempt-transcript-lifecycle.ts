@@ -30,7 +30,6 @@ export function createEmbeddedAttemptTranscriptLifecycle(
     createLifecycleStore?: () => AsyncLocalStorage<LifecycleOwner>;
   } = {},
 ): EmbeddedAttemptTranscriptLifecycle {
-  let cleanupRequested = false;
   let disposed = false;
   let lifecycle = Promise.resolve();
   let cleanupDrain: Promise<void> | undefined;
@@ -139,13 +138,10 @@ export function createEmbeddedAttemptTranscriptLifecycle(
     if (currentOwner?.active) {
       throw new Error("cannot start attempt cleanup inside a transcript write callback");
     }
-    if (cleanupRequested) {
-      if (cleanupDrain) {
-        await cleanupDrain;
-      }
+    if (cleanupDrain) {
+      await cleanupDrain;
       return;
     }
-    cleanupRequested = true;
     // Release the owned AsyncLocalStorage only after the serialized drain actually
     // settles, never when the bounded teardown budget merely expires. Disabling it
     // early would make a still-running transcript callback lose its store (its
@@ -164,7 +160,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(
   return {
     withTranscriptWrite: (run) => {
       const activeDescendant = lifecycleOwner.getStore()?.active === true;
-      if ((cleanupRequested || disposed) && !activeDescendant) {
+      if ((cleanupDrain || disposed) && !activeDescendant) {
         const rejected = Promise.reject(
           new Error(
             disposed

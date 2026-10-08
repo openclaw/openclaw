@@ -15,22 +15,6 @@ import type {
 } from "./config-contracts.js";
 import { readExecAsk, readExecSecurity, readRecord } from "./config-utils.js";
 
-function resolveOpenClawExecPolicyFromConfig(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-}): OpenClawExecPolicyForCodexAppServer {
-  const globalExec = readRecord(params.config?.tools?.exec);
-  const globalPolicy = applyOpenClawExecPolicyLayer(
-    resolveOpenClawExecPolicy({ mode: "full" }, false),
-    globalExec,
-  );
-  const agentId = params.agentId?.trim();
-  const agentExec = agentId
-    ? readRecord(resolveAgentConfig(params.config ?? {}, agentId)?.tools?.exec)
-    : undefined;
-  return applyOpenClawExecPolicyLayer(globalPolicy, agentExec);
-}
-
 export function resolveOpenClawExecPolicyForCodexAppServer(params: {
   permissionMode?: EmbeddedRunAttemptParamsV2["permissionMode"];
   execOverrides?: {
@@ -45,7 +29,16 @@ export function resolveOpenClawExecPolicyForCodexAppServer(params: {
   if (params.permissionMode === "full") {
     return resolveOpenClawExecPolicy({ mode: "full" });
   }
-  const basePolicy = resolveOpenClawExecPolicyFromConfig(params);
+  const globalExec = readRecord(params.config?.tools?.exec);
+  const globalPolicy = applyOpenClawExecPolicyLayer(
+    resolveOpenClawExecPolicy({ mode: "full" }, false),
+    globalExec,
+  );
+  const agentId = params.agentId?.trim();
+  const agentExec = agentId
+    ? readRecord(resolveAgentConfig(params.config ?? {}, agentId)?.tools?.exec)
+    : undefined;
+  const basePolicy = applyOpenClawExecPolicyLayer(globalPolicy, agentExec);
   const overridePolicy = applyOpenClawExecPolicyLayer(basePolicy, params.execOverrides);
   const approvalFloors = params.approvals
     ? resolveExecApprovalsFromFile({

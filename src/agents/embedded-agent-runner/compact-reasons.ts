@@ -10,6 +10,20 @@ import { extractFailoverHttpStatus } from "../failover/retry-evidence.js";
 const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
 const COMPACTION_PROVIDER_4XX = new Set([400, 401, 403, 429]);
 const COMPACTION_PROVIDER_5XX = new Set([500, 502, 503, 504]);
+const COMPACTION_TEXT_REASONS: ReadonlyArray<
+  readonly [reason: string, fragments: readonly string[], match?: "all"]
+> = [
+  ["no_compactable_entries", ["nothing to compact", "no real conversation messages"]],
+  // Both backends' phrases mean the transcript is already small enough.
+  ["below_threshold", ["below threshold", "already under target"]],
+  ["already_compacted", ["already compacted", "already_compacted"]],
+  ["deferred_background", ["deferred to background"]],
+  ["live_context_still_exceeds_target", ["still exceeds target"]],
+  ["transcript_persistence_failed", ["session transcript", "not persisted"], "all"],
+  ["guard_blocked", ["guard"]],
+  ["summary_failed", ["summary"]],
+  ["timeout", ["timed out", "timeout"]],
+];
 
 export const DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON =
   "deferred to background context-engine maintenance";
@@ -78,34 +92,11 @@ export function classifyCompactionReason(reason?: string): string {
   ) {
     return "auth_failed";
   }
-  if (text.includes("nothing to compact") || text.includes("no real conversation messages")) {
-    return "no_compactable_entries";
-  }
-  // Backends use both phrases for the same harmless state: the transcript is
-  // already small enough, so preflight compaction should skip instead of fail.
-  if (text.includes("below threshold") || text.includes("already under target")) {
-    return "below_threshold";
-  }
-  if (text.includes("already compacted") || text.includes("already_compacted")) {
-    return "already_compacted";
-  }
-  if (text.includes("deferred to background")) {
-    return "deferred_background";
-  }
-  if (text.includes("still exceeds target")) {
-    return "live_context_still_exceeds_target";
-  }
-  if (text.includes("session transcript") && text.includes("not persisted")) {
-    return "transcript_persistence_failed";
-  }
-  if (text.includes("guard")) {
-    return "guard_blocked";
-  }
-  if (text.includes("summary")) {
-    return "summary_failed";
-  }
-  if (text.includes("timed out") || text.includes("timeout")) {
-    return "timeout";
+  for (const [classification, fragments, match] of COMPACTION_TEXT_REASONS) {
+    const includes = (fragment: string) => text.includes(fragment);
+    if (match === "all" ? fragments.every(includes) : fragments.some(includes)) {
+      return classification;
+    }
   }
   const status = extractFailoverHttpStatus(reason, { includeLabeledStatus: true });
   if (status !== undefined && COMPACTION_PROVIDER_4XX.has(status)) {

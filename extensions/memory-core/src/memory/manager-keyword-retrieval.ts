@@ -55,6 +55,22 @@ type KeywordSearchOptions = {
   fuseRecallMetadata?: boolean;
 };
 
+function projectRecallMetadata(
+  row:
+    | { importance: number | null; triggers: string | null; project_key: string | null }
+    | undefined,
+) {
+  return {
+    ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
+    ...(typeof row?.triggers === "string" && row.triggers.trim()
+      ? { triggers: row.triggers.trim() }
+      : {}),
+    ...(typeof row?.project_key === "string" && row.project_key.trim()
+      ? { projectKey: row.project_key.trim() }
+      : {}),
+  };
+}
+
 function compareKeywordSearchHits(
   a: KeywordSearchHit,
   b: KeywordSearchHit,
@@ -138,38 +154,26 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         });
         return [];
       }
-      return this.toCuratedMemorySearchResults(result.rows);
-    });
-  }
-
-  private toCuratedMemorySearchResults(
-    rows: Awaited<ReturnType<typeof runMemoryCuratedCandidates>>["rows"],
-  ): MemorySearchResult[] {
-    return rows.map((row) => {
-      const result: MemorySearchResult = {
-        path: row.path,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        score: 0,
-        snippet: row.text,
-        source: "memory",
-      };
-      if (typeof row.importance === "number") {
-        result.importance = row.importance;
-      }
-      if (typeof row.triggers === "string" && row.triggers.trim()) {
-        result.triggers = row.triggers.trim();
-      }
-      if (typeof row.project_key === "string" && row.project_key.trim()) {
-        result.projectKey = row.project_key.trim();
-      }
-      result.provenance = {
-        originClass: row.origin_class,
-        sessionKind: row.session_kind,
-        observedAt: row.observed_at,
-        ...(typeof row.supersedes_key === "string" ? { supersedesKey: row.supersedes_key } : {}),
-      };
-      return result;
+      return result.rows.map((row): MemorySearchResult => {
+        const candidate: MemorySearchResult = {
+          path: row.path,
+          startLine: row.start_line,
+          endLine: row.end_line,
+          score: 0,
+          snippet: row.text,
+          source: "memory",
+        };
+        Object.assign(candidate, projectRecallMetadata(row));
+        candidate.provenance = {
+          originClass: row.origin_class,
+          sessionKind: row.session_kind,
+          observedAt: row.observed_at,
+        };
+        if (typeof row.supersedes_key === "string") {
+          candidate.provenance.supersedesKey = row.supersedes_key;
+        }
+        return candidate;
+      });
     });
   }
 
@@ -261,13 +265,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         const row = metadataById.get(entry.id);
         return Object.assign(entry, {
           sourceMtime: sourceMtimes[entry.source].get(entry.path),
-          ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
-          ...(typeof row?.triggers === "string" && row.triggers.trim()
-            ? { triggers: row.triggers.trim() }
-            : {}),
-          ...(typeof row?.project_key === "string" && row.project_key.trim()
-            ? { projectKey: row.project_key.trim() }
-            : {}),
+          ...projectRecallMetadata(row),
           ...(row?.provenance ? { provenance: row.provenance } : {}),
         });
       });

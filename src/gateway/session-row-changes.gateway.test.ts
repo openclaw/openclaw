@@ -104,19 +104,25 @@ describe("gateway session row change publications", () => {
         rejectCommit = true;
         await expect(write()).rejects.toThrow("commit rejected");
         expect(changed).not.toHaveBeenCalled();
+        expect(facts).not.toHaveBeenCalled();
         rejectCommit = false;
         const committed = await write();
         if (source === "observer digests") {
           expect(committed).toBe(true);
         }
         expect(changed).toHaveBeenCalledExactlyOnceWith({ ...target, scope: "runtime" });
-        expect(facts).toHaveBeenCalledExactlyOnceWith({ ...target, scope: "runtime" });
+        expect(facts).toHaveBeenCalledExactlyOnceWith({
+          ...target,
+          scope: "runtime",
+          facts: { kind: "unchanged" },
+        });
         if (source === "lifecycle errors") {
           await write("replaced-generation");
         } else {
           expect(await write()).toBe(false);
         }
         expect(changed).toHaveBeenCalledTimes(1);
+        expect(facts).toHaveBeenCalledTimes(1);
       } finally {
         unsubscribe();
       }

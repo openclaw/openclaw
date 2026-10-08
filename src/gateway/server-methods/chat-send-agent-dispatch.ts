@@ -15,6 +15,7 @@ import { isInternalSourceReplyChannel } from "../../auto-reply/reply/source-repl
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -68,7 +69,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     client,
     context,
     toolsAllow,
-    skillWorkshopProposalRevision,
     prepareSkillLibraryAuthoring,
     cronCreatorAuthority,
     assertDashboardReadCurrent,
@@ -330,7 +330,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 operatorAuthority: admission.operatorAuthority,
                 providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                 dashboardReadAdmission,
-                skillWorkshopProposalRevision,
                 skillLibraryAuthoring,
                 ...(cronCreatorAuthority
                   ? { cronCreatorAuthorityCapability: cronCreatorAuthority }
@@ -479,16 +478,32 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             });
           };
           const dispatchWithRetry = () =>
-            runAcceptedChatSendDispatch({
-              operation: () => withCurrentUserTurnInput(userTurnRecorder, dispatchInbound),
-              classify: classifyDispatchFailure,
-              waitForRetry: (error) =>
-                waitForAcceptedChatSendRetry(
-                  { agentId, sessionKey, storePath },
-                  error,
-                  activeRunAbort.controller.signal,
-                ),
-            });
+            withExecRequestTurn(
+              {
+                identity: {
+                  runId: clientRunId,
+                  sessionKey: sessionBinding.sessionKey,
+                  sessionId: sessionBinding.sessionId,
+                  agentId: sessionBinding.agentId,
+                  ownerConnId: sessionBinding.ownerConnId,
+                  ownerDeviceId: sessionBinding.ownerDeviceId,
+                  controlUiVisible: sessionBinding.controlUiVisible,
+                  turnKind: sessionBinding.turnKind,
+                },
+                abortSignal: activeRunAbort.controller.signal,
+              },
+              () =>
+                runAcceptedChatSendDispatch({
+                  operation: () => withCurrentUserTurnInput(userTurnRecorder, dispatchInbound),
+                  classify: classifyDispatchFailure,
+                  waitForRetry: (error) =>
+                    waitForAcceptedChatSendRetry(
+                      { agentId, sessionKey, storePath },
+                      error,
+                      activeRunAbort.controller.signal,
+                    ),
+                }),
+            );
           const dispatchResult = await (cronCreatorAuthority && externalAuthorityAdmission
             ? externalAuthorityAdmission.run(
                 cronCreatorAuthority,

@@ -368,9 +368,15 @@ describe("models cli", () => {
     { label: "fallbacks clear", args: ["fallbacks", "clear"], command: clearFallbacksCommand },
   ])("rejects parent --agent for models $label", async ({ args, command }) => {
     const agent = args[0] === "set" ? "poe" : "";
-    await expect(runModelsCommand(["models", "--agent", agent, ...args])).rejects.toThrow(
-      "does not support --agent",
-    );
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new ExitError(code);
+    });
+    await expect(runModelsCommand(["models", "--agent", agent, ...args])).rejects.toMatchObject({
+      code: 1,
+    });
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("Remove --agent"));
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(command).not.toHaveBeenCalled();
   });
 

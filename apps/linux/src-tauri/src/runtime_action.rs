@@ -41,7 +41,7 @@ struct LauncherFile {
     entry: PathBuf,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct ExpectedPin {
     revision: String,
     definition: Option<String>,
@@ -114,18 +114,7 @@ impl Observation {
         if intent.get("status").and_then(Value::as_str) != Some("known") {
             return Err(UPGRADE.into());
         }
-        Ok(ExpectedPin {
-            revision: intent
-                .get("revision")
-                .and_then(Value::as_str)
-                .ok_or(UPGRADE)?
-                .into(),
-            definition: match intent.get("definition") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(value)) => Some(value.clone()),
-                _ => return Err(UPGRADE.into()),
-            },
-        })
+        serde_json::from_value(intent.clone()).map_err(|_| UPGRADE.into())
     }
 
     fn admit(&self, fresh: bool) -> Result<(), String> {
@@ -205,15 +194,12 @@ impl Observation {
     }
 
     fn previous_runtime_command(&self) -> String {
-        let pin = self.0.pointer("/service/runtimeIntent/pin");
-        let path = pin
-            .and_then(|pin| pin.get("path"))
-            .and_then(Value::as_str)
+        let path = self
+            .text("/service/runtimeIntent/pin/path")
             .map(Path::new)
             .or_else(|| self.runtime_path());
-        let kind = pin
-            .and_then(|pin| pin.get("runtime"))
-            .and_then(Value::as_str)
+        let kind = self
+            .text("/service/runtimeIntent/pin/runtime")
             .unwrap_or_else(|| {
                 if path
                     .and_then(Path::file_name)

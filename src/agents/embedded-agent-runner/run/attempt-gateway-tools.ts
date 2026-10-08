@@ -36,11 +36,10 @@ export async function withPreparedEmbeddedGatewayTools<T>(
     sessionKey: attempt.sessionKey,
     turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,
     turnSourceLocal:
-      !attempt.messageChannel &&
-      !attempt.messageProvider &&
-      attempt.cronCreatorAuthorityCapability?.callerOrigin.kind === "local"
-        ? true
-        : undefined,
+      (!attempt.messageChannel &&
+        !attempt.messageProvider &&
+        attempt.cronCreatorAuthorityCapability?.callerOrigin.kind === "local") ||
+      undefined,
     turnSourceTo: attempt.currentMessagingTarget ?? attempt.currentChannelId,
     turnSourceAccountId: attempt.agentAccountId,
     turnSourceThreadId: attempt.currentThreadTs,

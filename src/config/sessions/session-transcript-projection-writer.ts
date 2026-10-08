@@ -219,6 +219,7 @@ export async function finalizePreparedProjection(
       sessionChanges.emit({
         storePath: databaseOptions.path,
         sessionKey: result.sessionKey,
+        scope: "transcript",
         facts: { kind: "unchanged" },
       });
     }
@@ -249,6 +250,7 @@ export async function finalizePreparedProjection(
           {
             storePath: database.path,
             sessionKey: session.session_key,
+            scope: "transcript",
             facts: { kind: "unchanged" },
           },
           database.db,

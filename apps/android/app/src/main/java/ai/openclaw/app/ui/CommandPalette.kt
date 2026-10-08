@@ -4,7 +4,6 @@ import ai.openclaw.app.GatewayModelProviderSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
-import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
@@ -131,7 +130,7 @@ internal fun CommandPalette(
 
         if (actionRows.isNotEmpty() || sessionRows.isEmpty()) {
           item(key = "actions-heading") {
-            CommandSectionLabel(title = nativeString("Quick actions"))
+            UppercaseSectionLabel(title = nativeString("Quick actions"), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.Start)
           }
           item(key = "actions") {
             if (actionRows.isEmpty()) {
@@ -143,7 +142,7 @@ internal fun CommandPalette(
         }
 
         item(key = "threads-heading") {
-          CommandSectionLabel(title = nativeString("Threads"))
+          UppercaseSectionLabel(title = nativeString("Threads"), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.Start)
         }
 
         item(key = "threads") {
@@ -318,13 +317,6 @@ private fun CommandRowChevron(contentDescription: String?) {
       modifier = Modifier.size(17.dp),
       tint = ClawTheme.colors.textMuted,
     )
-  }
-}
-
-@Composable
-private fun CommandSectionLabel(title: String) {
-  Row(modifier = Modifier.fillMaxWidth()) {
-    Text(text = localizedUppercase(title, currentAppLanguage().languageTag), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
   }
 }
 

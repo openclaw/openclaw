@@ -67,39 +67,49 @@ function handleAssistantFailureAfterRecovery(
 ) {
   const { attempt, erroredAssistant: assistant, failoverRetryController: failover } = fixture;
   return handleEmbeddedAssistantFailure({
-    runParams: {
-      sessionId: "session:transport-drop",
-      runId: "run:transport-drop",
-      workspaceDir: "/tmp/provider-recovery-test",
-      prompt: "Continue",
-      timeoutMs: 60_000,
+    runInput: {
+      runParams: {
+        sessionId: "session:transport-drop",
+        sessionFile: "/tmp/provider-recovery-test/session.jsonl",
+        runId: "run:transport-drop",
+        workspaceDir: "/tmp/provider-recovery-test",
+        prompt: "Continue",
+        timeoutMs: 60_000,
+      },
+      fallbackConfigured: true,
+      suspendForFailure: vi.fn(),
+      agentDir: "/tmp/provider-recovery-test",
+      isProbeSession: false,
     },
-    attempt,
-    attemptAssistant: assistant,
-    currentAttemptAssistant: assistant,
-    terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
-    activeErrorContext: { provider: "openai", model: "synthetic-model" },
-    provider: "openai",
+    normalizedAttempt: {
+      attempt,
+      attemptAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+      activeErrorContext: { provider: "openai", model: "synthetic-model" },
+    },
+    preparedRuntime: {
+      provider: "openai",
+      modelId: "synthetic-model",
+      model: { id: "synthetic-model" },
+      attemptedThinking: new Set(["off"]),
+      attemptAuthProfileStore: { version: 1, profiles: {} },
+      maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
+    },
+    runtime: {
+      thinkLevel: "off",
+      lastProfileId: undefined,
+      pluginHarnessOwnsTransport: false,
+    },
     providerOwner: undefined,
-    modelId: "synthetic-model",
-    model: "synthetic-model",
-    thinkLevel: "off",
     getThinkLevel: () => "off",
-    attemptedThinking: new Set(["off"]),
-    fallbackConfigured: true,
-    pluginHarnessOwnsTransport: false,
-    authProfileStore: { version: 1, profiles: {} },
     runtimeAuthRetry: false,
-    maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
     failover,
     emptyErrorRetries: 0,
     overloadProfileRotations: 0,
     previousRetryFailoverReason,
     traceAttempts: [],
-    suspendForFailure: vi.fn(),
     suspensionSessionId: "session:transport-drop",
-    agentDir: "/tmp/provider-recovery-test",
-    isProbeSession: false,
   });
 }
 
@@ -196,6 +206,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     "continues output-limited work without replay (no tools=%s)",
     async (noTools) => {
       const {
+        attempt,
         recovery,
         markOwnedTranscriptRetry,
         continueFromCurrentTranscript,
@@ -211,6 +222,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
       expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
         includeToolFailureInstruction: false,
+        messages: attempt.messagesSnapshot,
       });
       expect(failoverRetryController.transientRetryCount).toBe(1);
       expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
@@ -547,6 +559,8 @@ describe("recoverEmbeddedRunAttempt", () => {
 
   it.each<[string, TransportDropScenario]>([
     ["WebSocket drop", {}],
+    ["overload before work", { noTools: true, errorMessage: "server_overloaded", diagnostics: [] }],
+    ["overload after settled tools", { errorMessage: "server_overloaded", diagnostics: [] }],
     [
       "WebSocket transport code",
       {
@@ -614,6 +628,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     ],
   ])("continues the existing transcript after %s", async (_label, scenario) => {
     const {
+      attempt,
       recovery,
       markOwnedTranscriptRetry,
       continueFromCurrentTranscript,
@@ -628,6 +643,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(markOwnedTranscriptRetry).toHaveBeenCalledOnce();
     expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
       includeToolFailureInstruction: Boolean(scenario.lastToolError),
+      messages: attempt.messagesSnapshot,
     });
     expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();

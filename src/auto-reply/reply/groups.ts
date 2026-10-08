@@ -90,10 +90,6 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }
 
-function resolveSharedChatNoun(chatType?: string | null): "group chat" | "channel" {
-  return normalizeOptionalLowercaseString(chatType) === "channel" ? "channel" : "group chat";
-}
-
 /**
  * Builds trusted group/channel delivery guidance.
  *
@@ -110,8 +106,11 @@ export function buildGroupChatContext(params: {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const provider = normalizeOptionalLowercaseString(params.sessionCtx.Provider);
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
-  const sharedChatNoun = resolveSharedChatNoun(params.sessionCtx.ChatType);
-  const destinationLabel = sharedChatNoun === "channel" ? "this channel" : "this group chat";
+  const sharedChatNoun =
+    normalizeOptionalLowercaseString(params.sessionCtx.ChatType) === "channel"
+      ? "channel"
+      : "group chat";
+  const destinationLabel = `this ${sharedChatNoun}`;
 
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} ${sharedChatNoun}.`);

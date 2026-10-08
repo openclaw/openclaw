@@ -68,17 +68,15 @@ internal class ChatTranscriptHistoryRefresh(
             try {
               while (isCurrent()) {
                 val shouldRead =
-                  synchronized(this@ChatTranscriptHistoryRefresh) {
-                    if (pending !== request) {
-                      false
-                    } else if (!request.requested) {
+                  synchronized(this@ChatTranscriptHistoryRefresh) read@{
+                    if (pending !== request) return@read false
+                    if (!request.requested) {
                       // Retire atomically so an event arriving as we finish starts a new reader.
                       pending = null
-                      false
-                    } else {
-                      request.requested = false
-                      true
+                      return@read false
                     }
+                    request.requested = false
+                    true
                   }
                 if (!shouldRead) break
                 delay(retryDelayMs)

@@ -476,17 +476,15 @@ private fun OverviewScreen(
       )
   }
 
-  LaunchedEffect(isConnected) {
-    if (isConnected) {
-      viewModel.refreshChatSessions(limit = 20)
-      viewModel.refreshAgents()
-      viewModel.refreshModelCatalog()
-      viewModel.refreshProviderModels()
-      viewModel.refreshCronJobs()
-      viewModel.refreshNodesDevices()
-      viewModel.refreshChannels()
-      viewModel.refreshExecApprovals()
-    }
+  SettingsRefreshOnConnect(isConnected) {
+    viewModel.refreshChatSessions(limit = 20)
+    viewModel.refreshAgents()
+    viewModel.refreshModelCatalog()
+    viewModel.refreshProviderModels()
+    viewModel.refreshCronJobs()
+    viewModel.refreshNodesDevices()
+    viewModel.refreshChannels()
+    viewModel.refreshExecApprovals()
   }
 
   ClawScaffold(
@@ -787,25 +785,44 @@ private fun TalkEntryPanel(
 
 @Composable
 private fun RecentSessionsHeader(onOpenSessions: () -> Unit) {
-  SectionLabel(
-    title = nativeString("Recent Threads"),
-    action = {
-      Surface(
-        onClick = onOpenSessions,
-        modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
-        color = Color.Transparent,
-        contentColor = ClawTheme.colors.textMuted,
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Text(
-            text = nativeString("View all"),
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
-          )
-        }
+  val title = nativeString("Recent Threads")
+  UppercaseSectionLabel(nativeString(title)) {
+    Surface(
+      onClick = onOpenSessions,
+      modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
+      color = Color.Transparent,
+      contentColor = ClawTheme.colors.textMuted,
+    ) {
+      Box(contentAlignment = Alignment.Center) {
+        Text(
+          text = nativeString("View all"),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
       }
-    },
-  )
+    }
+  }
+}
+
+@Composable
+internal fun UppercaseSectionLabel(
+  title: String,
+  verticalAlignment: Alignment.Vertical = Alignment.CenterVertically,
+  horizontalArrangement: Arrangement.Horizontal = Arrangement.SpaceBetween,
+  action: @Composable () -> Unit = {},
+) {
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    verticalAlignment = verticalAlignment,
+    horizontalArrangement = horizontalArrangement,
+  ) {
+    Text(
+      text = localizedUppercase(title, currentAppLanguage().languageTag),
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textMuted,
+    )
+    action()
+  }
 }
 
 internal data class OverviewHeaderState(
@@ -1066,26 +1083,6 @@ private fun HomeAttentionPanel(
 }
 
 @Composable
-private fun SectionLabel(
-  title: String,
-  action: (@Composable () -> Unit)? = null,
-) {
-  val localizedTitle = nativeString(title)
-  Row(
-    modifier = Modifier.fillMaxWidth(),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.SpaceBetween,
-  ) {
-    Text(
-      text = localizedUppercase(localizedTitle, currentAppLanguage().languageTag),
-      style = ClawTheme.type.caption,
-      color = ClawTheme.colors.textMuted,
-    )
-    action?.invoke()
-  }
-}
-
-@Composable
 private fun HomeAttentionListRow(
   row: HomeAttentionRow,
   onClick: () -> Unit,
@@ -1240,14 +1237,12 @@ private fun SettingsShellScreen(
   val pendingApprovalsCount = approvalInbox.approvals.size + pendingToolCalls.size
   val appLanguage = currentAppLanguage()
 
-  LaunchedEffect(isConnected) {
-    if (isConnected) {
-      viewModel.refreshModelCatalog()
-      viewModel.refreshProviderModels()
-      viewModel.refreshNodesDevices()
-      viewModel.refreshChannels()
-      viewModel.refreshExecApprovals()
-    }
+  SettingsRefreshOnConnect(isConnected) {
+    viewModel.refreshModelCatalog()
+    viewModel.refreshProviderModels()
+    viewModel.refreshNodesDevices()
+    viewModel.refreshChannels()
+    viewModel.refreshExecApprovals()
   }
 
   val settingsRows =
@@ -1509,7 +1504,7 @@ internal fun gatewaySummary(
   if (isConnected) return if (statusText == "Connected (node offline)") gatewayConnectionStatusForDisplay(statusText) else nativeString("Online and ready")
   val status = statusText.trim().lowercase()
   return when {
-    status.contains("connecting") || status.contains("reconnecting") -> nativeString("Connecting...")
+    status.contains("connecting") -> nativeString("Connecting...")
     status.contains("pairing") -> nativeString("Waiting for pairing")
     status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
     status.contains("fingerprint verification timed out") -> nativeString("TLS timed out")

@@ -13,6 +13,7 @@ import {
   createPlacementMoveOps,
   readWorkerPlacementMovesReadOnly,
 } from "./placement-move-intent.js";
+import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
 import {
   retireWorkerSessionPlacement,
   type WorkerSessionPlacementRetirement,
@@ -71,6 +72,20 @@ export const placementReadOperations = {
     input: { sessionIds?: readonly string[] },
     { open }: WorkerOperationContext,
   ) => readWorkerPlacementsInDatabase(open().db, input.sessionIds),
+  "workerPlacements.readWithMove": (
+    input: { sessionId: string },
+    { open }: WorkerOperationContext,
+  ) => {
+    const { projection } = readWorkerSessionPlacementProjectionInDatabase(
+      open().db,
+      [input.sessionId],
+      [],
+    );
+    return {
+      placement: projection.placements.get(input.sessionId),
+      move: projection.moves.get(input.sessionId),
+    };
+  },
   "workerPlacements.readMove": (input: { sessionId: string }, { open }: WorkerOperationContext) =>
     readWorkerPlacementMovesReadOnly(open().db, [input.sessionId]).get(input.sessionId),
   "workerPlacements.readReconcile": (

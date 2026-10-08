@@ -105,6 +105,27 @@ export function resolveServiceRefreshEnv(
   return resolvedEnv;
 }
 
+function applyUpdateEnv(
+  entries: Iterable<readonly [string, string | undefined]>,
+  replace = false,
+): void {
+  clearFsSafeEnvFallback(process.env);
+  if (replace) {
+    for (const key of Object.keys(process.env)) {
+      delete process.env[key];
+    }
+  }
+  for (const [key, value] of entries) {
+    // A full snapshot skips undefined; an overlay uses it to unset a selector.
+    if (value !== undefined) {
+      process.env[key] = value;
+    } else if (!replace) {
+      delete process.env[key];
+    }
+  }
+  normalizeFsSafeNativeEnv();
+}
+
 /** Run one update phase under the managed Gateway's authoritative environment. */
 export async function withOwnedManagedUpdateEnv<T>(
   env: NodeJS.ProcessEnv | undefined,
@@ -118,24 +139,11 @@ export async function withOwnedManagedUpdateEnv<T>(
   const previousEnv = { ...fsSafeEnvInput(process.env) };
   // Snapshot an aliased input before clearing the process environment.
   const phaseEnv = env === process.env ? previousEnv : { ...fsSafeEnvInput(env) };
-  const replace = (snapshot: NodeJS.ProcessEnv) => {
-    clearFsSafeEnvFallback(process.env);
-    for (const key of Object.keys(process.env)) {
-      delete process.env[key];
-    }
-    for (const [key, value] of Object.entries(snapshot)) {
-      // Node stringifies undefined on assignment; unset selectors must remain absent.
-      if (value !== undefined) {
-        process.env[key] = value;
-      }
-    }
-    normalizeFsSafeNativeEnv();
-  };
-  replace(phaseEnv);
+  applyUpdateEnv(Object.entries(phaseEnv), true);
   try {
     return await run();
   } finally {
-    replace(previousEnv);
+    applyUpdateEnv(Object.entries(previousEnv), true);
   }
 }
 
@@ -153,22 +161,11 @@ export async function withUpdateEnv<T>(
         process.platform === "win32" ? resolveEnvironmentValue(before, key) : before[key],
       ] as const,
   );
-  const apply = (entries: Iterable<readonly [string, string | undefined]>) => {
-    clearFsSafeEnvFallback(process.env);
-    for (const [key, value] of entries) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-    normalizeFsSafeNativeEnv();
-  };
-  apply(Object.entries(inputs));
+  applyUpdateEnv(Object.entries(inputs));
   try {
     return await run();
   } finally {
-    apply(previous);
+    applyUpdateEnv(previous);
   }
 }
 

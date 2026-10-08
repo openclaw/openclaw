@@ -105,7 +105,24 @@ export class CodexNativeProcessClient {
       const threadId = readCodexNotificationThreadId(notification.params);
       const turnId = readCodexNotificationTurnId(notification.params);
       const commands = threadId ? this.threads.get(threadId) : undefined;
-      if (!commands || !turnId) {
+      if (!commands) {
+        return;
+      }
+      if (
+        notification.method === "thread/closed" ||
+        notification.method === "thread/archived" ||
+        notification.method === "thread/deleted"
+      ) {
+        // Codex unloads an unsubscribed thread by dropping its listener before
+        // shutdown, so its background terminals end without an item/completed
+        // this connection can observe. The thread-level receipt is final.
+        for (const command of commands.values()) {
+          command.background = undefined;
+          this.closeAdmission(command);
+        }
+        return;
+      }
+      if (!turnId) {
         return;
       }
       if (notification.method === "turn/completed") {

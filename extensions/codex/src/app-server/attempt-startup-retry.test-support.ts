@@ -72,7 +72,6 @@ export function startFixtureAttempt(
     dynamicTools: [],
     webSearchAllowed: false,
     developerInstructions: undefined,
-    finalConfigPatch: undefined,
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
     nativeProviderWebSearchSupport: "supported",
