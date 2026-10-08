@@ -7,6 +7,7 @@ import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
 import { isConfigValidationFailedError } from "../config/io.write-errors.js";
 import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
+import { previewConfigFileWriteSafety } from "../config/io.write-preview.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
@@ -457,6 +458,17 @@ export async function runConfigOperations(params: {
       previousEnv: preparedPreviousValues.resolutionEnv,
     };
   }
+  const unchanged =
+    params.successMode === "set" &&
+    isDeepStrictEqual(currentConfig, nextConfig) &&
+    isDeepStrictEqual(authoredPreviousConfig, authoredNextConfig);
+  const writeOptions = {
+    ...mutationStart.writeOptions,
+    ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
+    ...(normalizedExplicitSetPaths.length > 0
+      ? { explicitSetPaths: normalizedExplicitSetPaths }
+      : {}),
+  };
   const validation = await validateConfigMutation({
     config: nextConfig,
     modelValidation,
@@ -464,15 +476,32 @@ export async function runConfigOperations(params: {
     operations: appliedOperations,
     options,
     configPath: snapshot.path,
-    unchanged:
-      params.successMode === "set" &&
-      isDeepStrictEqual(currentConfig, nextConfig) &&
-      isDeepStrictEqual(authoredPreviousConfig, authoredNextConfig),
+    unchanged,
     pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
     deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
     databaseOnly: params.databaseOnly,
   });
   if (validation.kind === "dry-run") {
+    if (
+      validation.result.ok &&
+      !unchanged &&
+      operations.some((operation) => operation.inputMode !== "value")
+    ) {
+      const reasons = previewConfigFileWriteSafety({
+        sourceConfig: authoredNextConfig,
+        snapshot,
+        writeOptions,
+      });
+      if (reasons.length > 0) {
+        validation.result.ok = false;
+        validation.result.errors = [
+          {
+            kind: "write-safety",
+            message: `Config write would be rejected (${reasons.join(", ")}). No settings were saved.`,
+          },
+        ];
+      }
+    }
     printConfigDryRunResult(validation.result, runtime, options.json);
     return;
   }
@@ -487,7 +516,7 @@ export async function runConfigOperations(params: {
     snapshot,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     writeOptions: {
-      ...mutationStart.writeOptions,
+      ...writeOptions,
       auditOrigin: "cli",
       ...(assertCurrentExpectation || params.beforePersistentApply
         ? {
@@ -497,10 +526,6 @@ export async function runConfigOperations(params: {
               params.beforePersistentApply?.();
             },
           }
-        : {}),
-      ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
-      ...(normalizedExplicitSetPaths.length > 0
-        ? { explicitSetPaths: normalizedExplicitSetPaths }
         : {}),
     },
   });
