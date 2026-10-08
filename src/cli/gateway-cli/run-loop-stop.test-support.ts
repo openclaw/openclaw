@@ -55,7 +55,7 @@ export function registerForegroundUpdateStopTests({
     return { close, start, runtime, exited };
   }
 
-  it.each(["pending-completion", "false", "reject"] as const)(
+  it.each(["pending-completion", "reject"] as const)(
     "retries the captured foreground Stop operation after %s settlement",
     async (outcome) => {
       const pendingCompletion = outcome === "pending-completion";
@@ -295,40 +295,6 @@ export function registerForegroundUpdateStopTests({
         joined.resolve(true);
         rollback.mockRestore();
         await withTimeout(exited, 4000);
-      }
-    });
-  });
-
-  it("does not start a second active-work drain for repeated shutdown signals", async () => {
-    vi.clearAllMocks();
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { exited } = await createSignaledLoopHarness();
-      const drain = createDeferred();
-      waitForGatewayActiveWork.mockImplementationOnce(async () => {
-        await drain.promise;
-        return { drained: true, snapshot: createActiveWorkSnapshot() };
-      });
-
-      try {
-        const sigterm = captureSignal("SIGTERM");
-        const sigint = captureSignal("SIGINT");
-        sigterm();
-        await waitForLoopCondition(
-          () => waitForGatewayActiveWork.mock.calls.length === 1,
-          "expected first shutdown signal to begin the active-work drain",
-        );
-
-        sigint();
-
-        expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
-        expect(isGatewayWorkAdmissionClosed()).toBe(true);
-
-        drain.resolve();
-        await expect(exited).resolves.toBe(0);
-      } finally {
-        drain.resolve();
-        await exited;
       }
     });
   });

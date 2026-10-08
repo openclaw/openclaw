@@ -11,6 +11,7 @@ import { ACT_MAX_WAIT_TIME_MS, resolveActWaitTimeoutMs } from "./act-policy.js";
 import {
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
+  EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
 } from "./constants.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
@@ -48,6 +49,17 @@ import {
 
 const DEFAULT_UPLOAD_MIME_TYPE = "application/octet-stream";
 const PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES = 50 * 1024 * 1024;
+/**
+ * Aggregate upload size below which the byte-payload branch is known to fit a
+ * single extension-relay WebSocket message. Playwright delivers file payloads to
+ * CDP-attached browsers as base64 inside an evaluate command, so the relay-safe
+ * bound is three quarters of the relay's message cap, minus headroom for JSON
+ * framing. Extension uploads at or above this bound take the local path handoff
+ * so a file that the relay could not carry as bytes still uploads for extensions
+ * with local file access.
+ */
+const PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES =
+  Math.floor((EXTENSION_RELAY_MAX_PAYLOAD_BYTES * 3) / 4) - 1024 * 1024;
 
 async function toPlaywrightFilePayloads(paths: string[]) {
   const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
@@ -70,6 +82,11 @@ async function toPlaywrightFilePayloads(paths: string[]) {
   );
 }
 
+async function measureExistingUploadPathsSize(paths: string[]): Promise<number> {
+  const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
+  return stats.reduce((size, stat) => size + stat.size, 0);
+}
+
 async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { paths: string[] }) {
   return await racePromiseWithAbortSignal(
     (async () => {
@@ -77,9 +94,19 @@ async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { 
       if (!resolved.ok) {
         throw new Error(resolved.error);
       }
-      return opts.ssrfPolicy && opts.browserFilesystemLocal !== true
-        ? await toPlaywrightFilePayloads(resolved.paths)
-        : resolved.paths;
+      if (!(opts.ssrfPolicy && opts.browserFilesystemLocal !== true)) {
+        return resolved.paths;
+      }
+      if (
+        opts.uploadPathsFallbackOnPayloadLimit === true &&
+        (await measureExistingUploadPathsSize(resolved.paths)) >=
+          PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES
+      ) {
+        // Preserve path handoff for extensions with local file access when the
+        // payload would exceed the relay limit.
+        return resolved.paths;
+      }
+      return await toPlaywrightFilePayloads(resolved.paths);
     })(),
     opts.signal,
     ({ reason }) => toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),

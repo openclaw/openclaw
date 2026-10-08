@@ -8,6 +8,7 @@ import {
   sqliteTranscriptPayloadColumns,
 } from "../../../lib/sqlite-transcript-payload.mjs";
 import { assert, readJson, write, writeJson } from "../fixtures/common.mjs";
+import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import {
   assertUpgradeVolumeSharedState,
   seedUpgradeVolumeSharedState,
@@ -32,6 +33,48 @@ const PREEXISTING_SESSION_FIXTURES = [
     sessionId: "upgrade-group-session",
   },
 ];
+
+export function measureVolumeDoctorBudget(stateDir) {
+  const counts = { sessions: 0, events: 0, cronJobs: 0, pluginRoots: 0 };
+  for (const agentId of VOLUME_AGENT_IDS) {
+    const db = new DatabaseSync(
+      path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+      { readOnly: true },
+    );
+    try {
+      counts.sessions += Number(
+        db.prepare("SELECT count(*) AS count FROM session_nodes").get().count,
+      );
+      counts.events += Number(
+        db.prepare("SELECT count(*) AS count FROM transcript_events").get().count,
+      );
+    } finally {
+      db.close();
+    }
+  }
+  const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    counts.cronJobs = Number(db.prepare("SELECT count(*) AS count FROM cron_jobs").get().count);
+  } finally {
+    db.close();
+  }
+  const index = readPluginInstallIndex({ stateDir, configPath: null });
+  counts.pluginRoots = new Set(
+    (index.plugins ?? []).filter((plugin) => plugin.enabled).map((plugin) => plugin.rootDir),
+  ).size;
+  // Slow-host allowance, calibrated against the 473s AWS fixture; never learn
+  // from the timed run itself, which would hide a Doctor slowdown.
+  const computedSeconds = Math.ceil(
+    60 +
+      counts.sessions * 0.08 +
+      counts.events * 0.002 +
+      counts.cronJobs * 0.02 +
+      counts.pluginRoots * 20,
+  );
+  return { counts, computedSeconds };
+}
 
 function assertJsonEqual(actual, expected, message) {
   assert(JSON.stringify(actual) === JSON.stringify(expected), message);
