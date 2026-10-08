@@ -2354,7 +2354,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cron/service.stale-family.test.ts",
   "src/cron/service.startup-heartbeat.test.ts",
   "src/cron/service.startup-overflow-clobber.test.ts",
-  "src/cron/service.store-load-invalid-main-job.test.ts",
   "src/cron/service.stream-validation.test.ts",
   "src/cron/service.test-harness.test.ts",
   "src/cron/service.timer-maintenance.test.ts",
