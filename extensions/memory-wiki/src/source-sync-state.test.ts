@@ -14,11 +14,8 @@ import {
   assertMemoryWikiSourceSyncStateCapacity,
   configureMemoryWikiSourceSyncStateStore,
   createMemoryWikiSourceSyncStateStore,
-  MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
   pruneImportedSourceEntries,
-  readLegacyMemoryWikiSourceSyncState,
   readMemoryWikiSourceSyncState,
-  resolveMemoryWikiSourceSyncStatePath,
   setImportedSourceEntry,
   writeMemoryWikiSourceSyncState,
 } from "./source-sync-state.js";
@@ -174,7 +171,9 @@ describe("memory wiki source sync state", () => {
         },
       },
     });
-    await expect(fs.stat(resolveMemoryWikiSourceSyncStatePath(vaultRoot))).rejects.toMatchObject({
+    await expect(
+      fs.stat(path.join(vaultRoot, ".openclaw-wiki", "source-sync.json")),
+    ).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
@@ -279,44 +278,19 @@ describe("memory wiki source sync state", () => {
     });
   });
 
-  it("keeps legacy file reads separate for doctor migration", async () => {
+  it("ignores retired JSON when reading current source-sync state", async () => {
     const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
-    const legacyPath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
+    const legacyPath = path.join(vaultRoot, ".openclaw-wiki", "source-sync.json");
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(
-      legacyPath,
-      `${JSON.stringify({
-        version: 1,
-        entries: {
-          beta: {
-            group: "unsafe-local",
-            pagePath: "sources/beta.md",
-            sourcePath: "/tmp/beta.md",
-            sourceUpdatedAtMs: 10,
-            sourceSize: 20,
-            renderFingerprint: "beta",
-          },
-        },
-      })}\n`,
-    );
+    await fs.writeFile(legacyPath, "retired JSON is not a runtime input\n");
 
     await expect(readMemoryWikiSourceSyncState(vaultRoot)).resolves.toEqual({
       version: 1,
       entries: {},
     });
-    await expect(readLegacyMemoryWikiSourceSyncState(vaultRoot)).resolves.toEqual({
-      version: 1,
-      entries: {
-        beta: {
-          group: "unsafe-local",
-          pagePath: "sources/beta.md",
-          sourcePath: "/tmp/beta.md",
-          sourceUpdatedAtMs: 10,
-          sourceSize: 20,
-          renderFingerprint: "beta",
-        },
-      },
-    });
+    await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe(
+      "retired JSON is not a runtime input\n",
+    );
   });
 
   it("rejects writes beyond the source-sync state row cap", async () => {
@@ -324,7 +298,7 @@ describe("memory wiki source sync state", () => {
     const vaultRoot = path.join(stateDir, "vault");
     const store = openStore({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
     const entries = Object.fromEntries(
-      Array.from({ length: MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES + 1 }, (_, index) => [
+      Array.from({ length: 20_001 }, (_, index) => [
         `source-${index}`,
         {
           group: "bridge" as const,
@@ -826,7 +800,7 @@ describe("memory wiki source sync state", () => {
           },
         },
         group: "bridge",
-        incomingCount: MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
+        incomingCount: 20_000,
       }),
     ).toThrow("Memory Wiki source sync state exceeds SQLite entry limit");
   });

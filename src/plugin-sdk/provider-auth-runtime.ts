@@ -39,11 +39,13 @@ export type OAuthCallbackResult = {
 };
 
 type ProviderOAuthLoopbackCallbackResult =
-  | { type: "authorization_code"; code: string; state: string }
+  | { type: "authorization_code"; code: string; state: string; parameters: URLSearchParams }
   | { type: "oauth_error"; error: string; errorDescription?: string };
 
 type ProviderOAuthLoopbackCallbackServer = {
   waitForCallback: () => Promise<ProviderOAuthLoopbackCallbackResult>;
+  /** Flushes a deferred browser result, then closes; closed listeners ignore late completion. */
+  complete: (response: ProviderOAuthLoopbackRenderedResponse & { status: number }) => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -59,9 +61,15 @@ type ProviderOAuthLoopbackCorsOriginResolver = (
 export async function startProviderOAuthLoopbackCallbackServer(params: {
   redirectUrl: string | URL;
   expectedState: string;
-  timeoutMs: number;
+  /** Optional listener deadline; the caller signal continues to own provider work. */
+  timeoutMs?: number;
   signal?: AbortSignal;
+  /** Additional loopback host; all addresses of the redirect hostname remain bound. */
   bindHostname?: string;
+  /** Exact Node bind host for providers whose existing redirect uses one address family. */
+  bindOnlyHostname?: string;
+  /** Admit callback parameters now, then render the browser outcome through complete(). */
+  deferResponse?: boolean;
   resolveCorsOrigin?: ProviderOAuthLoopbackCorsOriginResolver;
   renderSuccess?: () => ProviderOAuthLoopbackRenderedResponse;
   renderError?: (message: string) => ProviderOAuthLoopbackRenderedResponse;
@@ -127,15 +135,10 @@ export function buildOAuthCallbackOriginResolver(
     if (!value) {
       return undefined;
     }
-    try {
-      const parsed = new URL(value);
-      if (parsed.protocol !== "https:") {
-        return undefined;
-      }
-      return normalized.has(parsed.host.toLowerCase()) ? parsed.origin : undefined;
-    } catch {
-      return undefined;
-    }
+    const parsed = URL.parse(value);
+    return parsed?.protocol === "https:" && normalized.has(parsed.host.toLowerCase())
+      ? parsed.origin
+      : undefined;
   };
 }
 
@@ -166,20 +169,19 @@ export function parseOAuthCallbackInput(
     return { error: "No input provided" };
   }
 
-  try {
-    const url = new URL(trimmed);
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state");
-    if (!code) {
-      return { error: "Missing 'code' parameter in URL" };
-    }
-    if (!state) {
-      return { error: messages.missingState ?? "Missing 'state' parameter in URL" };
-    }
-    return { code, state };
-  } catch {
+  const url = URL.parse(trimmed);
+  if (!url) {
     return { error: messages.invalidInput ?? "Paste the full redirect URL, not just the code." };
   }
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  if (!code) {
+    return { error: "Missing 'code' parameter in URL" };
+  }
+  if (!state) {
+    return { error: messages.missingState ?? "Missing 'state' parameter in URL" };
+  }
+  return { code, state };
 }
 
 /**
@@ -255,12 +257,8 @@ export async function waitForLocalOAuthCallback(params: {
 }
 
 function isHttpOrigin(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (url.protocol === "http:" || url.protocol === "https:") && url.origin === value;
-  } catch {
-    return false;
-  }
+  const url = URL.parse(value);
+  return (url?.protocol === "http:" || url?.protocol === "https:") && url.origin === value;
 }
 
 type ResolveApiKeyForProvider =
@@ -292,7 +290,7 @@ async function loadRuntimeModelAuthModule(): Promise<RuntimeModelAuthModule> {
 }
 
 /**
- * Resolves provider API-key auth through the runtime auth module when available.
+ * Resolves provider API-key auth through the runtime auth module.
  */
 export async function resolveApiKeyForProvider(
   /** Provider auth lookup params forwarded to the runtime auth module. */
@@ -301,11 +299,7 @@ export async function resolveApiKeyForProvider(
   params.signal?.throwIfAborted();
   const runtimeAuth = await loadRuntimeModelAuthModule();
   params.signal?.throwIfAborted();
-  const resolveApiKeyForProviderLocal =
-    typeof runtimeAuth.resolveProviderRuntimeApiKey === "function"
-      ? runtimeAuth.resolveProviderRuntimeApiKey
-      : (await import("../agents/model-auth.js")).resolveApiKeyForProviderCore;
-  return resolveApiKeyForProviderLocal(params);
+  return runtimeAuth.resolveProviderRuntimeApiKey(params);
 }
 
 /**

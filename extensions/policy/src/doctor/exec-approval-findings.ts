@@ -14,7 +14,6 @@ import {
   execApprovalAllowlistMissingTarget,
   execApprovalAllowlistRequirementKey,
   formatExecApprovalAllowlistEntry,
-  formatExecApprovalAllowlistRequirement,
   readExecApprovalAllowlistRequirements,
   syntheticExecApprovalAgentEntry,
 } from "./exec-approval-rules.js";
@@ -82,17 +81,6 @@ export function execApprovalsFindings(
       continue;
     }
     const requirementBase = `scopes/${ocPathSegment(target.scopeName)}/execApprovals`;
-    const shapeFinding = execApprovalsPolicyShapeFinding(target.overlay.execApprovals, {
-      policyDocName,
-      policyPath,
-      targetPrefix: requirementBase,
-      propertyPrefix: `scopes.${target.scopeName}.execApprovals`,
-      allowDefaults: false,
-    });
-    if (shapeFinding !== undefined) {
-      findings.push(shapeFinding);
-      continue;
-    }
     const fileFindings = execApprovalsFileFindings(target.overlay.execApprovals, {
       policyDocName,
       file,
@@ -291,7 +279,7 @@ function execApprovalsRuleFindings(
         findings.push({
           checkId: CHECK_IDS.policyExecApprovalsAllowlistMissing,
           severity: "error",
-          message: `exec approvals allowlist is missing expected pattern '${formatExecApprovalAllowlistRequirement(entry)}'.`,
+          message: `exec approvals allowlist is missing expected pattern '${formatExecApprovalAllowlistEntry(entry)}'.`,
           source: "policy",
           path: params.fileDisplayName ?? params.displayName,
           target,

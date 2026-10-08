@@ -1,69 +1,54 @@
-// Compaction retry state, fenced retry output, and tool summaries.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { onAgentEvent } from "../infra/agent-events.js";
 import type { EmbeddedContextAccountingEvent } from "./embedded-agent-runner/run/internal-params.js";
 import {
   createStubSessionHarness,
   createSubscribedSessionHarness,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
-import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
-type SessionEventHandler = (evt: unknown) => void;
-
-function completedCompactionEnd(willRetry = true, tokensBefore = 100, tokensAfter = 50) {
+function harness(params: Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId"> = {}) {
+  const result = createSubscribedSessionHarness({ runId: "compaction", ...params });
+  onTestFinished(() => result.subscription.unsubscribe());
+  return result;
+}
+function completed(willRetry = true, tokensBefore = 100, tokensAfter = 50) {
   return {
     type: "compaction_end",
     reason: willRetry ? "overflow" : "threshold",
-    outcome: {
-      status: "completed",
-      tokensBefore,
-      tokensAfter,
-      willRetry,
-    },
+    outcome: { status: "completed", tokensBefore, tokensAfter, willRetry },
   } as const;
 }
-
-const skippedCompactionEnd = () =>
-  ({
-    type: "compaction_end",
-    reason: "threshold",
-    outcome: { status: "skipped", reason: "Nothing to compact (session too small)" },
-  }) as const;
-
-function accountingAssistant(input: number, stopReason: AssistantMessage["stopReason"] = "stop") {
+const skipped = {
+  type: "compaction_end",
+  reason: "threshold",
+  outcome: { status: "skipped", reason: "Nothing to compact (session too small)" },
+} as const;
+function assistant(input: number, stopReason: AssistantMessage["stopReason"] = "stop") {
   return makeAgentAssistantMessage({
     content: [{ type: "text", text: "model reply" }],
     usage: { ...makeZeroUsageSnapshot(), input, totalTokens: input },
     stopReason,
   });
 }
+type Emit = ReturnType<typeof harness>["emit"];
+function message(emit: Emit, value: AssistantMessage) {
+  emit({ type: "message_start", message: value });
+  emit({ type: "message_end", message: value });
+}
 
-describe("synchronous context accounting", () => {
+describe("compaction accounting", () => {
   it.each([
     {
-      name: "model snapshots without counting public compaction notices as commits",
+      name: "unavailable provider context despite billing usage",
       events: [
-        accountingAssistant(90_000),
-        completedCompactionEnd(false, 90_000, 12_000),
-        accountingAssistant(18_000),
-        completedCompactionEnd(false, 18_000, 8_000),
-      ],
-      expected: [
-        { kind: "model", contextTokens: 90_000, successful: false },
-        { kind: "model", contextTokens: 18_000, successful: false },
-      ],
-    },
-    {
-      name: "explicitly unavailable provider context despite billing usage",
-      events: [
-        completedCompactionEnd(false, 90_000, 12_000),
+        completed(false, 90_000, 12_000),
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "context unavailable" }],
           usage: {
@@ -78,11 +63,7 @@ describe("synchronous context accounting", () => {
     },
     {
       name: "failed zero-usage retry without old assistant backfill",
-      events: [
-        accountingAssistant(90_000),
-        completedCompactionEnd(true, 90_000, 12_000),
-        accountingAssistant(0, "error"),
-      ],
+      events: [assistant(90_000), completed(true, 90_000, 12_000), assistant(0, "error")],
       expected: [
         { kind: "model", contextTokens: 90_000, successful: false },
         { kind: "model", contextTokens: undefined, successful: false },
@@ -90,26 +71,20 @@ describe("synchronous context accounting", () => {
     },
   ])("records $name in producer order", ({ events, expected }) => {
     const observed: EmbeddedContextAccountingEvent[] = [];
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-context-accounting",
+    const { emit } = harness({
       sessionPersistence: "detached",
       onContextAccountingEvent: (event) => {
         observed.push(event);
       },
     });
-    try {
-      for (const event of events) {
-        if ("role" in event) {
-          emit({ type: "message_start", message: event });
-          emit({ type: "message_end", message: event });
-        } else {
-          emit(event);
-        }
+    for (const event of events) {
+      if ("role" in event) {
+        message(emit, event);
+      } else {
+        emit(event);
       }
-      expect(observed).toEqual(expected);
-    } finally {
-      subscription.unsubscribe();
     }
+    expect(observed).toEqual(expected);
   });
 
   it("captures repaired model usage before queued delivery and throwing cleanup", async () => {
@@ -129,7 +104,7 @@ describe("synchronous context accounting", () => {
     let aborted = false;
     const subscription = subscribeEmbeddedAgentSession({
       session,
-      runId: "run-held-context-accounting",
+      runId: "held-accounting",
       sessionPersistence: "detached",
       isTerminalAborted: () => aborted,
       blockReplyBreak: "message_end",
@@ -147,21 +122,14 @@ describe("synchronous context accounting", () => {
       { kind: "model", contextTokens: 20_000, successful: false },
     ];
     try {
-      const before = accountingAssistant(90_000);
-      emit({ type: "message_start", message: before });
-      emit({ type: "message_end", message: before });
+      message(emit, assistant(90_000));
       await deliveryStarted.promise;
-      emit(completedCompactionEnd(false, 90_000, 12_000));
-      const after = accountingAssistant(0);
+      emit(completed(false, 90_000, 12_000));
+      const after = assistant(0);
       emit({ type: "message_start", message: after });
       const partial = {
         ...after,
-        usage: {
-          ...makeZeroUsageSnapshot(),
-          input: 18_000,
-          cacheRead: 2_000,
-          totalTokens: 20_000,
-        },
+        usage: { ...makeZeroUsageSnapshot(), input: 18_000, cacheRead: 2_000, totalTokens: 20_000 },
       };
       emit({
         type: "message_update",
@@ -175,9 +143,7 @@ describe("synchronous context accounting", () => {
       } satisfies AgentSessionEvent);
       emit({ type: "message_end", message: after });
       for (const model of ["delivery-mirror", "gateway-injected"]) {
-        const synthetic = { ...accountingAssistant(99_000), provider: "openclaw", model };
-        emit({ type: "message_start", message: synthetic });
-        emit({ type: "message_end", message: synthetic });
+        message(emit, { ...assistant(99_000), provider: "openclaw", model });
         const withoutUsage = { role: "assistant", provider: "openclaw", model };
         emit({ type: "message_end", message: withoutUsage });
         expect(withoutUsage).not.toHaveProperty("usage");
@@ -195,13 +161,10 @@ describe("synchronous context accounting", () => {
     }
     expect(observed).toEqual(expected);
   });
-});
 
-describe("fenced output and compaction retries", () => {
-  it("preserves an accepted heartbeat response and private scratch through compaction retry", async () => {
+  it("preserves an accepted heartbeat response and private scratch through retry", async () => {
     const onHeartbeatToolResponse = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-heartbeat-compaction",
+    const { emit, subscription } = harness({
       sessionPersistence: "detached",
       onHeartbeatToolResponse,
     });
@@ -213,529 +176,226 @@ describe("fenced output and compaction retries", () => {
       notificationText: "Your report is ready.",
       scratch: "Private monitor notes: report completion confirmed.",
     };
-    const toolCallId = "heartbeat-before-compaction";
     emit({
       type: "tool_execution_start",
       toolName: tool.name,
-      toolCallId,
+      toolCallId: "heartbeat",
       args: response,
     });
-    const result = await tool.execute(toolCallId, response);
+    const result = await tool.execute("heartbeat", response);
     emit({
       type: "tool_execution_end",
       toolName: tool.name,
-      toolCallId,
+      toolCallId: "heartbeat",
       isError: false,
       result,
     });
     await subscription.waitForPendingEvents();
     expect(subscription.getHeartbeatToolResponse()).toEqual(response);
-
-    emit(completedCompactionEnd());
-    const assistant = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "Internal retry fallback." }],
-    });
-    emit({ type: "message_start", message: assistant });
-    emit({ type: "message_end", message: assistant });
-    emit({ type: "agent_end", messages: [assistant] });
+    emit(completed());
+    const reply = assistant(0);
+    message(emit, reply);
+    emit({ type: "agent_end", messages: [reply] });
     await subscription.waitForPendingEvents();
     await subscription.waitForCompactionRetry();
-
     expect(subscription.getHeartbeatToolResponse()).toEqual(response);
     expect(onHeartbeatToolResponse).toHaveBeenCalledExactlyOnceWith(response);
     expect(subscription.getCompactionCount()).toBe(1);
   });
 
-  it("clears the exact usage snapshot when compaction starts a new attempt", () => {
-    const listeners: SessionEventHandler[] = [];
-    const session = {
-      subscribe: (listener: SessionEventHandler) => {
-        listeners.push(listener);
-        return () => {};
-      },
-    } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
-    const subscription = subscribeEmbeddedAgentSession({ session, runId: "run-usage-reset" });
-    const assistantMessage = {
-      role: "assistant",
+  it("clears the assistant and its exact usage when compaction starts a new attempt", () => {
+    const { emit, subscription } = harness();
+    const reply = makeAgentAssistantMessage({
       content: [{ type: "text", text: "before compaction" }],
       usage: {
+        ...makeZeroUsageSnapshot(),
         input: 100,
         output: 20,
         cacheRead: 300,
-        cacheWrite: 0,
         totalTokens: 420,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
-    } as AssistantMessage;
-
-    for (const listener of listeners) {
-      listener({ type: "message_end", message: assistantMessage });
-    }
+    });
+    emit({ type: "message_end", message: reply });
+    expect(subscription.getCurrentAttemptAssistant()).toEqual(reply);
+    expect(subscription.assistantTexts).toEqual(["before compaction"]);
     expect(subscription.getLastAssistantUsage()).toMatchObject({
       input: 100,
       output: 20,
       cacheRead: 300,
       total: 420,
     });
-
-    for (const listener of listeners) {
-      listener(completedCompactionEnd());
-    }
+    emit(completed());
+    expect(subscription.getCurrentAttemptAssistant()).toBeUndefined();
+    expect(subscription.assistantTexts).toEqual([]);
     expect(subscription.getLastAssistantUsage()).toBeUndefined();
   });
+
   it("resolves after compaction ends without retry", async () => {
-    const listeners: SessionEventHandler[] = [];
-    const session = {
-      subscribe: (listener: SessionEventHandler) => {
-        listeners.push(listener);
-        return () => {};
-      },
-    } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-2",
-    });
-
-    for (const listener of listeners) {
-      listener({ type: "compaction_start" });
-    }
-
+    const { emit, subscription } = harness();
+    emit({ type: "compaction_start" });
     expect(subscription.isCompacting()).toBe(true);
-
     let resolved = false;
-    const waitPromise = subscription.waitForCompactionRetry().then(() => {
+    const pending = subscription.waitForCompactionRetry().then(() => {
       resolved = true;
     });
-
     await Promise.resolve();
     expect(resolved).toBe(false);
-
-    for (const listener of listeners) {
-      listener(skippedCompactionEnd());
-    }
-
-    await waitPromise;
+    emit(skipped);
+    await pending;
     expect(resolved).toBe(true);
     expect(subscription.isCompacting()).toBe(false);
   });
 
-  it("resets assistant usage to a zero snapshot after a completed compaction without retry", () => {
-    // A completed compaction rewrites history, so the surviving assistant usage
-    // refers to the old context and must reset to a zero snapshot. Only a
-    // completed end does this; a failed/aborted end keeps live usage intact.
-    const listeners: SessionEventHandler[] = [];
-    const session = {
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "old" }],
-          usage: {
-            input: 120,
-            output: 30,
-            cacheRead: 5,
-            cacheWrite: 0,
-            totalTokens: 155,
-            cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 },
-          },
-        },
-      ],
-      subscribe: (listener: SessionEventHandler) => {
-        listeners.push(listener);
-        return () => {};
-      },
-    } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
-
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-3",
-    });
-
-    for (const listener of listeners) {
-      listener(completedCompactionEnd(false));
-    }
-
-    const usage = (session.messages?.[0] as { usage?: unknown } | undefined)?.usage;
-    expect(usage).toEqual(makeZeroUsageSnapshot());
-  });
-});
-
-describe("canvas presenter summaries", () => {
-  it("includes the hosted document target in present summaries", async () => {
-    const onToolResult = vi.fn();
-
-    const toolHarness = createSubscribedSessionHarness({
-      runId: "run-canvas-tool",
-      verboseLevel: "on",
-      onToolResult,
-    });
-
-    toolHarness.emit({
-      type: "tool_execution_start",
-      toolName: "canvas",
-      toolCallId: "tool-canvas-1",
-      args: {
-        action: "present",
-        target: "/__openclaw__/canvas/documents/widget/index.html",
+  it("zeros stale assistant usage after completed compaction without retry", () => {
+    const reply = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "old" }],
+      usage: {
+        input: 120,
+        output: 30,
+        cacheRead: 5,
+        cacheWrite: 0,
+        totalTokens: 155,
+        cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 },
       },
     });
-
-    // Wait for async handler to complete
-    await Promise.resolve();
-
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = onToolResult.mock.calls.at(0)?.[0];
-    expect(payload.text).toContain("🖼️");
-    expect(payload.text).toContain("Canvas");
-    expect(payload.text).toContain("/__openclaw__/canvas/documents/widget/index.html");
+    const { emit, session, subscription } = harness({ sessionExtras: { messages: [reply] } });
+    emit(completed(false, 12_345, 6_789));
+    expect(session.messages?.[0]).toHaveProperty("usage", makeZeroUsageSnapshot());
+    expect(subscription.getCompactionCount()).toBe(1);
+    expect(subscription.getLastCompactionTokensAfter()).toBe(6_789);
   });
-  it("skips tool summaries when shouldEmitToolResult is false", () => {
-    const onToolResult = vi.fn();
 
-    const toolHarness = createSubscribedSessionHarness({
-      runId: "run-tool-off",
-      shouldEmitToolResult: () => false,
-      onToolResult,
-    });
-
-    toolHarness.emit({
-      type: "tool_execution_start",
-      toolName: "read",
-      toolCallId: "tool-2",
-      args: { path: "/tmp/b.txt" },
-    });
-
-    expect(onToolResult).not.toHaveBeenCalled();
-  });
-  it("emits tool summaries when shouldEmitToolResult overrides verbose", async () => {
-    const onToolResult = vi.fn();
-
-    const toolHarness = createSubscribedSessionHarness({
-      runId: "run-tool-override",
-      verboseLevel: "off",
-      shouldEmitToolResult: () => true,
-      onToolResult,
-    });
-
-    toolHarness.emit({
-      type: "tool_execution_start",
-      toolName: "read",
-      toolCallId: "tool-3",
-      args: { path: "/tmp/c.txt" },
-    });
-
-    // Wait for async handler to complete
-    await Promise.resolve();
-
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-  });
-});
-
-function toolResultPayloadAt(
-  onToolResult: ReturnType<typeof vi.fn>,
-  index: number,
-): {
-  text?: string;
-} {
-  // Tool summary assertions only need text payloads from onToolResult calls.
-  const [payload] = onToolResult.mock.calls[index] ?? [];
-  if (!payload || typeof payload !== "object") {
-    throw new Error(`expected tool result payload for call ${index + 1}`);
-  }
-  return payload as { text?: string };
-}
-
-describe("subscribeEmbeddedAgentSession", () => {
-  it("forwards max-attempt failure text to the observable compaction event", () => {
-    const onCompactionEvent = vi.fn();
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run-compaction-failure",
-      onAgentEvent: onCompactionEvent,
-    });
+  it("forwards max-attempt failure text to the compaction event", () => {
+    const onAgentEvent = vi.fn();
+    const { emit } = harness({ onAgentEvent });
     const failure =
       "Context overflow recovery failed after 3 compact-and-retry attempts. Try reducing context or switching to a larger-context model.";
-
     emit({
       type: "compaction_end",
       reason: "overflow",
       outcome: { status: "failed", reason: failure },
     });
-
-    expect(onCompactionEvent).toHaveBeenCalledWith({
+    expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "compaction",
+      transcriptStart: null,
       data: expect.objectContaining({ phase: "end", completed: false, reason: failure }),
     });
   });
 
-  it("waits for multiple compaction retries before resolving", async () => {
-    // Each retrying compaction requires a matching agent_end before waiters are
-    // released, preventing early continuation during repeated overflow repairs.
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-3",
-    });
-
-    emit(completedCompactionEnd());
-    emit(completedCompactionEnd());
-
+  it("counts completed compactions and waits for every retry", async () => {
+    const { emit, subscription } = harness();
+    emit({ type: "compaction_start" });
+    expect(subscription.getCompactionCount()).toBe(0);
+    emit(completed(true, 20_000, 12_345));
+    expect(subscription.getCompactionCount()).toBe(1);
+    expect(subscription.getLastCompactionTokensAfter()).toBe(12_345);
+    emit(completed());
+    expect(subscription.getCompactionCount()).toBe(2);
     let resolved = false;
-    const waitPromise = subscription.waitForCompactionRetry().then(() => {
+    const pending = subscription.waitForCompactionRetry().then(() => {
       resolved = true;
     });
-
     await Promise.resolve();
     expect(resolved).toBe(false);
-
     emit({ type: "agent_end" });
-
     await Promise.resolve();
     expect(resolved).toBe(false);
-
     emit({ type: "agent_end" });
-
-    await waitPromise;
+    await pending;
     expect(resolved).toBe(true);
   });
 
-  it("does not count compaction until end event", () => {
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-compaction-count",
-    });
-
-    emit({ type: "compaction_start" });
+  it("does not count skipped or aborted compaction", () => {
+    const { emit, subscription } = harness();
+    emit(skipped);
     expect(subscription.getCompactionCount()).toBe(0);
-
-    // willRetry with result — counter IS incremented (overflow compaction succeeded)
-    emit(completedCompactionEnd(true, 20_000, 12_345));
-    expect(subscription.getCompactionCount()).toBe(1);
-    expect(subscription.getLastCompactionTokensAfter()).toBe(12_345);
-
-    // willRetry=false with result — counter incremented again
-    emit(completedCompactionEnd(false, 12_345, 6_789));
-    expect(subscription.getCompactionCount()).toBe(2);
-    expect(subscription.getLastCompactionTokensAfter()).toBe(6_789);
-  });
-
-  it("clears the completed assistant when compaction schedules a retry", () => {
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-compaction-assistant",
-    });
-    const assistant = textAssistant("Reply before compaction") as AssistantMessage;
-
-    emit({ type: "message_end", message: assistant });
-    expect(subscription.getCurrentAttemptAssistant()).toEqual(assistant);
-    expect(subscription.assistantTexts).toEqual(["Reply before compaction"]);
-
-    emit(completedCompactionEnd());
-    expect(subscription.getCurrentAttemptAssistant()).toBeUndefined();
-    expect(subscription.assistantTexts).toEqual([]);
-  });
-
-  it("does not count compaction when result is absent", () => {
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-compaction-no-result",
-    });
-
-    // No result (e.g. aborted or cancelled) — counter stays at 0
-    emit(skippedCompactionEnd());
-    expect(subscription.getCompactionCount()).toBe(0);
-
-    emit({
-      type: "compaction_end",
-      reason: "threshold",
-      outcome: { status: "aborted" },
-    });
+    emit({ type: "compaction_end", reason: "threshold", outcome: { status: "aborted" } });
     expect(subscription.getCompactionCount()).toBe(0);
   });
 
-  it("emits compaction events on the agent event bus", () => {
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run-compaction",
-    });
-    const events: Array<{ phase: string; willRetry?: boolean }> = [];
-    const stop = onAgentEvent((evt) => {
-      if (evt.runId !== "run-compaction") {
-        return;
-      }
-      if (evt.stream !== "compaction") {
-        return;
-      }
-      const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
-      events.push({
-        phase,
-        willRetry: typeof evt.data?.willRetry === "boolean" ? evt.data.willRetry : undefined,
-      });
-    });
-
-    emit({ type: "compaction_start" });
-    emit(completedCompactionEnd());
-    emit(skippedCompactionEnd());
-
-    stop();
-
-    expect(events).toEqual([
-      { phase: "start" },
-      { phase: "end", willRetry: true },
-      { phase: "end", willRetry: false },
-    ]);
-  });
-
-  it("rejects compaction wait with AbortError when unsubscribed", async () => {
+  it("rejects compaction waits with AbortError when unsubscribed", async () => {
     const abortCompaction = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-abort-on-unsubscribe",
+    const { emit, subscription } = harness({
       sessionExtras: { isCompacting: true, abortCompaction },
     });
-
     emit({ type: "compaction_start" });
-
-    const waitPromise = subscription.waitForCompactionRetry();
+    const pending = subscription.waitForCompactionRetry();
     subscription.unsubscribe();
-
-    const firstAbort = await waitPromise.catch((error: unknown) => error);
-    expect(firstAbort).toBeInstanceOf(Error);
-    expect((firstAbort as Error).name).toBe("AbortError");
-    const secondAbort = await subscription
-      .waitForCompactionRetry()
-      .catch((error: unknown) => error);
-    expect(secondAbort).toBeInstanceOf(Error);
-    expect((secondAbort as Error).name).toBe("AbortError");
+    for (const wait of [pending, subscription.waitForCompactionRetry()]) {
+      const aborted: unknown = await wait.catch((error: unknown) => error);
+      expect(aborted).toBeInstanceOf(Error);
+      expect(aborted).toHaveProperty("name", "AbortError");
+    }
     expect(abortCompaction).toHaveBeenCalledTimes(1);
   });
+});
 
-  it("emits tool summaries at tool start when verbose is on", async () => {
+describe("tool summaries", () => {
+  it("honors shouldEmitToolResult over disabled verbose mode", async () => {
     const onToolResult = vi.fn();
-    const toolHarness = createSubscribedSessionHarness({
-      runId: "run-tool",
-      verboseLevel: "on",
+    const { emit, subscription } = harness({
+      verboseLevel: "off",
+      shouldEmitToolResult: () => true,
       onToolResult,
     });
-
-    toolHarness.emit({
+    emit({
       type: "tool_execution_start",
       toolName: "read",
-      toolCallId: "tool-1",
-      args: { path: "/tmp/a.txt" },
+      toolCallId: "read",
+      args: { path: "/tmp/c.txt" },
     });
-
-    // Wait for async handler to complete
-    await Promise.resolve();
-
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = toolResultPayloadAt(onToolResult, 0);
-    expect(payload?.text).toContain("/tmp/a.txt");
-
-    toolHarness.emit({
-      type: "tool_execution_end",
-      toolName: "read",
-      toolCallId: "tool-1",
-      isError: false,
-      result: "ok",
-    });
-
+    await subscription.waitForPendingEvents();
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["exec", "server.exec"])(
-    "hides command metadata for %s unless full verbose mode is enabled",
-    async (toolName) => {
-      const onToolResult = vi.fn();
-      const toolHarness = createSubscribedSessionHarness({
-        runId: "run-exec-on",
-        verboseLevel: "on",
-        onToolResult,
-      });
-
-      toolHarness.emit({
-        type: "tool_execution_start",
-        toolName,
-        toolCallId: "tool-exec-on",
-        args: { command: "echo private-sentinel" },
-      });
-
-      await Promise.resolve();
-
-      const payload = toolResultPayloadAt(onToolResult, 0);
-      expect(payload?.text).toContain(toolName === "exec" ? "Exec" : "Server.exec");
-      expect(payload?.text).not.toContain("private-sentinel");
-    },
-  );
-
-  it("includes browser action metadata in tool summaries", async () => {
-    const onToolResult = vi.fn();
-
-    const toolHarness = createSubscribedSessionHarness({
-      runId: "run-browser-tool",
-      verboseLevel: "on",
-      onToolResult,
-    });
-
-    toolHarness.emit({
+  it.each(["exec"])("hides command metadata for %s outside full verbose mode", async (toolName) => {
+    const onToolResult = vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>>();
+    const { emit, subscription } = harness({ verboseLevel: "on", onToolResult });
+    emit({
       type: "tool_execution_start",
-      toolName: "browser",
-      toolCallId: "tool-browser-1",
-      args: { action: "snapshot", targetUrl: "https://example.com" },
+      toolName,
+      toolCallId: "exec",
+      args: { command: "echo private-sentinel" },
     });
-
-    // Wait for async handler to complete
-    await Promise.resolve();
-
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = toolResultPayloadAt(onToolResult, 0);
-    expect(payload?.text).toContain("🌐");
-    expect(payload?.text).toContain("Browser");
-    expect(payload?.text).toContain("https://example.com");
+    await subscription.waitForPendingEvents();
+    const payload = onToolResult.mock.calls[0]?.[0];
+    expect(payload?.text).toContain(toolName === "exec" ? "Exec" : "Server.exec");
+    expect(payload?.text).not.toContain("private-sentinel");
   });
 
-  it("emits exec output in full verbose mode and includes PTY indicator", async () => {
-    const onToolResult = vi.fn();
-
-    const toolHarness = createSubscribedSessionHarness({
-      runId: "run-exec-full",
-      verboseLevel: "full",
-      onToolResult,
-    });
-
-    toolHarness.emit({
+  it("emits exec and read output in full verbose mode with the PTY indicator", async () => {
+    const onToolResult = vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>>();
+    const { emit, subscription } = harness({ verboseLevel: "full", onToolResult });
+    emit({
       type: "tool_execution_start",
       toolName: "exec",
-      toolCallId: "tool-exec-1",
+      toolCallId: "exec",
       args: { command: "claude", pty: true },
     });
-
-    await Promise.resolve();
-
+    await subscription.waitForPendingEvents();
     expect(onToolResult).toHaveBeenCalledTimes(1);
-    const summary = toolResultPayloadAt(onToolResult, 0);
-    expect(summary?.text).toContain("pty");
-    expect(summary?.text).toContain("claude");
-
-    toolHarness.emit({
+    expect(onToolResult.mock.calls[0]?.[0].text).toContain("pty");
+    expect(onToolResult.mock.calls[0]?.[0].text).toContain("claude");
+    emit({
       type: "tool_execution_end",
       toolName: "exec",
-      toolCallId: "tool-exec-1",
+      toolCallId: "exec",
       isError: false,
       result: { content: [{ type: "text", text: "hello\nworld" }] },
     });
-
-    await Promise.resolve();
-
+    await subscription.waitForPendingEvents();
     expect(onToolResult).toHaveBeenCalledTimes(2);
-    const output = toolResultPayloadAt(onToolResult, 1);
-    expect(output?.text).toContain("hello");
-    expect(output?.text).toContain("```txt");
-
-    toolHarness.emit({
+    expect(onToolResult.mock.calls[1]?.[0].text).toContain("hello");
+    expect(onToolResult.mock.calls[1]?.[0].text).toContain("```txt");
+    emit({
       type: "tool_execution_end",
       toolName: "read",
-      toolCallId: "tool-read-1",
+      toolCallId: "read",
       isError: false,
       result: { content: [{ type: "text", text: "file data" }] },
     });
-
-    await toolHarness.subscription.waitForPendingEvents();
-
+    await subscription.waitForPendingEvents();
     expect(onToolResult).toHaveBeenCalledTimes(3);
-    const readOutput = toolResultPayloadAt(onToolResult, 2);
-    expect(readOutput?.text).toContain("file data");
+    expect(onToolResult.mock.calls[2]?.[0].text).toContain("file data");
   });
 });

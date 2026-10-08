@@ -17,7 +17,22 @@ struct WatchExecApprovalIdentityKey: Hashable, Sendable {
     var approvalID: WatchApprovalID.Key
 }
 
+extension WatchExecApprovalIdentityKey {
+    init?(approvalId: String, gatewayStableID: String?) {
+        guard let approvalID = WatchApprovalID.key(approvalId),
+              let gatewayID = WatchGatewayID.key(gatewayStableID)
+        else { return nil }
+        self.init(gatewayID: gatewayID, approvalID: approvalID)
+    }
+}
+
 typealias WatchExecApprovalItem = OpenClawWatchExecApprovalItem
+
+extension WatchExecApprovalItem {
+    var ownerKey: WatchExecApprovalIdentityKey? {
+        WatchExecApprovalIdentityKey(approvalId: self.id, gatewayStableID: self.gatewayStableID)
+    }
+}
 
 struct WatchExecApprovalPromptMessage: Codable, Equatable {
     var approval: WatchExecApprovalItem
@@ -520,10 +535,6 @@ extension WatchAppSnapshotMessage: Codable {
         let gatewayConnected = Self.boolValue(payload["gatewayConnected"])
         let agentName = (payload["agentName"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let agentAvatarURL = (payload["agentAvatarUrl"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let agentAvatarText = (payload["agentAvatarText"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         let sessionKey = (payload["sessionKey"] as? String) ?? ""
         let gatewayStableID = WatchGatewayID.exact(payload["gatewayStableID"] as? String)
         let talkEnabled = Self.boolValue(payload["talkEnabled"])
@@ -545,8 +556,8 @@ extension WatchAppSnapshotMessage: Codable {
                     connected: gatewayConnected),
             gatewayConnected: gatewayConnected,
             agentName: agentName.isEmpty ? "Main" : agentName,
-            agentAvatarURL: agentAvatarURL?.isEmpty == false ? agentAvatarURL : nil,
-            agentAvatarText: agentAvatarText?.isEmpty == false ? agentAvatarText : nil,
+            agentAvatarURL: (payload["agentAvatarUrl"] as? String)?.trimmedNonEmpty,
+            agentAvatarText: (payload["agentAvatarText"] as? String)?.trimmedNonEmpty,
             sessionKey: sessionKey.isEmpty ? "main" : sessionKey,
             gatewayStableID: gatewayStableID,
             talkStatus: Self.parseStatus(
@@ -592,32 +603,13 @@ extension WatchAppSnapshotMessage: Codable {
             : localize(.waitingForIPhone)
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case gatewayStatus
-        case gatewayStatusText
-        case gatewayConnected
-        case agentName
-        case agentAvatarURL
-        case agentAvatarText
-        case sessionKey
-        case gatewayStableID
-        case talkStatus
-        case talkStatusText
-        case talkEnabled
-        case talkListening
-        case talkSpeaking
-        case pendingApprovalCount
-        case chatItems
-        case chatStatus
-        case chatStatusCode
-        case chatStatusText
-        case sentAtMs
-        case snapshotId
-        case chatDeliveryContext
+    private enum LegacyCodingKeys: String, CodingKey {
+        case gatewayStatusText, talkStatusText, chatStatusCode, chatStatusText
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
         self.gatewayConnected = try container.decode(Bool.self, forKey: .gatewayConnected)
         self.agentName = try container.decode(String.self, forKey: .agentName)
         self.agentAvatarURL = try container.decodeIfPresent(String.self, forKey: .agentAvatarURL)
@@ -633,72 +625,31 @@ extension WatchAppSnapshotMessage: Codable {
         self.snapshotId = try container.decodeIfPresent(String.self, forKey: .snapshotId)
         self.chatDeliveryContext = try container.decodeIfPresent(
             OpenClawWatchChatDeliveryContext.self, forKey: .chatDeliveryContext)
-        let gatewayStatusText = try container.decodeIfPresent(String.self, forKey: .gatewayStatusText)
-        let talkStatusText = try container.decodeIfPresent(String.self, forKey: .talkStatusText)
-        let chatStatusCode = try container.decodeIfPresent(String.self, forKey: .chatStatusCode)
-        let chatStatusText = try container.decodeIfPresent(String.self, forKey: .chatStatusText)
-        if let gatewayStatus = try? container.decode(
-            OpenClawWatchAppStatus.self,
-            forKey: .gatewayStatus)
-        {
-            self.gatewayStatus = gatewayStatus
-        } else if container.contains(.gatewayStatus),
-                  let gatewayStatusText,
-                  !gatewayStatusText.isEmpty
-        {
-            self.gatewayStatus = OpenClawWatchAppStatus(
-                code: .legacy,
-                verbatim: gatewayStatusText)
-        } else {
-            self.gatewayStatus = OpenClawWatchAppStatus.decodeLegacyGateway(
+        let gatewayStatusText = try legacy.decodeIfPresent(String.self, forKey: .gatewayStatusText)
+        let talkStatusText = try legacy.decodeIfPresent(String.self, forKey: .talkStatusText)
+        let chatStatusCode = try legacy.decodeIfPresent(String.self, forKey: .chatStatusCode)
+        let chatStatusText = try legacy.decodeIfPresent(String.self, forKey: .chatStatusText)
+        self.gatewayStatus = OpenClawWatchAppStatus.decode(
+            from: container,
+            forKey: .gatewayStatus,
+            fallbackText: gatewayStatusText)
+            ?? OpenClawWatchAppStatus.decodeLegacyGateway(
                 text: gatewayStatusText,
                 connected: self.gatewayConnected)
-        }
-        if let talkStatus = try? container.decode(
-            OpenClawWatchAppStatus.self,
-            forKey: .talkStatus)
-        {
-            self.talkStatus = talkStatus
-        } else if container.contains(.talkStatus),
-                  let talkStatusText,
-                  !talkStatusText.isEmpty
-        {
-            self.talkStatus = OpenClawWatchAppStatus(
-                code: .legacy,
-                verbatim: talkStatusText)
-        } else {
-            self.talkStatus = OpenClawWatchAppStatus.decodeLegacyTalk(
+        self.talkStatus = OpenClawWatchAppStatus.decode(
+            from: container,
+            forKey: .talkStatus,
+            fallbackText: talkStatusText)
+            ?? OpenClawWatchAppStatus.decodeLegacyTalk(
                 text: talkStatusText,
                 enabled: self.talkEnabled,
                 listening: self.talkListening,
                 speaking: self.talkSpeaking)
-        }
         self.chatStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
             forKey: .chatStatus)) ?? OpenClawWatchAppStatus.decodeLegacyChat(
             code: chatStatusCode,
             text: chatStatusText)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(self.gatewayStatus, forKey: .gatewayStatus)
-        try container.encode(self.gatewayConnected, forKey: .gatewayConnected)
-        try container.encode(self.agentName, forKey: .agentName)
-        try container.encodeIfPresent(self.agentAvatarURL, forKey: .agentAvatarURL)
-        try container.encodeIfPresent(self.agentAvatarText, forKey: .agentAvatarText)
-        try container.encode(self.sessionKey, forKey: .sessionKey)
-        try container.encodeIfPresent(self.gatewayStableID, forKey: .gatewayStableID)
-        try container.encode(self.talkStatus, forKey: .talkStatus)
-        try container.encode(self.talkEnabled, forKey: .talkEnabled)
-        try container.encode(self.talkListening, forKey: .talkListening)
-        try container.encode(self.talkSpeaking, forKey: .talkSpeaking)
-        try container.encode(self.pendingApprovalCount, forKey: .pendingApprovalCount)
-        try container.encodeIfPresent(self.chatItems, forKey: .chatItems)
-        try container.encodeIfPresent(self.chatStatus, forKey: .chatStatus)
-        try container.encodeIfPresent(self.sentAtMs, forKey: .sentAtMs)
-        try container.encodeIfPresent(self.snapshotId, forKey: .snapshotId)
-        try container.encodeIfPresent(self.chatDeliveryContext, forKey: .chatDeliveryContext)
     }
 
     private static func parseStatus(
@@ -798,17 +749,8 @@ struct WatchExecApprovalRecord: Equatable, Identifiable {
 }
 
 extension WatchExecApprovalRecord: Codable {
-    private enum CodingKeys: String, CodingKey {
-        case approval
-        case transport
-        case sourceSentAtMs
-        case updatedAt
-        case isResolving
-        case pendingDecision
-        case activeResolutionAttemptID
-        case status
+    private enum LegacyCodingKeys: String, CodingKey {
         case statusText
-        case statusAt
     }
 
     init(from decoder: Decoder) throws {
@@ -826,24 +768,10 @@ extension WatchExecApprovalRecord: Codable {
             forKey: .activeResolutionAttemptID)
         self.status = try container.decodeIfPresent(
             WatchExecApprovalStatus.self,
-            forKey: .status) ?? container.decodeIfPresent(String.self, forKey: .statusText)
+            forKey: .status) ?? decoder.container(keyedBy: LegacyCodingKeys.self)
+            .decodeIfPresent(String.self, forKey: .statusText)
             .flatMap(WatchExecApprovalStatus.decodeLegacyLocalizedText)
         self.statusAt = try container.decodeIfPresent(Date.self, forKey: .statusAt)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(self.approval, forKey: .approval)
-        try container.encode(self.transport, forKey: .transport)
-        try container.encodeIfPresent(self.sourceSentAtMs, forKey: .sourceSentAtMs)
-        try container.encode(self.updatedAt, forKey: .updatedAt)
-        try container.encode(self.isResolving, forKey: .isResolving)
-        try container.encodeIfPresent(self.pendingDecision, forKey: .pendingDecision)
-        try container.encodeIfPresent(
-            self.activeResolutionAttemptID,
-            forKey: .activeResolutionAttemptID)
-        try container.encodeIfPresent(self.status, forKey: .status)
-        try container.encodeIfPresent(self.statusAt, forKey: .statusAt)
     }
 }
 

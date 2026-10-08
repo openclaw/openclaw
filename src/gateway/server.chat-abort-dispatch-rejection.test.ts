@@ -6,15 +6,19 @@ import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "../agents/run-termination.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import * as staging from "../auto-reply/reply/stage-sandbox-media.js";
 import { clearConfigCache } from "../config/config.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import {
   getSessionWorkAdmissionRelease,
@@ -93,263 +97,264 @@ afterEach(async () => {
   clearConfigCache();
 });
 
+async function writeMainSession(
+  sessionId: string,
+  entry: Pick<SessionEntry, "startedAt" | "status"> = {},
+) {
+  await writeSessionStore({ entries: { main: { sessionId, updatedAt: Date.now(), ...entry } } });
+}
+
+function textAttachment(bytes: string) {
+  return {
+    fileName: "notes.txt",
+    mimeType: "text/plain",
+    content: Buffer.from(bytes).toString("base64"),
+  };
+}
+
 describe("gateway WebSocket chat abort ownership", () => {
-  test.each(["bound", "omitted"] as const)(
-    "preserves committed native input across a real reconnect with %s expected profile",
-    async (binding) => {
-      const sessionDirectory = temporaryDirectories.make("openclaw-chat-native-reconnect-");
-      const storePath = path.join(sessionDirectory, "sessions.json");
-      testState.sessionStorePath = storePath;
-      const scope = {
-        storePath,
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionId: `native-reconnect-${binding}`,
-      };
-      await writeSessionStore({
-        entries: { main: { sessionId: scope.sessionId, updatedAt: Date.now() } },
+  test("preserves committed native input across a profile-bound reconnect", async () => {
+    const sessionDirectory = temporaryDirectories.make("openclaw-chat-native-reconnect-");
+    const storePath = path.join(sessionDirectory, "sessions.json");
+    testState.sessionStorePath = storePath;
+    const scope = {
+      storePath,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "native-reconnect-bound",
+    };
+    await writeMainSession(scope.sessionId);
+    const runId = "real-websocket-native-reconnect-bound";
+    const sendParameters = {
+      sessionKey: scope.sessionKey,
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      message: "Keep the accepted native turn alive across reconnect.",
+      idempotencyKey: runId,
+    };
+    const client = {
+      id: "openclaw-macos",
+      version: "test",
+      platform: "darwin",
+      mode: "ui",
+    } as const;
+    const dispatchRelease = createDeferred();
+    const inputPersisted = createDeferred<{
+      recorder: UserTurnTranscriptRecorder;
+      signal: AbortSignal;
+      result: Awaited<ReturnType<UserTurnTranscriptRecorder["persistApproved"]>>;
+    }>();
+    const connectionOffset = connectionReleases.length;
+    const sockets: Array<{ socket: GatewaySocket; closed: Promise<void> }> = [];
+    const frames: Promise<unknown>[] = [];
+    const dispatches: Array<ReturnType<typeof dispatchInboundMessage>> = [];
+    let admissionRelease: Promise<void> | undefined;
+    const ownFrame = <T>(frame: Promise<T>) => {
+      frames.push(frame);
+      void frame.catch(() => {});
+      return frame;
+    };
+    void inputPersisted.promise.catch(() => {});
+    const isUserMessage = (event: unknown) => {
+      const entry = asOptionalRecord(event);
+      return entry?.type === "message" && asOptionalRecord(entry.message)?.role === "user";
+    };
+    const openSocket = async () => {
+      const index = connectionReleases.length;
+      const socket = await gateway.openWs();
+      const closed = new Promise<void>((resolve) => {
+        socket.once("close", () => resolve());
       });
-      const runId = `real-websocket-native-reconnect-${binding}`;
-      const sendParameters = {
-        sessionKey: scope.sessionKey,
-        agentId: scope.agentId,
-        sessionId: scope.sessionId,
-        message: "Keep the accepted native turn alive across reconnect.",
-        idempotencyKey: runId,
-      };
-      const client = {
-        id: "openclaw-macos",
-        version: "test",
-        platform: "darwin",
-        mode: "ui",
-      } as const;
-      const dispatchRelease = createDeferred();
-      const inputPersisted = createDeferred<{
-        recorder: UserTurnTranscriptRecorder;
-        signal: AbortSignal;
-        result: Awaited<ReturnType<UserTurnTranscriptRecorder["persistApproved"]>>;
-      }>();
-      const connectionOffset = connectionReleases.length;
-      const sockets: Array<{ socket: GatewaySocket; closed: Promise<void> }> = [];
-      const frames: Promise<unknown>[] = [];
-      const dispatches: Array<ReturnType<typeof dispatchInboundMessage>> = [];
-      let admissionRelease: Promise<void> | undefined;
-      const ownFrame = <T>(frame: Promise<T>) => {
-        frames.push(frame);
-        void frame.catch(() => {});
-        return frame;
-      };
-      void inputPersisted.promise.catch(() => {});
-      const isUserMessage = (event: unknown) => {
-        const entry = asOptionalRecord(event);
-        return entry?.type === "message" && asOptionalRecord(entry.message)?.role === "user";
-      };
-      const openSocket = async () => {
-        const index = connectionReleases.length;
-        const socket = await gateway.openWs();
-        const closed = new Promise<void>((resolve) => {
-          socket.once("close", () => resolve());
-        });
-        sockets.push({ socket, closed });
-        // Opens are serialized; exactly one server registration identifies this socket.
-        expect(connectionReleases).toHaveLength(index + 1);
-        const released = connectionReleases[index];
-        if (!released) {
-          throw new Error("Gateway socket did not register with its connection owner");
+      sockets.push({ socket, closed });
+      // Opens are serialized; exactly one server registration identifies this socket.
+      expect(connectionReleases).toHaveLength(index + 1);
+      const released = connectionReleases[index];
+      if (!released) {
+        throw new Error("Gateway socket did not register with its connection owner");
+      }
+      await connectOk(socket, { client });
+      return { socket, closed, released };
+    };
+    const send = async (socket: GatewaySocket, expectedProfileId?: string) => {
+      // Raw request frames need the same prepared reply runtime as rpcReq.
+      await prepareGatewayReplyRuntimeForTest();
+      const id = randomUUID();
+      const response = ownFrame(
+        onceMessage<Awaited<ReturnType<typeof rpcReq>>>(
+          socket,
+          (frame) => frame.type === "res" && frame.id === id,
+        ),
+      );
+      socket.send(
+        JSON.stringify({
+          type: "req",
+          id,
+          method: "chat.send",
+          params: sendParameters,
+          ...(expectedProfileId === undefined ? {} : { expectedProfileId }),
+        }),
+      );
+      return await response;
+    };
+    dispatchInboundMessageMock.mockImplementation((args: unknown) => {
+      const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
+      const dispatchWork = (async () => {
+        const recorder = replyOptions?.userTurnTranscriptRecorder;
+        const signal = replyOptions?.abortSignal;
+        if (!recorder || !signal) {
+          throw new Error("Native dispatch must retain its recorder and admitted abort signal");
         }
-        await connectOk(socket, { client });
-        return { socket, closed, released };
-      };
-      const send = async (socket: GatewaySocket, expectedProfileId?: string) => {
-        // Raw request frames need the same prepared reply runtime as rpcReq.
-        await prepareGatewayReplyRuntimeForTest();
-        const id = randomUUID();
-        const response = ownFrame(
-          onceMessage<Awaited<ReturnType<typeof rpcReq>>>(
-            socket,
-            (frame) => frame.type === "res" && frame.id === id,
+        const result = await recorder.persistApproved();
+        inputPersisted.resolve({ recorder, signal, result });
+        await dispatchRelease.promise;
+        dispatcher.sendFinalReply({ text: "The original accepted turn finished." });
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      })();
+      dispatches.push(dispatchWork);
+      void dispatchWork.catch(inputPersisted.reject);
+      return dispatchWork;
+    });
+
+    await runQaGatewayFixture(
+      async () => {
+        const original = await openSocket();
+        const self = await rpcReq<{ profile: { id: string } }>(original.socket, "users.self", {});
+        expect(self.ok).toBe(true);
+        const profileId = self.payload?.profile.id;
+        if (!profileId) {
+          throw new Error("Native socket must expose its canonical authenticated profile");
+        }
+        const expectedProfileId = profileId;
+        const started = await send(original.socket, expectedProfileId);
+        expect(started.ok).toBe(true);
+        expect(started.payload).toMatchObject({ runId, status: "started" });
+        await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledOnce(), {
+          interval: 10,
+          timeout: 2_000,
+        });
+        const { recorder, signal, result } = await inputPersisted.promise;
+        expect(result).toMatchObject({ appended: true });
+        const receipt = structuredClone(recorder.getAdmissionReceipt());
+        expect(receipt).toMatchObject({
+          agentId: scope.agentId,
+          sessionKey: scope.sessionKey,
+          sessionId: scope.sessionId,
+          entryId: result?.messageId,
+          role: "user",
+        });
+        const accepted = loadTranscriptEventsSync(scope);
+        const userRows = accepted.filter(isUserMessage);
+        expect(userRows).toHaveLength(1);
+        expect(userRows[0]).toMatchObject({
+          id: receipt?.entryId,
+          message: { content: sendParameters.message },
+        });
+        expect(signal.aborted).toBe(false);
+        admissionRelease = getSessionWorkAdmissionRelease({
+          scope: storePath,
+          identities: [scope.sessionKey, scope.sessionId],
+        });
+        expect(admissionRelease).toBeDefined();
+        if (!admissionRelease) {
+          throw new Error("Accepted native work must retain its session admission");
+        }
+
+        original.socket.close();
+        await original.closed;
+        await original.released;
+        const reconnected = await openSocket();
+        const reconnectedSelf = await rpcReq<{ profile: { id: string } }>(
+          reconnected.socket,
+          "users.self",
+          {},
+        );
+        expect(reconnectedSelf.ok).toBe(true);
+        expect(reconnectedSelf.payload?.profile.id).toBe(profileId);
+        const expectRetainedInput = () => {
+          expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+          expect(signal.aborted).toBe(false);
+          expect(loadTranscriptEventsSync(scope)).toEqual(accepted);
+          expect(recorder.getAdmissionReceipt()).toEqual(receipt);
+        };
+        const retry = await send(reconnected.socket, expectedProfileId);
+        expect(retry.ok).toBe(true);
+        expect(retry.payload).toMatchObject({ runId, status: "in_flight" });
+        expectRetainedInput();
+        const wrongProfile = "unselected-native-profile";
+        expect(wrongProfile).not.toBe(profileId);
+        const rejected = await send(reconnected.socket, wrongProfile);
+        expect(rejected.ok).toBe(false);
+        expect(rejected.error?.details).toEqual({
+          reason: "EXPECTED_PROFILE_MISMATCH",
+          execution: "not_started",
+        });
+        expectRetainedInput();
+        const correctRetry = await send(reconnected.socket, profileId);
+        expect(correctRetry.ok).toBe(true);
+        expect(correctRetry.payload).toMatchObject({ runId, status: "in_flight" });
+        expectRetainedInput();
+
+        const terminal = ownFrame(
+          onceMessage(
+            reconnected.socket,
+            (frame) =>
+              frame.type === "event" &&
+              frame.event === "chat" &&
+              frame.payload?.runId === runId &&
+              frame.payload?.state === "final",
           ),
         );
-        socket.send(
-          JSON.stringify({
-            type: "req",
-            id,
-            method: "chat.send",
-            params: sendParameters,
-            ...(expectedProfileId === undefined ? {} : { expectedProfileId }),
-          }),
+        dispatchRelease.resolve();
+        await expect(terminal).resolves.toMatchObject({ payload: { runId, state: "final" } });
+        await Promise.all(dispatches);
+        await admissionRelease;
+        const completed = loadTranscriptEventsSync(scope);
+        expect(completed.filter(isUserMessage)).toEqual(userRows);
+        expect(completed).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
+          ]),
         );
-        return await response;
-      };
-      dispatchInboundMessageMock.mockImplementation((args: unknown) => {
-        const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
-        const dispatchWork = (async () => {
-          const recorder = replyOptions?.userTurnTranscriptRecorder;
-          const signal = replyOptions?.abortSignal;
-          if (!recorder || !signal) {
-            throw new Error("Native dispatch must retain its recorder and admitted abort signal");
-          }
-          const result = await recorder.persistApproved();
-          inputPersisted.resolve({ recorder, signal, result });
-          await dispatchRelease.promise;
-          dispatcher.sendFinalReply({ text: "The original accepted turn finished." });
-          return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-        })();
-        dispatches.push(dispatchWork);
-        void dispatchWork.catch(inputPersisted.reject);
-        return dispatchWork;
-      });
-
-      await runQaGatewayFixture(
-        async () => {
-          const original = await openSocket();
-          const self = await rpcReq<{ profile: { id: string } }>(original.socket, "users.self", {});
-          expect(self.ok).toBe(true);
-          const profileId = self.payload?.profile.id;
-          if (!profileId) {
-            throw new Error("Native socket must expose its canonical authenticated profile");
-          }
-          const expectedProfileId = binding === "bound" ? profileId : undefined;
-          const started = await send(original.socket, expectedProfileId);
-          expect(started.ok).toBe(true);
-          expect(started.payload).toMatchObject({ runId, status: "started" });
-          await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledOnce(), {
-            interval: 10,
-            timeout: 2_000,
-          });
-          const { recorder, signal, result } = await inputPersisted.promise;
-          expect(result).toMatchObject({ appended: true });
-          const receipt = structuredClone(recorder.getAdmissionReceipt());
-          expect(receipt).toMatchObject({
-            agentId: scope.agentId,
-            sessionKey: scope.sessionKey,
-            sessionId: scope.sessionId,
-            entryId: result?.messageId,
-            role: "user",
-          });
-          const accepted = loadTranscriptEventsSync(scope);
-          const userRows = accepted.filter(isUserMessage);
-          expect(userRows).toHaveLength(1);
-          expect(userRows[0]).toMatchObject({
-            id: receipt?.entryId,
-            message: { content: sendParameters.message },
-          });
-          expect(signal.aborted).toBe(false);
-          admissionRelease = getSessionWorkAdmissionRelease({
-            scope: storePath,
-            identities: [scope.sessionKey, scope.sessionId],
-          });
-          expect(admissionRelease).toBeDefined();
-          if (!admissionRelease) {
-            throw new Error("Accepted native work must retain its session admission");
-          }
-
-          original.socket.close();
-          await original.closed;
-          await original.released;
-          const reconnected = await openSocket();
-          const reconnectedSelf = await rpcReq<{ profile: { id: string } }>(
-            reconnected.socket,
-            "users.self",
-            {},
-          );
-          expect(reconnectedSelf.ok).toBe(true);
-          expect(reconnectedSelf.payload?.profile.id).toBe(profileId);
-          const expectRetainedInput = () => {
-            expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-            expect(signal.aborted).toBe(false);
-            expect(loadTranscriptEventsSync(scope)).toEqual(accepted);
-            expect(recorder.getAdmissionReceipt()).toEqual(receipt);
-          };
-          const retry = await send(reconnected.socket, expectedProfileId);
-          expect(retry.ok).toBe(true);
-          expect(retry.payload).toMatchObject({ runId, status: "in_flight" });
-          expectRetainedInput();
-          if (binding === "bound") {
-            const wrongProfile = "unselected-native-profile";
-            expect(wrongProfile).not.toBe(profileId);
-            const rejected = await send(reconnected.socket, wrongProfile);
-            expect(rejected.ok).toBe(false);
-            expect(rejected.error?.details).toEqual({
-              reason: "EXPECTED_PROFILE_MISMATCH",
-              execution: "not_started",
-            });
-            expectRetainedInput();
-            const correctRetry = await send(reconnected.socket, profileId);
-            expect(correctRetry.ok).toBe(true);
-            expect(correctRetry.payload).toMatchObject({ runId, status: "in_flight" });
-            expectRetainedInput();
-          }
-
-          const terminal = ownFrame(
-            onceMessage(
-              reconnected.socket,
-              (frame) =>
-                frame.type === "event" &&
-                frame.event === "chat" &&
-                frame.payload?.runId === runId &&
-                frame.payload?.state === "final",
-            ),
-          );
-          dispatchRelease.resolve();
-          await expect(terminal).resolves.toMatchObject({ payload: { runId, state: "final" } });
-          await Promise.all(dispatches);
-          await admissionRelease;
-          const completed = loadTranscriptEventsSync(scope);
-          expect(completed.filter(isUserMessage)).toEqual(userRows);
-          expect(completed).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
-            ]),
-          );
-          const replay = await send(reconnected.socket, expectedProfileId);
-          expect(replay.ok).toBe(true);
-          expect(replay.payload).toMatchObject({ runId, status: "ok" });
-          expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-          expect(loadTranscriptEventsSync(scope)).toEqual(completed);
-          expect(recorder.getAdmissionReceipt()).toEqual(receipt);
-        },
-        async () => {
-          admissionRelease ??= getSessionWorkAdmissionRelease({
-            scope: storePath,
-            identities: [scope.sessionKey, scope.sessionId],
-          });
-          dispatchRelease.resolve();
-          await runQaGatewayFixture(
-            async () => {
-              await admissionRelease;
-            },
-            ...dispatches.map((work) => () => work),
-          );
-        },
-        async () => {
-          for (const { socket } of sockets) {
-            socket.close();
-          }
-          await Promise.all([
-            ...sockets.map(({ closed }) => closed),
-            ...connectionReleases.slice(connectionOffset),
-          ]);
-        },
-        async () => {
-          await Promise.allSettled(frames);
-        },
-      );
-    },
-  );
+        const replay = await send(reconnected.socket, expectedProfileId);
+        expect(replay.ok).toBe(true);
+        expect(replay.payload).toMatchObject({ runId, status: "ok" });
+        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        expect(loadTranscriptEventsSync(scope)).toEqual(completed);
+        expect(recorder.getAdmissionReceipt()).toEqual(receipt);
+      },
+      async () => {
+        admissionRelease ??= getSessionWorkAdmissionRelease({
+          scope: storePath,
+          identities: [scope.sessionKey, scope.sessionId],
+        });
+        dispatchRelease.resolve();
+        await runQaGatewayFixture(
+          async () => {
+            await admissionRelease;
+          },
+          ...dispatches.map((work) => () => work),
+        );
+      },
+      async () => {
+        for (const { socket } of sockets) {
+          socket.close();
+        }
+        await Promise.all([
+          ...sockets.map(({ closed }) => closed),
+          ...connectionReleases.slice(connectionOffset),
+        ]);
+      },
+      async () => {
+        await Promise.allSettled(frames);
+      },
+    );
+  });
 
   test("does not let a late abort replace an established dispatch error", async () => {
     const sessionDirectory = temporaryDirectories.make("openclaw-chat-error-late-abort-");
     const storePath = path.join(sessionDirectory, "sessions.json");
     testState.sessionStorePath = storePath;
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-        },
-      },
-    });
+    await writeMainSession("sess-main");
 
     const socket = await gateway.openWs();
     const dispatchEntered = createDeferred();
@@ -412,117 +417,111 @@ describe("gateway WebSocket chat abort ownership", () => {
     }
   });
 
-  test("keeps a real signal-only lifecycle terminal as the only chat terminal", async () => {
-    const sessionDirectory = temporaryDirectories.make("openclaw-chat-lifecycle-interrupt-");
-    const storePath = path.join(sessionDirectory, "sessions.json");
-    testState.sessionStorePath = storePath;
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main",
-          startedAt: 900,
-          status: "running",
-          updatedAt: Date.now(),
-        },
-      },
-    });
+  test.for([false, true])(
+    "keeps a signal-only lifecycle terminal as the only chat terminal (restart=%s)",
+    async (restart, { signal }) => {
+      const sessionDirectory = temporaryDirectories.make("openclaw-chat-lifecycle-interrupt-");
+      const storePath = path.join(sessionDirectory, "sessions.json");
+      testState.sessionStorePath = storePath;
+      await writeMainSession("sess-main", { startedAt: 900 });
 
-    const socket = await gateway.openWs();
-    const dispatchRelease = createDeferred();
-    const runId = "real-websocket-signal-only-lifecycle-terminal";
-    const terminalStates = trackChatTerminalStates(socket, runId);
-    let capturedAbortSignal: AbortSignal | undefined;
-    let dispatchRejected = false;
-    let interruption: Promise<boolean> | undefined;
+      const socket = await gateway.openWs();
+      const dispatchEntered = createDeferred<AbortSignal>();
+      const dispatchRelease = createDeferred();
+      const dispatchRejected = createDeferred();
+      const reason = restart
+        ? createAgentRunRestartAbortError()
+        : new Error("Session work admission interrupted");
+      const runId = `real-websocket-signal-only-lifecycle-terminal-${restart}`;
+      const terminalStates = trackChatTerminalStates(socket, runId);
+      let interruption: Promise<boolean> | undefined;
 
-    try {
-      await connectOk(socket);
-      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-        capturedAbortSignal = (args as { replyOptions?: GetReplyOptions }).replyOptions
-          ?.abortSignal;
-        await new Promise<void>((resolve) => {
-          if (capturedAbortSignal?.aborted) {
-            resolve();
-            return;
+      try {
+        await connectOk(socket);
+        dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+          const capturedAbortSignal = (args as { replyOptions?: GetReplyOptions }).replyOptions
+            ?.abortSignal;
+          if (!capturedAbortSignal) {
+            throw new Error("Admitted chat dispatch must receive its cancellation signal");
           }
-          capturedAbortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          dispatchEntered.resolve(capturedAbortSignal);
+          await new Promise<void>((resolve) => {
+            if (capturedAbortSignal.aborted) {
+              resolve();
+              return;
+            }
+            capturedAbortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          await dispatchRelease.promise;
+          dispatchRejected.resolve();
+          throw capturedAbortSignal.reason instanceof Error
+            ? capturedAbortSignal.reason
+            : new Error("lifecycle interrupted dispatch");
         });
-        await dispatchRelease.promise;
-        dispatchRejected = true;
-        throw capturedAbortSignal?.reason instanceof Error
-          ? capturedAbortSignal.reason
-          : new Error("lifecycle interrupted dispatch");
-      });
 
-      const started = await rpcReq(socket, "chat.send", {
-        sessionKey: "main",
-        message: "preserve the signal-only lifecycle terminal",
-        idempotencyKey: runId,
-      });
-      expect(started.ok).toBe(true);
-      expect(started.payload).toMatchObject({ runId, status: "started" });
-      await vi.waitFor(() => expect(capturedAbortSignal).toBeDefined(), {
-        interval: 10,
-        timeout: 2_000,
-      });
+        const started = await rpcReq(socket, "chat.send", {
+          sessionKey: "main",
+          message: "preserve the signal-only lifecycle terminal",
+          idempotencyKey: runId,
+        });
+        expect(started.ok).toBe(true);
+        expect(started.payload).toMatchObject({ runId, status: "started" });
+        const capturedAbortSignal = await withinTest(dispatchEntered.promise, signal);
 
-      interruption = interruptSessionWorkAdmissions({
-        scope: storePath,
-        identities: ["main", "agent:main:main", "sess-main"],
-        timeoutMs: 1_000,
-      });
-      await vi.waitFor(() => expect(capturedAbortSignal?.aborted).toBe(true), {
-        interval: 10,
-        timeout: 2_000,
-      });
+        interruption = interruptSessionWorkAdmissions({
+          scope: storePath,
+          identities: ["main", "agent:main:main", "sess-main"],
+          reason,
+          timeoutMs: 1_000,
+        });
+        expect(capturedAbortSignal.aborted).toBe(true);
+        expect(capturedAbortSignal.reason).toBe(reason);
 
-      const abortedFrame = onceMessage(
-        socket,
-        (frame) =>
-          frame.type === "event" &&
-          frame.event === "chat" &&
-          frame.payload?.runId === runId &&
-          frame.payload?.state === "aborted",
-        2_000,
-      );
-      expect(
-        emitAgentEventIfCurrent({
-          runId,
-          stream: "lifecycle",
-          sessionKey: "agent:main:main",
-          sessionId: "sess-main",
-          agentId: "main",
-          data: {
-            phase: "end",
-            startedAt: 900,
-            endedAt: Date.now(),
-            aborted: true,
-            stopReason: "restart",
-          },
-        }),
-      ).toBe(true);
-      await expect(abortedFrame).resolves.toMatchObject({
-        payload: { runId, state: "aborted" },
-      });
+        const abortedFrame = onceMessage(
+          socket,
+          (frame) =>
+            frame.type === "event" &&
+            frame.event === "chat" &&
+            frame.payload?.runId === runId &&
+            frame.payload?.state === "aborted",
+          2_000,
+        );
+        expect(
+          emitAgentEventIfCurrent({
+            runId,
+            stream: "lifecycle",
+            sessionKey: "agent:main:main",
+            sessionId: "sess-main",
+            agentId: "main",
+            data: {
+              phase: "end",
+              startedAt: 900,
+              endedAt: Date.now(),
+              aborted: true,
+              stopReason: restart ? "restart" : "aborted",
+            },
+          }),
+        ).toBe(true);
+        await expect(abortedFrame).resolves.toMatchObject({
+          payload: { runId, state: "aborted" },
+        });
 
-      dispatchRelease.resolve();
-      await vi.waitFor(() => expect(dispatchRejected).toBe(true), {
-        interval: 10,
-        timeout: 2_000,
-      });
-      await expect(interruption).resolves.toBe(true);
+        dispatchRelease.resolve();
+        await withinTest(dispatchRejected.promise, signal);
+        await expect(interruption).resolves.toBe(true);
 
-      // The history RPC response follows every previously emitted chat
-      // event on this socket, so it exposes any contradictory late terminal.
-      const barrier = await rpcReq(socket, "chat.history", { sessionKey: "main" });
-      expect(barrier.ok).toBe(true);
-      expect(terminalStates).toEqual(["aborted"]);
-    } finally {
-      dispatchRelease.resolve();
-      await interruption?.catch(() => undefined);
-      socket.close();
-    }
-  });
+        // The history RPC response follows every previously emitted chat
+        // event on this socket, so it exposes any contradictory late terminal.
+        const barrier = await rpcReq(socket, "chat.history", { sessionKey: "main" });
+        expect(barrier.ok).toBe(true);
+        expect(terminalStates).toEqual(["aborted"]);
+      } finally {
+        dispatchRelease.resolve();
+        await interruption?.catch(() => undefined);
+        socket.close();
+      }
+    },
+  );
 
   test("returns pre-ACK attachment cancellation only after inbound cleanup", async () => {
     const sessionDirectory = temporaryDirectories.make("openclaw-chat-attachment-abort-");
@@ -540,11 +539,7 @@ describe("gateway WebSocket chat abort ownership", () => {
         workspaceAccess: "none",
       },
     };
-    await writeSessionStore({
-      entries: {
-        main: { sessionId: "sess-attachment-abort", updatedAt: Date.now() },
-      },
-    });
+    await writeMainSession("sess-attachment-abort");
 
     const socket = await gateway.openWs();
     const stageRelease = createDeferred();
@@ -573,13 +568,7 @@ describe("gateway WebSocket chat abort ownership", () => {
         sessionKey: "main",
         message: "cancel this attachment before dispatch",
         idempotencyKey: runId,
-        attachments: [
-          {
-            fileName: "notes.txt",
-            mimeType: "text/plain",
-            content: Buffer.from(bytes).toString("base64"),
-          },
-        ],
+        attachments: [textAttachment(bytes)],
       }).then((response) => {
         filePresentAtResponse = inboundPath !== undefined && existsSync(inboundPath);
         return response;
@@ -654,9 +643,7 @@ describe("gateway WebSocket chat abort ownership", () => {
           skipBootstrap: true,
           sandbox: { mode: "off" },
         };
-        await writeSessionStore({
-          entries: { main: { sessionId: "sess-pass-through-abort", updatedAt: Date.now() } },
-        });
+        await writeMainSession("sess-pass-through-abort");
         // Eager chat.send imports bind the real dispatcher before fixture mocks exist.
         const [sandboxContext, attachments, chatSend] = await Promise.all([
           import("../agents/sandbox/context.js"),
@@ -725,13 +712,7 @@ describe("gateway WebSocket chat abort ownership", () => {
           sessionKey: "main",
           message: "cancel this pass-through attachment before dispatch",
           idempotencyKey: runId,
-          attachments: [
-            {
-              fileName: "notes.txt",
-              mimeType: "text/plain",
-              content: Buffer.from(bytes).toString("base64"),
-            },
-          ],
+          attachments: [textAttachment(bytes)],
         });
         await Promise.race([
           prepared.promise,

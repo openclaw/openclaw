@@ -513,6 +513,45 @@ describe("isTerminalSqliteIntegrityError", () => {
 });
 
 describe("confirmSqliteFileIntegrity", () => {
+  it("confirms page corruption despite empty WAL sidecars created by its own reader", () => {
+    const databasePath = path.join(tempDirs.make("sqlite-corrupt-wal-"), "database.sqlite");
+    const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
+    database.exec(
+      "PRAGMA journal_mode=WAL; CREATE TABLE damaged(value TEXT); INSERT INTO damaged VALUES ('preserved');",
+    );
+    const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
+    const rootPage = Number(
+      database.prepare("SELECT rootpage FROM sqlite_schema WHERE name='damaged'").get()?.rootpage,
+    );
+    database.close();
+    expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
+    const file = fs.openSync(databasePath, "r+");
+    try {
+      fs.writeSync(file, Buffer.from([0xff]), 0, 1, (rootPage - 1) * pageSize);
+    } finally {
+      fs.closeSync(file);
+    }
+    const open = nodeSqlite.openNodeSqliteDatabase;
+    let opening = 0;
+    const reader = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+      const db = open(...args);
+      // Reproduce native empty-WAL creation/retouching independently of SQLite and filesystem versions.
+      fs.writeFileSync(`${databasePath}-wal`, "");
+      fs.utimesSync(`${databasePath}-wal`, ++opening, opening);
+      return db;
+    });
+    try {
+      expect(confirmSqliteFileIntegrity(databasePath, "damaged WAL database")).toMatchObject({
+        status: "failed",
+        terminal: true,
+        error: { name: "SqliteIntegrityError" },
+        generation: { database: { size: BigInt(fs.statSync(databasePath).size) } },
+      });
+    } finally {
+      reader.mockRestore();
+    }
+  });
+
   it("leaves SQLite open failures unbound because the failed file identity is unknown", () => {
     const databasePath = path.join(tempDirs.make("sqlite-open-integrity-"), "database.sqlite");
     fs.writeFileSync(databasePath, "not a sqlite database");

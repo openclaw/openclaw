@@ -31,16 +31,15 @@ async function startPublicCase(
   const releaseParent = createDeferred<void>();
   const parentSent = createDeferred<void>();
   const marker = "QA-SUBAGENT-TERMINAL-FALLBACK-OK";
-  const task = {
-    taskId: "child-task",
-    title: "qa-terminal-fallback",
-    status: "completed",
-    deliveryStatus: "delivered",
-    sessionKey: "parent",
+  const run = {
+    label: "qa-terminal-fallback",
+    execution: { status: "terminal", outcome: { status: "ok" } },
+    delivery: { status: "delivered" },
+    requesterSessionKey: "parent",
     childSessionKey: "child",
     runId: "run",
   };
-  const requests = [{ plannedToolName: "sessions_spawn", plannedToolArgs: { label: task.title } }];
+  const requests = [{ plannedToolName: "sessions_spawn", plannedToolArgs: { label: run.label } }];
   let parentSend: Promise<void> | undefined;
   const result = runLoadedScenarioFlow(scenario.id, {
     state,
@@ -60,6 +59,7 @@ async function startPublicCase(
     api: {
       fs,
       path,
+      readNativeQaSubagentRuns: async () => [run],
       config: {
         ...scenario.execution.config,
         cases: [{ name: "fallback", marker, expectedSendCount: 1 }],
@@ -70,9 +70,6 @@ async function startPublicCase(
         mock: { baseUrl: "http://mock.invalid" },
         gateway: {
           call: async (method: string) => {
-            if (method === "tasks.list") {
-              return { tasks: [task] };
-            }
             if (method === "chat.history") {
               return {
                 messages: [
@@ -190,6 +187,122 @@ describe("terminal completion scenario parent acknowledgment", () => {
           count === 0 ? "parent acknowledgment missing" : "spawning parent did not acknowledge",
         );
       }
+    },
+  );
+});
+
+async function replayPrivateKickoff(text: string, fault?: string) {
+  const scenario = readQaScenarioById("subagent-completion-direct-fallback");
+  const guarded = scenario.execution.flow?.steps[0]?.actions
+    .map((action) => (isRecord(action) ? action.try : undefined))
+    .find(isRecord);
+  if (!Array.isArray(guarded?.actions)) {
+    throw new Error("missing terminal scenario body");
+  }
+  const start = guarded.actions.findIndex(
+    (action) => isRecord(action) && action.set === "privateOutbound",
+  );
+  const end = guarded.actions.findIndex(
+    (action, index) => index > start && isRecord(action) && "forEach" in action,
+  );
+  if (start < 0 || end < 0) {
+    throw new Error("missing private outbound assertions");
+  }
+  const state = createQaBusState();
+  const conversation = "terminal-private-fixture";
+  const kickoff = state.addOutboundMessage({
+    accountId: "default",
+    to: "dm:" + (fault === "target" ? "foreign" : conversation),
+    replyToId: "ingress",
+    text: fault === "transient" ? "private child prose" : text,
+    ...(fault === "media"
+      ? {
+          attachments: [
+            {
+              id: "private-image",
+              kind: "image" as const,
+              mimeType: "image/png",
+              url: "https://example.com/private.png",
+            },
+          ],
+        }
+      : {}),
+  });
+  if (fault === "transient") {
+    state.editMessage({ accountId: "default", messageId: kickoff.id, text });
+  }
+  state.addOutboundMessage({
+    accountId: "default",
+    to: "dm:" + conversation,
+    replyToId: "ingress",
+    text: "Worker started.",
+  });
+  const wire = [text, "Worker started."].map((bodyText) => ({
+    type: "api",
+    path: "/bot<redacted>/sendMessage",
+    accepted: true,
+    body: { chat_id: "123", text: bodyText },
+  }));
+  if (fault === "wire") {
+    wire.push({
+      ...wire[0]!,
+      path: "/bot<redacted>/editMessageText",
+      body: { chat_id: "123", text: "private child prose" },
+    });
+  }
+  return runLoadedScenarioFlow(scenario.id, {
+    state,
+    flow: {
+      steps: [{ name: "private outbound privacy", actions: guarded.actions.slice(start, end) }],
+    },
+    api: {
+      privateStartIndex: 0,
+      privateEventCursor: 0,
+      privateWireCursor: 0,
+      privateConversationId: conversation,
+      privateIngress: { id: "ingress" },
+      privateTelegramWire: fault !== "non-telegram",
+      readTelegramWire: async () => wire,
+      transport: { buildAgentDelivery: () => ({ to: "123" }) },
+    },
+  });
+}
+
+describe("terminal private kickoff progress oracle", () => {
+  it.each([
+    "<b>Working</b>",
+    "<b>Working</b>\nSub-agent: running",
+    "<b>Working</b>\nLast activity: Sub-agent",
+  ])("accepts the public spawn status %s", async (text) => {
+    await expect(replayPrivateKickoff(text)).resolves.toMatchObject({ status: "pass" });
+  });
+
+  it.each([
+    "<b>Working</b>\nprivate child prose",
+    "<b>Working</b>\nQA-PARENT-PRIVATE-CHILD1-0123456789ABCDEF0123456789ABCDEF",
+    "<b>Working</b>\nMEDIA:qa-private-result.png",
+    "<b>Working</b>\nNO_REPLY",
+    "<b>Working</b>\nExec: running",
+    "<b>Working</b>\nLast activity: Sub-agent\nprivate child prose",
+    "<b>Working</b>\nqa-terminal-private-first: completed",
+  ])("rejects non-fixture status %s", async (text) => {
+    await expect(replayPrivateKickoff(text)).rejects.toThrow(
+      "private completion emitted unexpected",
+    );
+  });
+
+  it.each(["target", "media", "transient", "wire", "non-telegram"])(
+    "does not relax the %s boundary for accepted public text",
+    async (fault) => {
+      await expect(
+        replayPrivateKickoff("<b>Working</b>\nLast activity: Sub-agent", fault),
+      ).rejects.toThrow(
+        fault === "transient"
+          ? "private completion leaked a transient"
+          : fault === "wire"
+            ? "Telegram wire capture contained private"
+            : "private completion emitted unexpected",
+      );
     },
   );
 });

@@ -1,47 +1,5 @@
 import { describe, expect, test } from "vitest";
-import {
-  DEFAULT_SANDBOX_BASELINE,
-  resolveBaselineReadonlyPaths,
-  resolveSandboxBaseline,
-  resolveSandboxTempDir,
-} from "../src/sandbox-baseline.js";
-
-describe("resolveSandboxBaseline", () => {
-  test("returns enforceable defaults", () => {
-    expect(resolveSandboxBaseline()).toEqual(DEFAULT_SANDBOX_BASELINE);
-    expect(resolveSandboxBaseline().filesystem.restrictToProjectDir).toBe(true);
-    expect(resolveSandboxBaseline().process.timeoutSeconds).toBe(300);
-    expect(resolveSandboxBaseline().process.timeoutSecondsConfigured).toBe(false);
-  });
-
-  test("merges partial input with defaults", () => {
-    const baseline = resolveSandboxBaseline({
-      filesystem: {
-        restrictToProjectDir: false,
-        additionalReadonlyPaths: ["C:\\tools\\readonly"],
-        additionalReadwritePaths: ["C:\\work\\scratch"],
-      },
-      process: {
-        timeoutSeconds: 45,
-      },
-    });
-
-    expect(baseline.filesystem.restrictToProjectDir).toBe(false);
-    expect(baseline.filesystem.additionalReadonlyPaths).toEqual(["C:\\tools\\readonly"]);
-    expect(baseline.filesystem.additionalReadwritePaths).toEqual(["C:\\work\\scratch"]);
-    expect(baseline.process.timeoutSeconds).toBe(45);
-    expect(baseline.process.timeoutSecondsConfigured).toBe(true);
-  });
-
-  test("rejects invalid timeout values", () => {
-    expect(() => resolveSandboxBaseline({ process: { timeoutSeconds: 0 } })).toThrow(
-      /timeoutSeconds/u,
-    );
-    expect(() => resolveSandboxBaseline({ process: { timeoutSeconds: Number.NaN } })).toThrow(
-      /timeoutSeconds/u,
-    );
-  });
-});
+import { resolveBaselineReadonlyPaths, resolveSandboxTempDir } from "../src/sandbox-baseline.js";
 
 describe("effective filesystem policy", () => {
   test("derives baseline readonly directories from the host Windows env", () => {

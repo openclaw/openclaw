@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
@@ -71,7 +72,6 @@ it.each(["ro", "rw"] as const)(
         sessionId: "remote-policy",
         sessionKey: "agent:main:remote-policy",
         agentId: "main",
-        requireWritableSandbox: true,
         requireWorkspaceOnly: true,
         config: {
           agents: { defaults: { sandbox: { mode: "all", backend: "unavailable-fixture" } } },
@@ -85,18 +85,12 @@ it.each(["ro", "rw"] as const)(
           },
         }),
       });
-      if (workspaceAccess === "ro") {
-        await expect(preparation).rejects.toThrow(
-          "sandbox workspace is not read-write; collection review skipped",
-        );
-      } else {
-        await expect(preparation).resolves.toMatchObject({
-          effectiveWorkspace: state.workspaceDir,
-          effectiveCwd: state.workspaceDir,
-          effectiveFsWorkspaceOnly: true,
-          sandbox: null,
-        });
-      }
+      await expect(preparation).resolves.toMatchObject({
+        effectiveWorkspace: state.workspaceDir,
+        effectiveCwd: state.workspaceDir,
+        effectiveFsWorkspaceOnly: true,
+        sandbox: null,
+      });
       await expect(fs.stat(remoteWorkspace)).rejects.toMatchObject({ code: "ENOENT" });
     });
   },
@@ -158,6 +152,7 @@ it("reports the selected sandbox policy without duplicate workspace creation", a
       { sessionId: "optional", updatedAt: 1, sandboxMode: "off" },
     );
     const mkdir = vi.spyOn(fs, "mkdir");
+    const sql = observeHostDataSql();
     try {
       const prepared = await resolveAttemptWorkspaceSandbox({
         agentId: "main",
@@ -170,7 +165,11 @@ it("reports the selected sandbox policy without duplicate workspace creation", a
       expect(prepared.sandbox).toBeNull();
       expect(prepared.sandboxReport).toEqual({ mode: "all", sandboxed: false });
       expect(mkdir.mock.calls.filter(([dir]) => dir === state.workspaceDir)).toHaveLength(1);
+      expect(
+        sql.queries.filter((query) => /\bsession_(?:nodes|windows|participants)\b/.test(query)),
+      ).toEqual([]);
     } finally {
+      sql.restore();
       mkdir.mockRestore();
     }
   });

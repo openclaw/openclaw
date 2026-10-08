@@ -33,6 +33,7 @@ import {
 } from "./chat-history-request.ts";
 import {
   commitCurrentChatHistorySnapshot,
+  historySessionId,
   resolveChatHistoryPagination,
   type ChatHistoryResult,
 } from "./chat-history-snapshot.ts";
@@ -56,6 +57,7 @@ import { isTranscriptScrollKey } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { readTranscriptViewport } from "./components/chat-transcript-scroll-events.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
@@ -118,27 +120,23 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
             resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey
           ) {
-            return;
+            return hydration.complete?.();
           }
           // A sibling can fill the shared cache while this pane still needs its
           // own transcript. Adopt those messages before revalidating their cursor.
-          const snapshot =
-            readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }) ??
-            storedSnapshot;
+          const cache = state.chatMessagesBySession;
+          const snapshot = readChatSessionSnapshot(cache, state, { sessionKey }) ?? storedSnapshot;
           if (!snapshot) {
-            return;
+            return hydration.complete?.();
           }
           applyChatCacheSnapshot(state, snapshot);
           const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-          cacheChatSessionSnapshot(
-            state.chatMessagesBySession,
-            state,
-            { sessionKey },
-            mergedSnapshot,
-          );
+          cacheChatSessionSnapshot(cache, state, { sessionKey }, mergedSnapshot);
+          // Release startup with the adopted cursor before Lit queues the snapshot render.
+          hydration.complete?.();
           state.requestUpdate?.();
         })
-        .catch(() => undefined)
+        .catch(() => hydration.complete?.())
         .finally(() => {
           if (requests.initialSnapshotHydration === hydration && !hydration.wait) {
             delete requests.initialSnapshotHydration;
@@ -289,8 +287,9 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           ? event.target
           : null;
     const previousScrollTop = this.transcriptScrollTop;
-    if (root) {
-      this.transcriptScrollTop = root.scrollTop;
+    const viewport = root ? readTranscriptViewport(root) : null;
+    if (viewport) {
+      this.transcriptScrollTop = viewport.scrollTop;
       const renderedSessionKey = this.transcript.renderedSessionKey;
       const stateSessionKey = this.state?.sessionKey;
       if (
@@ -301,7 +300,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         saveChatSessionScrollPosition(
           this.paneId,
           renderedSessionKey,
-          captureChatSessionScrollPosition(root),
+          captureChatSessionScrollPosition(viewport),
         );
       }
     }
@@ -310,11 +309,11 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     const hasUpwardIntent =
       !this.loadingOlder &&
       !this.transcript.isMaintenanceScroll &&
-      root !== null &&
+      viewport !== null &&
       previousScrollTop !== null &&
-      root.scrollTop < previousScrollTop &&
-      root.scrollTop < root.scrollHeight - root.clientHeight &&
-      root.scrollTop <= CHAT_HISTORY_PREFETCH_EDGE_PX;
+      viewport.scrollTop < previousScrollTop &&
+      viewport.scrollTop < viewport.scrollHeight - viewport.clientHeight &&
+      viewport.scrollTop <= CHAT_HISTORY_PREFETCH_EDGE_PX;
     const newHistoryIntent = hasUpwardIntent && this.consumeHistoryIntent();
     // A failed request or exhausted bootstrap stays disarmed until renewed
     // upward intent, preventing request loops without stranding older history.
@@ -460,13 +459,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           prepended = true;
           return true;
         }
-        const resultSessionId =
-          typeof result.sessionInfo?.sessionId === "string" && result.sessionInfo.sessionId.trim()
-            ? result.sessionInfo.sessionId.trim()
-            : typeof result.sessionId === "string"
-              ? result.sessionId.trim()
-              : "";
-        if (expectedSessionId && resultSessionId !== expectedSessionId) {
+        if (expectedSessionId && historySessionId(result) !== expectedSessionId) {
           // Offset cursors belong to one transcript. A reset can reuse the session
           // key, so replace the tail instead of mixing two session IDs.
           await loadChatHistory(state);

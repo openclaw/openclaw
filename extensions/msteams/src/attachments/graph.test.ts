@@ -13,7 +13,6 @@ vi.mock("./shared.js", async (importOriginal) => {
     ),
     normalizeContentType: vi.fn((ct: string | null | undefined) => ct ?? undefined),
     resolveAttachmentFetchPolicy: vi.fn(() => ({ allowHosts: ["*"], authAllowHosts: ["*"] })),
-    resolveRequestUrl: vi.fn((input: string) => input),
     safeFetchWithPolicy: vi.fn(),
   };
 });

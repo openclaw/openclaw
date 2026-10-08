@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
-import { root } from "openclaw/plugin-sdk/file-access-runtime";
+import { createFileWatchNotifier, root } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
@@ -53,23 +53,35 @@ export async function serveMemoryFiles(options: {
     const lines = createInterface({ input: options.input, crlfDelay: Infinity });
     let watcher: InstanceType<typeof MemoryFileWatcher> | undefined;
     let closing: Promise<void> | undefined;
+    let outputClosing: Promise<void> | undefined;
+    let notifier: ReturnType<typeof createFileWatchNotifier> | undefined;
+    let stopped = false;
     const close = () => {
+      stopped = true;
       closing ??= watcher?.close();
+      outputClosing ??= notifier?.close();
+      void outputClosing?.catch(() => undefined);
       // The stream can close while start awaits a directory probe. Stop new
       // admission immediately; the finally block still joins and reports close.
       void closing?.catch(() => undefined);
     };
+    notifier = createFileWatchNotifier(options.output, () => {
+      close();
+      lines.close();
+    });
     options.input.on("end", close).on("close", close);
+    const errors: unknown[] = [];
     try {
       for await (const line of lines) {
+        if (stopped) {
+          break;
+        }
         if (watcher) {
           throw new Error("Unexpected message on the Memory watch subscription");
         }
         // SAFETY: The provisioned adapter sends this same-version file-watch contract on stdin.
         const request = JSON.parse(line) as MemoryWorkspaceWatchRequest;
-        const notify = (event: "change" | "unavailable") => {
-          options.output.write(`${JSON.stringify(event)}\n`);
-        };
+        const notify = (event: "change" | "unavailable") => notifier?.send(event);
         watcher = new MemoryFileWatcher({
           workspaceDir: path.resolve(options.workspace),
           agentId: request.agentId,
@@ -83,10 +95,20 @@ export async function serveMemoryFiles(options: {
         }
         await watcher.start();
       }
+    } catch (error) {
+      errors.push(error);
     } finally {
       options.input.off("end", close).off("close", close);
       lines.close();
-      await (closing ?? watcher?.close());
+      close();
+      const results = await Promise.allSettled([closing, outputClosing]);
+      errors.push(
+        ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+      );
+      notifier = undefined;
+    }
+    if (errors.length) {
+      throw new AggregateError(errors, "Memory watch retirement failed");
     }
     return;
   }

@@ -36,6 +36,8 @@ export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext
   agentRuntime?: string | null;
   /** API adapter id from the selected catalog route, when known. */
   api?: string | null;
+  /** Base URL from the selected catalog route, when known. */
+  baseUrl?: string | null;
   reasoning?: boolean;
   /** Thinking-to-wire mapping from the selected model route. */
   thinkingLevelMap?: ThinkingLevelMap;

@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import {
   validateApprovalHistoryResult,
@@ -32,8 +32,9 @@ import {
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { i18n, t } from "../../i18n/index.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { formatDateTimeMs } from "../../lib/format.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
@@ -58,13 +59,6 @@ function grantIsActive(grant: ExecApprovalStandingGrant, nowMs: number): boolean
 }
 const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
 const APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
-
-function formatResolvedAt(timestampMs: number): string {
-  return new Intl.DateTimeFormat(i18n.getLocale(), {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(timestampMs));
-}
 
 const APPROVAL_KIND_LABELS = {
   exec: "approvalHistory.kinds.exec",
@@ -113,6 +107,18 @@ function resolverLabel(item: TerminalApprovalSnapshot): string {
     return t("approvalHistory.unknown");
   }
   return item.resolver.id ? `${item.resolver.kind} · ${item.resolver.id}` : item.resolver.kind;
+}
+
+function renderEmptyRow(columns: number, label: string) {
+  return html`<tr>
+    <td colspan=${columns} class="data-table-empty-cell">
+      <div class="data-table-empty-state" role="status" aria-live="polite">${label}</div>
+    </td>
+  </tr>`;
+}
+
+function renderCell(labelKey: string, value: string | number | TemplateResult, mono = false) {
+  return html`<td class=${mono ? "mono" : nothing} data-label=${t(labelKey)}>${value}</td>`;
 }
 
 class ApprovalsPage extends OpenClawLightDomElement {
@@ -384,25 +390,18 @@ class ApprovalsPage extends OpenClawLightDomElement {
             <tbody>
               ${
                 this.grants.length === 0
-                  ? html`
-                      <tr>
-                        <td colspan="5" class="data-table-empty-cell">
-                          <div class="data-table-empty-state" role="status" aria-live="polite">
-                            ${t("standingGrants.empty")}
-                          </div>
-                        </td>
-                      </tr>
-                    `
-                  : this.grants.map(
-                      (grant) => html`
+                  ? renderEmptyRow(5, t("standingGrants.empty"))
+                  : this.grants.map((grant) => {
+                      const revokeLabel = t(
+                        this.revokingGrantId === grant.grantId
+                          ? "standingGrants.revoking"
+                          : "standingGrants.revoke",
+                      );
+                      return html`
                         <tr>
-                          <td data-label=${t("standingGrants.columns.automation")}>
-                            ${grant.cronJobName ?? grant.cronJobId}
-                          </td>
-                          <td class="mono" data-label=${t("standingGrants.columns.command")}>
-                            ${grant.command}
-                          </td>
-                          <td data-label=${t("standingGrants.columns.uses")}>${grant.useCount}</td>
+                          ${renderCell("standingGrants.columns.automation", grant.cronJobName ?? grant.cronJobId)}
+                          ${renderCell("standingGrants.columns.command", grant.command, true)}
+                          ${renderCell("standingGrants.columns.uses", grant.useCount)}
                           <td data-label=${t("standingGrants.columns.state")} aria-live="polite">
                             ${grantStateLabel(grant, nowMs)}
                           </td>
@@ -412,27 +411,19 @@ class ApprovalsPage extends OpenClawLightDomElement {
                                 ? html`
                                     <button
                                       class="btn btn--sm"
-                                      aria-label=${`${
-                                        this.revokingGrantId === grant.grantId
-                                          ? t("standingGrants.revoking")
-                                          : t("standingGrants.revoke")
-                                      }: ${grant.cronJobName ?? grant.cronJobId} — ${grant.command}`}
+                                      aria-label=${`${revokeLabel}: ${grant.cronJobName ?? grant.cronJobId} — ${grant.command}`}
                                       ?disabled=${this.revokingGrantId !== null}
                                       @click=${() => void this.revokeGrant(grant.grantId)}
                                     >
-                                      ${
-                                        this.revokingGrantId === grant.grantId
-                                          ? t("standingGrants.revoking")
-                                          : t("standingGrants.revoke")
-                                      }
+                                      ${revokeLabel}
                                     </button>
                                   `
                                 : nothing
                             }
                           </td>
                         </tr>
-                      `,
-                    )
+                      `;
+                    })
               }
             </tbody>
           </table>
@@ -467,44 +458,28 @@ class ApprovalsPage extends OpenClawLightDomElement {
           <tbody>
             ${
               this.items.length === 0
-                ? html`
-                    <tr>
-                      <td colspan="7" class="data-table-empty-cell">
-                        <div class="data-table-empty-state" role="status" aria-live="polite">
-                          ${
-                            this.error || !this.hasLoaded
-                              ? t("approvalHistory.unknown")
-                              : t("approvalHistory.empty")
-                          }
-                        </div>
-                      </td>
-                    </tr>
-                  `
+                ? renderEmptyRow(
+                    7,
+                    t(
+                      this.error || !this.hasLoaded
+                        ? "approvalHistory.unknown"
+                        : "approvalHistory.empty",
+                    ),
+                  )
                 : this.items.map(
                     (item) => html`
                       <tr>
-                        <td data-label=${t("approvalHistory.columns.resolved")}>
-                          ${formatResolvedAt(item.resolvedAtMs)}
-                        </td>
-                        <td data-label=${t("approvalHistory.columns.kind")}>
-                          ${t(APPROVAL_KIND_LABELS[item.presentation.kind])}
-                        </td>
-                        <td class="mono" data-label=${t("approvalHistory.columns.request")}>
-                          ${requestLabel(item)}
-                        </td>
-                        <td data-label=${t("approvalHistory.columns.decision")}>
-                          ${t(APPROVAL_STATUS_LABELS[item.status])} ·
-                          ${t("decision" in item && item.decision ? APPROVAL_DECISION_LABELS[item.decision] : "approvalHistory.notApplicable")}
-                        </td>
-                        <td data-label=${t("approvalHistory.columns.reason")}>
-                          ${t(APPROVAL_REASON_LABELS[item.reason])}
-                        </td>
-                        <td class="mono" data-label=${t("approvalHistory.columns.source")}>
-                          ${sourceLabel(item)}
-                        </td>
-                        <td class="mono" data-label=${t("approvalHistory.columns.resolver")}>
-                          ${resolverLabel(item)}
-                        </td>
+                        ${renderCell("approvalHistory.columns.resolved", formatDateTimeMs(item.resolvedAtMs, { dateStyle: "medium", timeStyle: "short" }))}
+                        ${renderCell("approvalHistory.columns.kind", t(APPROVAL_KIND_LABELS[item.presentation.kind]))}
+                        ${renderCell("approvalHistory.columns.request", requestLabel(item), true)}
+                        ${renderCell(
+                          "approvalHistory.columns.decision",
+                          html`${t(APPROVAL_STATUS_LABELS[item.status])} ·
+                          ${t("decision" in item && item.decision ? APPROVAL_DECISION_LABELS[item.decision] : "approvalHistory.notApplicable")}`,
+                        )}
+                        ${renderCell("approvalHistory.columns.reason", t(APPROVAL_REASON_LABELS[item.reason]))}
+                        ${renderCell("approvalHistory.columns.source", sourceLabel(item), true)}
+                        ${renderCell("approvalHistory.columns.resolver", resolverLabel(item), true)}
                       </tr>
                     `,
                   )

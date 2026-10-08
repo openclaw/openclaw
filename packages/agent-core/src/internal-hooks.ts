@@ -3,24 +3,28 @@ import type {
   AgentMessage,
   AgentToolResult,
   AgentToolUpdateCallback,
-  InternalBeforeToolBatchContext,
   InternalBeforeToolBatchResult,
   ToolLoopWarning,
 } from "./types.js";
 
-export type InternalBeforeToolBatchHook = (
-  context: InternalBeforeToolBatchContext,
-  signal?: AbortSignal,
-) => Promise<InternalBeforeToolBatchResult | undefined>;
+export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToolBatch"]>;
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
+
+export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
+
+const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
 
 type InternalReadyToolCall = { toolCallId: string; args: unknown };
 
 export type InternalToolBatchLifecycle = {
-  /** Commit admitted calls whose tool implementations are about to start. May throw before launch. */
+  /**
+   * Commit admitted calls in assistant order as they launch: prepared calls just
+   * before their implementations start, argument-validation rejections when the
+   * launch reaches them. May throw before launch.
+   */
   commitReadyCalls: (calls: readonly InternalReadyToolCall[]) => void;
-  /** Release admission state for admitted prepared calls that will not launch. */
+  /** Release admission state for admitted calls, prepared or rejected, that will not launch. */
   releaseSkippedCalls: (toolCallIds: readonly string[]) => void;
 };
 
@@ -38,6 +42,7 @@ const syncSteeringGetterByCallback = new WeakMap<
 
 export type InternalSteeringQueueObserver = {
   peek: () => readonly AgentMessage[];
+  drainContext?: () => AgentMessage[];
   reserve: (messages: readonly AgentMessage[]) => () => void;
   subscribe: (listener: () => void) => () => void;
 };
@@ -89,6 +94,23 @@ export function setInternalBeforeToolBatch(
 
 export function getInternalBeforeToolBatch(agent: object): InternalBeforeToolBatchHook | undefined {
   return beforeToolBatchByAgent.get(agent);
+}
+
+export function setInternalToolTurnCompletion(
+  agent: object,
+  hook: InternalToolTurnCompletionHook | undefined,
+): void {
+  if (hook) {
+    toolTurnCompletionByAgent.set(agent, hook);
+  } else {
+    toolTurnCompletionByAgent.delete(agent);
+  }
+}
+
+export function getInternalToolTurnCompletion(
+  agent: object,
+): InternalToolTurnCompletionHook | undefined {
+  return toolTurnCompletionByAgent.get(agent);
 }
 
 /** Attach scheduler lifecycle ownership without widening the public admission result. */
@@ -195,7 +217,10 @@ export function copyInternalToolResultState<T extends object>(source: object, ta
   return target;
 }
 
-/** Call only after raw outcome recording: feedback must not change no-progress hashes. */
+/**
+ * Feedback must not change no-progress hashes: call only after raw outcome
+ * recording, or for rejected calls whose validation result admission captured.
+ */
 export function appendToolLoopWarning<T extends AgentToolResult<unknown>>(
   result: T,
   warning: ToolLoopWarning,

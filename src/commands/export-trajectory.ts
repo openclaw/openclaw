@@ -2,7 +2,10 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString, readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import {
+  resolveAgentOperationAgentId,
+  resolveConfiguredAgentId,
+} from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -12,7 +15,7 @@ import {
   resolveSessionTranscriptReadTarget,
 } from "../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { classifySessionKeyShape, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   exportTrajectoryForCommand,
@@ -64,19 +67,6 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   return opts;
 }
 
-function resolveExportTrajectoryOptions(
-  opts: ExportTrajectoryCommandOptions,
-): ExportTrajectoryCommandOptions {
-  const encoded = opts.requestJsonBase64;
-  if (encoded === undefined || encoded.length === 0) {
-    return opts;
-  }
-  return {
-    ...opts,
-    ...decodeExportTrajectoryRequest(encoded),
-  };
-}
-
 function throwTrajectoryExportError(message: string): never {
   throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
@@ -88,7 +78,9 @@ export async function exportTrajectoryCommand(
 ): Promise<void> {
   let resolvedOpts: ExportTrajectoryCommandOptions;
   try {
-    resolvedOpts = resolveExportTrajectoryOptions(opts);
+    resolvedOpts = opts.requestJsonBase64
+      ? { ...opts, ...decodeExportTrajectoryRequest(opts.requestJsonBase64) }
+      : opts;
   } catch (error) {
     throwTrajectoryExportError(
       `Failed to decode trajectory export request: ${formatErrorMessage(error)}`,
@@ -111,7 +103,12 @@ export async function exportTrajectoryCommand(
   try {
     targetAgentId = requestedAgent
       ? resolveConfiguredAgentId(getRuntimeConfig(), requestedAgent)
-      : resolveAgentIdFromSessionKey(sessionKey);
+      : resolveAgentIdFromSessionKey(
+          sessionKey,
+          classifySessionKeyShape(sessionKey) === "legacy_or_alias"
+            ? resolveAgentOperationAgentId(getRuntimeConfig())
+            : undefined,
+        );
   } catch (error) {
     throwTrajectoryExportError(formatErrorMessage(error));
   }

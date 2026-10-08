@@ -1,27 +1,18 @@
-import type { Bot, Context } from "grammy";
+import type { Context } from "grammy";
 import {
   findCommandByNativeName,
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
 } from "openclaw/plugin-sdk/command-auth-native";
-import type {
-  ChannelGroupPolicy,
-  OpenClawConfig,
-  TelegramAccountConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginCommandRuntime } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type {
-  TelegramNativeCommandCallbackDispatcher,
-  TelegramResolvedGroupConfig,
-} from "./bot-handlers.types.js";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramNativeCommandCallbackDispatcher } from "./bot-handlers.types.js";
 import type { TelegramBuiltinCommandResult } from "./bot-native-command-builtins.js";
-import {
-  defaultTelegramNativeCommandDeps,
-  type TelegramNativeCommandDeps,
-} from "./bot-native-command-deps.runtime.js";
+import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
+import type { TelegramCommandExecutorParams } from "./bot-native-command-dispatch.js";
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
@@ -29,7 +20,6 @@ import {
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
-import type { TelegramBotOptions } from "./bot.types.js";
 import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
@@ -45,53 +35,30 @@ const loadTelegramPluginCommandExecutor = createLazyRuntimeModule(
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
-type RegisterTelegramNativeCommandsParams = {
-  bot: Bot;
+type RegisterTelegramNativeCommandsParams = Omit<
+  TelegramCommandExecutorParams,
+  "botUser" | "msg" | "rawText"
+> & {
   cfg: OpenClawConfig;
-  runtime: RuntimeEnv;
-  accountId: string;
   telegramCfg: TelegramAccountConfig;
-  mediaMaxBytes?: number;
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
-  resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
-  resolveTelegramGroupConfig: (
-    chatId: string | number,
-    messageThreadId: number | undefined,
-    cfg: OpenClawConfig,
-  ) => TelegramResolvedGroupConfig;
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
-  telegramDeps?: TelegramNativeCommandDeps;
-  opts: Pick<
-    TelegramBotOptions,
-    | "token"
-    | "ownerAgentId"
-    | "botInfo"
-    | "allowFrom"
-    | "groupAllowFrom"
-    | "replyToMode"
-    | "accountAbortSignal"
-  >;
 };
 
 export const registerTelegramNativeCommands = ({
-  bot,
   cfg,
-  runtime,
-  accountId,
   telegramCfg,
-  mediaMaxBytes,
   nativeEnabled,
   nativeSkillsEnabled,
-  resolveGroupPolicy,
-  resolveTelegramGroupConfig,
   shouldSkipUpdate,
   telegramDeps = defaultTelegramNativeCommandDeps,
-  opts,
+  ...executorParams
 }: RegisterTelegramNativeCommandsParams): {
   nativeCommandNames: ReadonlyMap<string, string>;
   nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher;
 } => {
+  const { bot, runtime, accountId, opts } = executorParams;
   const boundRoute =
     nativeEnabled && nativeSkillsEnabled
       ? resolveAgentRoute({ cfg, channel: "telegram", accountId })
@@ -168,16 +135,14 @@ export const registerTelegramNativeCommands = ({
     })
     .filter((command) => command !== null);
   const customCommandNames = new Set(customCommands.map((command) => command.command));
-  const fullCommandCatalog = buildCappedTelegramMenuCommands({
-    allCommands: [
-      ...customCommands,
-      ...nativeMenuCommands.filter((command) => !command.isAlias),
-      ...(nativeEnabled
-        ? pluginCatalog.commands.filter((command) => !customCommandNames.has(command.command))
-        : []),
-      ...nativeMenuCommands.filter((command) => command.isAlias),
-    ],
-  });
+  const fullCommandCatalog = buildCappedTelegramMenuCommands([
+    ...customCommands,
+    ...nativeMenuCommands.filter((command) => !command.isAlias),
+    ...(nativeEnabled
+      ? pluginCatalog.commands.filter((command) => !customCommandNames.has(command.command))
+      : []),
+    ...nativeMenuCommands.filter((command) => command.isAlias),
+  ]);
   if (fullCommandCatalog.skillCommandsOmitted) {
     runtime.log?.(
       "Telegram menu pressure omitted per-skill commands; removing per-skill commands and keeping /skill.",
@@ -239,21 +204,6 @@ export const registerTelegramNativeCommands = ({
     botToken: opts.token,
   });
 
-  const buildExecutorParams = (params: {
-    botUser: Context["me"];
-    msg: NonNullable<Context["message"]>;
-    rawText: string;
-  }) => ({
-    ...params,
-    bot,
-    runtime,
-    accountId,
-    mediaMaxBytes,
-    resolveGroupPolicy,
-    resolveTelegramGroupConfig,
-    telegramDeps,
-    opts,
-  });
   let handleLoginCallback:
     | ((
         botUser: Context["me"],
@@ -271,7 +221,11 @@ export const registerTelegramNativeCommands = ({
     ): Promise<TelegramBuiltinCommandResult> => {
       const { executeTelegramBuiltinCommand } = await loadTelegramBuiltinCommandExecutor();
       return await executeTelegramBuiltinCommand({
-        ...buildExecutorParams({ botUser, msg, rawText }),
+        ...executorParams,
+        telegramDeps,
+        botUser,
+        msg,
+        rawText,
         commandName: command.name,
         shouldSkip,
       });
@@ -308,11 +262,11 @@ export const registerTelegramNativeCommands = ({
       }
       const { executeTelegramPluginCommand } = await loadTelegramPluginCommandExecutor();
       await executeTelegramPluginCommand({
-        ...buildExecutorParams({
-          botUser: ctx.me,
-          msg: ctx.message,
-          rawText: ctx.match?.trim() ?? "",
-        }),
+        ...executorParams,
+        telegramDeps,
+        botUser: ctx.me,
+        msg: ctx.message,
+        rawText: ctx.match?.trim() ?? "",
         commandName: pluginCommand.command,
         candidate: pluginCommand.spec,
       });
@@ -339,10 +293,7 @@ export const registerTelegramNativeCommands = ({
       return { handled: false, clearButtons: false };
     }
     const callbackMessage = callbackQuery.message;
-    if (!callbackMessage || callbackMessage.date <= 0) {
-      return { handled: true, clearButtons: false };
-    }
-    if (callbackMessage.chat.type === "channel") {
+    if (!callbackMessage || callbackMessage.date <= 0 || callbackMessage.chat.type === "channel") {
       return { handled: true, clearButtons: false };
     }
     const rawText = separatorIndex === -1 ? "" : commandBody.slice(separatorIndex + 1).trim();

@@ -1,8 +1,9 @@
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { createSendCfgThreadingRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { IrcClient } from "./client.js";
-import { setIrcRuntime } from "./runtime.js";
+import * as ircRuntime from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => {
@@ -33,11 +34,11 @@ vi.mock("./connect-options.js", () => ({
   buildIrcConnectOptions: hoisted.buildIrcConnectOptions,
 }));
 
-vi.mock("./protocol.js", async () => {
-  const actual = await vi.importActual<typeof import("./protocol.js")>("./protocol.js");
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
   return {
     ...actual,
-    makeIrcMessageId: () => "irc-msg-1",
+    randomUUID: () => "irc-msg-1",
   };
 });
 
@@ -66,7 +67,7 @@ vi.mock("openclaw/plugin-sdk/text-chunking", async () => {
 
 import { ircMessageAdapter, sendFormattedIrcText } from "./message-adapter.js";
 import { ircOutboundBaseAdapter } from "./outbound-base.js";
-import { sendMessageIrc } from "./send.js";
+import { sendIrcMessages, sendMessageIrc } from "./send.js";
 
 function resetHoistedMocks() {
   hoisted.loadConfig.mockReset();
@@ -81,7 +82,7 @@ function resetHoistedMocks() {
 afterAll(() => {
   vi.doUnmock("./client.js");
   vi.doUnmock("./connect-options.js");
-  vi.doUnmock("./protocol.js");
+  vi.doUnmock("node:crypto");
   vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
   vi.doUnmock("openclaw/plugin-sdk/text-chunking");
   vi.resetModules();
@@ -106,7 +107,7 @@ function createClient(isReady = () => true) {
 describe("sendMessageIrc cfg threading", () => {
   beforeEach(() => {
     resetHoistedMocks();
-    setIrcRuntime(createSendCfgThreadingRuntime(hoisted) as never);
+    ircRuntime.setIrcRuntime(createSendCfgThreadingRuntime(hoisted) as never);
   });
 
   it("uses explicitly provided cfg without loading runtime config", async () => {
@@ -207,9 +208,8 @@ describe("sendMessageIrc cfg threading", () => {
 
   it("sends with provided cfg when runtime activity recording is unavailable", async () => {
     const client = createClient();
-    hoisted.record.mockImplementation(() => {
-      throw new Error("IRC runtime not initialized");
-    });
+    const runtime = vi.spyOn(ircRuntime, "getOptionalIrcRuntime").mockReturnValueOnce(null);
+    onTestFinished(() => runtime.mockRestore());
 
     const result = await sendMessageIrc("#room", "hello", {
       cfg: providedCfg,
@@ -217,6 +217,7 @@ describe("sendMessageIrc cfg threading", () => {
     });
 
     expect(hoisted.loadConfig).not.toHaveBeenCalled();
+    expect(hoisted.record).not.toHaveBeenCalled();
     expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello", undefined);
     expect(result.target).toBe("#room");
     expect(result.messageId).toBeTypeOf("string");
@@ -335,12 +336,75 @@ describe("sendMessageIrc cfg threading", () => {
         onDeliveryResult,
         onPlatformSendDispatch,
       }),
-    ).rejects.toThrow("IRC connection closed before send");
+    ).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      message: "IRC connection closed before send",
+      deliveryResult: { messageIds: ["irc-msg-1"], visibleReplySent: true },
+    });
 
     expect(client.sendPrivmsg).toHaveBeenCalledOnce();
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
     expect(onDeliveryResult).toHaveBeenCalledOnce();
     expect(client.quit).toHaveBeenCalledOnce();
+  });
+
+  it.each(["send", "report", "activity", "partial-send"] as const)(
+    "retains accepted receipts when a later %s fails",
+    async (phase) => {
+      const client = createClient();
+      const cause = new Error("send interrupted");
+      const failure =
+        phase === "partial-send"
+          ? createChannelPartialDeliveryError(cause, {
+              messageIds: ["nested-id"],
+              visibleReplySent: true,
+            })
+          : cause;
+      if (phase === "send" || phase === "partial-send") {
+        client.sendPrivmsg.mockResolvedValueOnce(undefined).mockRejectedValueOnce(failure);
+      }
+      if (phase === "activity") {
+        hoisted.record.mockImplementationOnce(() => {
+          throw cause;
+        });
+      }
+      const onDeliveryResult =
+        phase === "report"
+          ? () => {
+              throw cause;
+            }
+          : undefined;
+
+      await expect(
+        sendIrcMessages(
+          "#room",
+          "first second",
+          { cfg: providedCfg, client },
+          () => [{ text: "first" }, { text: "second" }],
+          onDeliveryResult,
+        ),
+      ).rejects.toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        cause: failure,
+        deliveryResult: {
+          messageIds: phase === "partial-send" ? ["irc-msg-1", "nested-id"] : ["irc-msg-1"],
+          visibleReplySent: true,
+          receipt: {
+            platformMessageIds:
+              phase === "partial-send" ? ["irc-msg-1", "nested-id"] : ["irc-msg-1"],
+          },
+        },
+      });
+    },
+  );
+
+  it("preserves the original failure when no message was sent", async () => {
+    const client = createClient();
+    const failure = new Error("first send refused");
+    client.sendPrivmsg.mockRejectedValueOnce(failure);
+    await expect(sendMessageIrc("#room", "hello", { cfg: providedCfg, client })).rejects.toBe(
+      failure,
+    );
   });
 
   it("declares message adapter durable text, media, and reply with receipt proofs", async () => {

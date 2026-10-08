@@ -6,11 +6,9 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import { writeSessionStore } from "../test-helpers.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
-import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createProviderReplayDispatch } from "./provider-replay.test-support.js";
 import * as support from "./service.test-support.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
@@ -212,24 +210,9 @@ describe("worker environment service", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
-    const dispatch = createWorkerPlacementDispatchService({
+    const dispatch = createProviderReplayDispatch({
       placements,
       environments: workerService,
-      runnerAvailability: { read: () => undefined, version: () => 0 },
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-      runRecoveryBarrier: async ({ run }) =>
-        await run({ kind: "local", path: "/gateway/workspace" }),
-      runActivationBarrier: async ({ activate }) => activate(),
-      runMoveBarrier: async ({ begin }) => begin(),
-      resolveMoveDestination: async () => undefined,
-      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-      runReclaimBarrier: async ({ begin, reclaim }) =>
-        await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
-      runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      ...createWorkerWorkspaceRecoveryFixture({
-        resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
-      }),
     });
 
     const dispatchFailure = dispatch.dispatch({

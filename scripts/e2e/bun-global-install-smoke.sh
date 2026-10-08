@@ -9,6 +9,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
+source "$ROOT_DIR/scripts/e2e/lib/bun-global-install/ai-candidate.sh"
 
 BUN_BIN="${BUN_BIN:-bun}"
 HOST_BUILD="${OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD:-1}"
@@ -64,55 +65,6 @@ dump_debug_logs() {
     "$GATEWAY_STATUS_LOG" \
     "$GATEWAY_AGENT_LOG" \
     "$DIRECT_BUN_LOG" >&2 || true
-}
-
-prepare_ai_candidate() {
-  local ai_manifest
-  local ai_package_dir
-  local ai_tarballs
-  local root_manifest
-
-  if [ -z "$PACK_DIR" ]; then
-    PACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-pack.XXXXXX")"
-  fi
-  root_manifest="$PACK_DIR/openclaw-package.json"
-  tar -xOf "$PACKAGE_TGZ" package/package.json >"$root_manifest"
-  if ! tar -tzf "$PACKAGE_TGZ" package/node_modules/@openclaw/ai/package.json >/dev/null 2>&1; then
-    if node -e '
-const manifest = require(process.argv[1]);
-process.exit(manifest.dependencies?.["@openclaw/ai"] ? 0 : 1);
-' "$root_manifest"; then
-      if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-        echo "OpenClaw tarball requires a verified candidate registry for unbundled @openclaw/ai" >&2
-        exit 1
-      fi
-      REQUIRED_REGISTRY_PACKAGES='["@openclaw/ai"]'
-      echo "==> Resolve candidate @openclaw/ai from the prepared package registry"
-      return
-    fi
-    echo "==> Candidate has no bundled @openclaw/ai dependency"
-    return
-  fi
-  echo "==> Extract bundled candidate @openclaw/ai package"
-  ai_package_dir="$PACK_DIR/ai-candidate"
-  mkdir -p "$ai_package_dir"
-  tar -xzf "$PACKAGE_TGZ" \
-    -C "$ai_package_dir" \
-    --strip-components=4 \
-    package/node_modules/@openclaw/ai
-  ai_manifest="$ai_package_dir/package.json"
-  node scripts/e2e/lib/bun-global-install/assertions.mjs \
-    assert-release-versions \
-    "$root_manifest" \
-    "$ai_manifest" \
-    >/dev/null
-  npm pack --ignore-scripts --silent --pack-destination "$PACK_DIR" "$ai_package_dir" >/dev/null
-  ai_tarballs=("$PACK_DIR"/openclaw-ai-*.tgz)
-  if [ "${#ai_tarballs[@]}" -ne 1 ] || [ ! -f "${ai_tarballs[0]}" ]; then
-    echo "expected one packed @openclaw/ai candidate in $PACK_DIR" >&2
-    exit 1
-  fi
-  AI_PACKAGE_TGZ="${ai_tarballs[0]}"
 }
 
 trap cleanup EXIT
@@ -230,7 +182,10 @@ main() {
   fi
 
   resolve_package_tgz
-  prepare_ai_candidate
+  if [ -z "$PACK_DIR" ]; then
+    PACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-pack.XXXXXX")"
+  fi
+  prepare_ai_candidate "$PACKAGE_TGZ" "$PACK_DIR"
   openclaw_prepublish_plugin_registry_start_mounted \
     "$PACK_DIR/registry" REGISTRY_PID "$REQUIRED_REGISTRY_PACKAGES"
 

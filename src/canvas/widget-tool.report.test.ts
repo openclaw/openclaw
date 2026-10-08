@@ -215,7 +215,6 @@ describe("native report authoring", () => {
     { pin: true, kind: "html" },
     { pin: true, widget_code: "<p>Other content</p>" },
     { pin: true, presentation: { target: "assistant_message" } },
-    { pin: true, presentation: { target: "node_panel" } },
   ])("rejects unsupported report presentation before any write: %j", async (options) => {
     const callGateway = vi.fn();
     const tool = createShowWidgetTool({ agentSessionKey: "agent:main:report", callGateway });

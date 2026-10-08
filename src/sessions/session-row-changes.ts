@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { SessionMembershipFact } from "../config/sessions/session-membership-facts.types.js";
+import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import {
   deferSqlitePostCommitPublication,
   stageSqliteTransactionState,
@@ -9,6 +10,14 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 export type SessionRowFacts =
   | { kind: "unchanged" }
+  | { kind: "replacement"; membership: SessionMembershipFact }
+  | {
+      kind: "acp";
+      sessionId: string | undefined;
+      lifecycleRevision: string | null;
+      sessionStartedAt?: number;
+      acp: SessionAcpMeta | null;
+    }
   | {
       kind: "entry";
       previousSessionId: string | undefined;
@@ -17,6 +26,12 @@ export type SessionRowFacts =
       clearMembers: boolean;
     }
   | { kind: "member"; sessionId: string; identityId: string; present: boolean }
+  | {
+      kind: "owner";
+      sessionId: string;
+      lifecycleRevision: string | null;
+      owner: SessionEntry["owner"];
+    }
   | {
       kind: "participants";
       /** Participant history belongs to the logical key, across transcript replacements. */
@@ -30,9 +45,9 @@ export type SessionRowChange =
       sessionKey: string;
       agentId?: string;
       storePath?: string;
-      scope?: "automation" | "runtime" | "session-entry";
-      /** An uncertain storage result requires worker reconciliation before facts are reused. */
-      factsInvalidated?: true;
+      scope?: "automation" | "runtime" | "session-entry" | "acp" | "transcript";
+      /** Category uncertainty cannot change identity or lineage; other storage outcomes can. */
+      factsInvalidated?: true | "category";
       /** Omission is a metadata notification; storage owners publish their changed facts. */
       facts?: SessionRowFacts;
     }
@@ -80,11 +95,20 @@ export const sessionChanges = {
   subscribeProjection(listener: (change: SessionRowChange) => void): () => void {
     return registerListener(projectionListeners, listener);
   },
+  /** Pending or indeterminate work fences facts without announcing a committed change. */
+  invalidate(change: SessionRowChange): void {
+    notifyListeners(factListeners, change);
+    notifyListeners(projectionListeners, change);
+  },
   /** SQLite observers run only after all committed owner state has settled. */
   emit(change: SessionRowChange, database?: DatabaseSync): void {
     sessionChanges.emitBatch([change], database);
   },
-  emitBatch(changes: readonly SessionRowChange[], database?: DatabaseSync): void {
+  emitBatch(
+    changes: readonly SessionRowChange[],
+    database?: DatabaseSync,
+    beforePublicNotifications?: () => void,
+  ): void {
     const publishFacts = () => {
       for (const change of changes) {
         notifyListeners(factListeners, change);
@@ -110,6 +134,7 @@ export const sessionChanges = {
       prepareObservers();
     }
     const publish = () => {
+      beforePublicNotifications?.();
       for (const change of changes) {
         if ("sessionKey" in change) {
           const { facts: _facts, factsInvalidated: _invalidated, ...notification } = change;

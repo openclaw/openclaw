@@ -1,8 +1,3 @@
-/**
- * Shared built-in session tool input/detail contracts.
- *
- * Keeps tool factories, renderers, and callers aligned on typed payload and metadata shapes.
- */
 import type { Static } from "typebox";
 import type {
   bashSchema,

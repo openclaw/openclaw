@@ -1,4 +1,7 @@
+import { realpath } from "node:fs/promises";
+import { resolve } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
@@ -11,7 +14,7 @@ import {
 } from "../plugins/install-artifact-inspection.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { readClawCronRefs, type PersistedClawCronRef } from "./cron.js";
-import { digestClawAgentConfig } from "./lifecycle-config-removal.js";
+import { digestClawValue } from "./digest.js";
 import {
   ClawRemoveError,
   inspectClawBootstrap,
@@ -27,10 +30,16 @@ import {
   type PersistedClawMcpServerRef,
 } from "./mcp.js";
 import {
+  normalizeWorkspaceConfig,
+  resolveMigrationAgentSettings,
+  withAuthoredAgentRoster,
+} from "./migrate-validation.js";
+import {
   inspectClawPackage,
   type ClawPackageInspection,
   type PackageRemovalDeps,
 } from "./package-remove.js";
+import { readClawPackageOwnership } from "./provenance-async.js";
 import {
   readClawInstallRecords,
   readClawPackageRefs,
@@ -178,6 +187,41 @@ function inspectMcpServer(
   };
 }
 
+/** Package cleanup needs ownership and artifact inspections, without unrelated state repairs. */
+export async function readClawPackageRemovalStatus(
+  agentId: string,
+  options: OpenClawStateDatabaseOptions & {
+    signal?: AbortSignal;
+    packageDeps?: PackageRemovalDeps;
+  } = {},
+): Promise<Pick<ClawStatusRecord, "install" | "packages" | "orphaned"> | undefined> {
+  const snapshot = await readClawPackageOwnership({ ...options, agentId });
+  if (!snapshot.install && snapshot.packageRefs.length === 0 && !snapshot.orphanWorkspace) {
+    return undefined;
+  }
+  const firstPackage = snapshot.packageRefs[0];
+  const install =
+    snapshot.install ??
+    synthesizeOrphanInstall({
+      agentId,
+      clawName: firstPackage?.clawName,
+      workspace: snapshot.orphanWorkspace?.workspace,
+      updatedAtMs: Math.max(
+        firstPackage?.updatedAtMs ?? 0,
+        snapshot.orphanWorkspace?.updatedAtMs ?? 0,
+      ),
+    });
+  return {
+    install,
+    ...(snapshot.install ? {} : { orphaned: true }),
+    packages: await Promise.all(
+      snapshot.packageRefs.map((packageRef) =>
+        inspectClawPackageCompatibility({ install, packageRef, packageDeps: options.packageDeps }),
+      ),
+    ),
+  };
+}
+
 export async function readClawStatus(
   target?: string,
   options: OpenClawStateDatabaseOptions & {
@@ -234,7 +278,26 @@ export async function readClawStatus(
   const records: ClawStatusRecord[] = [];
   const packagePreflight = options.packagePreflight;
   for (const install of installs) {
-    const agent = listAgentEntries(config).find((candidate) => candidate.id === install.agentId);
+    const lifecycleConfig =
+      install.agentOrigin === "adopted" && listedMcp?.ok
+        ? withAuthoredAgentRoster(config, listedMcp.sourceConfigBeforeMigrations)
+        : config;
+    const agent = listAgentEntries(lifecycleConfig).find(
+      (candidate) => candidate.id === install.agentId,
+    );
+    let comparableAgent = agent;
+    if (agent?.id && install.agentOrigin === "adopted") {
+      try {
+        comparableAgent = normalizeWorkspaceConfig(
+          resolveMigrationAgentSettings(lifecycleConfig, agent),
+          await realpath(resolveAgentWorkspaceDir(config, install.agentId, options.env)).catch(() =>
+            resolve(resolveAgentWorkspaceDir(config, install.agentId, options.env)),
+          ),
+        );
+      } catch {
+        comparableAgent = undefined;
+      }
+    }
     const packageRefs = allPackageRefs.filter(
       (packageRef) => packageRef.agentId === install.agentId,
     );
@@ -253,7 +316,7 @@ export async function readClawStatus(
       ...(installAgentIds.has(install.agentId) ? {} : { orphaned: true }),
       agentState: !agent
         ? "missing"
-        : digestClawAgentConfig(agent) === install.agentConfigDigest
+        : digestClawValue(comparableAgent) === install.agentConfigDigest
           ? "present"
           : "modified",
       bootstrapState: bootstrap.state,
@@ -272,7 +335,7 @@ export async function readClawStatus(
       ),
       mcpServers: (options.readOnly
         ? readClawMcpServerRefs(install.agentId, options)
-        : reconcileClawMcpServerRefs(install.agentId, configuredMcpServers, options)
+        : await reconcileClawMcpServerRefs(install.agentId, configuredMcpServers, options)
       ).map((ref) => inspectMcpServer(ref, configuredMcpServers)),
       cronJobs: readClawCronRefs(install.agentId, options),
     });

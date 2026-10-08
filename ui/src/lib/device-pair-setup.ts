@@ -1,8 +1,4 @@
-// Shared mobile pairing setup state for app-level entry points.
-import {
-  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-  type GatewayProtocolRequestOptions,
-} from "@openclaw/gateway-client/browser";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   DevicePairSetupCodeParams,
@@ -11,15 +7,10 @@ import type {
   DevicePairSetupDeliveryUncertainEvent,
   DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { formatUiError } from "./format-error.ts";
 
-type GatewayRequestClient = {
-  request<T = unknown>(
-    method: string,
-    params?: unknown,
-    options?: GatewayProtocolRequestOptions,
-  ): Promise<T>;
-};
+type GatewayRequestClient = Pick<GatewayBrowserClient, "request">;
 
 export type DevicePairSetup = DevicePairSetupCodeResult & {
   setupId: string;

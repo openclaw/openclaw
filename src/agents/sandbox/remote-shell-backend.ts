@@ -54,13 +54,9 @@ export async function createRemoteShellSandboxBackend(
     ? resolvePreprovisionedRuntimePaths(options.preprovisionedWorkdir)
     : resolveRemoteShellRuntimePaths(params.cfg.ssh.workspaceRoot, params.scopeKey);
   return new RemoteShellSandboxBackendImpl({
+    ...options,
     createParams: params,
-    preprovisionedWorkdir: options.preprovisionedWorkdir,
     backendId: options.backendId ?? params.cfg.backend,
-    runtimeId: options.runtimeId,
-    configLabel: options.configLabel,
-    configLabelKind: options.configLabelKind,
-    createSession: options.createSession,
     runtimePaths,
   }).asHandle();
 }
@@ -71,14 +67,9 @@ class RemoteShellSandboxBackendImpl {
   private readonly pendingExecs = new WeakMap<object, PendingExec>();
 
   constructor(
-    private readonly params: {
+    private readonly params: RemoteShellSandboxBackendOptions & {
       createParams: CreateSandboxBackendParams;
-      preprovisionedWorkdir?: PreprovisionedRemoteWorkdir;
-      createSession: () => Promise<RemoteShellSandboxSession>;
       backendId: string;
-      runtimeId?: string;
-      configLabel?: string;
-      configLabelKind?: string;
       runtimePaths: ResolvedRemoteRuntimePaths;
     },
   ) {}
@@ -322,12 +313,9 @@ class RemoteShellSandboxBackendImpl {
   }
 
   private consumeRefreshedSkillsForNextExec(workdir: string): boolean {
-    if (this.refreshedSkillsForNextExecWorkdir !== workdir) {
-      this.refreshedSkillsForNextExecWorkdir = null;
-      return false;
-    }
+    const refreshed = this.refreshedSkillsForNextExecWorkdir === workdir;
     this.refreshedSkillsForNextExecWorkdir = null;
-    return true;
+    return refreshed;
   }
 
   private resolveWorkdirValidationRoot(workdir: string): string {

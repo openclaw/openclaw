@@ -1,7 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
-import type { CronStoreTransactionHooks } from "./store/transaction-hooks.types.js";
 
 const mutationMethods = new Set([
   "cron.add",
@@ -80,23 +78,5 @@ export function captureCronMutationCommit(method: string): (() => undefined) | u
       state.committed = true;
     }
     return undefined;
-  };
-}
-
-/** Record the SQL commit before fallible reporting, preserving existing hooks. */
-export function withCronMutationCommitHook(
-  method: string,
-  hooks?: CronStoreTransactionHooks,
-): CronStoreTransactionHooks | undefined {
-  const committed = captureCronMutationCommit(method);
-  if (!committed) {
-    return hooks;
-  }
-  return {
-    ...hooks,
-    afterWrite: (db) => {
-      deferSqlitePostCommitPublication(db, committed);
-      return hooks?.afterWrite?.(db);
-    },
   };
 }

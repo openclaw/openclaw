@@ -8,6 +8,7 @@ import {
   finalizeRoleSnapshot,
   type RoleSnapshotIdentityMode,
   type RoleSnapshotOptions,
+  type RoleSnapshotResult,
   type RoleRefMap,
 } from "./pw-role-snapshot.js";
 import { storeRoleRefsForTarget } from "./pw-session.js";
@@ -36,13 +37,7 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   urls?: boolean;
   maxChars?: number;
   delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
-}): Promise<{
-  snapshot: string;
-  truncated?: boolean;
-  refs: RoleRefMap;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
-  newElements?: number;
-}> {
+}): Promise<RoleSnapshotResult> {
   const snapshot = params.urls
     ? appendSnapshotUrls(
         params.built.snapshot,
@@ -82,13 +77,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
   delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
-}): Promise<{
-  snapshot: string;
-  truncated?: boolean;
-  refs: Record<string, { role: string; name?: string; nth?: number }>;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
-  newElements?: number;
-}> {
+}): Promise<RoleSnapshotResult> {
   const page = await prepareSnapshotPageViaPlaywright({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,

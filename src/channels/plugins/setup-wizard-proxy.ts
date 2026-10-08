@@ -87,41 +87,30 @@ export function createAllowlistSetupWizardProxy<TGroupResolved>(params: {
   fallbackResolvedGroupAllowlist: (entries: string[]) => TGroupResolved;
 }) {
   return params.createBase({
-    promptAllowFrom: async ({ cfg, prompter, accountId }) => {
+    promptAllowFrom: async (input) => {
       const wizard = await params.loadWizard();
       if (!wizard.dmPolicy?.promptAllowFrom) {
-        return cfg;
+        return input.cfg;
       }
-      return await wizard.dmPolicy.promptAllowFrom({ cfg, prompter, accountId });
+      return await wizard.dmPolicy.promptAllowFrom(input);
     },
-    resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) => {
+    resolveAllowFromEntries: async (input) => {
       const wizard = await params.loadWizard();
       if (!wizard.allowFrom) {
         // A base wizard may expose allowlist UI before the delegated wizard has
         // resolver support. Preserve raw entries as unresolved instead of failing.
-        return entries.map((input) => ({ input, resolved: false, id: null }));
+        return input.entries.map((entry) => ({ input: entry, resolved: false, id: null }));
       }
-      return await wizard.allowFrom.resolveEntries({
-        cfg,
-        accountId,
-        credentialValues,
-        entries,
-      });
+      return await wizard.allowFrom.resolveEntries(input);
     },
-    resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries, prompter }) => {
+    resolveGroupAllowlist: async (input) => {
       const wizard = await params.loadWizard();
       if (!wizard.groupAccess?.resolveAllowlist) {
         // Group allowlists are channel-specific; callers provide the safe
         // fallback representation when the delegated wizard has no resolver.
-        return params.fallbackResolvedGroupAllowlist(entries);
+        return params.fallbackResolvedGroupAllowlist(input.entries);
       }
-      return (await wizard.groupAccess.resolveAllowlist({
-        cfg,
-        accountId,
-        credentialValues,
-        entries,
-        prompter,
-      })) as TGroupResolved;
+      return (await wizard.groupAccess.resolveAllowlist(input)) as TGroupResolved;
     },
   });
 }

@@ -10,7 +10,6 @@ import {
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   resolveMemoryCoreLocalServiceHostIdentity,
@@ -18,7 +17,6 @@ import {
 } from "./embedding-local-service.js";
 import {
   MemoryManagerReloadError,
-  prepareMemoryManagerReload,
   type MemoryManagerLifecycle,
   type MemoryReloadState,
 } from "./lifecycle.js";
@@ -26,10 +24,6 @@ import {
 const log = createSubsystemLogger("memory");
 
 export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "maintenance";
-
-export function isTransientMemoryIndexManagerPurpose(purpose: MemoryIndexManagerPurpose): boolean {
-  return purpose !== "default";
-}
 
 export function normalizeMemoryIndexManagerPurpose(
   purpose: MemoryIndexManagerPurpose | undefined,
@@ -92,7 +86,6 @@ type ManagerOwnership = {
   retiring: boolean;
 };
 
-type MemoryReloadChange = Parameters<NonNullable<MemoryPluginRuntime["prepareReload"]>>[0];
 export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
   readonly embeddingProbeCache = new Map<string, MemoryEmbeddingProbeCacheEntry>();
   private readonly cache = new Map<string, T>();
@@ -178,12 +171,6 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     this.managers.get(manager)?.providers.delete(provider);
   }
 
-  prepareReload(
-    change: MemoryReloadChange,
-  ): ReturnType<NonNullable<MemoryPluginRuntime["prepareReload"]>> {
-    return prepareMemoryManagerReload(change, this.lifecycle);
-  }
-
   private prepareManagersForReload(reload: MemoryReloadState) {
     // A probe can outlive its transient manager, but never the adapter that produced it.
     for (const [key, entry] of this.embeddingProbeCache) {
@@ -252,7 +239,6 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
       if (this.reload?.retireRuntime) {
         throw new MemoryManagerReloadError();
       }
-      const transient = isTransientMemoryIndexManagerPurpose(params.purpose);
       const create = async () => {
         if (this.reload?.retireRuntime) {
           throw new MemoryManagerReloadError();
@@ -266,7 +252,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
         }
         return manager;
       };
-      if (transient) {
+      if (params.purpose !== "default") {
         return await create();
       }
       const cachedManager = this.cache.get(prepared.key);
@@ -297,7 +283,14 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
   }
 
   async closeAll(): Promise<void> {
-    await this.runGlobalClose(() => this.retryFailedGlobalClose());
+    const previous = this.closePromise ?? Promise.resolve();
+    const operation = () => this.retryFailedGlobalClose();
+    const closePromise = previous.then(operation, operation);
+    this.closePromise = closePromise;
+    await closePromise;
+    if (this.closePromise === closePromise) {
+      this.closePromise = null;
+    }
   }
 
   async closeForAgent(params: {
@@ -305,9 +298,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     purpose: MemoryIndexManagerPurpose;
   }): Promise<void> {
     const scope = { agentId: normalizeAgentId(params.agentId), purpose: params.purpose };
-    await this.runScopeOperation(scope, async () => {
-      await this.closeScopeUnlocked(scope);
-    });
+    await this.runScopeOperation(scope, () => this.closeScopeUnlocked(scope));
   }
 
   deleteIfCurrent(key: string, manager: T): void {
@@ -324,16 +315,6 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     } catch (err) {
       this.closeFailed = true;
       throw err;
-    }
-  }
-
-  private async runGlobalClose(operation: () => Promise<void>): Promise<void> {
-    const previous = this.closePromise ?? Promise.resolve();
-    const closePromise = previous.then(operation, operation);
-    this.closePromise = closePromise;
-    await closePromise;
-    if (this.closePromise === closePromise) {
-      this.closePromise = null;
     }
   }
 

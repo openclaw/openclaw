@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.27.0
 
-FROM ubuntu:24.04@sha256:a053cbffda9d424679c103c5b4f452297efc3774a1e491c110289f726fbb5d34
+FROM ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 
 # Smoke images are pinned and short-lived, so skip distro upgrades here and
 # spend the time budget on installer coverage instead.

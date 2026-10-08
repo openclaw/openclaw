@@ -1,6 +1,3 @@
-/**
- * Plans which core, bundle MCP, and bundle LSP tools an attempt should build.
- */
 import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import {
   type CoreToolFactoryFamily,
@@ -21,21 +18,17 @@ import {
   readToolAllowlistIntersection,
 } from "../../tool-policy.js";
 
-const ALL_CODING_TOOL_CONSTRUCTION_PLAN: OpenClawCodingToolConstructionPlan = {
-  includeBaseCodingTools: true,
-  includeShellTools: true,
-  includeChannelTools: true,
-  includeOpenClawTools: true,
-  includePluginTools: true,
-};
-
-const NO_CODING_TOOL_CONSTRUCTION_PLAN: OpenClawCodingToolConstructionPlan = {
-  includeBaseCodingTools: false,
-  includeShellTools: false,
-  includeChannelTools: false,
-  includeOpenClawTools: false,
-  includePluginTools: false,
-};
+function createUniformCodingToolConstructionPlan(
+  include: boolean,
+): OpenClawCodingToolConstructionPlan {
+  return {
+    includeBaseCodingTools: include,
+    includeShellTools: include,
+    includeChannelTools: include,
+    includeOpenClawTools: include,
+    includePluginTools: include,
+  };
+}
 
 function isBundleMcpAllowlistName(normalized: string): boolean {
   // Bundle MCP tools use the synthetic bundle name or `bundle__tool` separator form.
@@ -124,14 +117,14 @@ function resolveCodingToolConstructionPlanForAllowlist(
   toolsAllow?: string[],
 ): OpenClawCodingToolConstructionPlan {
   if (!toolsAllow) {
-    return { ...ALL_CODING_TOOL_CONSTRUCTION_PLAN };
+    return createUniformCodingToolConstructionPlan(true);
   }
   const restrictions = readToolAllowlistIntersection(toolsAllow);
   if (!restrictions && toolsAllow.length === 0) {
-    return { ...NO_CODING_TOOL_CONSTRUCTION_PLAN };
+    return createUniformCodingToolConstructionPlan(false);
   }
   if (!restrictions && hasWildcardToolAllowlist(toolsAllow)) {
-    return { ...ALL_CODING_TOOL_CONSTRUCTION_PLAN };
+    return createUniformCodingToolConstructionPlan(true);
   }
   const constructionEntries = restrictions?.flat() ?? toolsAllow;
   const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(constructionEntries));
@@ -147,28 +140,17 @@ function resolveCodingToolConstructionPlanForAllowlist(
       .filter(({ name }) => constructionMatchers.every((matches) => matches(name)))
       .map(({ family }) => family),
   );
-  let includePluginTools = false;
-  for (const name of normalized) {
-    const family = resolveCoreToolFactoryFamily(name);
-    if (family) {
-      continue;
-    }
-    // Only bundle-mcp is unambiguous; namespaced entries can belong to plugins.
-    if (name !== "bundle-mcp") {
-      includePluginTools = true;
-    }
-  }
-  const includeBaseCodingTools = coreFamilies.has("base-coding");
-  const includeShellTools = coreFamilies.has("shell");
-  const includeOpenClawTools = coreFamilies.has("openclaw");
-  // Channel delivery tools are constructed through plugin-capable runtime setup.
-  const includeChannelTools = includePluginTools;
+  // Only bundle-mcp is unambiguous; namespaced entries can belong to plugins.
+  const includePluginTools = normalized.some(
+    (name) => !resolveCoreToolFactoryFamily(name) && name !== "bundle-mcp",
+  );
 
   return {
-    includeBaseCodingTools,
-    includeShellTools,
-    includeChannelTools,
-    includeOpenClawTools,
+    includeBaseCodingTools: coreFamilies.has("base-coding"),
+    includeShellTools: coreFamilies.has("shell"),
+    // Channel delivery tools are constructed through plugin-capable runtime setup.
+    includeChannelTools: includePluginTools,
+    includeOpenClawTools: coreFamilies.has("openclaw"),
     includePluginTools,
   };
 }
@@ -200,7 +182,7 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
     return {
       constructTools: false,
       includeCoreTools: false,
-      codingToolConstructionPlan: { ...NO_CODING_TOOL_CONSTRUCTION_PLAN },
+      codingToolConstructionPlan: createUniformCodingToolConstructionPlan(false),
     };
   }
   const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
@@ -224,12 +206,14 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   };
 }
 
+type BundleRuntimeParams = {
+  toolsEnabled: boolean;
+  disableTools?: boolean;
+  toolsAllow?: string[];
+};
+
 function shouldCreateBundleRuntimeForAttempt(
-  params: {
-    toolsEnabled: boolean;
-    disableTools?: boolean;
-    toolsAllow?: string[];
-  },
+  params: BundleRuntimeParams,
   matchesAllowlist: (normalizedToolNames: string[]) => boolean,
 ): boolean {
   if (!params.toolsEnabled || params.disableTools === true) {
@@ -251,12 +235,9 @@ function shouldCreateBundleRuntimeForAttempt(
  * runtime creation follows explicit bundle/plugin names or globs that can reach
  * a configured server namespace. Final tool policy remains authoritative.
  */
-export function shouldCreateBundleMcpRuntimeForAttempt(params: {
-  toolsEnabled: boolean;
-  disableTools?: boolean;
-  toolsAllow?: string[];
-  resolveConfiguredMcpNamespaces?: () => string[];
-}): boolean {
+export function shouldCreateBundleMcpRuntimeForAttempt(
+  params: BundleRuntimeParams & { resolveConfiguredMcpNamespaces?: () => string[] },
+): boolean {
   return shouldCreateBundleRuntimeForAttempt(params, (names) => {
     if (names.some((name) => isBundleMcpAllowlistName(name) || name === "group:plugins")) {
       return true;
@@ -273,14 +254,7 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   });
 }
 
-/**
- * Discovers LSP tools for plugin grants or patterns that can match their namespace.
- */
-export function shouldCreateBundleLspRuntimeForAttempt(params: {
-  toolsEnabled: boolean;
-  disableTools?: boolean;
-  toolsAllow?: string[];
-}): boolean {
+export function shouldCreateBundleLspRuntimeForAttempt(params: BundleRuntimeParams): boolean {
   return shouldCreateBundleRuntimeForAttempt(params, (names) =>
     names.some(
       (name) =>

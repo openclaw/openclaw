@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const PARTIAL_FAILURE_RECOVERY_SCENARIO = "telegram-partial-failure-recovery";
 const SOURCE_GATED_SCENARIOS = [
   "telegram-empty-response-after-write-recovery",
+  "telegram-prepared-delivery-recovery",
   "telegram-progress-tool-visibility",
   "telegram-provider-failure-before-output",
   "telegram-queue-invalid-mode",

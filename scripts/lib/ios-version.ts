@@ -1,9 +1,12 @@
-// Ios Version script supports OpenClaw repository automation.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { extractChangelogSection } from "./mobile-changelog.ts";
 import { encodeMobileStoreVersion, MAX_MOBILE_STORE_REVISION } from "./mobile-store-version.ts";
-import { parsePinnedReleaseVersion, parseReleaseVersion } from "./release-version.mjs";
+import {
+  normalizeGatewayVersionToPinnedMobileVersion,
+  readRootPackageVersion,
+} from "./mobile-version.ts";
+import { parsePinnedReleaseVersion } from "./release-version.mjs";
 
 const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
 export const MAX_IOS_APP_STORE_REVISION = MAX_MOBILE_STORE_REVISION;
@@ -38,14 +41,12 @@ export function normalizePinnedIosVersion(rawVersion: string): string {
 
 export function normalizeIosAppStoreRevision(rawRevision: string | number): number {
   const normalized = String(rawRevision).trim();
-  if (!/^(?:0|[1-9]\d*)$/u.test(normalized)) {
-    throw new Error(
-      `Invalid iOS App Store revision '${rawRevision}'. Expected an integer from 0 to ${MAX_IOS_APP_STORE_REVISION}.`,
-    );
-  }
-
   const revision = Number(normalized);
-  if (!Number.isSafeInteger(revision) || revision > MAX_IOS_APP_STORE_REVISION) {
+  if (
+    !/^(?:0|[1-9]\d*)$/u.test(normalized) ||
+    !Number.isSafeInteger(revision) ||
+    revision > MAX_IOS_APP_STORE_REVISION
+  ) {
     throw new Error(
       `Invalid iOS App Store revision '${rawRevision}'. Expected an integer from 0 to ${MAX_IOS_APP_STORE_REVISION}.`,
     );
@@ -71,36 +72,6 @@ export function encodeIosAppStoreVersion(
   }
 }
 
-function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): string {
-  const trimmed = rawVersion.trim().replace(/^v/u, "");
-  if (!trimmed) {
-    throw new Error("Missing root package.json version.");
-  }
-
-  const parsed = parseReleaseVersion(trimmed);
-  if (!parsed) {
-    throw new Error(
-      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.PATCH, YYYY.M.PATCH-alpha.N, YYYY.M.PATCH-beta.N, or YYYY.M.PATCH-N.`,
-    );
-  }
-
-  return parsed.baseVersion;
-}
-
-function rootPackageJsonPath(rootDir = path.resolve(".")): string {
-  return path.join(rootDir, "package.json");
-}
-
-function readRootPackageVersion(rootDir = path.resolve(".")): string {
-  const packageJsonPath = rootPackageJsonPath(rootDir);
-  const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
-  const version = typeof parsed.version === "string" ? parsed.version.trim() : "";
-  if (!version) {
-    throw new Error(`Missing package.json version in ${packageJsonPath}.`);
-  }
-  return version;
-}
-
 export function resolveGatewayVersionForIosRelease(rootDir = path.resolve(".")): {
   packageVersion: string;
   pinnedIosVersion: string;
@@ -108,7 +79,7 @@ export function resolveGatewayVersionForIosRelease(rootDir = path.resolve(".")):
   const packageVersion = readRootPackageVersion(rootDir);
   return {
     packageVersion,
-    pinnedIosVersion: normalizeGatewayVersionToPinnedIosVersion(packageVersion),
+    pinnedIosVersion: normalizeGatewayVersionToPinnedMobileVersion(packageVersion),
   };
 }
 
@@ -138,7 +109,7 @@ export function resolveIosVersion(
     buildVersion: "1",
     changelogPath,
     versionSource: explicitReleaseVersion ? "explicit" : "package",
-    versionSourcePath: explicitReleaseVersion ? null : rootPackageJsonPath(rootDir),
+    versionSourcePath: explicitReleaseVersion ? null : path.join(rootDir, "package.json"),
   };
 }
 

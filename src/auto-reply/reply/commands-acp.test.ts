@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveSessionStorePathForAcp } from "../../acp/runtime/session-meta-store.js";
@@ -10,10 +10,10 @@ import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-i
 import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { setMinimalAcpCommandRegistryForTests } from "./commands-acp.channels.test-support.js";
 import {
+  createAcpCommandSessionBindingService,
   createAcpTestSessionBinding as createSessionBinding,
   type AcpTestSessionBinding as FakeBinding,
 } from "./test-fixtures/acp-runtime.js";
@@ -79,27 +79,6 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-function createAcpCommandSessionBindingService() {
-  return {
-    bind: (input: unknown) => hoisted.sessionBindingBindMock(input),
-    getCapabilities: (params: unknown) => hoisted.sessionBindingCapabilitiesMock(params),
-    inspectByConversationAsync: async (
-      ref: unknown,
-    ): Promise<{ status: "available"; binding: SessionBindingRecord | null }> => ({
-      status: "available",
-      binding: hoisted.sessionBindingResolveByConversationMock(ref),
-    }),
-    listBySession: (targetSessionKey: string) =>
-      hoisted.sessionBindingListBySessionMock(targetSessionKey),
-    resolveByConversation: (ref: unknown) => hoisted.sessionBindingResolveByConversationMock(ref),
-    resolveByConversationAsync: async (ref: unknown) =>
-      hoisted.sessionBindingResolveByConversationMock(ref),
-    touch: vi.fn(),
-    touchAsync: vi.fn(async () => {}),
-    unbind: (input: unknown) => hoisted.sessionBindingUnbindMock(input),
-  };
-}
-
 vi.mock("../../acp/control-plane/spawn.js", () => ({
   cleanupFailedAcpSpawn: (args: unknown) => hoisted.cleanupFailedAcpSpawnMock(args),
 }));
@@ -113,7 +92,8 @@ vi.mock("../../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: (id?: string) => hoisted.getAcpRuntimeBackendMock(id),
 }));
 
-vi.mock("../../acp/runtime/session-meta.js", () => ({
+vi.mock("../../acp/runtime/session-meta.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../acp/runtime/session-meta.js")>()),
   listAcpSessionEntries: (args: unknown) => hoisted.listAcpSessionEntriesMock(args),
   readAcpSessionEntry: (args: unknown) => hoisted.readAcpSessionEntryMock(args),
   readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsyncMock,
@@ -147,7 +127,16 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
   >("../../infra/outbound/session-binding-service.js");
   return {
     ...actual,
-    getSessionBindingService: createAcpCommandSessionBindingService,
+    getSessionBindingService: () =>
+      createAcpCommandSessionBindingService({
+        bind: hoisted.sessionBindingBindMock,
+        getCapabilities: hoisted.sessionBindingCapabilitiesMock,
+        listBySession: hoisted.sessionBindingListBySessionMock,
+        resolveByConversation: hoisted.sessionBindingResolveByConversationMock,
+        unbind: hoisted.sessionBindingUnbindMock,
+      }),
+    listSessionBindingsBySessionsAsync: async (keys: readonly string[]) =>
+      new Map(keys.map((key) => [key, hoisted.sessionBindingListBySessionMock(key)])),
   } satisfies typeof actual;
 });
 
@@ -156,21 +145,6 @@ const { buildCommandTestParams } = await import("./commands-spawn.test-harness.j
 const { AcpSessionManager, testing: acpManagerTesting } =
   await import("../../acp/control-plane/manager.js");
 const { resolveEffectiveResetTargetSessionKey } = await import("./acp-reset-target.js");
-const { createTaskRecord } = await import("../../tasks/task-registry.js");
-const { resetTaskRegistryForTests } = await import("../../tasks/task-runtime.test-helpers.js");
-const { configureTaskRegistryRuntime } = await import("../../tasks/task-registry.store.js");
-const { failTaskRunByRunIdCore } = await import("../../tasks/task-executor.js");
-
-function configureInMemoryTaskRegistryStoreForTests(): void {
-  configureTaskRegistryRuntime({
-    store: {
-      ...createInMemoryTaskRegistryStore(),
-      upsertTaskWithDeliveryState: () => {},
-      upsertDeliveryState: () => {},
-      close: () => {},
-    },
-  });
-}
 
 const baseCfg = {
   acp: {
@@ -536,8 +510,6 @@ describe("/acp command", () => {
   beforeEach(() => {
     setMinimalAcpCommandRegistryForTests();
     acpManagerTesting.resetAcpSessionManagerForTests();
-    resetTaskRegistryForTests({ persist: false });
-    configureInMemoryTaskRegistryStoreForTests();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.callGatewayMock.mockReset().mockResolvedValue({ ok: true });
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
@@ -768,10 +740,6 @@ describe("/acp command", () => {
     });
   });
 
-  afterEach(() => {
-    resetTaskRegistryForTests({ persist: false });
-  });
-
   it("returns null when the message is not /acp", async () => {
     const result = await runDiscordAcpCommand("/status");
     expect(result).toBeNull();
@@ -869,12 +837,11 @@ describe("/acp command", () => {
       const cfg = {
         ...baseCfg,
         agents: {
-          list: [
-            {
-              id: "codex",
+          entries: {
+            codex: {
               workspace,
             },
-          ],
+          },
         },
       } satisfies OpenClawConfig;
 
@@ -903,12 +870,11 @@ describe("/acp command", () => {
     const cfg = {
       ...baseCfg,
       agents: {
-        list: [
-          {
-            id: "codex",
+        entries: {
+          codex: {
             workspace: "/home/bob/codex-workspace-missing",
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
 
@@ -1398,53 +1364,51 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Viewed diver package.");
   });
 
-  it("resolves ACP reset targets through the configured default account when AccountId is omitted", async () => {
-    const cfg = {
-      ...baseCfg,
-      channels: {
-        discord: {
-          defaultAccount: "work",
+  it.each([
+    {
+      name: "configured default account",
+      cfg: {
+        ...baseCfg,
+        channels: {
+          discord: { defaultAccount: "work" },
         },
-      },
-    } satisfies OpenClawConfig;
-    hoisted.sessionBindingResolveByConversationMock.mockImplementation(
-      (ref: {
-        channel?: string;
-        accountId?: string;
-        conversationId?: string;
-        parentConversationId?: string;
-      }) =>
-        ref.channel === "discord" &&
-        ref.accountId === "work" &&
-        ref.conversationId === defaultThreadId &&
-        ref.parentConversationId === "parent-1"
-          ? createSessionBinding({
-              targetSessionKey: defaultAcpSessionKey,
-              conversation: {
-                channel: "discord",
-                accountId: "work",
-                conversationId: defaultThreadId,
-                parentConversationId: "parent-1",
-              },
-            })
-          : null,
-    );
-
-    const result = await resolveEffectiveResetTargetSessionKey({
-      cfg,
-      channel: "discord",
-      conversationId: defaultThreadId,
-      parentConversationId: "parent-1",
-    });
-
-    expectMockCallFields(hoisted.sessionBindingResolveByConversationMock, {
-      channel: "discord",
+      } satisfies OpenClawConfig,
       accountId: "work",
-      conversationId: defaultThreadId,
-      parentConversationId: "parent-1",
-    });
-    expect(result).toBe(defaultAcpSessionKey);
-  });
+    },
+    { name: "default account without channel config", cfg: {}, accountId: "default" },
+  ])(
+    "resolves ACP reset targets through $name when AccountId is omitted",
+    async ({ cfg, accountId }) => {
+      const conversation = {
+        channel: "discord",
+        accountId,
+        conversationId: defaultThreadId,
+        parentConversationId: "parent-1",
+      };
+      hoisted.sessionBindingResolveByConversationMock.mockImplementation(
+        (ref: Partial<SessionBindingRecord["conversation"]>) =>
+          ref.channel === "discord" &&
+          ref.accountId === accountId &&
+          ref.conversationId === defaultThreadId &&
+          ref.parentConversationId === "parent-1"
+            ? createSessionBinding({
+                targetSessionKey: defaultAcpSessionKey,
+                conversation,
+              })
+            : null,
+      );
+
+      const result = await resolveEffectiveResetTargetSessionKey({
+        cfg,
+        channel: "discord",
+        conversationId: defaultThreadId,
+        parentConversationId: "parent-1",
+      });
+
+      expectMockCallFields(hoisted.sessionBindingResolveByConversationMock, conversation);
+      expect(result).toBe(defaultAcpSessionKey);
+    },
+  );
 
   it("blocks /acp steer when ACP dispatch is disabled by policy", async () => {
     const cfg = {
@@ -1704,24 +1668,12 @@ describe("/acp command", () => {
         lastUpdatedAt: Date.now(),
       },
     });
-    createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: defaultAcpSessionKey,
-      runId: "acp-run-1",
-      task: "Inspect ACP backlog",
-      status: "running",
-      progressSummary: "Fetching the latest runtime state",
-    });
     const result = await runThreadAcpCommand("/acp status", baseCfg);
 
     expect(result?.reply?.text).toContain("ACP status:");
     expect(result?.reply?.text).toContain(`session: ${defaultAcpSessionKey}`);
     expect(result?.reply?.text).toContain("agent session id: codex-sid-1");
     expect(result?.reply?.text).toContain("acpx session id: acpx-sid-1");
-    expect(result?.reply?.text).toContain("taskStatus: running");
-    expect(result?.reply?.text).toContain("taskProgress: Fetching the latest runtime state");
     expect(result?.reply?.text).toContain("capabilities:");
     expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
   });
@@ -1734,16 +1686,6 @@ describe("/acp command", () => {
         ...createAcpSessionEntry().acp,
         lastActivityAt: 8_700_000_000_000_000,
       },
-    });
-    createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: defaultAcpSessionKey,
-      runId: "acp-run-1",
-      task: "Inspect ACP backlog",
-      status: "running",
-      lastEventAt: 8_700_000_000_000_000,
     });
 
     const result = await runThreadAcpCommand("/acp status", baseCfg);
@@ -1809,32 +1751,10 @@ describe("/acp command", () => {
         ].join("\n"),
       },
     });
-    createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: defaultAcpSessionKey,
-      runId: "acp-run-1",
-      task: "Inspect ACP backlog",
-      status: "running",
-    });
-    failTaskRunByRunIdCore({
-      runId: "acp-run-1",
-      endedAt: Date.now(),
-      error: [
-        "OpenClaw runtime context (internal):",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        "[Internal task completion event]",
-        "source: subagent",
-      ].join("\n"),
-      terminalSummary: "Needs approval to continue.",
-    });
 
     const result = await runThreadAcpCommand("/acp status", baseCfg);
 
     expect(result?.reply?.text).toContain("ACP status:");
-    expect(result?.reply?.text).toContain("taskSummary: Needs approval to continue.");
     expect(result?.reply?.text).not.toContain("OpenClaw runtime context (internal):");
     expect(result?.reply?.text).not.toContain("Internal task completion event");
   });

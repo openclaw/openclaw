@@ -12,14 +12,12 @@ import {
   type ReplyExpectation,
 } from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveSessionPluginStatusLines,
-  resolveSessionPluginTraceLines,
-  type SessionEntry,
-} from "../../config/sessions.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
+import { isRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -38,7 +36,10 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { RuntimeFallbackAttempt } from "./agent-runner-execution.types.js";
+import type {
+  ReplyAgentTurnContext,
+  RuntimeFallbackAttempt,
+} from "./agent-runner-execution.types.js";
 import {
   buildKnownAgentRunFailureReplyPayload,
   buildTerminalAgentRunFailureReplyPayload,
@@ -46,11 +47,16 @@ import {
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
-import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
-import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
+import {
+  type FollowupRun,
+  kickFollowupDrainIfIdle,
+  type QueueSettings,
+  scheduleFollowupDrain,
+} from "./queue.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
 import {
+  buildRestartLifecycleReplyText,
   isReplyOperationSuperseded,
   resolveReplyOperationAbortReason,
 } from "./reply-operation-abort.js";
@@ -59,9 +65,6 @@ import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
 export const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
-
-const RESTART_LIFECYCLE_REPLY_TEXT =
-  "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 
 export function scheduleFollowupDrainAfterReplyOperationClear(params: {
   operation: ReplyOperation;
@@ -278,22 +281,6 @@ export function resolveFallbackOriginModel(params: {
   };
 }
 
-export function buildInlinePluginStatusPayload(params: {
-  entry: SessionEntry | undefined;
-  includeStatusLines: boolean;
-  includeTraceLines: boolean;
-}): ReplyPayload | undefined {
-  const statusLines = params.includeStatusLines
-    ? resolveSessionPluginStatusLines(params.entry)
-    : [];
-  const traceLines = params.includeTraceLines ? resolveSessionPluginTraceLines(params.entry) : [];
-  const lines = [...statusLines, ...traceLines];
-  if (lines.length === 0) {
-    return undefined;
-  }
-  return { text: lines.join("\n") };
-}
-
 export function normalizeAssistantFinalDeliveryText(text: string): string {
   const parsed = normalizeReplyPayloadDirectives({
     payload: { text },
@@ -303,30 +290,33 @@ export function normalizeAssistantFinalDeliveryText(text: string): string {
   return sanitizePendingFinalDeliveryText(parsed.payload.text ?? "");
 }
 
-export function refreshSessionEntryFromStore(params: {
+export async function refreshSessionEntryFromStore(params: {
   storePath?: string;
   sessionKey?: string;
   fallbackEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
   expectedGeneration?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
-}): SessionEntry | undefined {
+  reader?: SessionEntryCohortReader;
+}): Promise<SessionEntry | undefined> {
   const { storePath, sessionKey, fallbackEntry, activeSessionStore } = params;
   if (!storePath || !sessionKey) {
     return fallbackEntry;
   }
   try {
-    const latestEntry = loadSessionEntryReadOnly({
-      storePath,
-      sessionKey,
-    });
-    if (!latestEntry) {
-      return fallbackEntry;
-    }
+    const latestEntry = await readSessionEntryReadOnlyInWorker(
+      {
+        storePath,
+        sessionKey,
+      },
+      undefined,
+      params.reader,
+    );
     // Completion may refresh facts, but only admission can adopt a replacement generation.
     if (
-      params.expectedGeneration &&
-      (latestEntry.sessionId !== params.expectedGeneration.sessionId ||
-        latestEntry.lifecycleRevision !== params.expectedGeneration.lifecycleRevision)
+      !latestEntry ||
+      (params.expectedGeneration &&
+        (latestEntry.sessionId !== params.expectedGeneration.sessionId ||
+          latestEntry.lifecycleRevision !== params.expectedGeneration.lifecycleRevision))
     ) {
       return fallbackEntry;
     }
@@ -334,7 +324,10 @@ export function refreshSessionEntryFromStore(params: {
       activeSessionStore[sessionKey] = latestEntry;
     }
     return latestEntry;
-  } catch {
+  } catch (error) {
+    if (params.reader) {
+      throw error;
+    }
     return fallbackEntry;
   }
 }
@@ -343,10 +336,7 @@ export function resolveAdmittedRunSessionFile(params: {
   sessionFile?: string;
   sessionKey?: string;
 }): string | undefined {
-  if (params.sessionKey?.trim()) {
-    return params.sessionKey.trim();
-  }
-  return params.sessionFile;
+  return normalizeOptionalString(params.sessionKey) ?? params.sessionFile;
 }
 
 export async function handleReplyAgentRunError(
@@ -395,7 +385,7 @@ export async function handleReplyAgentRunError(
     }
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
-        text: RESTART_LIFECYCLE_REPLY_TEXT,
+        text: buildRestartLifecycleReplyText(),
       }),
     );
   }
@@ -406,7 +396,15 @@ export async function handleReplyAgentRunError(
     );
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
-        text: RESTART_LIFECYCLE_REPLY_TEXT,
+        text: buildRestartLifecycleReplyText(),
+      }),
+    );
+  }
+  if (isRestartRecoveryClaimChangedError(error)) {
+    replyOperation.fail("run_failed", error);
+    return returnWithQueuedFollowupDrain(
+      markReplyPayloadForSourceSuppressionDelivery({
+        text: "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
       }),
     );
   }
@@ -436,6 +434,7 @@ export async function handleReplyAgentRunError(
 export async function cleanupReplyAgentRun(context: {
   blockReplyPipeline: BlockReplyPipeline | null;
   clearRestartRecoveryDeliveryClaim: () => Promise<void>;
+  isHeartbeat: boolean;
   providedReplyOperation: ReplyOperation | undefined;
   queueKey: string;
   replyOperation: ReplyOperation;
@@ -447,6 +446,7 @@ export async function cleanupReplyAgentRun(context: {
   const {
     blockReplyPipeline,
     clearRestartRecoveryDeliveryClaim,
+    isHeartbeat,
     providedReplyOperation,
     queueKey,
     replyOperation,
@@ -466,30 +466,28 @@ export async function cleanupReplyAgentRun(context: {
     );
   }
   if (shouldDrainQueuedFollowupsAfterClear) {
-    scheduleFollowupDrainAfterReplyOperationClear({
-      operation: replyOperation,
-      queueKey,
-      runFollowup: runFollowupTurn,
-    });
+    if (isHeartbeat) {
+      // Heartbeat-scoped options and dispatch must never run queued user turns after a restart.
+      runAfterReplyOperationClear(replyOperation, () => kickFollowupDrainIfIdle(queueKey));
+    } else {
+      scheduleFollowupDrainAfterReplyOperationClear({
+        operation: replyOperation,
+        queueKey,
+        runFollowup: runFollowupTurn,
+      });
+    }
   }
   if (!providedReplyOperation) {
     replyOperation.complete();
   }
   blockReplyPipeline?.stop();
   typing.markRunComplete();
-  // Safety net: the dispatcher's onIdle callback normally fires
-  // markDispatchIdle(), but if the dispatcher exits early, errors,
-  // or the reply path doesn't go through it cleanly, the second
-  // signal never fires and the typing keepalive loop runs forever.
-  // Repeated completion signals are harmless: cleanup() is guarded by
-  // the typing controller's sealed flag.
+  // Early exits may never reach dispatcher onIdle, leaving typing's other half open.
+  // The typing controller seals cleanup, so repeated completion is safe.
   typing.markDispatchIdle();
 }
 
-export type RunReplyAgentParams = {
-  commandBody: string;
-  transcriptCommandBody?: string;
-  followupRun: FollowupRun;
+export type RunReplyAgentParams = ReplyAgentTurnContext & {
   queueKey: string;
   resolvedQueue: QueueSettings;
   shouldSteer: boolean;
@@ -497,29 +495,13 @@ export type RunReplyAgentParams = {
   hasQueuedFollowups?: boolean;
   isActive: boolean;
   isRunActive?: () => boolean;
-  opts?: InternalGetReplyOptions;
   typing: TypingController;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-  storePath?: string;
   defaultModel: string;
-  resolvedVerboseLevel: VerboseLevel;
-  toolProgressDetail?: "explain" | "raw";
   isNewSession: boolean;
-  blockStreamingEnabled: boolean;
-  blockReplyChunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-    flushOnParagraph?: boolean;
-  };
-  resolvedBlockStreamingBreak: "text_end" | "message_end";
-  sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
   resetTriggered?: boolean;
   replyThreadingOverride?: TemplateContext["ReplyThreading"];
-  replyOperation?: ReplyOperation;
 };

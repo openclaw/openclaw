@@ -270,12 +270,7 @@ const conversationBindingMocks = await vi.hoisted(async () => {
   return createDispatchConversationBindingMocks(vi);
 });
 const threadInfoMocks = vi.hoisted(() => ({
-  parseSessionThreadInfo: vi.fn<
-    (sessionKey: string | undefined) => {
-      baseSessionKey: string | undefined;
-      threadId: string | undefined;
-    }
-  >(),
+  parseSessionThreadInfo: vi.fn<typeof parseGenericThreadSessionInfo>(),
 }));
 
 export {
@@ -323,11 +318,6 @@ export function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
   const threadId = trimmed.slice(index + marker.length).trim() || undefined;
   return { baseSessionKey, threadId };
 }
-
-vi.mock("./route-reply.runtime.js", () => ({
-  isRoutableChannel: (channel: string | undefined) => mocks.isRoutableChannel(channel),
-  routeReply: mocks.routeReply,
-}));
 
 vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) => mocks.isRoutableChannel(channel),
@@ -383,21 +373,38 @@ vi.mock("../../audit/message-audit-events.js", () => ({
   emitTrustedMessageAuditEvent: messageAuditMocks.emitTrustedMessageAuditEvent,
   hasTrustedMessageAuditListeners: () => messageAuditMocks.enabled,
 }));
-vi.mock("../../config/sessions/thread-info.js", () => ({
-  parseSessionThreadInfo: (sessionKey: string | undefined) =>
-    threadInfoMocks.parseSessionThreadInfo(sessionKey),
-  parseSessionThreadInfoFast: (sessionKey: string | undefined) =>
-    threadInfoMocks.parseSessionThreadInfo(sessionKey),
+vi.mock("../../channels/plugins/session-conversation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/session-conversation.js")>()),
+  resolveSessionThreadInfo: (sessionKey: string | null | undefined) =>
+    threadInfoMocks.parseSessionThreadInfo(sessionKey ?? undefined),
 }));
-vi.mock("./dispatch-from-config.runtime.js", () => ({
+
+vi.mock("../../channels/plugins/session-thread-info-loaded.js", () => ({
+  resolveLoadedSessionThreadInfo: (sessionKey: string | null | undefined) =>
+    threadInfoMocks.parseSessionThreadInfo(sessionKey ?? undefined),
+}));
+vi.mock("../../hooks/internal-hooks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../hooks/internal-hooks.js")>()),
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
-  loadSessionStoreEntry: sessionStoreMocks.loadSessionStoreEntry,
-  loadSessionStore: sessionStoreMocks.loadSessionStore,
-  readSessionEntry: sessionStoreMocks.readSessionEntry,
-  resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
-  resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
-  updateSessionStoreEntry: sessionStoreMocks.updateSessionStoreEntry,
+}));
+vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/paths.js")>()),
+  resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
+}));
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryReadOnlyInWorker: async (
+    scope: Parameters<
+      typeof import("../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
+    >[0],
+    assertCurrent?: () => void,
+  ) => {
+    assertCurrent?.();
+    const entry = await Promise.resolve(sessionStoreMocks.loadSessionStoreEntry(scope));
+    assertCurrent?.();
+    return entry;
+  },
 }));
 vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => ({
   ...(await importOriginal<
@@ -418,7 +425,8 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   return {
     ...actual,
     loadSessionEntry: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
-    loadSessionEntryReadOnly: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
+    loadSessionEntryReadOnly: (...args: unknown[]) =>
+      sessionStoreMocks.loadSessionStoreEntry(...args),
     patchSessionEntryCore: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>
       sessionStoreMocks.updateSessionEntry(...args),
     updateSessionEntry: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>
@@ -435,6 +443,7 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalPluginRegistry: () => hookMocks.registry,
   resetGlobalHookRunner: vi.fn(),
 }));
+// mock-isolation: Reply routing supplies ACP snapshots without initializing live control state.
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
   readAcpSessionEntry: acpMocks.readAcpSessionEntry,
@@ -443,13 +452,16 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
     agentId?: string;
     cfg?: OpenClawConfig;
   }) => acpMocks.readAcpSessionEntry(params),
-  readAcpSessionMeta: acpMocks.readAcpSessionMeta,
   readAcpSessionMetaAsync: async (params: {
     sessionKey: string;
     agentId?: string;
     cfg?: OpenClawConfig;
   }) => acpMocks.readAcpSessionMeta(params),
+  prepareAcpSessionControlRead:
+    vi.fn<typeof import("../../acp/runtime/session-meta.js").prepareAcpSessionControlRead>(),
   upsertAcpSessionMeta: acpMocks.upsertAcpSessionMeta,
+  upsertAcpSessionMetaForControl:
+    vi.fn<typeof import("../../acp/runtime/session-meta.js").upsertAcpSessionMetaForControl>(),
 }));
 vi.mock("../../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: acpMocks.getAcpRuntimeBackend,
@@ -528,20 +540,23 @@ vi.mock("../../tts/tts.js", () => ({
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
-vi.mock("./reply-media-paths.runtime.js", () => ({
+vi.mock("./reply-media-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-media-paths.js")>()),
   createReplyMediaContext: () => ({
     normalizePayload: (payload: unknown) => payload,
   }),
   createReplyMediaPathNormalizer: (params: unknown) =>
     replyMediaPathMocks.createReplyMediaPathNormalizer(params),
 }));
-vi.mock("./stage-sandbox-media.runtime.js", () => ({
+vi.mock("./stage-sandbox-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stage-sandbox-media.js")>()),
   stageSandboxMedia: (params: unknown) => stageSandboxMediaMocks.stageSandboxMedia(params),
 }));
 vi.mock("../../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: runtimePluginMocks.loadAgentRuntimePluginRegistryHandle,
 }));
-vi.mock("./conversation-binding-input.js", () => ({
+vi.mock("./conversation-binding-input.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./conversation-binding-input.js")>()),
   resolveConversationBindingAccountIdFromMessage:
     conversationBindingMocks.resolveConversationBindingAccountIdFromMessage,
   resolveConversationBindingChannelFromMessage:
@@ -550,8 +565,6 @@ vi.mock("./conversation-binding-input.js", () => ({
     conversationBindingMocks.resolveConversationBindingContextFromAcpCommand,
   resolveConversationBindingContextFromMessage:
     conversationBindingMocks.resolveConversationBindingContextFromMessage,
-  resolveConversationBindingThreadIdFromMessage:
-    conversationBindingMocks.resolveConversationBindingThreadIdFromMessage,
 }));
 vi.mock("../../tts/status-config.js", () => ({
   resolveStatusTtsSnapshot: () => ttsMocks.state.statusSnapshot,
@@ -570,6 +583,10 @@ vi.mock("../../tts/tts-config.js", () => ({
   resolveEffectiveTtsConfig: (cfg: OpenClawConfig) => cfg.tts ?? {},
   shouldCleanTtsDirectiveText: () => true,
   shouldAttemptTtsPayload: () => true,
+}));
+// mock-isolation: Dispatch fixtures supply prepared preferences without opening the shared-state worker.
+vi.mock("../../tts/tts-preferences.js", () => ({
+  prepareTtsPreferences: async () => ({}),
 }));
 
 export const noAbortResult = { handled: false, aborted: false } as const;

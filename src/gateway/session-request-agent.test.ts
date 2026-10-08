@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import {
   resolveSessionEventAgentScope,
   resolveRequestedSessionAgentId,
@@ -65,9 +66,9 @@ describe("requested session agent ownership", () => {
   );
 
   it("uses a legacy compatibility owner for a bare key", () => {
-    const cfg: OpenClawConfig = {
+    const { config: cfg } = createCanonicalAgentConfigFixture({
       agents: { entries: { ops: { default: true }, research: {} } },
-    };
+    });
 
     expect(resolveRequestedSessionAgentId(cfg, "global")).toEqual({
       ok: true,
@@ -81,7 +82,7 @@ describe("requested session agent ownership", () => {
       const cfg = retainLegacyDefaultAgentId(
         {
           agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-        },
+        } satisfies OpenClawConfig,
         retainedOwner,
       );
 
@@ -158,9 +159,11 @@ describe("session event agent scope", () => {
       "retired",
       undefined,
     ]);
-    expect(
-      resolveSessionEventAgentScope({ agents: { entries: { main: { default: true } } } }, "global"),
-    ).toEqual([undefined, "main", "main"]);
+    expect(resolveSessionEventAgentScope({ agents: { entries: { main: {} } } }, "global")).toEqual([
+      undefined,
+      "main",
+      "main",
+    ]);
     expect(resolveSessionEventAgentScope(fixedStoreConfig("ops"), "global", "research")).toEqual([
       "research",
       "research",

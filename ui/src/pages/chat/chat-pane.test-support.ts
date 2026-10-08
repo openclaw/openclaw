@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html, type ReactiveControllerHost, type TemplateResult } from "lit";
 import { onTestFinished, vi } from "vitest";
 import type {
   SessionSuggestion,
@@ -37,6 +37,7 @@ import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
+import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
@@ -47,14 +48,18 @@ import {
   SESSION_MUTATION_TEST_METHODS,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
+import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { ChatPane } from "./chat-pane-render.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import type { ChatTypingActorState, ChatTypingActorView } from "./chat-typing-presence.ts";
+import type {
+  ChatTypingActorState,
+  ChatTypingActorView,
+  ChatTypingOverflow,
+} from "./chat-typing-presence.ts";
 import type { ChatProps } from "./chat-view.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
@@ -66,14 +71,32 @@ import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
 
-export type TestChatPane = HTMLElement & {
+type PaneHeaderWorkspace = ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
+
+export function createPaneHeaderWorkspaceFixture(
+  state: Parameters<typeof createSessionWorkspaceProps>[0],
+): PaneHeaderWorkspace {
+  return {
+    ...createSessionWorkspaceProps(state),
+    collapsed: true,
+    onToggleCollapsed: vi.fn(),
+    onToggleTerminal: undefined,
+    onToggleBrowser: undefined,
+    onToggleDesktop: undefined,
+  };
+}
+
+export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   catalogMessages: unknown[];
   active: boolean;
   presented: boolean;
   presentationId: string;
   chatMessagesBySession?: ChatMessageCache;
   sessionSnapshotStore?: SessionSnapshotStore;
-  chatState: Pick<ChatStateController<ChatPageHost>, "attach" | "composerPersistence">;
+  chatState: Pick<
+    ChatStateController<ChatPageHost>,
+    "attach" | "composerPersistence" | "createRenderLifecycle"
+  >;
   context: ApplicationContext;
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
@@ -100,11 +123,11 @@ export type TestChatPane = HTMLElement & {
   disconnectedCallback: () => void;
   discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
-  acceptTaskSuggestion: (
+  resolveTaskSuggestion: (
     suggestion: TaskSuggestion,
+    action: "accept" | "dismiss",
     mode?: TaskSuggestionStartMode,
   ) => Promise<void>;
-  dismissTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   copyTaskSuggestionPrompt: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
@@ -134,6 +157,8 @@ export type TestChatPane = HTMLElement & {
   clearTypingActorForSessionMessage: (payload: unknown) => void;
   pruneTypingActors: () => void;
   typingActors: Map<string, ChatTypingActorState>;
+  typingOverflow?: ChatTypingOverflow;
+  clearTypingActors: () => void;
   typingActorViews: () => ChatTypingActorView[];
   sendTypingState: (typing: boolean, preview?: string) => void;
   refreshSessionSuggestions: () => Promise<void>;
@@ -144,8 +169,6 @@ export type TestChatPane = HTMLElement & {
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   paneId: string;
   sessionKey: string;
-  updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
   performUpdate: () => void;
   deferSessionHydrationUntilTranscript: (
     sessionKey: string,
@@ -164,7 +187,6 @@ export type TestChatPane = HTMLElement & {
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<void>;
   resetOlderMessagesViewport: () => void;
-  requestReplyMessage: (messageId: string) => void;
   readReplyMessage: (messageId: string) => unknown;
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;
@@ -197,8 +219,7 @@ export type TestChatPane = HTMLElement & {
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
   applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
   renderPaneHeader: (
-    workspace: ReturnType<typeof createSessionWorkspaceProps>,
-    tasks: ReturnType<typeof createBackgroundTasksProps>,
+    workspace: PaneHeaderWorkspace,
     row: GatewaySessionRow | undefined,
     catalog: boolean,
     agentWorkspace: undefined,
@@ -207,7 +228,7 @@ export type TestChatPane = HTMLElement & {
     sidebarLayout?: SidebarLayout,
     panelDefinitions?: SidebarPanelDefinition[],
   ) => TemplateResult;
-};
+}
 
 type GatewayBrowserClientFixtureOverrides = Omit<Partial<GatewayBrowserClient>, "request"> & {
   request?: GatewayRequestHandler;
@@ -232,6 +253,7 @@ type FixtureContextServices =
   | "agentIdentity"
   | "agents"
   | "sessions"
+  | "plugins"
   | "connectionBootstrap"
   | "chatAttachmentHandoff";
 
@@ -255,7 +277,9 @@ function withLiveCapabilities(
   const sessions =
     context.sessions ??
     createSessionCapability(context.gateway, context.agentSelection, { connectionBootstrap });
+  const plugins = new ControlUiPluginRuntime(() => applicationContext);
   onTestFinished(() => {
+    plugins.dispose();
     stopBootstrap();
     chatAttachmentHandoff.dispose();
     connectionBootstrap.reset();
@@ -265,15 +289,17 @@ function withLiveCapabilities(
     agents.dispose();
     theme.dispose();
   });
-  return {
+  const applicationContext: ApplicationContext = {
     ...context,
     chatAttachmentHandoff,
     connectionBootstrap,
     theme,
     agents,
     sessions,
+    plugins,
     agentIdentity: createAgentIdentityCapability(context.gateway),
   };
+  return applicationContext;
 }
 
 export function createInitializationContext(client?: GatewayBrowserClient): ApplicationContext {
@@ -448,15 +474,14 @@ export function createSessionContext(
   } as unknown as Omit<ApplicationContext, FixtureContextServices> & {
     sessions?: SessionCapability;
   });
-  return {
-    ...context,
-    publishGatewaySnapshot(next) {
+  return Object.assign(context, {
+    publishGatewaySnapshot(next: ApplicationContext["gateway"]["snapshot"]) {
       snapshot = next;
       for (const listener of snapshotListeners) {
         listener(next);
       }
     },
-  };
+  });
 }
 
 export function createTestChatPane(params: {

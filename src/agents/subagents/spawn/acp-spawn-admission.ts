@@ -1,42 +1,21 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { listTasksForOwnerKey } from "../../../tasks/runtime-internal.js";
-import { getSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
-
-function isActiveTaskStatus(status: string | undefined): boolean {
-  return status === "queued" || status === "running";
-}
+import { listActiveAcpSessionsForOwner } from "../../../acp/control-plane/active-turns.js";
+import { getSubagentSessionListRunByChildSessionKey } from "../registry/subagent-registry-read.js";
 
 export function countUntrackedActiveAcpRunsForOwner(
   ownerKey: string | undefined,
   pendingChildSessionKeys?: ReadonlySet<string>,
 ): number {
-  const normalizedOwnerKey = normalizeOptionalString(ownerKey);
-  if (!normalizedOwnerKey) {
+  if (!ownerKey?.trim()) {
     return 0;
   }
-  const tasks = listTasksForOwnerKey(normalizedOwnerKey);
-  const trackedChildSessionKeys = new Set(
-    tasks.flatMap((task) => {
-      const key = normalizeOptionalString(task.childSessionKey);
-      return task.runtime === "subagent" && isActiveTaskStatus(task.status) && key ? [key] : [];
-    }),
-  );
-  const activeAcpChildSessionKeys = new Set(
-    tasks.flatMap((task) => {
-      const childSessionKey = normalizeOptionalString(task.childSessionKey);
-      const trackedRun = childSessionKey ? getSubagentRunByChildSessionKey(childSessionKey) : null;
-      const hasActiveRegistryRun = Boolean(
-        trackedRun && typeof trackedRun.execution.endedAt !== "number",
+  const sessions = listActiveAcpSessionsForOwner(ownerKey.trim());
+  return new Set(
+    sessions.filter((sessionKey) => {
+      const run = getSubagentSessionListRunByChildSessionKey(sessionKey);
+      return (
+        !pendingChildSessionKeys?.has(sessionKey) &&
+        !(run && typeof run.execution.endedAt !== "number")
       );
-      return task.runtime === "acp" &&
-        isActiveTaskStatus(task.status) &&
-        childSessionKey !== undefined &&
-        !pendingChildSessionKeys?.has(childSessionKey) &&
-        !hasActiveRegistryRun &&
-        !trackedChildSessionKeys.has(childSessionKey)
-        ? [childSessionKey]
-        : [];
     }),
-  );
-  return activeAcpChildSessionKeys.size;
+  ).size;
 }

@@ -6,8 +6,9 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMattermostRuntime } from "../runtime.js";
-import { isWildcardBindHost } from "./callback-host.js";
+import { resolveCallbackHost } from "./callback-host.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import {
   isRequestBodyLimitError,
@@ -123,15 +124,7 @@ export function computeInteractionCallbackUrl(
     return `${callbackBaseUrl.replace(/\/+$/, "")}${path}`;
   }
   const port = resolveGatewayPort(cfg);
-  let host =
-    cfg?.gateway?.customBindHost && !isWildcardBindHost(cfg.gateway.customBindHost)
-      ? cfg.gateway.customBindHost.trim()
-      : "localhost";
-
-  // Bracket IPv6 literals so the URL is valid: http://[::1]:18789/...
-  if (host.includes(":") && !(host.startsWith("[") && host.endsWith("]"))) {
-    host = `[${host}]`;
-  }
+  const host = resolveCallbackHost(cfg?.gateway?.customBindHost, true);
 
   return `http://${host}:${port}${path}`;
 }
@@ -155,28 +148,19 @@ export function resolveInteractionCallbackUrl(
 // Secret is derived from the bot token so it's stable across CLI and gateway processes.
 
 const interactionSecrets = new Map<string, string>();
-let defaultInteractionSecret: string | undefined;
 
 function deriveInteractionSecret(botToken: string): string {
   return createHmac("sha256", "openclaw-mattermost-interactions").update(botToken).digest("hex");
 }
 
-export function setInteractionSecret(accountIdOrBotToken: string, botToken?: string): void {
-  if (typeof botToken === "string") {
-    interactionSecrets.set(accountIdOrBotToken, deriveInteractionSecret(botToken));
-    return;
-  }
-  // Backward-compatible fallback for call sites/tests that only pass botToken.
-  defaultInteractionSecret = deriveInteractionSecret(accountIdOrBotToken);
+export function setInteractionSecret(accountId: string, botToken: string): void {
+  interactionSecrets.set(accountId, deriveInteractionSecret(botToken));
 }
 
 function getInteractionSecret(accountId?: string): string {
   const scoped = accountId ? interactionSecrets.get(accountId) : undefined;
   if (scoped) {
     return scoped;
-  }
-  if (defaultInteractionSecret) {
-    return defaultInteractionSecret;
   }
   // Fallback for single-account runtimes that only registered scoped secrets.
   if (interactionSecrets.size === 1) {
@@ -210,23 +194,6 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-type MattermostButton = {
-  id: string;
-  type: "button" | "select";
-  name: string;
-  style?: "default" | "primary" | "danger";
-  integration: {
-    url: string;
-    context: Record<string, unknown>;
-  };
-};
-
-type MattermostAttachment = {
-  text?: string;
-  actions?: MattermostButton[];
-  [key: string]: unknown;
-};
-
 /**
  * Sanitize a button ID so Mattermost's action router can match it.
  * Mattermost uses the action ID in the URL path `/api/v4/posts/{id}/actions/{actionId}`
@@ -247,8 +214,8 @@ export function buildButtonAttachments(params: {
     context?: Record<string, unknown>;
   }>;
   text?: string;
-}): MattermostAttachment[] {
-  const actions: MattermostButton[] = params.buttons.map((btn) => {
+}) {
+  const actions = params.buttons.map((btn) => {
     const safeId = sanitizeActionId(btn.id);
     const context: Record<string, unknown> = {
       action_id: safeId,
@@ -330,7 +297,6 @@ function sendInteractionResponse(
 
 export function createMattermostInteractionHandler(params: {
   client: MattermostClient;
-  botUserId: string;
   accountId: string;
   allowedSourceIps?: string[];
   trustedProxies?: string[];
@@ -368,11 +334,11 @@ export function createMattermostInteractionHandler(params: {
   const core = getMattermostRuntime();
 
   function parseInteractionPayload(raw: string): MattermostInteractionPayload {
-    try {
-      return JSON.parse(raw) as MattermostInteractionPayload;
-    } catch {
+    const payload = safeParseJson<MattermostInteractionPayload>(raw);
+    if (payload === null) {
       throw new Error("Mattermost interaction body was malformed JSON");
     }
+    return payload;
   }
 
   return async (req: IncomingMessage, res: ServerResponse) => {

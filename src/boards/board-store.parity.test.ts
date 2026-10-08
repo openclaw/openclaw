@@ -26,7 +26,7 @@ function seedSession(env: NodeJS.ProcessEnv, agentId: string, sessionKey: string
   const database = openOpenClawAgentDatabase({ agentId, env });
   const sessionId = `session-${agentId}-${sessionKey.replaceAll(":", "-")}`;
   replaceSessionEntrySync(
-    { agentId, sessionKey, storePath: database.path },
+    { agentId, env, sessionKey, storePath: database.path },
     { sessionId, updatedAt: Date.now() },
   );
   return database.path;
@@ -677,21 +677,13 @@ describe("SqliteBoardStore persistence", () => {
     const stateDir = tempDirs.make("openclaw-board-transcript-only-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:transcript-only";
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    database.db
-      .prepare(
-        `INSERT INTO session_nodes (
-           session_key, current_session_id, entry_json, updated_at
-         ) VALUES (?, 'transcript-only-session', '{}', 1)`,
-      )
-      .run(sessionKey);
-    database.db
-      .prepare(
-        `INSERT INTO session_windows (
-           session_id, session_key, session_scope, created_at, updated_at
-         ) VALUES ('transcript-only-session', ?, 'conversation', 1, 1)`,
-      )
-      .run(sessionKey);
+    const storePath = seedSession(env, "main", sessionKey);
+    await deleteSessionEntryLifecycle({
+      env,
+      storePath,
+      archiveTranscript: false,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
     const store = new SqliteBoardStore({
       resolveSession: () => ({ agentId: "main", sessionKey }),
       env,
@@ -813,7 +805,7 @@ describe("SqliteBoardStore persistence", () => {
       path: path.join(stateDir, "000-relocated.sqlite"),
     });
     replaceSessionEntrySync(
-      { agentId, sessionKey, storePath: relocated.path },
+      { agentId, env, sessionKey, storePath: relocated.path },
       { sessionId: "relocated-session", updatedAt: Date.now() },
     );
     relocated.db
@@ -850,6 +842,7 @@ describe("SqliteBoardStore persistence", () => {
     const result = await deleteSessionEntryLifecycle({
       agentId: "main",
       archiveTranscript: false,
+      env,
       storePath: databasePath,
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
     });

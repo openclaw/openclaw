@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox";
+import { GatewayAgentRuntimeSchema } from "../../../packages/gateway-protocol/src/schema/model-runtime-options.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
@@ -12,16 +13,6 @@ import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 const AgentsListToolSchema = Type.Object({});
-const AgentRuntimeSourceSchema = Type.Union([
-  Type.Literal("env"),
-  Type.Literal("agent"),
-  Type.Literal("defaults"),
-  Type.Literal("model"),
-  Type.Literal("provider"),
-  Type.Literal("implicit"),
-  Type.Literal("session"),
-  Type.Literal("session-key"),
-]);
 const AgentsListOutputSchema = Type.Object(
   {
     requester: Type.String(),
@@ -37,7 +28,7 @@ const AgentsListOutputSchema = Type.Object(
             Type.Object(
               {
                 id: Type.String(),
-                source: AgentRuntimeSourceSchema,
+                source: GatewayAgentRuntimeSchema.properties.source,
               },
               { additionalProperties: false },
             ),
@@ -65,14 +56,10 @@ export function createAgentsListTool(opts?: {
     outputSchema: AgentsListOutputSchema,
     execute: async () => {
       const cfg = getRuntimeConfig();
-      const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const { alias } = resolveMainSessionAlias(cfg);
       const requesterInternalKey =
         typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
-          ? resolveInternalSessionKey({
-              key: opts.agentSessionKey,
-              alias,
-              mainKey,
-            })
+          ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias })
           : alias;
       const requesterAgentId = resolveSessionAgentIds({
         config: cfg,

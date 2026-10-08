@@ -1,8 +1,8 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readThreadParentThreadId } from "./native-subagent-assignment.js";
 import type { ChildState, NativeSubagentMonitorClient } from "./native-subagent-monitor-types.js";
 import type { CodexNativeSubagentRecoveryCoordinator } from "./native-subagent-recovery-coordinator.js";
 import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
-import { readThreadParentThreadId } from "./native-subagent-task-ids.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
 export async function readCodexNativeSubmissionTurn(
@@ -39,12 +39,9 @@ export async function readCodexNativeSubmissionTurn(
     ) {
       return undefined;
     }
-    const turns: JsonObject[] = [];
-    for (const turn of Array.isArray(thread?.turns) ? thread.turns : []) {
-      if (isJsonObject(turn)) {
-        turns.push(turn);
-      }
-    }
+    const turns = (Array.isArray(thread?.turns) ? thread.turns : []).flatMap((turn) =>
+      isJsonObject(turn) ? [turn] : [],
+    );
     const predecessorIndex = turns.findIndex(
       (turn) => readString(turn, "id") === receipt.predecessorNativeTurnId,
     );

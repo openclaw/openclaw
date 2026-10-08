@@ -150,10 +150,18 @@ When reconfiguring an existing trusted-proxy setup, the prompt defaults to the e
 With live configuration reload enabled, changes to `gateway.trustedProxies`,
 `gateway.allowRealIpFallback`, `gateway.auth.allowTailscale`,
 `gateway.auth.identityScopes`, and `gateway.auth.trustedProxy` apply without a
-Gateway restart. Gateway clients reconnect under the new policy. A configuration
-writer receives its accepted result before its connection closes. Pending
-handshakes and HTTP requests cannot retain old policy authority through an
-asynchronous wait; already-admitted work follows its existing completion lifecycle.
+Gateway restart. Transport policy changes require clients to reconnect while
+preserving accepted runs and queued inputs whose access grants are unchanged.
+This includes proxy headers, OIDC mapping, device auto-approval, and trusted proxy
+addresses. Removing a connected identity from `allowUsers`, disabling its auth
+method, or changing its own identity-scope grant still revokes accepted work.
+Restoring the grant does not revive revoked work. Identity-scope edits for other
+identities leave existing connections and work unchanged; clients without verified
+operator identities also ignore those edits. HTTP requests and plugin auth cookies
+do not use identity-scope grants and are unaffected by those scope edits.
+A configuration writer receives its accepted result before its connection closes.
+Pending handshakes and HTTP requests recheck the policy applicable to their authority
+after asynchronous waits.
 
 ## Per-identity scope grants
 
@@ -450,14 +458,10 @@ Loopback trusted-proxy identity headers still fail closed: same-host callers are
 
 ## Restrict a separate Gateway to one owner
 
-Use a [separate Gateway cell](/gateway/multi-tenant-hosting) when one owner needs a
+Use a [separate Gateway](/gateway/security/trust-model) when one owner needs a
 different trust boundary. A separate workspace, model picker filter, or Gateway
 process under the same OS user does not isolate its credentials and state from
 other agents running as that user.
-
-Fleet-managed cells currently use token authentication. This trusted-proxy
-procedure requires an independently provisioned cell; do not overwrite Fleet's
-managed auth configuration.
 
 The identity-aware proxy must reject every other user **before forwarding any HTTP
 request or WebSocket upgrade**. Bind that policy to a verified immutable identity,
@@ -473,9 +477,9 @@ WebSocket authentication paths. Existing connections also require explicit
 revocation or disconnection. Enforce the owner restriction at the proxy for all
 routes, including plugin routes, and do not create an unprotected node route.
 
-For a proxy-only cell, omit both Gateway token and password configuration and
+For a proxy-only Gateway, omit both Gateway token and password configuration and
 their environment variables. Keep `allowLoopback: false` when the proxy has a
-separate network identity. The provider credential inside the cell authenticates
+separate network identity. The provider credential inside the Gateway authenticates
 the workload to its provider; it does not authenticate the human using the
 Gateway. The host administrator remains trusted.
 

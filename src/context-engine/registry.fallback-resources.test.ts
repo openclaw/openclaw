@@ -7,7 +7,9 @@ import { retireInspectionInstances } from "../plugins/registry-inspection.test-s
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { LegacyContextEngine } from "./legacy.js";
+import * as health from "./quarantine-health.js";
 import { registerContextEngineInRegistry, resolveContextEngine } from "./registry.js";
+import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
 import type { ContextEngine } from "./types.js";
 
 it.each([
@@ -197,3 +199,105 @@ it.each([
     warn.mockRestore();
   }
 });
+
+it.each(["missing", "factory", "guarded"] as const)(
+  "retains a distinct fallback source while recording quarantine (%s)",
+  async (mode) => {
+    const donor = createEmptyPluginRegistry();
+    const registry = createEmptyPluginRegistry();
+    const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+    resources.attach(donor);
+    const database = new DatabaseSync(":memory:");
+    let sourceDisposals = 0;
+    resources.register("fallback", {
+      id: "native",
+      dispose() {
+        sourceDisposals++;
+        database.close();
+      },
+    });
+    const fallback = vi.fn(() => {
+      expect(database.prepare("SELECT 42 AS value").get()?.value).toBe(42);
+      return new LegacyContextEngine();
+    });
+    registerContextEngineInRegistry(donor, "legacy", fallback, "core");
+    // A copied registration still belongs to the donor, not this unowned view.
+    registry.contextEngines.set("legacy", donor.contextEngines.get("legacy")!);
+    const id = `quarantine-source-${mode}`;
+    const failure = new Error("configured engine failed");
+    if (mode !== "missing") {
+      registerContextEngineInRegistry(
+        registry,
+        id,
+        () => {
+          if (mode === "factory") {
+            throw failure;
+          }
+          return Object.assign(new LegacyContextEngine(), {
+            assemble: async () => {
+              throw failure;
+            },
+          });
+        },
+        "plugin:fixture",
+      );
+    }
+    const started = createDeferred();
+    const gate = createDeferred();
+    const record = health.recordPersistedContextEngineQuarantine;
+    const recording = vi
+      .spyOn(health, "recordPersistedContextEngineQuarantine")
+      .mockImplementation(async (...args) => {
+        started.resolve();
+        await gate.promise;
+        await record(...args);
+      });
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    let engine: ContextEngine | undefined;
+    let operation: Promise<unknown> | undefined;
+    try {
+      const resolve = () =>
+        withPluginRuntimeRegistryScope(registry, () =>
+          resolveContextEngine({ plugins: { slots: { contextEngine: id } } }),
+        );
+      if (mode === "guarded") {
+        engine = await resolve();
+        operation = withPluginRuntimeRegistryScope(registry, () =>
+          engine!.assemble({ sessionId: "recording-source", messages: [] }),
+        );
+      } else {
+        operation = resolve().then((resolved) => {
+          engine = resolved;
+        });
+      }
+      void operation.catch(() => {});
+      await started.promise;
+      await resources.release();
+      expect(database.isOpen).toBe(true);
+      expect(sourceDisposals).toBe(0);
+      expect(fallback).not.toHaveBeenCalled();
+      const replacement = vi.fn(() => new LegacyContextEngine());
+      registerContextEngineInRegistry(registry, "legacy", replacement, "core", {
+        allowSameOwnerRefresh: true,
+      });
+      gate.resolve();
+      await operation;
+      expect(fallback).toHaveBeenCalledOnce();
+      expect(replacement).not.toHaveBeenCalled();
+      await engine?.dispose?.();
+      expect(sourceDisposals).toBe(1);
+      expect(database.isOpen).toBe(false);
+    } finally {
+      gate.resolve();
+      await operation?.catch(() => {});
+      await engine?.dispose?.();
+      await resources.release();
+      if (database.isOpen) {
+        database.close();
+      }
+      recording.mockRestore();
+      warn.mockRestore();
+      await resetContextEngineRuntimeQuarantineForTests();
+    }
+  },
+);

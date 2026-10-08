@@ -15,6 +15,7 @@ import {
   runCliProcessChild,
   waitForCliProcessStderrMarker,
 } from "./cli-process-child.test-helpers.js";
+import type { GatewayRestartResult } from "./daemon-cli/restart-health.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -28,8 +29,13 @@ const doctorDiagnostics = [
   "Doctor console diagnostic",
   "Doctor complete.",
 ];
+const repairDeadlineScenarios = {
+  ready: "repair-deadline",
+  starting: "repair-deadline-starting",
+  failed: "repair-deadline-failed",
+} satisfies Record<GatewayRestartResult["outcome"], string>;
 const scenarios = [
-  "repair-deadline",
+  ...Object.values(repairDeadlineScenarios),
   "json",
   "inherited-json",
   "doctor-error",
@@ -56,6 +62,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
   it.each(command === "repair" ? scenarios : finalizeScenarios)(
     "%s preserves the output and exit contract",
     async (scenario) => {
+      const repairDeadline = Object.values(repairDeadlineScenarios).includes(scenario);
       const root = tempDirs.make("openclaw-update-json-");
       const state = path.join(root, "state");
       const config = path.join(root, "openclaw.json");
@@ -169,20 +176,35 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         },
       });
       const failure = formatCliProcessFailure({ reason: `${command} ${scenario}`, ...result });
+      if (json) {
+        expect(result.stdout.trim(), failure).not.toBe("");
+      }
       if (scenario === "human-recovery-plugin-error" || scenario === "borrowed-output") {
         expect(result.stderr, failure).toContain("Fixture advanced watchdog clock.");
       }
       expect(result.signal, failure).toBeNull();
       expect(result.code, failure).toBe(
-        scenario === "repair-deadline" ||
+        repairDeadline ||
           scenario.endsWith("error") ||
           scenario === "phase-hang" ||
           blockedPhase === "doctor"
           ? 1
           : 0,
       );
-      if (scenario === "repair-deadline") {
-        const output = JSON.parse(result.stdout);
+      if (scenario === "json" || scenario === "human") {
+        for (const status of ["in_progress", "completed"]) {
+          const phaseRecord = `"step":"finalize:preflight","status":"${status}"`;
+          expect(result.stderr, failure).toContain(phaseRecord);
+          expect(result.stdout, failure).not.toContain(phaseRecord);
+        }
+      }
+      if (repairDeadline) {
+        let output: unknown;
+        try {
+          output = JSON.parse(result.stdout);
+        } catch (cause) {
+          throw new Error(failure, { cause });
+        }
         expect(output, failure).toMatchObject({ status: "failed", stuckPhase: "plugins" });
         expect(await fs.readFile(path.join(state, "managed-service-state"), "utf8"), failure).toBe(
           "running",
@@ -205,9 +227,18 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
             }),
           ]),
         });
-        expect(result.stderr, failure).toContain(
-          "Gateway restarted and verified after Doctor repair.",
-        );
+        if (scenario === repairDeadlineScenarios.ready) {
+          expect(result.stderr, failure).toContain(
+            "Gateway restarted and verified after Doctor repair.",
+          );
+        } else {
+          expect(result.stderr, failure).not.toContain(
+            "Gateway restarted and verified after Doctor repair.",
+          );
+          if (scenario === repairDeadlineScenarios.starting) {
+            expect(result.stderr, failure).toContain("Gateway is still starting");
+          }
+        }
         return;
       }
       if (blockedPhase === "doctor") {
@@ -231,7 +262,10 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           (entry: { phase: string }) => entry.phase === "doctor",
         );
         expect(timing.durationMs, failure).toBeGreaterThanOrEqual(1_000);
-        expect(timing.durationMs, failure).toBeLessThan(3_000);
+        // Exact deadline/nonrenewal timing lives in update-finalization-lifecycle.test.ts;
+        // this duration also includes service custody, diagnostics, and joined cleanup.
+        expect(timing.outcome, failure).toBe("failed");
+        expect(readRun(), failure).toMatchObject({ reason: "finalization-timeout" });
         if (scenario === "doctor-progress") {
           expect(output.doctorOutput.stderr.excerpt, failure).toContain(
             "PROGRESS fixture-validation",

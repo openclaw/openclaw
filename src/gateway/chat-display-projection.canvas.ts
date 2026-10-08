@@ -5,21 +5,11 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
+import {
+  MAX_TOOL_APPROVAL_REVIEWS,
+  normalizeToolApprovalReview,
+} from "../shared/tool-approval-reviews.js";
 import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
-
-const MAX_TOOL_APPROVAL_REVIEWS = 16;
-const TOOL_APPROVAL_REVIEW_STATUSES = new Set([
-  "in_progress",
-  "approved",
-  "denied",
-  "timed_out",
-  "aborted",
-]);
-
-function boundedReviewText(value: unknown, maxChars: number): string | undefined {
-  const text = typeof value === "string" ? value.trim() : "";
-  return text ? truncateUtf16Safe(text, maxChars) : undefined;
-}
 
 function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is string {
   return (
@@ -28,27 +18,6 @@ function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is st
     value.length <= maxChars &&
     value.trim() === value
   );
-}
-
-function projectToolApprovalReview(value: unknown): Record<string, unknown> | undefined {
-  const review = readRecord(value);
-  const id = boundedReviewText(review?.id, 256);
-  const label = boundedReviewText(review?.label, 80);
-  const status = boundedReviewText(review?.status, 32);
-  if (!id || !label || !status || !TOOL_APPROVAL_REVIEW_STATUSES.has(status)) {
-    return undefined;
-  }
-  const riskLevel = boundedReviewText(review?.riskLevel, 40);
-  const userAuthorization = boundedReviewText(review?.userAuthorization, 40);
-  const rationale = boundedReviewText(review?.rationale, 2_000);
-  return {
-    id,
-    label,
-    status,
-    ...(riskLevel ? { riskLevel } : {}),
-    ...(userAuthorization ? { userAuthorization } : {}),
-    ...(rationale ? { rationale } : {}),
-  };
 }
 
 /** Return true for known tool-call/tool-result block type spellings in transcripts. */
@@ -95,10 +64,28 @@ export function projectToolResultDetails(
         : {}),
     };
   }
-  // The diff is the one display-capped field here; surface the fact so the
-  // message-level marker covers capped tool-result details too.
+  // Surface capped detail fields through the same message-level display marker.
   let truncated = false;
-  for (const key of ["changed", "created"] as const) {
+  for (const key of ["exitCode", "durationMs"] as const) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      projected[key] = value;
+    }
+  }
+  if (typeof record.cwd === "string") {
+    const cwd = truncateChatHistoryText(record.cwd, maxChars);
+    projected.cwd = cwd.text;
+    truncated ||= cwd.truncated;
+  }
+  if (
+    typeof record.sessionKey === "string" &&
+    record.sessionKey.length > 0 &&
+    record.sessionKey.length <= maxChars &&
+    record.sessionKey.trim() === record.sessionKey
+  ) {
+    projected.sessionKey = record.sessionKey;
+  }
+  for (const key of ["ok", "changed", "created"] as const) {
     if (typeof record[key] === "boolean") {
       projected[key] = record[key];
     }
@@ -106,12 +93,12 @@ export function projectToolResultDetails(
   if (typeof record.diff === "string" && record.diff.trim()) {
     const diff = truncateChatHistoryText(record.diff, maxChars);
     projected.diff = diff.text;
-    truncated = diff.truncated;
+    truncated ||= diff.truncated;
   }
   if (Array.isArray(record.approvalReviews)) {
     const reviews = record.approvalReviews
       .slice(-MAX_TOOL_APPROVAL_REVIEWS)
-      .flatMap((review) => projectToolApprovalReview(review) ?? []);
+      .flatMap((review) => normalizeToolApprovalReview(review) ?? []);
     if (reviews.length > 0) {
       projected.approvalReviews = reviews;
     }
@@ -261,11 +248,7 @@ export function appendChatCanvasBlocksToMessage(
   return { ...message, content: appendChatCanvasBlocks(content, previews) };
 }
 
-function messageContainsToolHistoryContent(message: unknown): boolean {
-  const entry = readObjectRecord(message);
-  if (!entry) {
-    return false;
-  }
+function messageContainsToolHistoryContent(entry: Record<string, unknown>): boolean {
   if (
     typeof entry.toolCallId === "string" ||
     typeof entry.tool_call_id === "string" ||

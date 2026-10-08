@@ -2,17 +2,42 @@
 // components (postcss-lit). Error-class rules only — oxfmt owns formatting.
 const selectorFunction = String.raw`\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)`;
 const selectorTail = String.raw`(?:[^([]|${selectorFunction}|\[[^\]]*\])*`;
+const selectorCompound = String.raw`(?:[^\s>+~(),[\]]|${selectorFunction}|\[[^\]]*\])*`;
+const appAncestor = String.raw`(?:\.(?:shell|content|chat-thread|chat-split-view)(?:--[\w-]+)?|:root|(?<![.#\w-])(?:html|body))(?![\w-])`;
+const ancestorHas = String.raw`(?::(?:not|is|where)\(\s*)*:has`;
+const selectorList = String.raw`(?:[^()[\]]|${selectorFunction}|\[[^\]]*\])*`;
+const listSubject = (subject) =>
+  String.raw`:(?:is|where)\(${selectorList}${subject}${selectorCompound}\s*(?:,${selectorList})?\)`;
+// One nesting level covers forms such as :is(:where(html, body), .other).
+const ancestorSelectorList = listSubject(`(?:${appAncestor}|${listSubject(appAncestor)})`);
+const appAncestorSubject = String.raw`(?:${appAncestor}|${ancestorSelectorList})`;
 
 export default {
   extends: "stylelint-config-recommended",
   rules: {
-    // Measured :has() hazards: universal targets (~9 ms) and ::placeholder (~8 ms)
-    // restyle the whole subtree per insertion with 534 messages; ::part did not.
-    // Skip functional arguments/attributes; split lists to keep safe branches independent.
+    // Chromium builds one invalidation set for every non-subject :has(). A universal
+    // selector or pseudo-element after one widens it to whole subtrees (~9 ms per
+    // insertion with 534 messages), ::placeholder on the :has() compound cost ~8 ms, and
+    // a tick after a sibling-relative :has() restyled every position-rail tick per
+    // transcript row. Style the element directly, or set a state class or custom
+    // property on the :has() subject. Functional arguments and attributes are skipped;
+    // split lists keep safe branches independent.
     "selector-disallowed-list": [
       [
-        new RegExp(`:has${selectorFunction}${selectorTail}[\\s>+~]\\*`, "i"),
+        new RegExp(
+          `:has${selectorFunction}${selectorTail}[\\s>+~](?:${selectorTail}[\\s>+~(])?\\*`,
+          "i",
+        ),
+        new RegExp(`:has${selectorFunction}${selectorTail}[\\s>+~]${selectorTail}::`, "i"),
         new RegExp(`:has${selectorFunction}${selectorTail}::placeholder(?![\\w-])`, "i"),
+        new RegExp(`:has(?=\\(\\s*[+~])${selectorFunction}${selectorTail}[\\s>+~]`, "i"),
+        // An ancestor subject, including :is()/:where() lists, restyles on every insertion
+        // below it. The rule sees raw selectors; nested & forms remain policy-owned.
+        new RegExp(`${appAncestorSubject}${selectorCompound}${ancestorHas}\\(`, "i"),
+        new RegExp(
+          `${ancestorHas}${selectorFunction}\\)*${selectorCompound}${appAncestorSubject}`,
+          "i",
+        ),
       ],
       { splitList: true },
     ],
@@ -24,15 +49,6 @@ export default {
     // `word-break: break-word` is deprecated but swapping it for overflow-wrap
     // changes min-content sizing in flex/grid text containers.
     "declaration-property-value-keyword-no-deprecated": [true, { ignoreKeywords: ["break-word"] }],
-    // Chromium builds one invalidation set for every non-subject :has(). A
-    // pseudo-element or universal selector after one widens it to whole
-    // subtrees, so each DOM insertion restyled every :has() anchor, the chat
-    // transcript included. Style the element directly, or set a state class
-    // or custom property on the :has() subject.
-    "selector-disallowed-list": [
-      [/:has\((?:[^()]|\([^()]*\))*\)[^\s>+~]*[\s>+~](?:.*::|(?:.*[\s>+~(])?\*)/s],
-      { splitList: true },
-    ],
   },
   overrides: [
     {

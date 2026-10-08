@@ -50,7 +50,10 @@ export class OpenClawHomeSession extends OpenClawLightDomElement {
     const work = this.workContext;
     const scope = JSON.stringify([
       this.context.gateway.connection.gatewayUrl,
+      this.sessionKey,
+      this.agentId,
       work.page,
+      work.detail,
       work.sessionKey,
       work.sessionId,
       work.agentId,

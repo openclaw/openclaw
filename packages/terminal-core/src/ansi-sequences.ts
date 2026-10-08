@@ -153,10 +153,8 @@ export class AnsiSequenceStripper {
       if (this.state === "csi") {
         if (code === 0x18 || code === 0x1a) {
           this.state = "text";
-          index += 1;
         } else if (code <= 0x1f || code === 0x7f) {
           output.push(input.charAt(index));
-          index += 1;
         } else if (code >= 0x20 && code <= 0x3f) {
           // Only retain bounded CSI metadata; oversized controls are still stripped
           // through their final byte, but never dispatch a truncated command.
@@ -166,78 +164,71 @@ export class AnsiSequenceStripper {
           if (!isCompatPrefixCode(code)) {
             this.csiCompatPrefixOnly = false;
           }
-          index += 1;
         } else if ((code === 0x5b || code === 0x5d) && this.csiCompatPrefixOnly) {
           // The compatibility grammar accepts bracket runs before parameters.
           // Keep them pending so a chunk split cannot expose the final byte.
           this.state = "compat";
           this.compatInParameters = false;
           this.compatParameterDigits = 0;
-          index += 1;
         } else if (code >= 0x40 && code <= 0x7e) {
           if (this.csi !== undefined) {
             this.onCsi?.(this.csi + input.charAt(index));
           }
           this.state = "text";
-          index += 1;
         } else {
           this.state = "text";
+          continue;
         }
+        index += 1;
         continue;
       }
 
       if (this.state === "escape") {
         if (code === 0x5d) {
           this.state = "osc";
-          index += 1;
         } else if (code === 0x5b) {
           this.startCsi();
-          index += 1;
         } else if (isCompatPrefixCode(code)) {
           this.state = "compat";
           this.compatInParameters = false;
           this.compatParameterDigits = 0;
-          index += 1;
         } else if (isDigitCode(code)) {
           this.state = "compat";
           this.compatInParameters = true;
           this.compatParameterDigits = 1;
-          index += 1;
         } else if (isCompatFinalCode(code)) {
           this.state = "text";
-          index += 1;
         } else {
           this.state = "text";
+          continue;
         }
+        index += 1;
         continue;
       }
 
       if (code === 0x18 || code === 0x1a) {
         this.state = "text";
-        index += 1;
       } else if (!this.compatInParameters && isCompatPrefixCode(code)) {
         index += 1;
+        continue;
       } else if (!this.compatInParameters && isDigitCode(code)) {
         this.compatInParameters = true;
         this.compatParameterDigits = 1;
-        index += 1;
       } else if (this.compatInParameters && isCompatParameterCode(code)) {
         if (code === 0x3a || code === 0x3b) {
           this.compatParameterDigits = 0;
-          index += 1;
         } else if (this.compatParameterDigits < 4) {
           this.compatParameterDigits += 1;
-          index += 1;
         } else {
           this.state = "text";
-          index += 1;
         }
       } else if (isCompatFinalCode(code)) {
         this.state = "text";
-        index += 1;
       } else {
         this.state = "text";
+        continue;
       }
+      index += 1;
     }
     return output.join("");
   }

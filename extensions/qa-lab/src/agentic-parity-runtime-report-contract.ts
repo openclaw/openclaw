@@ -1,7 +1,8 @@
 import type { QaRuntimeParityCacheUsage } from "./agentic-parity-cache-usage.js";
+import type { RuntimeId } from "./runtime-id.js";
 import type { RuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import type { QaRuntimeTiming } from "./runtime-parity-timing.js";
-import type { RuntimeId, RuntimeParityDrift, RuntimeParityUsagePolicy } from "./runtime-parity.js";
+import type { RuntimeParityDrift, RuntimeParityUsagePolicy } from "./runtime-parity.js";
 
 export type QaRuntimeParityScenarioReport = {
   name: string;

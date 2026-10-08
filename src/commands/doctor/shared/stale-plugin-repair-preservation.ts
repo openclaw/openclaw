@@ -9,18 +9,15 @@ export type StalePluginSurface =
   | "heartbeat"
   | "modelByChannel";
 
-type StalePluginHit = {
-  pluginId: string;
-  surface: StalePluginSurface;
-};
-
 function normalizeIds(ids: Iterable<string> | undefined): Set<string> {
   return new Set(
     [...(ids ?? [])].map((id) => normalizePluginId(id)).filter((id): id is string => Boolean(id)),
   );
 }
 
-export function filterRepairableStalePluginHits<T extends StalePluginHit>(params: {
+export function filterRepairableStalePluginHits<
+  T extends { pluginId: string; surface: StalePluginSurface },
+>(params: {
   hits: readonly T[];
   preservePluginIds?: Iterable<string>;
   surfacePreservePluginIds?: Partial<Record<StalePluginSurface, Iterable<string>>>;

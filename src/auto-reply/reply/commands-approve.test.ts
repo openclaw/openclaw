@@ -13,7 +13,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { handleApproveCommand } from "./commands-approve.js";
+import { handleApproveCommandFromContext as handleApproveCommand } from "./commands-approve.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
@@ -131,6 +131,7 @@ function buildApproveParams(
     SenderId?: string;
     GatewayClientScopes?: string[];
     AccountId?: string;
+    GroupSpace?: string;
   },
 ): HandleCommandsParams {
   const provider = ctxOverrides?.Provider ?? "whatsapp";
@@ -143,6 +144,7 @@ function buildApproveParams(
       SenderId: ctxOverrides?.SenderId,
       GatewayClientScopes: ctxOverrides?.GatewayClientScopes,
       AccountId: ctxOverrides?.AccountId,
+      GroupSpace: ctxOverrides?.GroupSpace,
     },
     command: {
       commandBodyNormalized,
@@ -312,6 +314,52 @@ describe("handleApproveCommand", () => {
     expectApprovalResolverCall({ method, id });
   });
 
+  it("passes workspace-qualified Slack plugin reviewers to Gateway without changing exec identity", async () => {
+    const slackPlugin = {
+      ...slackApproveTestPlugin,
+      approvalCapability: {
+        ...createApprovalCapability("Slack"),
+        resolveReviewerSenderId: ({
+          senderId,
+          spaceId,
+        }: {
+          senderId?: string | null;
+          spaceId?: string | null;
+        }) => `team:${spaceId}:user:${senderId}`,
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", plugin: slackPlugin, source: "test" }]),
+    );
+    const cfg = withApprovalPolicy(
+      { commands: { text: true }, channels: { slack: { allowFrom: ["*"] } } } as OpenClawConfig,
+      {
+        plugin: { authorizedSenders: ["team:T11111111:user:U12345678"] },
+        exec: { authorizedSenders: [] },
+      },
+    );
+    const ctx = {
+      Provider: "slack",
+      Surface: "slack",
+      SenderId: "U12345678",
+      GroupSpace: "T11111111",
+    };
+    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
+
+    const plugin = buildApproveParams("/approve plugin:abc allow-once", cfg, ctx);
+    plugin.command.isAuthorizedSender = false;
+    await handleApproveCommand(plugin, true);
+    expect(approvalResolverRequest(0).senderId).toBe("team:T11111111:user:U12345678");
+
+    resolveApprovalOverGatewayMock.mockClear();
+    withApprovalPolicy(cfg, {
+      plugin: { authorizedSenders: [] },
+      exec: { authorizedSenders: ["U12345678"] },
+    });
+    await handleApproveCommand(buildApproveParams("/approve exec:abc allow-once", cfg, ctx), true);
+    expect(approvalResolverRequest(0).senderId).toBe("U12345678");
+  });
+
   it("honors the configured default account for omitted-account /approve auth", async () => {
     resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
     const params = buildApproveParams(
@@ -470,7 +518,7 @@ describe("handleApproveCommand", () => {
       true,
     );
 
-    expect(result?.reply?.text).toContain("unknown or expired approval id");
+    expect(result?.reply?.text).toContain("That approval is no longer available");
     expect(resolveApprovalOverGatewayMock).toHaveBeenCalledTimes(2);
     expect(approvalResolverRequest(0).approvalKind).toBeUndefined();
     expect(approvalResolverRequest(1).approvalKind).toBeUndefined();
@@ -514,7 +562,7 @@ describe("handleApproveCommand", () => {
         },
       });
 
-      expect(result?.reply?.text).toContain("owner authority changed");
+      expect(result?.reply?.text).toContain("Check the request in the Control UI");
       const canonicalCalls = resolveApprovalOverGatewayMock.mock.calls.filter(
         ([request]) => (request as { approvalKind?: string }).approvalKind === "system-agent",
       );
@@ -534,7 +582,7 @@ describe("handleApproveCommand", () => {
     });
   });
 
-  it("returns the underlying not-found error for plugin-only approval routing", async () => {
+  it("explains an expired approval for plugin-only approval routing", async () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -576,8 +624,8 @@ describe("handleApproveCommand", () => {
     );
 
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Failed to submit approval");
-    expect(result?.reply?.text).toContain("unknown or expired approval id");
+    expect(result?.reply?.text).toContain("approval is no longer available");
+    expect(result?.reply?.text).toContain("Control UI");
     expect(resolveApprovalOverGatewayMock).toHaveBeenCalledTimes(1);
     expectApprovalResolverCall({ method: "plugin.approval.resolve", id: "abc123" });
   });
@@ -656,7 +704,7 @@ describe("handleApproveCommand", () => {
           resolveApprovalOverGatewayMock.mockRejectedValue(
             new Error("unknown or expired approval id"),
           ),
-        expectedText: "unknown or expired approval id",
+        expectedText: "That approval is no longer available",
         expectResolverCalls: 2,
       },
       {

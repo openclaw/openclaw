@@ -1,8 +1,3 @@
-/**
- * Bundled channel catalog reader.
- *
- * Loads channel metadata from generated package catalogs and bundled plugin package manifests.
- */
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -109,9 +104,6 @@ function toBundledChannelEntry(
   };
 }
 
-/**
- * Lists bundled channel catalog entries from package manifests and generated catalog files.
- */
 export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[] {
   const pluginsDir = resolveBundledPluginsDir();
   const catalogs = getPluginCache().metadata.bundledChannelCatalogs;

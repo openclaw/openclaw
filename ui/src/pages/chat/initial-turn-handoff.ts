@@ -1,4 +1,6 @@
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { outboxPayloadMatchesOwner } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
@@ -26,10 +28,7 @@ let pending: InitialTurnHandoff | null = null;
 const listeners = new Set<() => void>();
 
 export function subscribeInitialTurnHandoff(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return registerListener(listeners, listener);
 }
 
 function clearPending(releaseAttachments: boolean): void {
@@ -57,8 +56,12 @@ export function prepareInitialTurnHandoff(
   }
 }
 
-function consumeInitialTurnHandoff(sessionKey: string): InitialTurnHandoff | null {
-  if (!pending || !areUiSessionKeysEquivalent(pending.sessionKey, sessionKey)) {
+function consumeInitialTurnHandoff(host: ChatHost, sessionKey: string): InitialTurnHandoff | null {
+  if (
+    !pending ||
+    !areUiSessionKeysEquivalent(pending.sessionKey, sessionKey) ||
+    !outboxPayloadMatchesOwner(host, pending.item)
+  ) {
     return null;
   }
   const handoff = pending;
@@ -67,7 +70,7 @@ function consumeInitialTurnHandoff(sessionKey: string): InitialTurnHandoff | nul
 }
 
 export function admitInitialTurnHandoff(host: ChatHost, sessionKey: string): boolean {
-  const handoff = consumeInitialTurnHandoff(sessionKey);
+  const handoff = consumeInitialTurnHandoff(host, sessionKey);
   if (!handoff) {
     return false;
   }

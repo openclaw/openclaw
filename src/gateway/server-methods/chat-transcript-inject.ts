@@ -10,15 +10,10 @@ import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcri
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  readSessionTranscriptRunId,
-  resolveTerminalAssistantTranscriptRunId,
-} from "../../sessions/transcript-events.js";
-import {
   ASSISTANT_DISPLAY_CONTENT_FIELD,
   projectAssistantDisplayContent,
   retainAssistantModelContent,
 } from "../../shared/assistant-display-content.js";
-import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import type { ChatAbortOrigin } from "./chat-aborted-partial.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
@@ -69,12 +64,11 @@ function resolveInjectedAssistantContent(params: {
 
 /** Append a gateway-authored assistant message while preserving transcript parent links. */
 export async function appendInjectedAssistantMessageToTranscript(params: {
-  transcriptPath?: string;
-  storePath?: string;
-  sessionId?: string;
+  storePath: string | undefined;
+  sessionId: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
-  sessionKey?: string;
+  sessionKey: string;
   agentId?: string;
   message: string;
   label?: string;
@@ -85,11 +79,13 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   abortMeta?: GatewayInjectedAbortMeta;
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   contextFreeCommand?: true;
-  now?: number;
   config?: OpenClawConfig;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
 }): Promise<GatewayInjectedTranscriptAppendResult> {
-  const now = params.now ?? Date.now();
+  if (!params.sessionKey.trim() || !params.sessionId.trim() || !params.storePath) {
+    return { ok: false, error: "transcript identity not resolved" };
+  }
+  const now = Date.now();
   const resolvedContent = resolveInjectedAssistantContent(params);
   const displayMessage: {
     role: "assistant";
@@ -103,7 +99,6 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   const displayContent = preparedDisplayMessage.content;
   const canonicalContent = retainAssistantModelContent(displayContent);
   const rawDeliveryFacts = preparedDisplayMessage.openclawDelivery;
-  const abortRunId = params.abortMeta?.runId;
   const messageBody: AppendMessageArg & Record<string, unknown> = applyAssistantDeliveryDirectives({
     role: "assistant",
     content: canonicalContent,
@@ -136,20 +131,14 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     messageBody.openclawDelivery = rawDeliveryFacts;
   }
 
+  const scope = {
+    storePath: params.storePath,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  };
   try {
-    if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {
-      return { ok: false, error: "transcript identity not resolved" };
-    }
     if (params.abortMeta?.producerSettled) {
-      if (!params.storePath || !params.sessionId || !params.sessionKey) {
-        return { ok: false, error: "settled producer transcript identity not resolved" };
-      }
-      const scope = {
-        storePath: params.storePath,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-      };
       const result = await appendAbortedSessionTranscriptPartial(scope, {
         runId: params.abortMeta.runId,
         message: messageBody,
@@ -170,56 +159,39 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         message: projectAssistantDisplayContent(append.message),
       };
     }
-    let predicateDeclined = false;
-    const turn = await persistSessionTranscriptTurn(
-      {
-        sessionKey: params.sessionKey ?? "",
-        ...(params.transcriptPath ? { sessionFile: params.transcriptPath } : {}),
-        ...(params.storePath ? { storePath: params.storePath } : {}),
-        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-      },
-      {
-        expectedSessionId: params.expectedSessionId,
-        expectedLifecycleRevision: params.expectedLifecycleRevision,
-        updateMode: "inline",
-        onMessageCommitted: params.onMessageCommitted,
-        ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
-        touchSessionEntry: Boolean(params.storePath && params.sessionId && params.sessionKey),
-        ...(params.config ? { config: params.config } : {}),
-        messages: [
-          {
-            message: messageBody,
-            idempotencyLookup: "scan-assistant",
-            ...(params.abortMeta
-              ? {
-                  shouldAppendInTransaction: (latestAssistantMessage: unknown) => {
-                    const committedRunId = resolveTerminalAssistantTranscriptRunId(
-                      latestAssistantMessage,
-                      readSessionTranscriptRunId(latestAssistantMessage),
-                    );
-                    const committedText = extractAssistantPhaseText(latestAssistantMessage)?.trim();
-                    // The same run can commit before its live buffer clears. Recheck after
-                    // BEGIN IMMEDIATE so a direct writer cannot land between this fact and insert.
-                    predicateDeclined =
-                      committedRunId === abortRunId && committedText === params.message.trim();
-                    return !predicateDeclined;
-                  },
-                }
-              : {}),
-            now,
-            useRawWhenLinear: true,
-          },
-        ],
-      },
-    );
+    const turn = await persistSessionTranscriptTurn(scope, {
+      expectedSessionId: params.expectedSessionId,
+      expectedLifecycleRevision: params.expectedLifecycleRevision,
+      updateMode: "inline",
+      onMessageCommitted: params.onMessageCommitted,
+      ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
+      touchSessionEntry: true,
+      ...(params.config ? { config: params.config } : {}),
+      messages: [
+        {
+          message: messageBody,
+          idempotencyLookup: "scan-assistant",
+          ...(params.abortMeta
+            ? {
+                predicate: {
+                  kind: "latest-assistant-differs" as const,
+                  runId: params.abortMeta.runId,
+                  text: params.message.trim(),
+                },
+              }
+            : {}),
+          now,
+          useRawWhenLinear: true,
+        },
+      ],
+    });
     if (turn.rejectedReason) {
       return { ok: false, error: turn.rejectedReason };
     }
     const appended = turn.messages[0];
     if (!appended) {
       // A declined predicate is a decision, not a failure: no row was wanted.
-      if (predicateDeclined) {
+      if (turn.predicateSkipped) {
         return { ok: true, skipped: true };
       }
       return { ok: false, error: "gateway-injected assistant message was not appended" };

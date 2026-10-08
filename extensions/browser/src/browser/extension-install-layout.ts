@@ -5,9 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { inspectPathPermissions } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import type { NativeWindowsContext } from "./extension-windows-contract.js";
-import type { runWindowsManagement } from "./extension-windows-management.js";
-import type { WindowsNativePlatform } from "./extension-windows-platform.js";
 
 const EXTENSION_ID_PATTERN = /^[a-p]{32}$/;
 const UNPACKED_MANIFEST_LOCATION = 4;
@@ -36,25 +33,6 @@ export type DiscoveredChromeStoreExtension = Omit<DiscoveredChromeExtension, "ex
   enabled: boolean;
   awaitingApproval: boolean;
 };
-type WindowsNativeHostDeps = {
-  platform?: WindowsNativePlatform;
-  manage?: typeof runWindowsManagement;
-  context?: NativeWindowsContext;
-  cliPath?: string;
-  executable?: string;
-};
-export type ExtensionInstallDeps = {
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-  homeDir?: string;
-  nodePath?: string;
-  nativeHostPath?: string;
-  windowsNative?: WindowsNativeHostDeps;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-};
-
 export async function approvedInstallRealpaths(
   installed: string,
   bundled: string,
@@ -87,8 +65,8 @@ export function generateChromeExtensionIdForPath(
   );
 }
 
-function homeDirectory(deps: ExtensionInstallDeps): string {
-  const value = deps.homeDir ?? deps.env?.HOME ?? deps.env?.USERPROFILE ?? os.homedir();
+function homeDirectory(): string {
+  const value = process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
   if (!value.trim()) {
     throw new Error("Could not resolve the user home directory.");
   }
@@ -96,10 +74,10 @@ function homeDirectory(deps: ExtensionInstallDeps): string {
 }
 
 /** Chromium-derived default user-data and user native-host roots. */
-export function chromeProductRoots(deps: ExtensionInstallDeps = {}): ChromeProductRoot[] {
-  const platform = deps.platform ?? process.platform;
-  const env = deps.env ?? process.env;
-  const home = homeDirectory({ ...deps, env });
+export function chromeProductRoots(): ChromeProductRoot[] {
+  const platform = process.platform;
+  const env = process.env;
+  const home = homeDirectory();
   const root = (
     product: ChromeProduct,
     label: string,
@@ -156,12 +134,8 @@ export function chromeProductRoots(deps: ExtensionInstallDeps = {}): ChromeProdu
   return [];
 }
 
-export function stableChromeExtensionDir(deps: ExtensionInstallDeps = {}): string {
-  return path.join(
-    path.resolve(deps.stateDir ?? resolveStateDir(deps.env)),
-    "browser",
-    "chrome-extension",
-  );
+export function stableChromeExtensionDir(): string {
+  return path.join(path.resolve(resolveStateDir()), "browser", "chrome-extension");
 }
 
 export async function pathInfo(
@@ -280,14 +254,11 @@ async function copyRuntimeTree(source: string, target: string): Promise<void> {
 }
 
 /** Copy/update the bundled extension with rollback-safe same-directory renames. */
-export async function installStableChromeExtension(
-  bundledDir: string,
-  deps: ExtensionInstallDeps = {},
-): Promise<string> {
+export async function installStableChromeExtension(bundledDir: string): Promise<string> {
   const source = await fs.realpath(path.resolve(bundledDir));
   await assertOwnedPath(source, "directory", { allowRootOwner: true });
-  const target = stableChromeExtensionDir(deps);
-  await ensurePrivateDirectory(path.resolve(deps.stateDir ?? resolveStateDir(deps.env)));
+  const target = stableChromeExtensionDir();
+  await ensurePrivateDirectory(path.resolve(resolveStateDir()));
   await ensurePrivateDirectory(path.dirname(target));
   const existing = await inspectInstalledCopy(target);
   if (existing.present && !existing.owned) {
@@ -339,15 +310,13 @@ async function approvedRealpaths(paths: readonly string[]): Promise<string[]> {
 export async function discoverChromeExtensionIds(params: {
   approvedDirs: readonly string[];
   storeExtensionId?: string;
-  deps?: ExtensionInstallDeps;
 }): Promise<{
   discovered: DiscoveredChromeExtension[];
   storeDiscovered: DiscoveredChromeStoreExtension[];
   issues: string[];
   identityMismatches: string[];
 }> {
-  const deps = params.deps ?? {};
-  const platform = deps.platform ?? process.platform;
+  const platform = process.platform;
   const approved = new Set(
     (await approvedRealpaths(params.approvedDirs)).map((value) => comparablePath(value, platform)),
   );
@@ -355,7 +324,7 @@ export async function discoverChromeExtensionIds(params: {
   const storeDiscovered: DiscoveredChromeStoreExtension[] = [];
   const issues: string[] = [];
   const identityMismatches: string[] = [];
-  for (const root of chromeProductRoots(deps)) {
+  for (const root of chromeProductRoots()) {
     if (!(await pathInfo(root.userDataDir))) {
       continue;
     }
@@ -411,6 +380,14 @@ export async function discoverChromeExtensionIds(params: {
               state?: unknown;
               disable_reasons?: unknown;
             };
+            const identity = {
+              product: root.product,
+              browser: root.label,
+              userDataDir: root.userDataDir,
+              profile: profileEntry.name,
+              securePreferencesPath: preferencesPath,
+              extensionId,
+            };
             if (
               extensionId === params.storeExtensionId &&
               entry.from_webstore === true &&
@@ -428,12 +405,7 @@ export async function discoverChromeExtensionIds(params: {
                 ? reasons.includes(8_192)
                 : typeof reasons === "number" && (reasons & 8_192) !== 0;
               storeDiscovered.push({
-                product: root.product,
-                browser: root.label,
-                userDataDir: root.userDataDir,
-                profile: profileEntry.name,
-                securePreferencesPath: preferencesPath,
-                extensionId,
+                ...identity,
                 enabled,
                 awaitingApproval,
               });
@@ -457,12 +429,7 @@ export async function discoverChromeExtensionIds(params: {
               continue;
             }
             discovered.push({
-              product: root.product,
-              browser: root.label,
-              userDataDir: root.userDataDir,
-              profile: profileEntry.name,
-              securePreferencesPath: preferencesPath,
-              extensionId,
+              ...identity,
               extensionPath: canonicalPath,
             });
           }
@@ -474,29 +441,25 @@ export async function discoverChromeExtensionIds(params: {
       }
     }
   }
-  const unique = new Map(
-    discovered.map((entry) => [
-      `${entry.product}\0${entry.profile}\0${entry.extensionId}\0${entry.extensionPath}`,
-      entry,
-    ]),
-  );
-  const uniqueStore = new Map(
-    storeDiscovered.map((entry) => [
-      `${entry.product}\0${entry.profile}\0${entry.extensionId}`,
-      entry,
-    ]),
-  );
+  const uniqueSorted = <T extends { product: ChromeProduct; profile: string; extensionId: string }>(
+    entries: T[],
+    suffix: (entry: T) => string,
+  ): T[] => {
+    const unique = new Map(
+      entries.map((entry) => [
+        `${entry.product}\0${entry.profile}\0${entry.extensionId}${suffix(entry)}`,
+        entry,
+      ]),
+    );
+    return [...unique.values()].toSorted((a, b) =>
+      `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
+        `${b.product}/${b.profile}/${b.extensionId}`,
+      ),
+    );
+  };
   return {
-    discovered: [...unique.values()].toSorted((a, b) =>
-      `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
-        `${b.product}/${b.profile}/${b.extensionId}`,
-      ),
-    ),
-    storeDiscovered: [...uniqueStore.values()].toSorted((a, b) =>
-      `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
-        `${b.product}/${b.profile}/${b.extensionId}`,
-      ),
-    ),
+    discovered: uniqueSorted(discovered, (entry) => `\0${entry.extensionPath}`),
+    storeDiscovered: uniqueSorted(storeDiscovered, () => ""),
     issues,
     identityMismatches,
   };

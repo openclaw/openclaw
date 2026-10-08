@@ -142,6 +142,7 @@ describe("worktree Git size estimates", () => {
       );
       const fetches = commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch");
       expect(fetches).toHaveLength(1);
+      expect(fetches[0]?.[1]).toContain("--no-auto-maintenance");
       const fetchOptions = fetches[0]?.[2];
       expect(fetchOptions?.timeoutMs).toBe(300_000);
       const input = fetchOptions?.input;
@@ -161,6 +162,38 @@ describe("worktree Git size estimates", () => {
       expect(commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch").length).toBe(0);
     },
   );
+
+  it("keeps the hydration fetch from starting Git auto-maintenance on the source repository", async () => {
+    const { root, clone, commit } = await partialClone();
+    const traceDir = path.join(root, "hydrate-trace2");
+    await fs.mkdir(traceDir);
+    // A directory target gives one event file per Git process, so nothing interleaves.
+    vi.stubEnv("GIT_TRACE2_EVENT", traceDir);
+    await expect(estimateWorktreeGitBytes(clone, commit)).resolves.toBe(16_384);
+    const events = (
+      await Promise.all(
+        (await fs.readdir(traceDir)).map(async (name) =>
+          (await fs.readFile(path.join(traceDir, name), "utf8"))
+            .split("\n")
+            .filter((line) => line.length > 0)
+            .map(
+              (line) =>
+                JSON.parse(line) as { event: string; sid: string; name?: string; argv?: string[] },
+            ),
+        ),
+      )
+    ).flat();
+    const fetchSid = events.find(
+      (event) => event.event === "cmd_name" && event.name === "fetch",
+    )?.sid;
+    expect(fetchSid).toBeTruthy();
+    const spawned = events
+      .filter((event) => event.event === "child_start" && event.sid.startsWith(fetchSid ?? ""))
+      .map((event) => event.argv ?? []);
+    // The transfer itself still happens inside the fetch; only the maintenance child must go.
+    expect(spawned.some((argv) => argv.includes("index-pack"))).toBe(true);
+    expect(spawned.filter((argv) => argv[1] === "maintenance" || argv[1] === "gc")).toEqual([]);
+  });
 
   it.each(["cancel", "revoke"] as const)(
     "keeps hydration behind queued ref writes and honors %s before fetching",

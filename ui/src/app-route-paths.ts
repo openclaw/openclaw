@@ -355,13 +355,8 @@ export function pathForPluginCatalogEntry(id: string, basePath = ""): string {
 }
 
 export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string | null {
-  const normalizedPath = normalizePath(pathname);
-  const prefix = `${pathForRoute("plugins", basePath)}/`;
-  if (!normalizedPath.startsWith(prefix)) {
-    return null;
-  }
-  const id = normalizedPath.slice(prefix.length);
-  return isPluginCatalogId(id) ? id : null;
+  const id = routePathSuffix(pathname, "plugins", basePath);
+  return id && isPluginCatalogId(id) ? id : null;
 }
 
 export function pathForPluginSettings(pluginId: string, basePath = ""): string {
@@ -374,13 +369,7 @@ export function pathForPluginSettings(pluginId: string, basePath = ""): string {
 }
 
 export function pluginSettingsIdFromPath(pathname: string, basePath = ""): string | null {
-  const normalizedPath = normalizePath(pathname);
-  const settingsPath = pathForRoute("plugin-settings", basePath);
-  const prefix = `${settingsPath}/`;
-  if (!normalizedPath.startsWith(prefix)) {
-    return null;
-  }
-  const encodedPluginId = normalizedPath.slice(prefix.length);
+  const encodedPluginId = routePathSuffix(pathname, "plugin-settings", basePath);
   // This exact retired discovery route belongs to the Plugins workspace.
   if (!encodedPluginId || encodedPluginId.includes("/") || encodedPluginId === "discover") {
     return null;
@@ -542,14 +531,8 @@ function isRouteOwnedBasePath(basePath: string): boolean {
   if (APP_ROUTE_PATHS.includes(basePath)) {
     return true;
   }
-  const segments = basePath.split("/").filter(Boolean);
-  for (let count = 1; count <= segments.length; count += 1) {
-    const ancestor = `/${segments.slice(0, count).join("/")}`;
-    if (APP_ROUTE_PATHS.some((path) => path.startsWith(`${ancestor}/`))) {
-      return true;
-    }
-  }
-  return false;
+  const namespace = basePath.split("/").find(Boolean);
+  return APP_ROUTE_PATHS.some((path) => path.startsWith(`/${namespace}/`));
 }
 
 export function inferBasePathFromPathname(pathname: string): string {

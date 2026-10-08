@@ -22,7 +22,23 @@ export type {
 
 /** Durable launch operations on the canonical shared-state worker. */
 export class NodeWorkerLaunchStore {
-  constructor(private readonly worker: NodeWorkerJournalWorker) {}
+  readonly listNonterminal;
+  readonly get;
+  readonly nonterminalCount;
+  readonly pruneExpiredTerminal;
+  readonly getMatching;
+  readonly cleanupBinding;
+  readonly finishCancelled;
+
+  constructor(private readonly worker: NodeWorkerJournalWorker) {
+    this.get = worker.operation("nodeWorker.launch.get");
+    this.listNonterminal = worker.operation("nodeWorker.launch.listNonterminal");
+    this.nonterminalCount = worker.operation("nodeWorker.launch.nonterminalCount");
+    this.pruneExpiredTerminal = worker.operation("nodeWorker.launch.pruneExpiredTerminal");
+    this.getMatching = worker.operation("nodeWorker.launch.getMatching");
+    this.cleanupBinding = worker.operation("nodeWorker.launch.cleanupBinding");
+    this.finishCancelled = worker.operation("nodeWorker.launch.finishCancelled");
+  }
 
   claim(
     claim: NodeWorkerLaunchClaim,
@@ -62,48 +78,6 @@ export class NodeWorkerLaunchStore {
         ],
       });
     }, authority);
-  }
-
-  listNonterminal(
-    ...params: Parameters<NodeWorkerLaunchKernel["listNonterminal"]>
-  ): Promise<ReturnType<NodeWorkerLaunchKernel["listNonterminal"]>> {
-    return this.worker.execute({ type: "nodeWorker.launch.listNonterminal", input: params });
-  }
-
-  nonterminalCount(
-    ...params: Parameters<NodeWorkerLaunchKernel["nonterminalCount"]>
-  ): Promise<ReturnType<NodeWorkerLaunchKernel["nonterminalCount"]>> {
-    return this.worker.execute({ type: "nodeWorker.launch.nonterminalCount", input: params });
-  }
-
-  pruneExpiredTerminal(
-    ...params: Parameters<NodeWorkerLaunchKernel["pruneExpiredTerminal"]>
-  ): Promise<ReturnType<NodeWorkerLaunchKernel["pruneExpiredTerminal"]>> {
-    return this.worker.execute({ type: "nodeWorker.launch.pruneExpiredTerminal", input: params });
-  }
-
-  get(
-    ...params: Parameters<NodeWorkerLaunchKernel["get"]>
-  ): Promise<ReturnType<NodeWorkerLaunchKernel["get"]>> {
-    return this.worker.execute({ type: "nodeWorker.launch.get", input: params });
-  }
-
-  getMatching(
-    ...params: Parameters<NodeWorkerLaunchKernel["getMatching"]>
-  ): Promise<ReturnType<NodeWorkerLaunchKernel["getMatching"]>> {
-    return this.worker.execute({ type: "nodeWorker.launch.getMatching", input: params });
-  }
-
-  cleanupBinding(
-    ...params: Parameters<NodeWorkerLaunchKernel["cleanupBinding"]>
-  ): Promise<ReturnType<NodeWorkerLaunchKernel["cleanupBinding"]>> {
-    return this.worker.execute({ type: "nodeWorker.launch.cleanupBinding", input: params });
-  }
-
-  finishCancelled(
-    ...params: Parameters<NodeWorkerLaunchKernel["finishCancelled"]>
-  ): Promise<ReturnType<NodeWorkerLaunchKernel["finishCancelled"]>> {
-    return this.worker.execute({ type: "nodeWorker.launch.finishCancelled", input: params });
   }
 
   finish(

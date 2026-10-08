@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   mergeSessionEntry,
   resolveSessionResetPolicy,
@@ -6,8 +6,10 @@ import {
 } from "../../config/sessions.js";
 import {
   loadSessionEntry,
+  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
@@ -49,6 +51,52 @@ function buildReusePatch(input: Partial<PatchParams>) {
 }
 
 describe("agent session reuse at mutation", () => {
+  it("backfills the current candidate header while new windows start at the current time", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "current-candidate",
+        sessionKey: "agent:main:reuse-header",
+        storePath: state.statePath("reuse-header.sqlite"),
+      };
+      const current: SessionEntry = {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        lastInteractionAt: now - 1,
+      };
+      await upsertSessionEntryCore(scope, current);
+      await replaceTranscriptEvents(scope, [
+        { type: "session", id: scope.sessionId, version: 3, timestamp: new Date(42).toISOString() },
+      ]);
+      for (const candidate of [
+        { initial: current, fresh: current, expectedId: scope.sessionId, startedAt: 42 },
+        {
+          initial: { ...current, sessionId: "predecessor" },
+          fresh: current,
+          expectedId: scope.sessionId,
+          startedAt: 42,
+        },
+        {
+          initial: current,
+          fresh: { ...current, lastInteractionAt: 1 },
+          expectedId: "replacement",
+          startedAt: now,
+        },
+      ]) {
+        const result = await buildReusePatch({
+          initialEntry: candidate.initial,
+          freshEntry: candidate.fresh,
+          canonicalSessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+        });
+        expect(result.patch).toMatchObject({
+          sessionId: candidate.expectedId,
+          sessionStartedAt: candidate.startedAt,
+        });
+      }
+    });
+  });
+
   it.each([
     { name: "expired ordinary turn", input: {}, sessionId: "replacement", isNew: true },
     { name: "fresh ordinary turn", input: { freshEntry }, sessionId: "original", isNew: false },
@@ -114,8 +162,8 @@ describe("agent session reuse at mutation", () => {
     input: Partial<PatchParams>;
     sessionId: string;
     isNew: boolean;
-  }>)("preserves $name", ({ input, sessionId, isNew }) => {
-    const result = buildReusePatch(input);
+  }>)("preserves $name", async ({ input, sessionId, isNew }) => {
+    const result = await buildReusePatch(input);
     expect(result.patch.sessionId).toBe(sessionId);
     expect(result.isNewSession).toBe(isNew);
   });
@@ -131,7 +179,7 @@ describe("agent session reuse at mutation", () => {
         storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
       };
       await upsertSessionEntryCore(scope, expiredEntry);
-      const prepared = prepareAgentSession({
+      const prepared = await prepareAgentSession({
         cfg,
         requestedSessionKey: sessionKey,
         request: { message: "continue", idempotencyKey: "reuse-proof" },
@@ -157,7 +205,7 @@ describe("agent session reuse at mutation", () => {
       };
       await upsertSessionEntryCore(scope, concurrent);
       const latest = loadSessionEntry(scope);
-      const updated = buildReusePatch({
+      const updated = await buildReusePatch({
         initialEntry: prepared.entry,
         freshEntry: latest,
         cfg: prepared.cfg,
@@ -175,6 +223,50 @@ describe("agent session reuse at mutation", () => {
         lifecycleRunId: "concurrent-run",
         cliSessionIds: { "claude-cli": "native-concurrent" },
       });
+    });
+  });
+
+  it("refuses a replaced expected session after database admission yields", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = {};
+      await state.writeConfig(cfg);
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:admission-replacement",
+        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+      };
+      await upsertSessionEntryCore(scope, { ...freshEntry, sessionId: "original" });
+      const open = agentDatabase.withOpenClawAgentDatabaseRuntime;
+      const admission = vi
+        .spyOn(agentDatabase, "withOpenClawAgentDatabaseRuntime")
+        .mockImplementationOnce(async (...args) => {
+          await upsertSessionEntryCore(scope, { ...freshEntry, sessionId: "successor" });
+          return open(...args);
+        });
+      const respond = vi.fn();
+      try {
+        const prepared = await prepareAgentSession({
+          cfg,
+          requestedSessionKey: scope.sessionKey,
+          expectedExistingSessionId: "original",
+          request: { message: "continue", idempotencyKey: "admission-replacement" },
+          canUseCronRunContinuation: false,
+          lifecycleGeneration: "admission-replacement",
+          respond,
+        });
+        expect(prepared).toBeUndefined();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "UNAVAILABLE",
+            message: expect.stringContaining("changed before expected work could start"),
+          }),
+        );
+        expect(loadSessionEntry(scope)?.sessionId).toBe("successor");
+      } finally {
+        admission.mockRestore();
+      }
     });
   });
 });

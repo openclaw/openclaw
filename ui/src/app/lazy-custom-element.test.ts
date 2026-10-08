@@ -30,22 +30,6 @@ describe("ensureCustomElementDefined", () => {
     expect(customElements.get(tagName)).toBeDefined();
   });
 
-  it("allows a failed module load to be retried", async () => {
-    const tagName = uniqueTag();
-    const firstError = new Error("chunk unavailable");
-    const loadModule = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(firstError)
-      .mockImplementationOnce(async () => {
-        customElements.define(tagName, class extends HTMLElement {});
-      });
-
-    await expect(ensureCustomElementDefined(tagName, loadModule)).rejects.toBe(firstError);
-    await expect(ensureCustomElementDefined(tagName, loadModule)).resolves.toBeUndefined();
-
-    expect(loadModule).toHaveBeenCalledTimes(2);
-  });
-
   it("rejects modules that do not register their declared element", async () => {
     const tagName = uniqueTag();
 

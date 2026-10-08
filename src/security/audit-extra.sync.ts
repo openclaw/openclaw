@@ -3,7 +3,6 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
@@ -26,15 +25,10 @@ import {
 } from "../gateway/node-command-policy.js";
 import { listEffectiveGroupRouteBindings } from "../routing/resolve-route.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
-import { collectAuditModelRefs } from "./audit-model-refs.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
 
-type HooksHardeningAuditOptions = {
-  gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
-};
-
-type GatewayHttpNoAuthAuditOptions = {
+type GatewayAuthAuditOptions = {
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
 
@@ -43,14 +37,6 @@ type GatewayAuthSharedSecretReuse = {
   label: GatewayAuthSharedSecretLabel;
   source: "config" | "override";
 };
-type ActiveGatewaySharedSecret = {
-  label: GatewayAuthSharedSecretLabel;
-  value?: string;
-};
-
-// --------------------------------------------------------------------------
-// Helpers
-// --------------------------------------------------------------------------
 
 function isProbablySyncedPath(p: string): boolean {
   const s = p.toLowerCase();
@@ -72,69 +58,29 @@ function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
   return tailscaleMode === "serve" || tailscaleMode === "funnel";
 }
 
-function formatGatewayAuthDisplayLabel(label: GatewayAuthSharedSecretLabel): string {
-  if (label === "gateway auth password") {
-    return "Gateway password";
-  }
-  return "Gateway token";
-}
-
-function formatHooksTokenReuseDetail(reusedGatewayAuthLabel: GatewayAuthSharedSecretLabel): string {
-  if (reusedGatewayAuthLabel === "gateway auth password") {
-    return "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to Gateway password auth.";
-  }
-  return "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.";
-}
-
-function listActiveGatewaySharedSecrets(auth: ResolvedGatewayAuth): ActiveGatewaySharedSecret[] {
-  if (auth.mode === "token") {
-    return [{ label: "gateway auth token", value: auth.token }];
-  }
-  if (auth.mode === "password" || auth.mode === "trusted-proxy") {
-    return [{ label: "gateway auth password", value: auth.password }];
-  }
-  return [];
-}
-
-function findGatewayAuthLabelMatchingHooksToken(params: {
-  hooksToken: string;
-  auth: ResolvedGatewayAuth;
-}): GatewayAuthSharedSecretLabel | undefined {
-  return listActiveGatewaySharedSecrets(params.auth).find(
-    (candidate) => normalizeOptionalString(candidate.value) === params.hooksToken,
-  )?.label;
-}
-
 function findHooksTokenGatewayAuthReuse(params: {
   hooksToken: string;
   configGatewayAuth: ResolvedGatewayAuth;
   overrideGatewayAuth?: ResolvedGatewayAuth;
 }): GatewayAuthSharedSecretReuse | undefined {
-  const configReuseLabel = findGatewayAuthLabelMatchingHooksToken({
-    hooksToken: params.hooksToken,
-    auth: params.configGatewayAuth,
-  });
-  if (configReuseLabel) {
-    return { label: configReuseLabel, source: "config" };
+  for (const [source, auth] of [
+    ["config", params.configGatewayAuth],
+    ["override", params.overrideGatewayAuth],
+  ] as const) {
+    if (!auth) {
+      continue;
+    }
+    if (auth.mode === "token" && normalizeOptionalString(auth.token) === params.hooksToken) {
+      return { label: "gateway auth token", source };
+    }
+    if (
+      (auth.mode === "password" || auth.mode === "trusted-proxy") &&
+      normalizeOptionalString(auth.password) === params.hooksToken
+    ) {
+      return { label: "gateway auth password", source };
+    }
   }
-
-  const overrideReuseLabel = params.overrideGatewayAuth
-    ? findGatewayAuthLabelMatchingHooksToken({
-        hooksToken: params.hooksToken,
-        auth: params.overrideGatewayAuth,
-      })
-    : undefined;
-  if (!overrideReuseLabel) {
-    return undefined;
-  }
-  return { label: overrideReuseLabel, source: "override" };
-}
-
-function formatHooksTokenReuseRemediation(reuse: GatewayAuthSharedSecretReuse): string {
-  if (reuse.source === "override") {
-    return "Rotate hooks.token or the runtime Gateway shared-secret auth value used for this audit; doctor can only repair reuse that is present in persisted config or process env.";
-  }
-  return `Run ${formatCliCommand("openclaw doctor --fix")} to rotate a persisted hooks.token, then update external hook senders to use the new hook token.`;
+  return undefined;
 }
 
 function hasResolvedGatewayHttpAuth(auth: ResolvedGatewayAuth): boolean {
@@ -148,35 +94,6 @@ function hasResolvedGatewayHttpAuth(auth: ResolvedGatewayAuth): boolean {
     return true;
   }
   return false;
-}
-
-const LEGACY_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }> = [
-  { id: "openai.gpt35", re: /\bgpt-3\.5\b/i, label: "GPT-3.5 family" },
-  { id: "anthropic.claude2", re: /\bclaude-(instant|2)\b/i, label: "Claude 2/Instant family" },
-  { id: "openai.gpt4_legacy", re: /\bgpt-4-(0314|0613)\b/i, label: "Legacy GPT-4 snapshots" },
-];
-
-const WEAK_TIER_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }> = [
-  { id: "anthropic.haiku", re: /\bhaiku\b/i, label: "Haiku tier (smaller model)" },
-];
-
-function isGptModel(id: string): boolean {
-  return /\bgpt-/i.test(id);
-}
-
-function isGpt5OrHigher(id: string): boolean {
-  return /\bgpt-5(?:\b|[.-])/i.test(id);
-}
-
-function isClaudeModel(id: string): boolean {
-  return /\bclaude-/i.test(id);
-}
-
-function isClaude45OrHigher(id: string): boolean {
-  // Match claude-*-4-5+, claude-*-45+, claude-*4.5+, or future 5.x+ majors.
-  return /\bclaude-[^\s/]*?(?:-4-?(?:[5-9]|[1-9]\d)\b|4\.(?:[5-9]|[1-9]\d)\b|-[5-9](?:\b|[.-]))/i.test(
-    id,
-  );
 }
 
 function hasConfiguredDockerConfig(
@@ -216,34 +133,22 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
     { platform: "windows", deviceFamily: "Windows" },
     { platform: "unknown" },
   ];
-  for (const node of platformNodes) {
-    const allow = resolveNodePairingCommandAllowlist(baseCfg, node);
-    for (const cmd of allow) {
+  for (const commands of [
+    ...platformNodes.map((node) => resolveNodePairingCommandAllowlist(baseCfg, node)),
+    resolveNodePairingCommandAllowlist(baseCfg, { caps: ["talk"] }),
+    DEFAULT_DANGEROUS_NODE_COMMANDS,
+  ]) {
+    for (const cmd of commands) {
       const normalized = normalizeNodeCommand(cmd);
       if (normalized) {
         out.add(normalized);
       }
     }
   }
-  for (const cmd of resolveNodePairingCommandAllowlist(baseCfg, { caps: ["talk"] })) {
-    const normalized = normalizeNodeCommand(cmd);
-    if (normalized) {
-      out.add(normalized);
-    }
-  }
-  for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
-    const normalized = normalizeNodeCommand(cmd);
-    if (normalized) {
-      out.add(normalized);
-    }
-  }
   return out;
 }
 
 function looksLikeNodeCommandPattern(value: string): boolean {
-  if (!value) {
-    return false;
-  }
   if (/[?*[\]{}(),|]/.test(value)) {
     return true;
   }
@@ -258,12 +163,7 @@ function looksLikeNodeCommandPattern(value: string): boolean {
   return /\s/.test(value) || value.includes("group:");
 }
 
-function suggestKnownNodeCommands(unknown: string, known: Set<string>): string[] {
-  const needle = unknown.trim();
-  if (!needle) {
-    return [];
-  }
-
+function suggestKnownNodeCommands(needle: string, known: Set<string>): string[] {
   // Fast path: prefix-ish suggestions.
   const prefix = needle.includes(".") ? needle.split(".").slice(0, 2).join(".") : needle;
   const prefixHits = Array.from(known)
@@ -491,10 +391,6 @@ function collectControlPlaneToolExposureContexts(cfg: OpenClawConfig): string[] 
   return exposedContexts;
 }
 
-// --------------------------------------------------------------------------
-// Exported collectors
-// --------------------------------------------------------------------------
-
 export function collectSyncedFolderFindings(params: {
   stateDir: string;
   configPath: string;
@@ -544,7 +440,7 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
 export function collectHooksHardeningFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
-  options: HooksHardeningAuditOptions = {},
+  options: GatewayAuthAuditOptions = {},
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   if (cfg.hooks?.enabled !== true) {
@@ -580,12 +476,18 @@ export function collectHooksHardeningFindings(
     overrideGatewayAuth,
   });
   if (reusedGatewayAuth) {
+    const password = reusedGatewayAuth.label === "gateway auth password";
     findings.push({
       checkId: "hooks.token_reuse_gateway_token",
       severity: "critical",
-      title: `Hooks token reuses the ${formatGatewayAuthDisplayLabel(reusedGatewayAuth.label)}`,
-      detail: formatHooksTokenReuseDetail(reusedGatewayAuth.label),
-      remediation: formatHooksTokenReuseRemediation(reusedGatewayAuth),
+      title: `Hooks token reuses the Gateway ${password ? "password" : "token"}`,
+      detail: password
+        ? "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to Gateway password auth."
+        : "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
+      remediation:
+        reusedGatewayAuth.source === "override"
+          ? "Rotate hooks.token or the runtime Gateway shared-secret auth value used for this audit; doctor can only repair reuse that is present in persisted config or process env."
+          : `Run ${formatCliCommand("openclaw doctor --fix")} to rotate a persisted hooks.token, then update external hook senders to use the new hook token.`,
     });
   }
 
@@ -690,7 +592,7 @@ export function collectGatewayHttpSessionKeyOverrideFindings(
 export function collectGatewayHttpNoAuthFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-  options: GatewayHttpNoAuthAuditOptions = {},
+  options: GatewayAuthAuditOptions = {},
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -885,9 +787,6 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     }
   }
 
-  // CDP source range is now auto-derived at runtime from the Docker network gateway
-  // for all bridge-like networks, so an unset cdpSourceRange is no longer a security gap.
-
   return findings;
 }
 
@@ -959,7 +858,7 @@ export function collectNodeDangerousAllowCommandFindings(
     return findings;
   }
 
-  const allow = new Set(normalizeUniqueStringEntries(allowRaw.map(normalizeNodeCommand)));
+  const allow = new Set(allowRaw.map(normalizeNodeCommand).filter(Boolean));
   if (allow.size === 0) {
     return findings;
   }
@@ -1020,91 +919,6 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
     remediation:
       'Set those agents to `tools.profile="minimal"` (or remove the agent override) if you want minimal tools enforced globally.',
   });
-
-  return findings;
-}
-
-export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  const findings: SecurityAuditFinding[] = [];
-  const models = collectAuditModelRefs(cfg);
-  if (models.length === 0) {
-    return findings;
-  }
-
-  const weakMatches = new Map<string, { model: string; source: string; reasons: string[] }>();
-  const addWeakMatch = (model: string, source: string, reason: string) => {
-    const key = `${model}@@${source}`;
-    const existing = weakMatches.get(key);
-    if (!existing) {
-      weakMatches.set(key, { model, source, reasons: [reason] });
-      return;
-    }
-    if (!existing.reasons.includes(reason)) {
-      existing.reasons.push(reason);
-    }
-  };
-
-  for (const entry of models) {
-    for (const pat of WEAK_TIER_MODEL_PATTERNS) {
-      if (pat.re.test(entry.id)) {
-        addWeakMatch(entry.id, entry.source, pat.label);
-        break;
-      }
-    }
-    if (isGptModel(entry.id) && !isGpt5OrHigher(entry.id)) {
-      addWeakMatch(entry.id, entry.source, "Below GPT-5 family");
-    }
-    if (isClaudeModel(entry.id) && !isClaude45OrHigher(entry.id)) {
-      addWeakMatch(entry.id, entry.source, "Below Claude 4.5");
-    }
-  }
-
-  const matches: Array<{ model: string; source: string; reason: string }> = [];
-  for (const entry of models) {
-    for (const pat of LEGACY_MODEL_PATTERNS) {
-      if (pat.re.test(entry.id)) {
-        matches.push({ model: entry.id, source: entry.source, reason: pat.label });
-        break;
-      }
-    }
-  }
-
-  if (matches.length > 0) {
-    const lines = matches
-      .slice(0, 12)
-      .map((m) => `- ${m.model} (${m.reason}) @ ${m.source}`)
-      .join("\n");
-    const more = matches.length > 12 ? `\n…${matches.length - 12} more` : "";
-    findings.push({
-      checkId: "models.legacy",
-      severity: "warn",
-      title: "Some configured models look legacy",
-      detail:
-        "Older/legacy models can be less robust against prompt injection and tool misuse.\n" +
-        lines +
-        more,
-      remediation: "Prefer modern, instruction-hardened models for any bot that can run tools.",
-    });
-  }
-
-  if (weakMatches.size > 0) {
-    const lines = Array.from(weakMatches.values())
-      .slice(0, 12)
-      .map((m) => `- ${m.model} (${m.reasons.join("; ")}) @ ${m.source}`)
-      .join("\n");
-    const more = weakMatches.size > 12 ? `\n…${weakMatches.size - 12} more` : "";
-    findings.push({
-      checkId: "models.weak_tier",
-      severity: "warn",
-      title: "Some configured models are below recommended tiers",
-      detail:
-        "Smaller/older models are generally more susceptible to prompt injection and tool misuse.\n" +
-        lines +
-        more,
-      remediation:
-        "Use the latest, top-tier model for any bot with tools or untrusted inboxes. Avoid Haiku tiers; prefer GPT-5+ and Claude 4.5+.",
-    });
-  }
 
   return findings;
 }
@@ -1212,7 +1026,7 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
       "Heuristic signals indicate this gateway may be reachable by multiple users:\n" +
       signals.map((signal) => `- ${signal}`).join("\n") +
       `\n${impactLine}\n${riskyContextsDetail}\n` +
-      "OpenClaw's default security model is personal-assistant (one trusted operator boundary), not hostile multi-tenant isolation on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting",
+      "OpenClaw's default security model is personal-assistant (one trusted operator boundary), not hostile multi-tenant isolation on one shared gateway. For mutually untrusted users or organizations, run separate Gateways with separate credentials, ideally under separate OS users or hosts: https://docs.openclaw.ai/gateway/security/trust-model",
     remediation:
       'If users may be mutually untrusted, split trust boundaries (separate gateways + credentials, ideally separate OS users/hosts). If you intentionally run shared-user access, set agents.defaults.sandbox.mode="all", keep tools.fs.workspaceOnly=true, deny runtime/fs/web tools unless required, and keep personal/private identities + credentials off that runtime.',
   });

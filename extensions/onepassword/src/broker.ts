@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -120,11 +121,6 @@ type ListedItem = {
 const APPROVAL_TIMEOUT_MS = 600_000;
 const PENDING_AUTHORIZATION_TTL_MS = APPROVAL_TIMEOUT_MS;
 
-function textParam(params: Record<string, unknown>, key: string): string | undefined {
-  const value = params[key];
-  return typeof value === "string" ? value.trim() : undefined;
-}
-
 class BrokerError extends Error {
   readonly code: AuditInternalErrorCode;
 
@@ -154,14 +150,14 @@ export function parseToolInput(params: Record<string, unknown>): ParsedToolInput
   if (params.action !== "get") {
     throw new BrokerError("INVALID_ACTION", "action must be list or get");
   }
-  const reason = textParam(params, "reason");
+  const reason = readStringValue(params.reason)?.trim();
   if (!reason || reason.length > 300) {
     throw new BrokerError(
       "INVALID_REASON",
       "reason is required and must be at most 300 characters",
     );
   }
-  const slug = textParam(params, "slug");
+  const slug = readStringValue(params.slug)?.trim();
   if (!slug || !SLUG_PATTERN.test(slug)) {
     throw new BrokerError("INVALID_SLUG", "slug must match ^[a-z0-9][a-z0-9-]{0,63}$");
   }
@@ -275,8 +271,8 @@ export class OnePasswordBroker {
       input = parseToolInput(event.params);
     } catch (error) {
       const context = this.context(event, ctx, {
-        slug: textParam(event.params, "slug"),
-        reason: textParam(event.params, "reason"),
+        slug: readStringValue(event.params.slug)?.trim(),
+        reason: readStringValue(event.params.reason)?.trim(),
       });
       await this.audit(context, "error", { errorCode: errorCode(error) ?? "INVALID_ACTION" });
       return {

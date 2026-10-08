@@ -115,10 +115,6 @@ vi.mock("openclaw/plugin-sdk/reply-history", () => ({
     },
   }),
 }));
-vi.mock("openclaw/plugin-sdk/routing", () => ({
-  resolveAgentRoute: () => ({ agentId: "default" }),
-}));
-
 const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
   upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
@@ -182,17 +178,6 @@ vi.mock("./bot-message-context.js", async (importOriginal) => ({
   buildLineMessageContext: buildLineMessageContextMock,
   buildLinePostbackContext: buildLinePostbackContextMock,
   prepareLineInboundRoute: async () => ({ mentionAgentId: "default" }),
-  getLineSourceInfo: (source: {
-    type?: string;
-    userId?: string;
-    groupId?: string;
-    roomId?: string;
-  }) => ({
-    userId: source.userId,
-    groupId: source.type === "group" ? source.groupId : undefined,
-    roomId: source.type === "room" ? source.roomId : undefined,
-    isGroup: source.type === "group" || source.type === "room",
-  }),
 }));
 
 // Cold module transforms belong to collection, not a timed lifecycle hook.
@@ -326,7 +311,6 @@ describe("handleLineWebhookEvents", () => {
     vi.doUnmock("openclaw/plugin-sdk/runtime-group-policy");
     vi.doUnmock("openclaw/plugin-sdk/runtime-env");
     vi.doUnmock("openclaw/plugin-sdk/reply-history");
-    vi.doUnmock("openclaw/plugin-sdk/routing");
     vi.doUnmock("openclaw/plugin-sdk/conversation-runtime");
     vi.doUnmock("./download.js");
     vi.doUnmock("./send.js");
@@ -770,6 +754,34 @@ describe("handleLineWebhookEvents", () => {
       }),
     );
     // A tap answers the question the agent is already waiting on; it is not a new turn.
+    expect(buildLinePostbackContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("consumes malformed question callbacks without starting an agent turn", async () => {
+    resolveLineQuestionPostbackMock.mockClear();
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+
+    await handleLineWebhookEvents(
+      [
+        {
+          type: "postback",
+          replyToken: "reply-token",
+          timestamp: Date.now(),
+          source: { type: "user", userId: "user-one" },
+          mode: "active",
+          webhookEventId: "evt-question-malformed",
+          deliveryContext: { isRedelivery: false },
+          postback: {
+            data: "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=9007199254740992",
+          },
+        } as never,
+      ],
+      context,
+    );
+
+    expect(resolveLineQuestionPostbackMock).not.toHaveBeenCalled();
     expect(buildLinePostbackContextMock).not.toHaveBeenCalled();
     expect(processMessage).not.toHaveBeenCalled();
   });

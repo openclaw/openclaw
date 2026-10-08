@@ -20,7 +20,7 @@ describe("whatsapp doctor compatibility", () => {
   it("reports acknowledgement behavior that the global settings cannot preserve", () => {
     const result = normalizeCompatibilityConfig({
       cfg: {
-        agents: { entries: { main: { default: true, identity: { emoji: "🔥" } } } },
+        agents: { entries: { main: { identity: { emoji: "🔥" } } } },
         channels: {
           whatsapp: {
             ackReaction: {

@@ -142,6 +142,48 @@ describe("GitHub release-note rendering", () => {
     },
   );
 
+  it("renders and verifies a pinned beta delta instead of cumulative stable notes", () => {
+    const rootDir = tempDirs.make("openclaw-beta-render-");
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: rootDir, encoding: "utf8" }).trim();
+    git("init", "-q");
+    git("config", "user.name", "Release Fixture");
+    git("config", "user.email", "release-fixture@openclaw.invalid");
+    git("config", "commit.gpgsign", "false");
+    const delta = `## ${tag.slice(1)}\n\n### Fixes\n\n- New beta-only fix.`;
+    writeFileSync(
+      join(rootDir, "CHANGELOG.md"),
+      `${delta}\n\n## ${version}\n\n- Cumulative stable feature.\n`,
+    );
+    splitChangelog({ rootDir });
+    git("add", ".");
+    git("commit", "-qm", "beta delta");
+    const ref = git("rev-parse", "HEAD");
+    writeFileSync(join(rootDir, `CHANGELOG/${tag.slice(1)}.md`), `${delta}\nUncommitted drift.\n`);
+    const render = (releaseTag: string, extra: string[] = []) =>
+      execFileSync(
+        process.execPath,
+        [
+          resolve("scripts/render-github-release-notes.mts"),
+          "--root",
+          rootDir,
+          "--ref",
+          ref,
+          "--tag",
+          releaseTag,
+          "--repository",
+          repository,
+          ...extra,
+        ],
+        { encoding: "utf8" },
+      );
+    expect(render(tag)).toBe(delta);
+    expect(render(`v${version}`)).toBe(`## ${version}\n\n- Cumulative stable feature.`);
+    const bodyPath = join(rootDir, "body.md");
+    writeFileSync(bodyPath, delta);
+    expect(render(tag, ["--version", tag.slice(1), "--verify-body", bodyPath])).toBe("");
+  });
+
   it("round-trips canonical contribution provenance and accepts published legacy lines", () => {
     const target = "a".repeat(40);
     const singular = formatContributionRecordProvenance({
@@ -232,7 +274,7 @@ describe("GitHub release-note rendering", () => {
   });
 
   it("prefixes extended-stable notes with immutable regular-stable context", () => {
-    const extendedVersion = "2026.7.35";
+    const extendedVersion = "2026.8.35";
     const extendedTag = `v${extendedVersion}`;
     const regularStableVersion = "2026.9.5";
     const changelog = changelogFor("- **PR #123** fix: example.").replaceAll(
@@ -250,11 +292,11 @@ describe("GitHub release-note rendering", () => {
     expect(
       rendered.body.startsWith(
         "This is a gateway-only `extended-stable` release, which is our current equivalent to LTS. " +
-          "This release is OpenClaw from the end of July 2026, plus critical security updates, " +
+          "This release is OpenClaw from the end of August 2026, plus critical security updates, " +
           "reliability and performance fixes, and features like new model support. " +
-          "The current latest version of OpenClaw is " +
+          "The latest version of OpenClaw at the time of this release is " +
           "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n" +
-          "## 2026.7.35",
+          "## 2026.8.35",
       ),
     ).toBe(true);
     expect(

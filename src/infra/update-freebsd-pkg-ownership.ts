@@ -5,6 +5,7 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { normalizeSupportDiagnosticErrorCode } from "../logging/diagnostic-support-redaction.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { isPathInside } from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
@@ -79,13 +80,9 @@ async function readPkgFiles(timeoutMs: number): Promise<string[]> {
     });
   }
   const output = result.stdout.toString("utf8");
-  if (output !== "" && !output.endsWith("\n")) {
-    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "database", {
-      operation: "pkg query",
-    });
-  }
   const files = output === "" ? [] : output.slice(0, -1).split("\n");
   if (
+    (output !== "" && !output.endsWith("\n")) ||
     files.length > 250_000 ||
     files.some((file) => !path.isAbsolute(file) || containsAsciiControlCharacter(file))
   ) {
@@ -144,41 +141,33 @@ export function createFreeBsdPkgOwnershipInspection(
   // Resolve parents, not registered file symlinks: pkg owns the directory
   // entry replaced by an update, not a symlink's unrelated referent.
   const canonicalDirectory = (directory: string): Promise<string> =>
-    read("paths", "directory resolution", () => {
-      let canonical = directories.get(directory);
-      if (!canonical) {
-        canonical = (async () => {
-          // fs-safe's ancestor lookup is synchronous. Bound each asynchronous
-          // lookup here so a late ENOENT cannot start work after the deadline.
-          let ancestor = directory;
-          while (
-            !(await readPath("lstat", () =>
-              fs.lstat(ancestor).then(
-                () => true,
-                (error: unknown) => {
-                  if (hasNodeErrorCode(error, "ENOENT")) {
-                    return false;
-                  }
-                  throw error;
-                },
-              ),
-            ))
-          ) {
-            const parent = path.dirname(ancestor);
-            if (parent === ancestor) {
-              throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths");
-            }
-            ancestor = parent;
+    read("paths", "directory resolution", () =>
+      getOrCreatePromise(directories, directory, async () => {
+        // fs-safe's ancestor lookup is synchronous. Bound each asynchronous
+        // lookup here so a late ENOENT cannot start work after the deadline.
+        let ancestor = directory;
+        while (
+          !(await readPath("lstat", () =>
+            fs.lstat(ancestor).catch((error: unknown) => {
+              if (hasNodeErrorCode(error, "ENOENT")) {
+                return null;
+              }
+              throw error;
+            }),
+          ))
+        ) {
+          const parent = path.dirname(ancestor);
+          if (parent === ancestor) {
+            throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths");
           }
-          return path.resolve(
-            await readPath("realpath", () => fs.realpath(ancestor)),
-            path.relative(ancestor, directory),
-          );
-        })();
-        directories.set(directory, canonical);
-      }
-      return canonical;
-    });
+          ancestor = parent;
+        }
+        return path.resolve(
+          await readPath("realpath", () => fs.realpath(ancestor)),
+          path.relative(ancestor, directory),
+        );
+      }),
+    );
   const assertUnowned = async (lexicalRoot: string, entryOnly: boolean) => {
     // Start cached work inside the admitted callback so synchronous budget
     // consumption cannot leave a started promise outside the deadline race.

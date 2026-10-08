@@ -9,12 +9,18 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { resolveOpenAICodexAccessTokenExpiry } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
-import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  classifyTransientNetworkErrorCode,
+  sleepWithAbort,
+} from "openclaw/plugin-sdk/retry-runtime";
 import {
   asNullableObjectRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  createOpenAIAuthorizationCodeForm,
+  withOpenAIOAuthResponse,
+} from "./openai-oauth-http.runtime.js";
 
 const OPENAI_AUTH_BASE_URL = "https://auth.openai.com";
 const OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -151,13 +157,11 @@ async function runOpenAICodexDeviceRequest(params: {
     requireHttps: true,
     auditContext: "openai-chatgpt-device-code",
   };
-  const { response, release } = await fetchWithSsrFGuard(
+  return await withOpenAIOAuthResponse(
     shouldUseEnvHttpProxyForUrl(params.url)
       ? withTrustedEnvProxyGuardedFetchMode(guardedOptions)
       : guardedOptions,
-  );
-  try {
-    return {
+    async (response) => ({
       ok: response.ok,
       status: response.status,
       bodyText: await readResponseTextLimited(
@@ -167,10 +171,8 @@ async function runOpenAICodexDeviceRequest(params: {
           : OPENAI_CODEX_DEVICE_ERROR_BODY_LIMIT_BYTES,
         { chunkTimeoutMs: params.timeoutMs },
       ),
-    };
-  } finally {
-    await release();
-  }
+    }),
+  );
 }
 
 async function fetchOpenAICodexDeviceCode(params: {
@@ -353,12 +355,11 @@ async function exchangeOpenAICodexDeviceCode(params: {
     init: {
       method: "POST",
       headers: resolveOpenAICodexDeviceCodeHeaders("application/x-www-form-urlencoded"),
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
+      body: createOpenAIAuthorizationCodeForm({
         code: params.authorizationCode,
-        redirect_uri: OPENAI_CODEX_DEVICE_CALLBACK_URL,
-        client_id: OPENAI_CODEX_CLIENT_ID,
-        code_verifier: params.codeVerifier,
+        redirectUri: OPENAI_CODEX_DEVICE_CALLBACK_URL,
+        clientId: OPENAI_CODEX_CLIENT_ID,
+        verifier: params.codeVerifier,
       }),
     },
     timeoutOperation: "token exchange",
@@ -438,21 +439,8 @@ export async function loginOpenAICodexDeviceCode(params: {
 }
 
 function waitForDeviceCodePoll(ms: number, signal?: AbortSignal): Promise<void> {
-  if (!signal) {
-    return new Promise((resolve) => {
-      setTimeout(resolve, ms);
-    });
-  }
-  signal.throwIfAborted();
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal.reason instanceof Error ? signal.reason : new Error("Device login cancelled"));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
+  signal?.throwIfAborted();
+  return sleepWithAbort(Math.max(1, ms), signal).catch(() => {
+    throw signal?.reason instanceof Error ? signal.reason : new Error("Device login cancelled");
   });
 }

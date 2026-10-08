@@ -16,7 +16,6 @@ import {
 } from "./replay-scope.js";
 import { resolveSdkRunWaitStatus } from "./run-terminal.js";
 import {
-  readGatewayEventConnectionEpoch,
   readGatewayEventReceipt,
   takeGatewayResponseReceipt,
   type GatewayEventReceipt,
@@ -139,7 +138,7 @@ export class SdkRunReplay {
   }
 
   publish(event: GatewayEvent): void {
-    const connectionEpoch = readGatewayEventConnectionEpoch(event);
+    const connectionEpoch = readGatewayEventReceipt(event)?.epoch;
     if (connectionEpoch && connectionEpoch !== this.replayConnectionEpoch) {
       this.retireBaselines();
       this.replayConnectionEpoch = connectionEpoch;

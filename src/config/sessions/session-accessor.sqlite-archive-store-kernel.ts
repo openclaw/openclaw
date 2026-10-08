@@ -21,6 +21,38 @@ type TranscriptArchiveDatabase = Pick<OpenClawAgentKyselyDatabase, "session_tran
 
 const PENDING_ARCHIVE_PUBLISH_BATCH_SIZE = 4;
 
+/** Reset inventories the optional archive owner without creating its schema. */
+export function readSessionTranscriptArchiveResetInventory(
+  database: Pick<OpenClawAgentDatabase, "db">,
+) {
+  if (!tableExists(database.db, SESSION_TRANSCRIPT_ARCHIVES_TABLE)) {
+    return [];
+  }
+  return executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db)
+      .selectFrom("session_transcript_archives")
+      .select(["session_id", "generation", "archive_name", "archive_sha256", "published_at"])
+      .orderBy("session_id")
+      .orderBy("generation"),
+  ).rows;
+}
+
+/** Offline full-history reset also removes unpublished canonical recovery copies. */
+export function deleteAllSessionTranscriptArchivesInTransaction(
+  database: Pick<OpenClawAgentDatabase, "db">,
+): void {
+  if (!tableExists(database.db, SESSION_TRANSCRIPT_ARCHIVES_TABLE)) {
+    return;
+  }
+  executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db).deleteFrom(
+      "session_transcript_archives",
+    ),
+  );
+}
+
 // Composite map keys keep repeated physical IDs distinct across transcript rewrites.
 export function transcriptArchiveIdentityKey(sessionId: string, generation: string): string {
   return `${sessionId}\u0000${generation}`;

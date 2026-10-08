@@ -7,6 +7,7 @@ import { requireDirectorySync, syncDirectorySync } from "../../infra/directory-d
 import { hasErrnoCode } from "../../infra/errno.js";
 import {
   executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
@@ -18,28 +19,49 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { readSessionGoalOperationInDatabase } from "./goals-operations.js";
 import { publishEncodedSessionTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
 import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import {
   readVerifiedSessionColdArchive,
   resolveSessionColdArchivePath,
   sessionColdRecordSchema,
+  verifyPublishedSessionColdArchive,
   type SessionColdRecord,
 } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
+import type { SessionColdRestorationGuard } from "./session-cold-storage-guard.types.js";
+import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
+import {
+  readSessionAdmissionProtectionKeys,
+  selectSessionColdBatch,
+  type SessionColdBatchInput,
+} from "./session-cold-storage-selection.js";
+import {
+  readSessionColdLockedRefusal,
+  type prepareSessionColdSourceGuard,
+} from "./session-cold-storage-source-guard.worker.js";
 import {
   readSessionColdTranscript,
   type SessionColdArchive,
 } from "./session-cold-storage-state.js";
+import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
+import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
 import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
   selectSessionTranscriptFtsRows,
 } from "./session-transcript-fts.js";
+import {
+  createSessionTranscriptTurnKernel,
+  sqliteSessionTranscriptTurnRebound,
+} from "./session-turn.kernel.js";
+import { resolveSessionWorkStartError } from "./session-work-start.js";
 import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
 
 const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
@@ -47,7 +69,6 @@ const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 type SessionColdPlan = {
   databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
   sessionId: string;
-  beforeMs: number;
   snapshot: SessionStateDeleteSnapshot;
 };
 type SessionColdPrepared = {
@@ -59,27 +80,18 @@ type SessionColdExternalization = {
   archive: Omit<SessionColdArchive, "archive_blob">;
   envelopeBytes: number;
 };
-export type SessionColdBatchInput = {
-  databaseOptions: SessionColdPlan["databaseOptions"];
-  plans: SessionColdPlan[];
-  externalizations: Array<Omit<SessionColdArchive, "archive_blob">>;
-  maxBytes: number;
-};
 export type SessionColdPreparationWorkerData = {
   type: "sqlite-transcript-archive-v2";
   operation: "cold-prepare";
   input: SessionColdBatchInput;
 };
 export type SessionColdBatchPrepared = {
+  freePages: number;
+  protectionKeys: string[];
   prepared: SessionColdPrepared[];
   externalizations: SessionColdExternalization[];
   oversizedSessionIds: string[];
   envelopeBytes: number;
-};
-export type SessionColdMutationResult = {
-  archivedTranscripts: number;
-  externalizedTranscripts: number;
-  restored: boolean;
 };
 export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databaseOptions"] } & (
   | { kind: "cold-maintain" }
@@ -88,8 +100,15 @@ export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databa
       prepared: SessionColdPrepared[];
       externalizations: SessionColdExternalization[];
       beforeMs: number;
+      protectionKeys: string[];
+      liveSessionKeys: string[];
     }
-  | { kind: "cold-restore"; sessionId: string; archive: Omit<SessionColdArchive, "archive_blob"> }
+  | {
+      kind: "cold-restore";
+      sessionId: string;
+      archive: Omit<SessionColdArchive, "archive_blob">;
+      guard?: SessionColdRestorationGuard;
+    }
 );
 export type SessionColdWorkerData = {
   type: "sqlite-transcript-archive-v2";
@@ -324,15 +343,25 @@ export async function prepareSessionColdBatchInWorker(
   input: SessionColdBatchInput,
 ): Promise<SessionColdBatchPrepared> {
   const result: SessionColdBatchPrepared = {
+    freePages: 0,
+    protectionKeys: [],
     prepared: [],
     externalizations: [],
     oversizedSessionIds: [],
     envelopeBytes: 0,
   };
+  const selection = selectSessionColdBatch(input);
+  if (!selection.found) {
+    return result;
+  }
+  result.freePages = selection.value.freePages;
   const maxBytes = Math.min(input.maxBytes, MAX_COLD_ARCHIVE_BYTES);
   const candidates = [
-    ...input.externalizations.map((archive) => ({ kind: "externalize" as const, archive })),
-    ...input.plans.map((plan) => ({ kind: "archive" as const, plan })),
+    ...selection.value.externalizations.map((archive) => ({
+      kind: "externalize" as const,
+      archive,
+    })),
+    ...selection.value.plans.map((plan) => ({ kind: "archive" as const, plan })),
   ];
   for (const candidate of candidates.slice(0, 128)) {
     const remaining = maxBytes - result.envelopeBytes;
@@ -365,6 +394,26 @@ export async function prepareSessionColdBatchInWorker(
       break;
     }
   }
+  const included = [
+    ...result.prepared.map((item) => item.plan.sessionId),
+    ...result.externalizations.map((item) => item.archive.session_id),
+  ];
+  if (included.length > 0) {
+    const protection = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        runSqliteDeferredTransactionSync(
+          database.db,
+          () => [...readSessionAdmissionProtectionKeys(database, included)],
+          { databaseLabel: database.path, operationLabel: "cold admission protection" },
+        ),
+      input.databaseOptions,
+    );
+    if (!protection.found) {
+      throw new Error("Cold transcript database disappeared during preparation");
+    }
+    result.protectionKeys = protection.value;
+  }
+
   return result;
 }
 
@@ -425,23 +474,11 @@ export async function prepareSessionColdRestoreInWorker(
   );
 }
 
-function verifyPublishedArchive(
-  storePath: string,
-  archive: Omit<SessionColdArchive, "archive_blob">,
-): void {
-  const published = fs.readFileSync(resolveSessionColdArchivePath(storePath, archive.archive_name));
-  if (
-    published.length !== archive.archive_bytes ||
-    createHash("sha256").update(published).digest("hex") !== archive.archive_sha256
-  ) {
-    throw new Error("Cold archive changed before publication; its SQLite copy was retained");
-  }
-}
-
 export function mutateSessionColdTranscriptInWorker(
   plan: SessionColdMutationPlan,
   records: SessionColdRecord[] | undefined,
   onCommit: (database: OpenClawAgentDatabase) => void,
+  sourceGuard?: ReturnType<typeof prepareSessionColdSourceGuard>,
 ): SessionColdMutationResult {
   return runOpenClawAgentWriteTransaction(
     (database) => {
@@ -456,7 +493,18 @@ export function mutateSessionColdTranscriptInWorker(
         return result;
       }
       if (plan.kind === "cold-batch") {
-        const protectedIds = readSessionColdStorageProtection(database, plan.beforeMs);
+        const protectionKeys = readSessionAdmissionProtectionKeys(database, [
+          ...plan.prepared.map((item) => item.plan.sessionId),
+          ...plan.externalizations.map((item) => item.archive.session_id),
+        ]);
+        if ([...protectionKeys].some((key) => !plan.protectionKeys.includes(key))) {
+          throw new Error("Transcript ownership changed; cold archival was canceled");
+        }
+        const protectedIds = readSessionColdStorageProtection(
+          database,
+          plan.beforeMs,
+          new Set(plan.liveSessionKeys),
+        );
         const archivedIds: string[] = [];
         for (const prepared of plan.prepared) {
           const { sessionId, snapshot } = prepared.plan;
@@ -470,7 +518,7 @@ export function mutateSessionColdTranscriptInWorker(
           ) {
             continue;
           }
-          verifyPublishedArchive(plan.databaseOptions.path, prepared.archive);
+          verifyPublishedSessionColdArchive(plan.databaseOptions.path, prepared.archive);
           executeSqliteQuerySync(
             database.db,
             db.insertInto("session_transcript_cold_archives").values(prepared.archive),
@@ -500,7 +548,7 @@ export function mutateSessionColdTranscriptInWorker(
           ) {
             continue;
           }
-          verifyPublishedArchive(plan.databaseOptions.path, archive);
+          verifyPublishedSessionColdArchive(plan.databaseOptions.path, archive);
           executeSqliteQuerySync(
             database.db,
             db
@@ -511,6 +559,50 @@ export function mutateSessionColdTranscriptInWorker(
           result.externalizedTranscripts++;
         }
       } else {
+        if (plan.guard?.kind === "turn") {
+          const { sessionKey, options, goalOperation } = plan.guard;
+          const kernel = createSessionTranscriptTurnKernel(
+            {
+              agentId: plan.guard.agentId,
+              path: database.path,
+              sessionId: plan.sessionId,
+              sessionKey,
+            },
+            { ...options, messages: [], sessionFile: "" },
+          );
+          const selected = kernel.readEntry(database);
+          const entries = new Map([[sessionKey, selected?.entry]]);
+          const refusedSource = sourceGuard
+            ? sourceGuard.read(database, entries)
+            : readRefusedSessionSource(database, plan.guard.sources, undefined, entries);
+          if (refusedSource) {
+            return { ...result, refusedSource };
+          }
+          if (
+            (plan.guard.requireActive &&
+              resolveSessionWorkStartError(sessionKey, selected?.entry)) ||
+            (!kernel.resolveExpectedEntry(selected) &&
+              !(
+                selected?.entry.sessionId === options.expectedSessionId &&
+                goalOperation &&
+                readSessionGoalOperationInDatabase(database, {
+                  sessionKey,
+                  expectedSessionId: options.expectedSessionId,
+                  operation: goalOperation,
+                })
+              ))
+          ) {
+            return { ...result, turnRebound: sqliteSessionTranscriptTurnRebound(selected, "") };
+          }
+        } else if (plan.guard?.kind === "locked") {
+          const refusal = readSessionColdLockedRefusal(
+            { database, sessionId: plan.sessionId, guard: plan.guard, sourceGuard },
+            resolveTranscriptAppendRefusal,
+          );
+          if (refusal) {
+            return { ...result, ...refusal };
+          }
+        }
         const current = readSessionColdTranscript(database.db, plan.sessionId);
         if (!current) {
           return result;
@@ -576,11 +668,35 @@ export function mutateSessionColdTranscriptInWorker(
           db.deleteFrom("session_transcript_cold_archives").where("session_id", "=", session_id),
         );
         result.restored = true;
+        result.sessionKey = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("session_windows")
+            .select("session_key")
+            .where("session_id", "=", session_id),
+        )?.session_key;
       }
       onCommit(database);
+      sourceGuard?.assertForeign();
       return result;
     },
     plan.databaseOptions,
     { operationLabel: "session cold storage" },
   );
+}
+
+export function readSessionColdStorageInventoryInWorker(options: OpenClawAgentDatabaseOptions) {
+  const counts = withOpenClawAgentDatabaseReadOnly(readSessionColdStorageInventory, options);
+  return counts.found ? counts.value : readSessionColdStorageInventory();
+}
+
+export function readSessionColdMetadataInWorker(
+  options: OpenClawAgentDatabaseOptions,
+  sessionId: string,
+) {
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionColdTranscript(database.db, sessionId),
+    options,
+  );
+  return result.found ? result.value : undefined;
 }

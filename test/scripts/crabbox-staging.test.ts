@@ -16,9 +16,8 @@ import {
 import { tmpdir } from "node:os";
 import { basename, delimiter, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { hasUnjoinedWork, runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import {
@@ -30,10 +29,24 @@ import {
   createFixtureDiagnostics,
   type FixtureDiagnostics,
 } from "../helpers/fixture-diagnostics.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { createDeferred, withinTest } from "../helpers/promise.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const repository = fileURLToPath(new URL("../../", import.meta.url));
+let fixtureReceipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  fixtureReceipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await fixtureReceipts?.close();
+});
+
 const artifactBytes = Buffer.from([0, 255, 128, 10, 65]);
 type Receipt = {
   version: number;
@@ -55,28 +68,35 @@ type Inspection = {
 };
 
 async function withFixture(scenario: (context: ReturnType<typeof createFixture>) => Promise<void>) {
-  const diagnostics = createFixtureDiagnostics("staging-recovery");
-  const f = createFixture(diagnostics);
-  let failure: Error | undefined;
-  try {
-    await scenario(f);
-  } catch (error) {
-    failure =
-      error instanceof Error ? error : new Error("Recovery scenario failed", { cause: error });
-  }
-  try {
-    await f.close(Boolean(failure));
-  } catch (error) {
-    diagnostics?.report("failure");
-    throw failure
-      ? new AggregateError([failure, error], "Recovery assertion and fixture cleanup failed", {
-          cause: error,
-        })
-      : error;
-  }
-  if (failure) {
-    throw failure;
-  }
+  const completion = (async () => {
+    const diagnostics = createFixtureDiagnostics("staging-recovery");
+    const f = createFixture(diagnostics);
+    let failure: Error | undefined;
+    try {
+      await scenario(f);
+    } catch (error) {
+      failure =
+        error instanceof Error ? error : new Error("Recovery scenario failed", { cause: error });
+    }
+    try {
+      await f.close(Boolean(failure));
+    } catch (error) {
+      diagnostics?.report("failure");
+      throw failure
+        ? new AggregateError([failure, error], "Recovery assertion and fixture cleanup failed", {
+            cause: error,
+          })
+        : error;
+    }
+    if (failure) {
+      throw failure;
+    }
+  })();
+  // Vitest must join cleanup even after the timed-out body has resumed its finally blocks.
+  onTestFinished(async () => {
+    await completion.catch(() => {});
+  });
+  await completion;
 }
 
 function createFixture(diagnostics?: FixtureDiagnostics) {
@@ -145,7 +165,8 @@ function createFixture(diagnostics?: FixtureDiagnostics) {
   writeFileSync(
     cli,
     `#!/usr/bin/env -S ${JSON.stringify(nodeExecutable)} ${nodeArgs.join(" ")}
-const fs = require('node:fs');
+import fs from 'node:fs';
+${fixtureReceiptClientSource(fixtureReceipts.endpoint)}
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(nodePolicy)}, JSON.stringify({entry:'claims-cli', nodeArgs:process.execArgv.filter(flag=>${JSON.stringify(nodeArgs)}.includes(flag))}) + '\\n');
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + '\\n');
@@ -154,6 +175,7 @@ const plan = JSON.parse(fs.readFileSync(${JSON.stringify(plan)}, 'utf8'));
 const finish = () => process.stdout.write(JSON.stringify({version:1,source:'local-claims',claims:plan.claims,problems:[]}));
 if (plan.gate) {
   fs.writeFileSync(plan.gate.ready, 'ready');
+  sendReceipt(plan.gate.ready, 'ready');
   const timer = setInterval(() => { if (fs.existsSync(plan.gate.release)) { clearInterval(timer); finish(); } }, 10);
 } else finish();
 `,
@@ -162,6 +184,15 @@ if (plan.gate) {
   const controllers = new Set<AbortController>(),
     pending = new Set<Promise<unknown>>();
   let unjoined = false;
+  const phases = new Map<string, ReturnType<typeof createDeferred<void>>>();
+  const phase = (path: string) => {
+    let gate = phases.get(path);
+    if (!gate) {
+      gate = createDeferred();
+      phases.set(path, gate);
+    }
+    return gate.promise;
+  };
   const command = (
     binary: string,
     args: string[],
@@ -184,11 +215,22 @@ if (plan.gate) {
           args,
           cwd: repository,
           env: { ...env, ...override },
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: ["ignore", "pipe", "pipe", "pipe"],
           timeoutMs,
           requireProcessTreeExit: true,
           signal: controller.signal,
           onReady(child) {
+            let phasesBuffer = "";
+            child.stdio[3]?.on("data", (chunk: Buffer) => {
+              phasesBuffer += chunk.toString();
+              let newline: number;
+              while ((newline = phasesBuffer.indexOf("\n")) >= 0) {
+                const path = phasesBuffer.slice(0, newline);
+                phasesBuffer = phasesBuffer.slice(newline + 1);
+                void phase(path);
+                phases.get(path)!.resolve();
+              }
+            });
             const capture = (chunk: Buffer, output: "stdout" | "stderr") => {
               observation?.output(output, chunk.byteLength);
               if (tooLarge) {
@@ -252,6 +294,11 @@ import crypto from 'node:crypto';
 import {join,resolve,basename} from 'node:path';
 import {syncBuiltinESMExports} from 'node:module';
 const ctx = ${JSON.stringify({ root, repository: source, staging, cli, calls })};
+function notifyFixturePhase(path) {
+  fs.writeFileSync(path, 'ready');
+  // A synchronous pipe write reaches the parent even while SQLite blocks this thread.
+  fs.writeSync(3, path + '\\n');
+}
 ${prelude}
 syncBuiltinESMExports();
 ${includeCapsule ? `const {prepareCrabboxSourceCapsule} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxSourceCapsule).href)});` : ""}
@@ -314,13 +361,24 @@ process.kill(process.pid,'SIGKILL');`,
     expect(result.status, result.stderr).toBe(0);
     return JSON.parse(result.stdout) as { discovery: Inspection; result?: Recovery };
   };
-  const waitFor = async (path: string) => {
-    const deadline = Date.now() + 10_000;
-    while (!existsSync(path) && Date.now() < deadline) {
-      await delay(10);
-    }
-    expect(existsSync(path), "fixture never reached its synchronization point: " + path).toBe(true);
-  };
+  const waitForPhase = (
+    path: string,
+    operation: Promise<unknown>,
+    signal: AbortSignal,
+    receipt = false,
+  ) =>
+    withinTest(
+      Promise.race([
+        receipt ? fixtureReceipts.waitFor(path, "ready") : phase(path),
+        operation.then(() => {
+          // The fixture records readiness before replying; receipt delivery can lag settlement.
+          expect(existsSync(path), "fixture never reached its synchronization point: " + path).toBe(
+            true,
+          );
+        }),
+      ]),
+      signal,
+    );
   return {
     root,
     source,
@@ -344,7 +402,7 @@ process.kill(process.pid,'SIGKILL');`,
     commit,
     git: (...args: string[]) => gitAt(source, ...args),
     gitAt,
-    waitFor,
+    waitForPhase,
     stage: (value: string) => diagnostics?.stage(value),
     receipt: (stage: Stage) =>
       JSON.parse(readFileSync(join(stage.root, "staging.json"), "utf8")) as Receipt,
@@ -423,14 +481,16 @@ function blockingMirrorIo(root: string, hook: string) {
   return `const {DatabaseSync}=await import('node:sqlite');
 function blockedIo(){
   const gate=new DatabaseSync(${JSON.stringify(join(root, "io-gate.sqlite"))},{timeout:15000});
-  fs.writeFileSync(${JSON.stringify(join(root, "io-ready"))},'ready');
+  notifyFixturePhase(${JSON.stringify(join(root, "io-ready"))});
   try{gate.exec('BEGIN EXCLUSIVE');gate.exec('ROLLBACK');}finally{gate.close();}
 }
 ${hook}`;
 }
 
 describe.skipIf(process.platform === "win32")("Crabbox reusable staging ownership", () => {
-  it("waits for allocation contention and reuses the other repository's warm mirror", async () =>
+  it("waits for allocation contention and reuses the other repository's warm mirror", async ({
+    signal,
+  }) =>
     withFixture(async (f) => {
       const other = join(f.root, "other-repository");
       mkdirSync(other);
@@ -442,9 +502,9 @@ describe.skipIf(process.platform === "win32")("Crabbox reusable staging ownershi
         const pending = f.program(
           `const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});
 console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();`,
-          `const error=console.error;console.error=(...args)=>{error(...args);if(args.join(' ').includes('waiting for source mirror allocation'))fs.writeFileSync(${JSON.stringify(ready)},'waiting');};`,
+          `const error=console.error;console.error=(...args)=>{error(...args);if(args.join(' ').includes('waiting for source mirror allocation'))notifyFixturePhase(${JSON.stringify(ready)});};`,
         );
-        await f.waitFor(ready);
+        await f.waitForPhase(ready, pending, signal);
         unlock();
         const result = await pending;
         expect(result.status, result.stderr).toBe(0);
@@ -456,44 +516,30 @@ console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?
       }
     }));
 
-  it("falls back to a fresh capsule only after the bounded allocation wait expires", async () =>
-    withFixture(async (f) => {
-      const [warm] = await idleMirrors(f, [f.source]);
-      const unlock = holdDatabase(join(f.staging, "mirrors", ".allocation.lock"));
-      try {
-        const result = await f.program(
-          `const cap=prepareCrabboxSourceCapsule({repoRoot:ctx.repository,syncRoot:ctx.staging,base:'HEAD',reuseMirror:true,syncPlan:{command:process.execPath,args:['-e','process.stdout.write(JSON.stringify({candidate:{files:1},topFiles:[{path:"source.txt"}]}))']}});
+  it.each(["fresh capsule", "contending allocator"] as const)(
+    "bounds the shared allocation wait for a %s",
+    async (mode) =>
+      withFixture(async (f) => {
+        const [warm] = await idleMirrors(f, [f.source]);
+        const capsule = mode === "fresh capsule";
+        const unlock = capsule
+          ? holdDatabase(join(f.staging, "mirrors", ".allocation.lock"))
+          : () => {};
+        try {
+          const result = capsule
+            ? await f.program(
+                `const cap=prepareCrabboxSourceCapsule({repoRoot:ctx.repository,syncRoot:ctx.staging,base:'HEAD',reuseMirror:true,syncPlan:{command:process.execPath,args:['-e','process.stdout.write(JSON.stringify({candidate:{files:1},topFiles:[{path:"source.txt"}]}))']}});
 const receipt=JSON.parse(fs.readFileSync(join(cap.staging.root,'staging.json'),'utf8'));
 console.log(JSON.stringify({budgets,root:cap.staging.root,mirror:Boolean(receipt.mirror),source:fs.readFileSync(join(cap.directory,'source.txt'),'utf8')}));cap.cleanup();`,
-          `const {DatabaseSync}=await import('node:sqlite');const execute=DatabaseSync.prototype.exec;const budgets=[];
+                `const {DatabaseSync}=await import('node:sqlite');const execute=DatabaseSync.prototype.exec;const budgets=[];
 DatabaseSync.prototype.exec=function(sql){const match=/busy_timeout\\s*=\\s*(\\d+)/u.exec(sql);if(match&&Number(match[1])>0){budgets.push(Number(match[1]));sql=sql.replace(match[0],'busy_timeout=1');}return execute.call(this,sql);};`,
-          30_000,
-          "capsule",
-          true,
-        );
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          budgets: [120_000],
-          mirror: false,
-          source: "retained source\n",
-        });
-        expect(JSON.parse(result.stdout).root).not.toBe(warm!.root);
-        expect(result.stderr.match(/waiting for source mirror allocation/g)).toHaveLength(1);
-        expect(result.stderr).toContain(
-          "[crabbox] source mirror allocation is busy; using a fresh capsule",
-        );
-        expect(existsSync(warm!.root)).toBe(true);
-      } finally {
-        unlock();
-      }
-    }));
-
-  it("shares the allocation wait budget when a contender wins between SQLite statements", async () =>
-    withFixture(async (f) => {
-      const [warm] = await idleMirrors(f, [f.source]);
-      const result = await f.program(
-        `try{const next=createMirrorStaging(ctx.staging,ctx.repository);console.log(JSON.stringify({allocated:Boolean(next),budgets,journalRetried}));next?.discard();}finally{execute.call(holder,'ROLLBACK');holder.close();}`,
-        `const {DatabaseSync}=await import('node:sqlite');const execute=DatabaseSync.prototype.exec;
+                30_000,
+                "capsule",
+                true,
+              )
+            : await f.program(
+                `try{const next=createMirrorStaging(ctx.staging,ctx.repository);console.log(JSON.stringify({allocated:Boolean(next),budgets,journalRetried}));next?.discard();}finally{execute.call(holder,'ROLLBACK');holder.close();}`,
+                `const {DatabaseSync}=await import('node:sqlite');const execute=DatabaseSync.prototype.exec;
 const holder=new DatabaseSync(join(ctx.staging,'mirrors','.allocation.lock'),{timeout:0});
 execute.call(holder,'PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE');
 const budgets=[];let journalRetried=false;
@@ -509,101 +555,99 @@ DatabaseSync.prototype.exec=function(sql){
   }
   return execute.call(this,sql);
 };`,
-      );
-      expect(result.status, result.stderr).toBe(0);
-      const outcome = JSON.parse(result.stdout) as {
-        allocated: boolean;
-        budgets: number[];
-        journalRetried: boolean;
-      };
-      expect(outcome).toMatchObject({ allocated: false, journalRetried: true });
-      expect(outcome.budgets).toHaveLength(2);
-      expect(outcome.budgets[0]).toBe(120_000);
-      expect(outcome.budgets[1]).toBeGreaterThan(0);
-      expect(outcome.budgets[1]).toBeLessThan(outcome.budgets[0]!);
-      expect(result.stderr.match(/waiting for source mirror allocation/g)).toHaveLength(1);
-      expect(result.stderr).toContain(
-        "[crabbox] source mirror allocation is busy; using a fresh capsule",
-      );
-      expect(existsSync(warm!.root)).toBe(true);
-    }));
+              );
+          expect(result.status, result.stderr).toBe(0);
+          if (capsule) {
+            expect(JSON.parse(result.stdout)).toMatchObject({
+              budgets: [120_000],
+              mirror: false,
+              source: "retained source\n",
+            });
+            expect(JSON.parse(result.stdout).root).not.toBe(warm!.root);
+          } else {
+            const outcome = JSON.parse(result.stdout) as {
+              allocated: boolean;
+              budgets: number[];
+              journalRetried: boolean;
+            };
+            expect(outcome).toMatchObject({ allocated: false, journalRetried: true });
+            expect(outcome.budgets).toHaveLength(2);
+            expect(outcome.budgets[0]).toBe(120_000);
+            expect(outcome.budgets[1]).toBeGreaterThan(0);
+            expect(outcome.budgets[1]).toBeLessThan(outcome.budgets[0]!);
+          }
+          expect(result.stderr.match(/waiting for source mirror allocation/g)).toHaveLength(1);
+          expect(result.stderr).toContain(
+            "[crabbox] source mirror allocation is busy; using a fresh capsule",
+          );
+          expect(existsSync(warm!.root)).toBe(true);
+        } finally {
+          unlock();
+        }
+      }),
+  );
 
-  it("keeps other warm mirrors available while a slot's database digest is slow", async () =>
-    withFixture(async (f) => {
-      const other = join(f.root, "other-repository");
-      mkdirSync(other);
-      f.initialize(other);
-      const [slow, warm] = await idleMirrors(f, [f.source, other]);
-      const unlock = holdDatabase(join(f.root, "io-gate.sqlite"));
-      try {
-        const pending = f.program(
-          "const next=createMirrorStaging(ctx.staging,ctx.repository);console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();",
-          blockingMirrorIo(
-            f.root,
-            `const open=fs.openSync,read=fs.readSync;let databaseFd;
+  it.for(["database digest", "eviction"] as const)(
+    "keeps another warm slot available while a reserved slot's %s is slow",
+    async (mode, { signal }) =>
+      withFixture(async (f) => {
+        const eviction = mode === "eviction";
+        const other = join(f.root, "other-repository");
+        const newcomer = join(f.root, "new-repository");
+        for (const sourceRepository of eviction ? [other, newcomer] : [other]) {
+          mkdirSync(sourceRepository);
+          f.initialize(sourceRepository);
+        }
+        const [slow, warm] = await idleMirrors(f, [f.source, other], eviction);
+        const unlock = holdDatabase(join(f.root, "io-gate.sqlite"));
+        try {
+          const pending = f.program(
+            eviction
+              ? `const next=createMirrorStaging(ctx.staging,${JSON.stringify(newcomer)});console.log(JSON.stringify({allocated:Boolean(next),reused:next?.reused}));next?.discard();`
+              : "const next=createMirrorStaging(ctx.staging,ctx.repository);console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();",
+            blockingMirrorIo(
+              f.root,
+              eviction
+                ? `const remove=fs.rmSync;fs.rmSync=(path,...args)=>{if(path===${JSON.stringify(join(slow!.root, "payload"))})blockedIo();return remove(path,...args);};`
+                : `const open=fs.openSync,read=fs.readSync;let databaseFd;
 fs.openSync=(path,...args)=>{const fd=open(path,...args);if(path===${JSON.stringify(join(slow!.root, "mirror.sqlite"))})databaseFd=fd;return fd;};
 fs.readSync=(fd,...args)=>{if(fd===databaseFd){databaseFd=undefined;blockedIo();}return read(fd,...args);};`,
-          ),
-        );
-        await f.waitFor(join(f.root, "io-ready"));
-        const concurrent = await f.program(
-          `const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();`,
-        );
-        expect(concurrent.status, concurrent.stderr).toBe(0);
-        expect(JSON.parse(concurrent.stdout)).toEqual({ reused: true, root: warm!.root });
-        expect(concurrent.stderr).not.toContain("waiting for source mirror allocation");
-        unlock();
-        const result = await pending;
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout)).toEqual({ reused: true, root: slow!.root });
-      } finally {
-        unlock();
-      }
-    }));
-
-  it("reserves an eviction victim until disposal finishes without blocking another warm slot", async () =>
-    withFixture(async (f) => {
-      const other = join(f.root, "other-repository");
-      const newcomer = join(f.root, "new-repository");
-      for (const sourceRepository of [other, newcomer]) {
-        mkdirSync(sourceRepository);
-        f.initialize(sourceRepository);
-      }
-      const [victim, warm] = await idleMirrors(f, [f.source, other], true);
-      const unlock = holdDatabase(join(f.root, "io-gate.sqlite"));
-      try {
-        const pending = f.program(
-          `const next=createMirrorStaging(ctx.staging,${JSON.stringify(newcomer)});console.log(JSON.stringify({allocated:Boolean(next),reused:next?.reused}));next?.discard();`,
-          blockingMirrorIo(
-            f.root,
-            `const remove=fs.rmSync;fs.rmSync=(path,...args)=>{if(path===${JSON.stringify(join(victim!.root, "payload"))})blockedIo();return remove(path,...args);};`,
-          ),
-        );
-        await f.waitFor(join(f.root, "io-ready"));
-        const concurrent = await f.program(
-          `const victim=createMirrorStaging(ctx.staging,ctx.repository);const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});
-console.log(JSON.stringify({victimAdopted:Boolean(victim),reused:next?.reused,root:next?.staging.root}));victim?.discard();next?.discard();`,
-        );
-        expect(concurrent.status, concurrent.stderr).toBe(0);
-        expect(JSON.parse(concurrent.stdout)).toEqual({
-          victimAdopted: false,
-          reused: true,
-          root: warm!.root,
-        });
-        expect(concurrent.stderr).not.toContain("waiting for source mirror allocation");
-        expect(existsSync(victim!.root)).toBe(true);
-        unlock();
-        const result = await pending;
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout)).toEqual({ allocated: true, reused: false });
-        expect(existsSync(victim!.root)).toBe(false);
-        expect(
-          readdirSync(join(f.staging, "mirrors")).filter((name) => name !== ".allocation.lock"),
-        ).toHaveLength(32);
-      } finally {
-        unlock();
-      }
-    }));
+            ),
+          );
+          await f.waitForPhase(join(f.root, "io-ready"), pending, signal);
+          const concurrent = await f.program(
+            eviction
+              ? `const victim=createMirrorStaging(ctx.staging,ctx.repository);const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});
+console.log(JSON.stringify({victimAdopted:Boolean(victim),reused:next?.reused,root:next?.staging.root}));victim?.discard();next?.discard();`
+              : `const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();`,
+          );
+          expect(concurrent.status, concurrent.stderr).toBe(0);
+          expect(JSON.parse(concurrent.stdout)).toEqual({
+            ...(eviction ? { victimAdopted: false } : {}),
+            reused: true,
+            root: warm!.root,
+          });
+          expect(concurrent.stderr).not.toContain("waiting for source mirror allocation");
+          if (eviction) {
+            expect(existsSync(slow!.root)).toBe(true);
+          }
+          unlock();
+          const result = await pending;
+          expect(result.status, result.stderr).toBe(0);
+          expect(JSON.parse(result.stdout)).toEqual(
+            eviction ? { allocated: true, reused: false } : { reused: true, root: slow!.root },
+          );
+          if (eviction) {
+            expect(existsSync(slow!.root)).toBe(false);
+            expect(
+              readdirSync(join(f.staging, "mirrors")).filter((name) => name !== ".allocation.lock"),
+            ).toHaveLength(32);
+          }
+        } finally {
+          unlock();
+        }
+      }),
+  );
 
   it("records interrupted eviction for recovery and rejects changed disposal metadata", async () =>
     withFixture(async (f) => {
@@ -819,6 +863,68 @@ console.log(JSON.stringify(stage));`);
       }),
   );
 
+  it.for([true, false].flatMap((receipt) => [true, false].map((locked) => ({ receipt, locked }))))(
+    "retires an old disposal when a recorded successor reuses its inode (receipt=$receipt, locked=$locked)",
+    async ({ receipt, locked }) =>
+      withFixture(async (f) => {
+        const newcomer = join(f.root, "new-repository");
+        mkdirSync(newcomer);
+        f.initialize(newcomer);
+        const initial = await f.program(`${seedMirror}
+const owner=createMirrorStaging(ctx.staging,ctx.repository);const source=seed(owner);
+if(${receipt})owner.finish();
+const stage={root:owner.staging.root,source,receipt:JSON.parse(fs.readFileSync(join(owner.staging.root,'staging.json'),'utf8'))};
+if(!${receipt})owner.discard();
+for(let i=1;i<32;i++)fs.mkdirSync(join(ctx.staging,'mirrors',String(i).padStart(64,'0')),{mode:0o700});
+console.log(JSON.stringify(stage));`);
+        expect(initial.status, initial.stderr).toBe(0);
+        const victim = JSON.parse(initial.stdout) as Stage;
+        const key = readdirSync(join(f.staging, "mirrors")).find((name) =>
+          existsSync(join(f.staging, "mirrors", name, "stage")),
+        )!;
+        const slot = join(f.staging, "mirrors", key);
+        const before = lstatSync(slot);
+        const saved = join(f.root, "empty-original-slot");
+        const tombstone = join(
+          f.staging,
+          basename(victim.root).replace(victim.receipt.id, "disposal-" + victim.receipt.id),
+        );
+        // Preserve the actual empty inode at removal, then let the real allocator
+        // reuse it. Receipts and generation IDs still come from production code.
+        const interrupted = await f.program(
+          `createMirrorStaging(ctx.staging,${JSON.stringify(newcomer)});throw new Error('disposal was not interrupted');`,
+          `const remove=fs.rmdirSync;fs.rmdirSync=(path,...args)=>{if(path===${JSON.stringify(slot)}){fs.renameSync(path,${JSON.stringify(saved)});process.kill(process.pid,'SIGKILL');}return remove(path,...args);};`,
+        );
+        expect(interrupted.signal, interrupted.stderr).toBe("SIGKILL");
+        expect(existsSync(victim.root)).toBe(false);
+        expect(existsSync(tombstone)).toBe(true);
+        expect(readdirSync(saved)).toEqual([]);
+        const allocated = await f.program(
+          `${seedMirror}
+const owner=createMirrorStaging(ctx.staging,ctx.repository);const source=seed(owner);owner.finish();
+console.log(JSON.stringify({root:owner.staging.root,source,receipt:JSON.parse(fs.readFileSync(join(owner.staging.root,'staging.json'),'utf8'))}));`,
+          `const mkdir=fs.mkdirSync;fs.mkdirSync=(path,...args)=>{if(path===${JSON.stringify(slot)}){fs.renameSync(${JSON.stringify(saved)},path);return;}return mkdir(path,...args);};`,
+        );
+        expect(allocated.status, allocated.stderr).toBe(0);
+        const successor = JSON.parse(allocated.stdout) as Stage;
+        expect(successor.receipt.id).not.toBe(victim.receipt.id);
+        expect(lstatSync(slot)).toMatchObject({ dev: before.dev, ino: before.ino });
+        const release = locked ? holdDatabase(join(slot, "lock")) : () => {};
+        try {
+          const recovered = await f.recover(victim);
+          expect(recovered.report.recovered).toBe(true);
+          expect(existsSync(tombstone)).toBe(false);
+          expect(lstatSync(slot)).toMatchObject({ dev: before.dev, ino: before.ino });
+          expect(f.receipt(successor)).toEqual(successor.receipt);
+          expect(readFileSync(join(successor.source, "source.txt"), "utf8")).toBe(
+            "uncommitted mirror source\n",
+          );
+        } finally {
+          release();
+        }
+      }),
+  );
+
   it("seals and reuses a large cache database with bounded read buffers", async () =>
     withFixture(async (f) => {
       const result = await f.program(`${seedMirror}
@@ -994,12 +1100,13 @@ console.log(JSON.stringify({outcomes,secret:fs.readFileSync(secret,'utf8')}));`)
   it("keeps idle mirrors during automatic discovery and reclaims them through explicit staging recovery", async () =>
     withFixture(async (f) => {
       const result = await f.program(`${seedMirror}
-const owner=createMirrorStaging(ctx.staging,ctx.repository);seed(owner);owner.finish();
-const discovery=discoverStaging(ctx.staging);
-const automatic=await recoverDiscoveredStaging(ctx.staging,discovery,{binary:ctx.cli,cwd:ctx.repository});
+const syncRoot=join(ctx.staging,'mîrror');fs.mkdirSync(syncRoot);
+const owner=createMirrorStaging(syncRoot,ctx.repository);seed(owner);owner.finish();
+const discovery=discoverStaging(syncRoot);
+const automatic=await recoverDiscoveredStaging(syncRoot,discovery,{binary:ctx.cli,cwd:ctx.repository});
 if(automatic?.recovered||!fs.existsSync(owner.staging.root))throw new Error('automatic discovery disposed a reusable mirror');
 const id=JSON.parse(fs.readFileSync(join(owner.staging.root,'staging.json'),'utf8')).id;
-await runStagingCommand(['recover',id],ctx.staging,{binary:ctx.cli,cwd:ctx.repository});
+await runStagingCommand(['recover',id],syncRoot,{binary:ctx.cli,cwd:ctx.repository});
 if(fs.existsSync(owner.staging.root))throw new Error('explicit recovery retained disposable mirror');`);
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({ recovered: true });
@@ -1459,28 +1566,30 @@ if(!interrupted)throw new Error('fixture did not interrupt artifact publication'
 
     it(
       "allows only one concurrent recovery owner and detects changed receipts during verification",
-      async () =>
+      async ({ signal }) =>
         withFixture(async (f) => {
           const stage = await f.prepare(),
             gate = { ready: join(f.root, "claims-ready"), release: join(f.root, "claims-release") };
           f.inventory([], gate);
           const first = f.recover(stage);
-          await f.waitFor(gate.ready);
+          await f.waitForPhase(gate.ready, first, signal, true);
           expect((await f.recover(stage)).report.reason).toContain("interrupted recovery");
           writeFileSync(gate.release, "release");
           expect((await first).report.recovered).toBe(true);
           f.inventory();
           const changed = await f.prepare();
-          rmSync(gate.ready);
-          rmSync(gate.release);
-          f.inventory([], gate);
+          const changedGate = {
+            ready: join(f.root, "changed-claims-ready"),
+            release: join(f.root, "changed-claims-release"),
+          };
+          f.inventory([], changedGate);
           const recovering = f.recover(changed);
-          await f.waitFor(gate.ready);
+          await f.waitForPhase(changedGate.ready, recovering, signal, true);
           writeFileSync(
             join(changed.root, "staging.json"),
             JSON.stringify({ ...f.receipt(changed), hold: "writers" }),
           );
-          writeFileSync(gate.release, "release");
+          writeFileSync(changedGate.release, "release");
           expect((await recovering).report).toMatchObject({
             recovered: false,
             reason: expect.stringContaining("ownership changed"),
@@ -1595,7 +1704,7 @@ if(!interrupted)throw new Error('fixture did not interrupt artifact publication'
             `
 const passes=[];
 for(let pass=0;pass<128&&fs.existsSync(${JSON.stringify(stage.root)});pass++){
-  counters={headers:0,bytes:0,payload:0,commands:0,hashes:0,osReads:0,osBytes:0,osCommands:0,osHashes:0,osHashBytes:0};phase='discover';
+  counters={headers:0,bytes:0,payload:0,commands:0,hashes:0,osReads:0,osBytes:0,osCommands:0,volumeCommands:0,volumeBytes:0,osHashes:0,osHashBytes:0};phase='discover';
   const discovery=discoverStaging(ctx.staging);phase='recover';
   const metrics={...counters,entries:discovery.entries.length,elapsedMs:discovery.elapsedMs,statuses:discovery.entries.map(entry=>entry.status)};
   const result=await recoverDiscoveredStaging(ctx.staging,discovery,{binary:ctx.cli,cwd:ctx.repository});
@@ -1603,15 +1712,15 @@ for(let pass=0;pass<128&&fs.existsSync(${JSON.stringify(stage.root)});pass++){
 }
 console.log(JSON.stringify({passes,remaining:fs.existsSync(${JSON.stringify(stage.root)})}));`,
             `
-let phase='idle';let counters;let observedBoot='',observedNamespace='';const descriptors=new Map();
+let phase='idle';let counters;let observedBoot='',observedNamespace='',observedDevice='';const descriptors=new Map();
 const originalOpen=fs.openSync,originalRead=fs.readSync,originalClose=fs.closeSync;
 fs.openSync=(path,...args)=>{const fd=originalOpen(path,...args);descriptors.set(fd,String(path));if(phase==='discover'){if(basename(String(path))==='staging.json')counters.headers++;if(String(path).includes('/payload'))counters.payload++;}return fd;};
-fs.readSync=(fd,...args)=>{const count=originalRead(fd,...args);if(phase==='discover'&&descriptors.has(fd)){if(descriptors.get(fd)==='/proc/sys/kernel/random/boot_id'){counters.osReads++;counters.osBytes+=count;if(Buffer.isBuffer(args[0])&&args[0].length<=128)observedBoot=args[0].subarray(0,count).toString('utf8').trim();}else counters.bytes+=count;}return count;};
+fs.readSync=(fd,...args)=>{const count=originalRead(fd,...args);if(phase==='discover'&&descriptors.has(fd)){if(['/proc/sys/kernel/random/boot_id','/etc/machine-id'].includes(descriptors.get(fd))){counters.osReads++;counters.osBytes+=count;if(descriptors.get(fd)==='/proc/sys/kernel/random/boot_id'&&Buffer.isBuffer(args[0])&&args[0].length<=129)observedBoot=args[0].subarray(0,count).toString('utf8').trim();}else counters.bytes+=count;}return count;};
 fs.closeSync=(fd)=>{descriptors.delete(fd);return originalClose(fd);};
 const originalReadlink=fs.readlinkSync;fs.readlinkSync=(path,...args)=>{const value=originalReadlink(path,...args);if(phase==='discover'&&path==='/proc/self/ns/pid'){counters.osReads++;counters.osBytes+=Buffer.byteLength(String(value));if(Buffer.byteLength(String(value))<=128)observedNamespace=String(value);}return value;};
 for(const name of ['lstatSync','statSync','readFileSync','readdirSync','readlinkSync']){const original=fs[name];fs[name]=(path,...args)=>{if(phase==='discover'&&String(path).includes('/payload'))counters.payload++;return original(path,...args);};}
 ${orderedDirectories([basename(stage.root)], "last")}
-for(const name of ['spawn','spawnSync','execFileSync']){const original=cp[name];cp[name]=(...args)=>{const options=args[2];const bootProbe=phase==='discover'&&process.platform==='darwin'&&name==='spawnSync'&&args[0]==='/usr/sbin/sysctl'&&JSON.stringify(args[1])===JSON.stringify(['-n','kern.bootsessionuuid'])&&options?.encoding==='utf8'&&options.env&&Object.keys(options.env).length===0&&options.timeout>0&&options.timeout<=1000&&options.maxBuffer>0&&options.maxBuffer<=1024;if(phase==='discover'){if(bootProbe)counters.osCommands++;else counters.commands++;}const result=original(...args);if(bootProbe&&typeof result.stdout==='string'){observedBoot=result.stdout.trim();counters.osBytes+=Buffer.byteLength(result.stdout);}return result;};}
+for(const name of ['spawn','spawnSync','execFileSync']){const original=cp[name];cp[name]=(...args)=>{const options=args[2];const bootProbe=phase==='discover'&&process.platform==='darwin'&&name==='spawnSync'&&args[0]==='/usr/sbin/sysctl'&&JSON.stringify(args[1])===JSON.stringify(['-n','kern.bootsessionuuid'])&&options?.encoding==='utf8'&&options.env&&Object.keys(options.env).length===0&&options.timeout>0&&options.timeout<=1000&&options.maxBuffer>0&&options.maxBuffer<=1024;const hostProbe=phase==='discover'&&process.platform==='darwin'&&name==='spawnSync'&&args[0]==='/usr/sbin/ioreg'&&JSON.stringify(args[1])===JSON.stringify(['-rd1','-c','IOPlatformExpertDevice'])&&options?.encoding==='utf8'&&options.env&&Object.keys(options.env).length===0&&options.timeout>0&&options.timeout<=1000&&options.maxBuffer>0&&options.maxBuffer<=64*1024;const volumeProbe=phase==='discover'&&process.platform==='darwin'&&name==='spawnSync'&&options?.encoding==='utf8'&&options.env&&Object.keys(options.env).length===0&&options.timeout>0&&options.timeout<=5000&&options.maxBuffer>0&&options.maxBuffer<=1024*1024&&((args[0]==='/usr/bin/stat'&&JSON.stringify(args[1])===JSON.stringify(['-f','%Sd',fs.realpathSync(ctx.staging)]))||(args[0]==='/usr/sbin/diskutil'&&/^disk[0-9]+(?:s[0-9]+)*$/.test(observedDevice)&&JSON.stringify(args[1])===JSON.stringify(['info','-plist',observedDevice])));if(phase==='discover'){if(bootProbe||hostProbe)counters.osCommands++;else if(volumeProbe)counters.volumeCommands++;else counters.commands++;}const result=original(...args);if(volumeProbe&&typeof result.stdout==='string'){counters.volumeBytes+=Buffer.byteLength(result.stdout);if(args[0]==='/usr/bin/stat')observedDevice=result.stdout.trim();}if((bootProbe||hostProbe)&&typeof result.stdout==='string'){if(bootProbe)observedBoot=result.stdout.trim();counters.osBytes+=Buffer.byteLength(result.stdout);}return result;};}
 const originalHash=crypto.createHash;crypto.createHash=(algorithm,...args)=>{const hash=originalHash(algorithm,...args);if(phase==='discover'){const metrics=counters;metrics.hashes++;const update=hash.update.bind(hash),digest=hash.digest.bind(hash);let updates=0,identity=false,size=0,finished=false;hash.update=(data,...options)=>{updates++;size=typeof data==='string'?Buffer.byteLength(data):0;identity=updates===1&&algorithm==='sha256'&&typeof data==='string'&&size<=256&&observedBoot.length===36&&(process.platform==='darwin'||observedNamespace.startsWith('pid:['))&&data===process.platform+':'+observedBoot.toLowerCase()+':'+observedNamespace;return update(data,...options);};hash.digest=(...options)=>{if(!finished&&identity){metrics.hashes--;metrics.osHashes++;metrics.osHashBytes+=size;}finished=true;return digest(...options);};}return hash;};`,
             120_000,
           );
@@ -1626,6 +1735,8 @@ const originalHash=crypto.createHash;crypto.createHash=(algorithm,...args)=>{con
               osReads: number;
               osBytes: number;
               osCommands: number;
+              volumeCommands: number;
+              volumeBytes: number;
               osHashes: number;
               osHashBytes: number;
               entries: number;
@@ -1639,20 +1750,22 @@ const originalHash=crypto.createHash;crypto.createHash=(algorithm,...args)=>{con
           expect(report.passes.length).toBeGreaterThan(1);
           expect(report.passes[0]!.statuses.every((status) => status === "protected")).toBe(true);
           expect(report.passes.filter((pass) => pass.recovered)).toHaveLength(1);
-          // Classify only the observed boot/PID-namespace digest as bounded OS
+          // Classify only the exact host/boot/PID-namespace and volume probes as bounded OS
           // metadata. No discovery pass is run before measurement or prewarmed.
-          expect(report.passes.reduce((sum, pass) => sum + pass.osHashes, 0)).toBe(1);
+          expect(report.passes.reduce((sum, pass) => sum + pass.osHashes, 0)).toBe(0);
           expect(report.passes.reduce((sum, pass) => sum + pass.osCommands, 0)).toBe(
-            process.platform === "darwin" ? 1 : 0,
+            process.platform === "darwin" ? 2 : 0,
           );
           for (const pass of report.passes) {
             expect(pass.headers).toBeLessThanOrEqual(64);
             expect(pass.entries).toBeLessThanOrEqual(64);
             expect(pass).toMatchObject({ payload: 0, commands: 0, hashes: 0 });
             expect(pass.bytes).toBeLessThanOrEqual(65 * 32 * 1024);
-            expect(pass.osReads).toBeLessThanOrEqual(2);
-            expect(pass.osBytes).toBeLessThanOrEqual(256);
+            expect(pass.osReads).toBeLessThanOrEqual(6);
+            expect(pass.osBytes).toBeLessThanOrEqual(64 * 1024 + 256);
             expect(pass.osHashBytes).toBeLessThanOrEqual(256);
+            expect(pass.volumeCommands).toBeLessThanOrEqual(process.platform === "darwin" ? 2 : 0);
+            expect(pass.volumeBytes).toBeLessThanOrEqual(1024 * 1024 + 256);
           }
           expect(readFileSync(f.calls, "utf8").trim().split("\n")).toHaveLength(2);
           console.info(

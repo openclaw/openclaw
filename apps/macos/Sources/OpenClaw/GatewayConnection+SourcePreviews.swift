@@ -42,7 +42,7 @@ extension GatewayConnection {
         return sourceResourceRevision == revision
     }
 
-    private func requestSourceResource(
+    func requestSourceResource(
         url: URL,
         maximumBytes: Int,
         lease: ServerLease,
@@ -61,37 +61,15 @@ extension GatewayConnection {
             params: tls, allowsRedirects: false, allowsStoredCredentials: false)
         defer { session.finishTasksAndInvalidate() }
         return try await OpenClawChatSourceResources.performAuthenticatedRequest(request, bearer: bearer) { request in
-            try await self.transferSourceResource(
-                request: request, session: session, maximumBytes: maximumBytes, lease: lease, revision: revision)
-        }
-    }
-
-    private func transferSourceResource(
-        request: URLRequest,
-        session: GatewayTLSPinningSession,
-        maximumBytes: Int,
-        lease: ServerLease,
-        revision: UInt64) async throws -> (Data, URLResponse)
-    {
-        guard await self.sourceResourceIsCurrent(lease: lease, revision: revision) else {
-            throw CancellationError()
-        }
-        let transfer = Task { [request] in
-            try await session.data(for: request, maximumBytes: maximumBytes) { [weak self] in
-                self?.serverLeaseMatchesCurrentState(lease) == true
+            guard await self.sourceResourceIsCurrent(lease: lease, revision: revision) else {
+                throw CancellationError()
             }
+            let result = try await self.transferMedia(
+                request: request, session: session, maximumBytes: maximumBytes, lease: lease)
+            guard await self.sourceResourceIsCurrent(lease: lease, revision: revision) else {
+                throw CancellationError()
+            }
+            return result
         }
-        let transferID = UUID()
-        managedMediaTransfers[transferID] = transfer
-        defer { self.managedMediaTransfers[transferID] = nil }
-        let result = try await withTaskCancellationHandler {
-            try await transfer.value
-        } onCancel: {
-            transfer.cancel()
-        }
-        guard await self.sourceResourceIsCurrent(lease: lease, revision: revision) else {
-            throw CancellationError()
-        }
-        return result
     }
 }

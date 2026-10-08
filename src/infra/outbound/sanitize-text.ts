@@ -4,14 +4,12 @@ import { flattenMarkdownDetails } from "./markdown-details.js";
 // conservative subset of model-produced HTML into channel-friendly text.
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 
-// Retained for the deprecated plugin-sdk/infra-runtime compatibility barrel.
-export { stripInternalRuntimeScaffolding };
-
 // Preserve the existing tag grammar; only exclude unspaced comparison prose.
 const HTML_TAG_RE = /<\/?[a-z][a-z0-9_.:-]*(?=[\s/>])[^>]*>/gi;
 // Disjoint whitespace/prose branches avoid quadratic backtracking on malformed tags.
 const COMPARISON_PROSE_RE = /^<([a-z][a-z0-9_]*\.?)\s+[^<>=/"'\s][^<>=/"']*>$/i;
-const COMPARISON_LEFT_OPERAND_RE = /[\p{L}\p{N}_\p{S}]$/u;
+// Alternation avoids Node 26.10's end-anchored character-class failure on astral operands.
+const COMPARISON_LEFT_OPERAND_RE = /(?:\p{L}|\p{N}|_|\p{S})$/u;
 const COMPARISON_CLAUSE_RE = /\b(?:and|or)\s|[.!?;:]\s|且/iu;
 // Standard HTML element names are never comparison operands: retain main's
 // stripping even beside numeric text or prose-like bare attributes.
@@ -31,17 +29,17 @@ const EMPTY_HTML_ELEMENT_RE =
   /<((?!(?:br|p|div)(?=[\s>]))[a-z][a-z0-9_.:-]*)(?=[\s>])(?:[^"'<>]|"[^"]*"|'[^']*')*>(?:[^\S\r\n\u2028\u2029]|<(?!\/?(?:br|p|div)(?=[\s/>]))\/?[a-z][a-z0-9_.:-]*(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>)*<\/\1\s*>/gi;
 
 function removeMatchesUntilStable(
-  text: string,
+  input: string,
   pattern: RegExp,
   replacement?: (match: string, offset: number, source: string) => string,
 ): string {
+  let text = input;
   let previous: string;
-  let current = text;
   do {
-    previous = current;
-    current = replacement ? current.replace(pattern, replacement) : current.replace(pattern, "");
-  } while (current !== previous);
-  return current;
+    previous = text;
+    text = replacement ? text.replace(pattern, replacement) : text.replace(pattern, "");
+  } while (text !== previous);
+  return text;
 }
 
 function stripHtmlTagUnlessComparison(

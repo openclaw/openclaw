@@ -6,7 +6,6 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
-  type DiagnosticMessageProcessedEvent,
 } from "../infra/diagnostic-events.js";
 import {
   createGatewaySchedulerClock,
@@ -74,14 +73,14 @@ it("preserves independent tool-loop and poll-backoff policy when diagnostic obse
   for (let index = 0; index < 10; index += 1) {
     recordToolCall(state, "read", args);
   }
-  const before = detectToolCallLoop(state, "read", args, { enabled: true });
+  const before = detectToolCallLoop(state, "read", args);
   expect(before).toMatchObject({ stuck: true, detector: "generic_repeat", count: 10 });
   expect(recordCommandPoll(state, "fixture-command", false)).toBe(5_000);
   expect(recordCommandPoll(state, "fixture-command", false)).toBe(10_000);
   setDiagnosticsEnabledForProcess(false);
   stopGatewayDiagnosticHeartbeat();
   const current = getDiagnosticSessionState(session);
-  expect(detectToolCallLoop(current, "read", args, { enabled: true })).toEqual(before);
+  expect(detectToolCallLoop(current, "read", args)).toEqual(before);
   expect(recordCommandPoll(current, "fixture-command", false)).toBe(30_000);
 });
 
@@ -122,7 +121,7 @@ it("retires interrupted diagnostic observations before re-enable without revivin
 });
 
 it("attributes message.processed to the ingesting agent recorded at the lifecycle owner", () => {
-  const processed: DiagnosticMessageProcessedEvent[] = [];
+  const processed: Extract<DiagnosticEventPayload, { type: "message.processed" }>[] = [];
   const unsubscribe = onDiagnosticEvent((event) => {
     if (event.type === "message.processed") {
       processed.push(event);

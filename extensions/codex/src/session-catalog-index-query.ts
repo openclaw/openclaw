@@ -7,6 +7,7 @@ import type { CodexCatalogField, CodexCatalogStatus } from "./session-catalog-in
 import {
   compareCodexCatalogRows,
   type CodexCatalogOrderKey,
+  type CodexCatalogOrderedRow,
 } from "./session-catalog-index-order.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import { normalizeLimit } from "./session-catalog-parsing.js";
@@ -29,7 +30,7 @@ export function prepareCodexCatalogQuery(
   const cursor = (row: CodexCatalogOrderKey, backwards: boolean) =>
     encodeCodexResidentCursor(queryId, row, backwards);
   return (
-    ordered: readonly CodexCatalogIndexRow[],
+    ordered: readonly CodexCatalogOrderedRow[],
     liveStatus: Pick<CodexCatalogField<CodexCatalogStatus>, "get">,
     liveSettings: Pick<CodexCatalogSettingsIndex, "get">,
     availability: Pick<CodexCatalogAvailability, "complete" | "frontier">,
@@ -46,51 +47,65 @@ export function prepareCodexCatalogQuery(
     ) {
       return undefined;
     }
-    const candidates =
-      complete && !cwd && !search
-        ? ordered
-        : ordered.filter((row) => {
-            const session = row.page.sessions[0];
-            return (
-              session &&
-              (complete || !frontier || compareCodexCatalogRows(row, frontier) <= 0) &&
-              (!cwd || (liveSettings.get(row.threadId)?.cwd ?? session.cwd) === cwd) &&
-              (!search ||
-                (session.name ?? session.fallbackName)?.toLocaleLowerCase().includes(search))
-            );
-          });
-    const selected = anchor?.backwards
-      ? candidates.filter((row) => row.threadId !== anchor.threadId)
-      : candidates;
-    let start = 0;
-    let end: number | undefined;
-    const after = (row: CodexCatalogOrderKey) =>
-      !anchor || compareCodexCatalogRows(row, anchor) > 0;
-    if (anchor) {
-      const at = selected.findIndex(after);
-      const boundary = at < 0 ? selected.length : at;
-      if (anchor.backwards) {
-        end = boundary;
-        start = Math.max(0, boundary - limit);
-      } else {
-        start = boundary;
+    function* candidates() {
+      for (const { row, searchText } of ordered) {
+        if (!complete && frontier && compareCodexCatalogRows(row, frontier) > 0) {
+          break;
+        }
+        if (
+          (!cwd || (liveSettings.get(row.threadId)?.cwd ?? row.page.sessions[0]!.cwd) === cwd) &&
+          (!search || searchText.includes(search))
+        ) {
+          yield row;
+        }
       }
     }
-    let page = selected.slice(start, end ?? start + limit);
+    let hasPrevious = false;
+    const page: CodexCatalogIndexRow[] = [];
+    let continuation: CodexCatalogOrderKey | undefined;
+    const after = (row: CodexCatalogOrderKey) =>
+      !anchor || compareCodexCatalogRows(row, anchor) > 0;
+    for (const row of candidates()) {
+      if (anchor?.backwards) {
+        if (row.threadId === anchor.threadId) {
+          continue;
+        }
+        if (after(row)) {
+          break;
+        }
+        if (page.length === limit) {
+          page.shift();
+          hasPrevious = true;
+        }
+      } else if (!after(row)) {
+        hasPrevious = true;
+        continue;
+      } else if (page.length === limit) {
+        continuation = page.at(-1);
+        break;
+      }
+      page.push(row);
+    }
     if (anchor?.backwards && !page.length) {
       // The preceding page disappeared; keep navigation at the current head.
-      start = 0;
-      page = candidates.slice(0, limit);
+      hasPrevious = false;
+      for (const row of candidates()) {
+        page.push(row);
+        if (page.length === limit) {
+          break;
+        }
+      }
     }
     const first = page[0];
     const last = page.at(-1);
-    let continuation: CodexCatalogOrderKey | undefined =
-      last &&
-      (anchor?.backwards
-        ? !complete || candidates.some((row) => compareCodexCatalogRows(row, last) > 0)
-        : start + page.length < selected.length)
-        ? last
-        : undefined;
+    if (anchor?.backwards && last) {
+      for (const row of candidates()) {
+        if (!complete || compareCodexCatalogRows(row, last) > 0) {
+          continuation = last;
+          break;
+        }
+      }
+    }
     if (!complete && !continuation) {
       if (!anchor?.backwards && !last && (!frontier || !after(frontier))) {
         return undefined;
@@ -99,17 +114,15 @@ export function prepareCodexCatalogQuery(
         frontier && (!last || compareCodexCatalogRows(frontier, last) > 0) ? frontier : last;
     }
     return {
-      sessions: page.flatMap((row) =>
-        row.page.sessions.map((session) =>
-          applyCodexCatalogLiveFields(
-            session,
-            liveStatus.get(row.threadId),
-            liveSettings.get(row.threadId),
-          ),
+      sessions: page.map((row) =>
+        applyCodexCatalogLiveFields(
+          row.page.sessions[0]!,
+          liveStatus.get(row.threadId),
+          liveSettings.get(row.threadId),
         ),
       ),
       ...(continuation ? { nextCursor: cursor(continuation, false) } : {}),
-      ...(first && start > 0 ? { backwardsCursor: cursor(first, true) } : {}),
+      ...(first && hasPrevious ? { backwardsCursor: cursor(first, true) } : {}),
     };
   };
 }

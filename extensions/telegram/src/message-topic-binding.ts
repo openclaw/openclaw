@@ -1,5 +1,5 @@
 // Telegram provider-owned authorization for message mutations in forum topics.
-import { normalizeAccountId, normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-core";
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-core";
 import type {
   ChannelMessageActionContext,
   ChannelThreadingToolContext,
@@ -34,7 +34,6 @@ function rejectUnboundTopicMutation(): never {
 }
 
 type CurrentTelegramConversation = {
-  hasThreadContext: boolean;
   matchesChat: boolean;
   threadId?: number;
 };
@@ -44,7 +43,7 @@ function resolveCurrentTelegramConversation(
   chatId: string,
 ): CurrentTelegramConversation {
   if (toolContext?.currentChannelProvider?.trim().toLowerCase() !== "telegram") {
-    return { hasThreadContext: false, matchesChat: false };
+    return { matchesChat: false };
   }
   const targets = [toolContext.currentChannelId, toolContext.currentMessagingTarget].filter(
     (value): value is string => typeof value === "string" && Boolean(value.trim()),
@@ -60,7 +59,6 @@ function resolveCurrentTelegramConversation(
     parsedTargets.every((target) => target.chatId === chatId) &&
     (threadId === undefined || threadIds.every((value) => value === threadId));
   return {
-    hasThreadContext: threadIds.length > 0,
     matchesChat,
     ...(threadId !== undefined ? { threadId } : {}),
   };
@@ -75,11 +73,7 @@ function resolveMatchingTelegramRequesterAccount(params: {
     params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
   );
   const requesterAccountId = normalizeOptionalAccountId(params.context?.requesterAccountId);
-  return accountId &&
-    requesterAccountId &&
-    normalizeAccountId(accountId) === normalizeAccountId(requesterAccountId)
-    ? accountId
-    : undefined;
+  return accountId && accountId === requesterAccountId ? accountId : undefined;
 }
 
 export function resolveTelegramConversationReadChatId(params: {
@@ -136,10 +130,10 @@ export async function resolveTelegramMessageMutationChatId(params: {
   }
 
   const threadId = target.messageThreadId ?? currentConversation.threadId;
-  if (threadId === undefined && !currentConversation.hasThreadContext) {
+  if (threadId === undefined) {
     return target.chatId;
   }
-  if (threadId === undefined || currentConversation.threadId !== threadId) {
+  if (currentConversation.threadId !== threadId) {
     return rejectUnboundTopicMutation();
   }
 

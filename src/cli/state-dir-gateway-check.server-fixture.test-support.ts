@@ -16,6 +16,7 @@ registerSealedRuntime({ json5, resolveSecureTempRoot: () => control });
 const port = Number.parseInt(process.env.OPENCLAW_GATEWAY_PORT ?? "0", 10);
 const token = process.env.OPENCLAW_TEST_GATEWAY_TOKEN ?? "";
 const minimal = process.argv.includes("--minimal-real-gateway");
+const configuredAuth = process.argv.includes("--configured-auth");
 let startupOperations:
   | ReturnType<typeof import("./gateway-cli/run-loop-startup.js").createGatewayStartupOperations>
   | undefined;
@@ -68,7 +69,10 @@ startup = (async () => {
       throw new Error("Minimal Gateway fixture requires its synthetic request log");
     }
     const { coreGatewayHandlers } = await import("../gateway/server-methods.js");
-    for (const method of ["sessions.list", "sessions.resolve"] as const) {
+    for (const method of ["sessions.list", "sessions.resolve", "health"] as const) {
+      if (method === "health" && !configuredAuth) {
+        continue;
+      }
       const original = coreGatewayHandlers[method]!;
       coreGatewayHandlers[method] = async (options) => {
         // Test evidence only: persist before the real response, without cross-pipe ordering guesses.
@@ -82,7 +86,7 @@ startup = (async () => {
   }
   server = await startGatewayServer(port, {
     bind: "loopback",
-    auth: { mode: "token", token },
+    ...(configuredAuth ? {} : { auth: { mode: "token" as const, token } }),
     controlUiEnabled: false,
     startupOperation: startupOperations.run,
     ...(minimal ? { sidecarStartup: "defer" as const } : {}),

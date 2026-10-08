@@ -1,11 +1,12 @@
 // OpenAI-compatible error helpers.
 // Converts OpenClaw failover/sampling errors to OpenAI-style HTTP responses.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
-type OpenAiCompatError = {
+export type OpenAiCompatError = {
   status: number;
   error: {
     message: string;
@@ -33,33 +34,6 @@ const ERROR_TYPE_BY_REASON = {
   unknown: undefined,
 } satisfies Record<FailoverReason, string | undefined>;
 
-function statusForReason(reason: FailoverReason, status: number | undefined): number {
-  if (reason === "server_error") {
-    return status && status >= 400 && status < 500 ? status : 502;
-  }
-  if (reason === "timeout") {
-    return status && status >= 400 && status < 500 ? status : 504;
-  }
-  return status ?? resolveFailoverStatus(reason) ?? 500;
-}
-
-function messageForReason(params: {
-  reason: FailoverReason;
-  message: string;
-  rawError?: string;
-}): string {
-  if (params.reason === "server_error") {
-    return "upstream provider error";
-  }
-  if (params.reason === "timeout") {
-    return "upstream provider timeout";
-  }
-  if (params.reason === "overloaded") {
-    return "upstream provider overloaded";
-  }
-  return params.rawError?.trim() || params.message.trim() || "request failed";
-}
-
 /** Converts a provider failover error into an OpenAI-compatible error envelope. */
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
   if (err instanceof ToolAuthorizationError) {
@@ -74,12 +48,22 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
   if (!type) {
     return undefined;
   }
-  const status = statusForReason(reason, described.status);
-  const message = messageForReason({
-    reason,
-    message: described.message,
-    rawError: described.rawError,
-  });
+  let status = described.status ?? resolveFailoverStatus(reason) ?? 500;
+  let message: string;
+  if (reason === "server_error" || reason === "timeout") {
+    status =
+      described.status && described.status >= 400 && described.status < 500
+        ? described.status
+        : reason === "timeout"
+          ? 504
+          : 502;
+    message = reason === "timeout" ? "upstream provider timeout" : "upstream provider error";
+  } else {
+    message =
+      reason === "overloaded"
+        ? "upstream provider overloaded"
+        : described.rawError?.trim() || described.message.trim() || "request failed";
+  }
   return {
     status,
     error: {
@@ -120,4 +104,35 @@ export function validateOpenAiSamplingParams(params: {
     return "`seed` must be an integer.";
   }
   return undefined;
+}
+
+export function resolveResponseFormat(value: unknown): Record<string, unknown> | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error("response_format must be an object");
+  }
+  const type = value.type;
+  if (type !== "text" && type !== "json_object" && type !== "json_schema") {
+    throw new Error("response_format.type must be text, json_object, or json_schema");
+  }
+  return value;
+}
+
+export function resolveStopSequences(
+  value: string | string[] | null | undefined,
+): string[] | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const list = typeof value === "string" ? [value] : value;
+  // OpenAI Chat Completions accepts at most 4 stop sequences.
+  if (list.length > 4) {
+    throw new Error("stop supports at most 4 sequences");
+  }
+  if (list.some((item) => item.length === 0)) {
+    throw new Error("stop entries must be non-empty strings");
+  }
+  return list.length > 0 ? list : undefined;
 }

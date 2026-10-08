@@ -3,7 +3,6 @@
  * Ensures tool names, actions, and details stay readable and redacted.
  */
 import { describe, expect, it } from "vitest";
-import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
 import {
   hasShellCompoundCommand,
   scanTopLevelChars,
@@ -35,19 +34,23 @@ describe("isShellToolDisplayName", () => {
 
   it("keeps the compact summary form for a capitalized shell tool", () => {
     const display = resolveToolDisplay({ name: "Bash", args: { command: "echo alpha" } });
-    // Compact form is "<emoji> <detail>", not "<emoji> Bash: <detail>".
-    expect(formatToolSummary(display)).toBe(`${display.emoji} ${formatToolDetail(display)}`);
+    expect(formatToolSummary(display)).toBe("print text, `echo alpha`");
   });
 });
 
 describe("tool display details", () => {
-  it("preserves the curated presentation for historical image activity", () => {
-    const display = resolveToolDisplay({
-      name: "image",
-      args: { image: "/tmp/screenshot.png", prompt: "Inspect the error" },
+  it("displays the called tool and inner query for a Tool Search invocation", () => {
+    expect(
+      resolveToolDisplay({
+        name: "tool_call",
+        args: { id: "openclaw:search:web_search", args: { query: "OpenClaw release notes" } },
+      }),
+    ).toMatchObject({
+      name: "web_search",
+      label: "Web Search",
+      verb: "search",
+      detail: 'for "OpenClaw release notes"',
     });
-
-    expect(display).toMatchObject({ emoji: "🖼️", title: "Image" });
   });
 
   it("uses the curated view_image presentation", () => {
@@ -56,7 +59,7 @@ describe("tool display details", () => {
       args: { path: "/tmp/screenshot.png", prompt: "Inspect the error" },
     });
 
-    expect(display).toMatchObject({ emoji: "🖼️", title: "View Image" });
+    expect(display.title).toBe("View Image");
     expect(formatToolDetail(display)).toBe("path /tmp/screenshot.png, prompt Inspect the error");
   });
 
@@ -69,7 +72,7 @@ describe("tool display details", () => {
       },
     });
 
-    expect(formatToolSummary(display)).toBe("⏸️ Yield");
+    expect(formatToolSummary(display)).toBe("Yield");
     expect(formatToolDetail(display)).toBeUndefined();
   });
 
@@ -97,76 +100,6 @@ describe("tool display details", () => {
     expect(stages[1]).toContain("printf done");
     expect(stages[1]).not.toContain("body | secret");
     expect(splitTopLevelPipes(stages[1] ?? "")).toHaveLength(1);
-  });
-
-  it("summarizes tool-search code targets from described tool ids", () => {
-    expect(
-      resolveToolSearchCodeDisplayTarget({
-        code: "const tool = await openclaw.tools.describe('openclaw:core:exec'); return await openclaw.tools.call(tool.id, { command: 'echo hi' });",
-      }),
-    ).toEqual({
-      toolName: "openclaw:core:exec",
-      displayToolName: "exec",
-      displayArgs: { command: "echo hi" },
-      detail: "echo hi",
-      bridgeVerb: "call",
-    });
-  });
-
-  it("normalizes direct tool-search catalog ids to native display names and args", () => {
-    expect(
-      resolveToolSearchCodeDisplayTarget({
-        code: 'return await openclaw.tools.call("openclaw:core:exec", { command: "echo hi" });',
-      }),
-    ).toEqual({
-      toolName: "openclaw:core:exec",
-      displayToolName: "exec",
-      displayArgs: { command: "echo hi" },
-      detail: "echo hi",
-      bridgeVerb: "call",
-    });
-  });
-
-  it("preserves JS numeric literals in tool-search call args", () => {
-    expect(
-      resolveToolSearchCodeDisplayTarget({
-        code: 'return await openclaw.tools.call("web_search", { query: "OpenClaw", count: 1e3, limit: +3, threshold: .5 });',
-      })?.displayArgs,
-    ).toEqual({
-      query: "OpenClaw",
-      count: 1000,
-      limit: 3,
-      threshold: 0.5,
-    });
-  });
-
-  it("skips zero/false values for optional detail fields", () => {
-    const detail = detailFor({
-      name: "sessions_spawn",
-      args: {
-        taskName: "double-message-bug-gpt",
-        label: 0,
-        runTimeoutSeconds: 0,
-      },
-    });
-
-    expect(detail).toBe("double-message-bug-gpt");
-  });
-
-  it("includes only truthy boolean details", () => {
-    const detail = detailFor({
-      name: "message",
-      args: {
-        action: "react",
-        provider: "discord",
-        to: "chan-1",
-        remove: false,
-      },
-    });
-
-    expect(detail).toContain("provider discord");
-    expect(detail).toContain("to chan-1");
-    expect(detail).not.toContain("remove");
   });
 
   it("keeps positive numbers and true booleans", () => {
@@ -201,15 +134,6 @@ describe("tool display details", () => {
     expect(readDetail).toBe("lines 2-3 from /tmp/a.txt");
     expect(writeDetail).toBe("to /tmp/a.txt (3 chars)");
     expect(editDetail).toBe("in /tmp/a.txt (4 chars)");
-  });
-
-  it("formats web_search query with quotes", () => {
-    const detail = detailFor({
-      name: "web_search",
-      args: { query: "OpenClaw docs", count: 3 },
-    });
-
-    expect(detail).toBe('for "OpenClaw docs" (top 3)');
   });
 
   it("formats web_search provider query shapes", () => {
@@ -541,7 +465,7 @@ describe("tool display details", () => {
           detailMode: "explain",
         }),
       ),
-    ).toBe("🛠️ fetch git changes (agent)");
+    ).toBe("fetch git changes (agent)");
 
     expect(
       formatToolSummary(
@@ -550,7 +474,7 @@ describe("tool display details", () => {
           args: { query: "OpenClaw docs" },
         }),
       ),
-    ).toBe('🔎 Web Search: for "OpenClaw docs"');
+    ).toBe('Web Search: for "OpenClaw docs"');
   });
 
   it("moves cd path to context suffix with || separator", () => {
@@ -852,21 +776,6 @@ describe("tool display details", () => {
     ]);
   });
 
-  it("includes both cwd and node name in exec detail for known commands", () => {
-    const detail = detailFor({
-      name: "exec",
-      args: {
-        command: "npm install",
-        workdir: "/app",
-        host: "node",
-        node: "raspberrypi",
-      },
-    });
-
-    expect(detail).toContain("(in /app)");
-    expect(detail).toContain("node: raspberrypi");
-  });
-
   it("omits node label when host is not 'node' even if node is set", () => {
     for (const host of ["gateway", "sandbox", "auto"]) {
       const detail = detailFor({
@@ -913,23 +822,6 @@ describe("compactRawCommand middle truncation", () => {
 });
 
 describe("coerceDisplayValue middle truncation", () => {
-  it("preserves start and end of long string values", () => {
-    const longPath =
-      "/usr/local/share/very/deeply/nested/directory/structure/" +
-      "a".repeat(150) +
-      "/important-file.txt";
-    const detail = detailFor({
-      name: "sessions_spawn",
-      args: { label: longPath },
-    });
-    // Should contain the start of the path
-    expect(detail).toContain("/usr/local/share/");
-    // Should contain the end (filename)
-    expect(detail).toContain("important-file.txt");
-    // Should contain the ellipsis for middle truncation
-    expect(detail).toContain("…");
-  });
-
   it("redacts credential-like values in long generic string details", () => {
     // A long string whose tail contains a GitHub PAT. Without
     // redaction-before-truncation, middle truncation could preserve

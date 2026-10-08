@@ -66,7 +66,7 @@ function createConfig(
 function createAckEmojiConfig(ackReaction?: AckReactionConfig): OpenClawConfig {
   const cfg = {
     agents: {
-      list: [{ id: "agent", identity: { emoji: "🔥" } }],
+      entries: { agent: { identity: { emoji: "🔥" } } },
     },
     channels: {
       whatsapp: {},
@@ -161,8 +161,9 @@ describe("resolveWhatsAppAckEmoji", () => {
     },
     {
       name: "uses normalized agent ids for the identity fallback",
+      agentId: " Agent ",
       cfg: {
-        agents: { list: [{ id: "Agent", identity: { emoji: "🔥" } }] },
+        agents: { entries: { agent: { identity: { emoji: "🔥" } } } },
         channels: { whatsapp: { ackReaction: { direct: true, group: "mentions" } } },
       } as OpenClawConfig,
       expected: "🔥",
@@ -174,8 +175,8 @@ describe("resolveWhatsAppAckEmoji", () => {
       } as OpenClawConfig,
       expected: "👀",
     },
-  ])("$name", ({ cfg, expected }) => {
-    expect(resolveAckEmoji(cfg)).toBe(expected);
+  ])("$name", ({ cfg, agentId, expected }) => {
+    expect(resolveAckEmoji(cfg, agentId)).toBe(expected);
   });
 });
 

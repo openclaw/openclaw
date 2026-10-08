@@ -3,11 +3,6 @@ import { formatCliCommand } from "../command-format.js";
 import { getCoreCliCommandNamesCore } from "./core-command-descriptors.js";
 import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
-const EXPLICIT_COMMAND_ALIASES = new Map<string, string>([
-  ["upgrade", "update"],
-  ["udpate", "update"],
-]);
-
 const MAX_SUGGESTIONS = 3;
 
 function uniqueSortedCommandNames(commands: Iterable<string>): string[] {
@@ -32,9 +27,11 @@ export function formatCliCommandSuggestions(
         ? [...getCoreCliCommandNamesCore(), ...getSubCliEntriesCore().map((entry) => entry.name)]
         : []),
   );
-  const explicitAlias = EXPLICIT_COMMAND_ALIASES.get(normalizedInput);
-  if (explicitAlias && knownCommands.includes(explicitAlias)) {
-    return formatCliSuggestionLines([explicitAlias], commandPath);
+  if (
+    (normalizedInput === "upgrade" || normalizedInput === "udpate") &&
+    knownCommands.includes("update")
+  ) {
+    return formatCliSuggestionLines(["update"], commandPath);
   }
   const suggestions = findCliCommandSuggestions(normalizedInput, knownCommands);
   if (suggestions.length === 0) {

@@ -39,6 +39,10 @@ import {
   expectSharedSecretHttpOwnerIdentity,
 } from "./http-authority.test-support.js";
 import {
+  registerOpenAiHttpUploadTests,
+  runOpenAiHttpImageInputCases,
+} from "./http-input-media.test-support.js";
+import {
   assistantSnapshotCases,
   streamingFailureCases,
   captureStreamingTerminals,
@@ -49,6 +53,7 @@ import {
   emitIncompatibleAssistantReplacement,
   emitCompatibleAssistantReplacement,
   emitBufferedAssistantReplacement,
+  emitEmbeddedLateCommentary,
   createOpenAiHttpTestClient,
   parseSseDataLines,
   readRawChatCompletionStream,
@@ -192,6 +197,13 @@ function firstAgentCommandOptions() {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
+  registerOpenAiHttpUploadTests({
+    getPort: () => enabledPort,
+    postChatCompletions,
+    firstAgentCommandOptions,
+    agentCommandMock,
+  });
+
   it.each([
     { stream: false, includeUsage: false },
     { stream: true, includeUsage: false },
@@ -439,7 +451,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     try {
       testState.agentsConfig = {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "beta" }],
+        entries: { main: {}, beta: {} },
       };
       resetConfigRuntimeState();
       agentCommandMock.mockClear();
@@ -523,7 +535,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     };
 
     try {
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
 
       {
@@ -553,7 +565,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       testState.agentsConfig = {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "beta" }],
+        entries: { main: {}, beta: {} },
       };
       resetConfigRuntimeState();
       await expectAgentSessionKeyMatch({
@@ -570,7 +582,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         matcher: /^agent:beta:/,
       });
 
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
 
       await expectAgentSessionKeyMatch({
@@ -624,7 +636,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         testState.agentsConfig = {
           ownership: "explicit",
-          list: [{ id: "main" }, { id: "beta" }],
+          entries: { main: {}, beta: {} },
         };
         resetConfigRuntimeState();
         mockAgentOnce([{ text: "hello" }]);
@@ -636,7 +648,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
         expect(firstAgentCommandOptions()?.sessionKey).toBe("agent:beta:openai:custom");
         await res.text();
-        testState.agentsConfig = { list: [{ id: "main" }] };
+        testState.agentsConfig = { entries: { main: {} } };
         resetConfigRuntimeState();
       }
 
@@ -766,221 +778,14 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         await res.text();
       }
 
-      {
-        const imageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA";
-        mockAgentOnce([{ text: "looks good" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "describe this" },
-                {
-                  type: "image_url",
-                  image_url: { url: `data:image/png;base64,${imageData}` },
-                },
-              ],
-            },
-          ],
-        });
-        expect(res.status).toBe(200);
-
-        const firstCall = getFirstAgentCall();
-        expect(firstCall?.message).toBe("describe this");
-        expect(firstCall?.images).toEqual([
-          { type: "image", data: imageData, mimeType: "image/png" },
-        ]);
-        await res.text();
-      }
-
-      {
-        const imageData = "QUJDRA==";
-        mockAgentOnce([{ text: "supports data-uri params" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "with metadata params" },
-                {
-                  type: "image_url",
-                  image_url: { url: `data:image/png;charset=utf-8;base64,${imageData}` },
-                },
-              ],
-            },
-          ],
-        });
-        expect(res.status).toBe(200);
-
-        const firstCall = getFirstAgentCall();
-        expect(firstCall?.images).toEqual([
-          { type: "image", data: imageData, mimeType: "image/png" },
-        ]);
-        await res.text();
-      }
-
-      await expectInvalidRequestNoDispatch([
-        {
-          role: "user",
-          content: [
-            {
-              type: "image_url",
-              image_url: { url: "https://example.com/image.png" },
-            },
-          ],
-        },
-      ]);
-
-      const malformedImageParts = [
-        { type: "image_url" },
-        { type: "image_url", image_url: null },
-        { type: "image_url", image_url: {} },
-        { type: "image_url", image_url: { url: "   " } },
-        { type: "image_url", image_url: { url: 123 } },
-        { type: "image_url", image_url: { url: null } },
-        { type: "image_url", image_url: "   " },
-        { type: "image_url", image_url: 123 },
-      ];
-      const validImagePart = {
-        type: "image_url",
-        image_url: { url: "data:image/png;base64,QUJDRA==" },
-      };
-      for (const imagePart of malformedImageParts) {
-        for (const content of [
-          [imagePart],
-          [{ type: "text", text: "describe this" }, imagePart],
-          [validImagePart, imagePart],
-        ]) {
-          await expectInvalidRequestNoDispatch([{ role: "user", content }]);
-        }
-      }
-
-      for (const malformedDataUri of [
-        "data:image/png,QUJDRA==",
-        "data:image/png;base64,",
-        "data:image/png;base64,%%%",
-        "data:image/svg+xml;base64,PHN2Zz4=",
-        "data:image/png;base64,JVBERi0xLjQK",
-      ]) {
-        await expectInvalidRequestNoDispatch([
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "describe this" },
-              { type: "image_url", image_url: { url: malformedDataUri } },
-            ],
-          },
-        ]);
-      }
-
-      {
-        mockAgentOnce([{ text: "I can see the image" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "image_url",
-                  image_url: { url: "data:image/jpeg;base64,QUJDRA==" },
-                },
-              ],
-            },
-          ],
-        });
-        expect(res.status).toBe(200);
-
-        const firstCall = getFirstAgentCall();
-        expect(firstCall?.message).toContain("User sent image(s) with no text.");
-        expect(firstCall?.images).toEqual([
-          { type: "image", data: "QUJDRA==", mimeType: "image/jpeg" },
-        ]);
-        await res.text();
-      }
-
-      {
-        mockAgentOnce([{ text: "follow up answer" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "image_url", image_url: { url: "data:image/png;base64,QUJDRA==" } },
-              ],
-            },
-            { role: "assistant", content: "I can see it." },
-            { role: "user", content: "What color was it?" },
-          ],
-        });
-        expect(res.status).toBe(200);
-
-        const firstCall = getFirstAgentCall();
-        expect(firstCall?.images).toBeUndefined();
-        expect(firstCall?.message ?? "").not.toContain("User sent image(s) with no text.");
-        await res.text();
-      }
-
-      for (const historicalImageParts of [
-        [{ type: "image_url", image_url: { url: "   " } }],
-        [validImagePart, { type: "image_url", image_url: { url: "   " } }],
-      ]) {
-        for (const followup of [
-          { role: "user", content: "What color was it?" },
-          { role: "tool", content: "Vision tool says it is blue." },
-        ]) {
-          mockAgentOnce([{ text: "follow up answer" }]);
-          const res = await postChatCompletions(port, {
-            model: "openclaw",
-            messages: [
-              {
-                role: "user",
-                content: [{ type: "text", text: "look at this" }, ...historicalImageParts],
-              },
-              { role: "assistant", content: "Checking the image." },
-              followup,
-            ],
-          });
-          expect(res.status).toBe(200);
-          expect(getFirstAgentCall()?.images).toBeUndefined();
-          expect(getFirstAgentMessage()).toContain("User: look at this");
-          await res.text();
-        }
-      }
-
-      {
-        mockAgentOnce([{ text: "latest image only" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "first" },
-                { type: "image_url", image_url: { url: "data:image/png;base64,QUFBQQ==" } },
-              ],
-            },
-            { role: "assistant", content: "noted" },
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "second" },
-                { type: "image_url", image_url: { url: "data:image/png;base64,QkJCQg==" } },
-              ],
-            },
-          ],
-        });
-        expect(res.status).toBe(200);
-
-        const firstCall = getFirstAgentCall();
-        expect(firstCall?.images).toEqual([
-          { type: "image", data: "QkJCQg==", mimeType: "image/png" },
-        ]);
-        await res.text();
-      }
+      await runOpenAiHttpImageInputCases({
+        port,
+        postChatCompletions,
+        mockAgentOnce,
+        getFirstAgentCall,
+        getFirstAgentMessage,
+        expectInvalidRequestNoDispatch,
+      });
 
       {
         const largeMessage = "x".repeat(1_200_000);
@@ -2326,6 +2131,25 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
     },
   );
+
+  it("keeps embedded late commentary append-only while the final answer streams", async () => {
+    agentCommandMock.mockImplementationOnce(emitEmbeddedLateCommentary);
+    const stream = await createOpenAiHttpTestClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Inspect the workspace and summarize it." }],
+      stream: true,
+    });
+    const content: string[] = [];
+    const finishReasons: Array<string | null> = [];
+    for await (const chunk of stream) {
+      for (const choice of chunk.choices) {
+        content.push(choice.delta.content ?? "");
+        finishReasons.push(choice.finish_reason);
+      }
+    }
+    expect(content.join("")).toBe("I will inspect the workspace.\n\nThe check is complete.");
+    expect(finishReasons.at(-1)).toBe("stop");
+  });
 
   it.each(
     incompatibleReplacementCases.toSpliced(6, 0, {

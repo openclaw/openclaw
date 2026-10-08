@@ -38,294 +38,220 @@ function parse(value: unknown) {
 }
 
 describe("update recovery manifest", () => {
-  it("retains explicit absent config and database inventory in every v2 generation", () => {
-    for (const generation of [
-      { kind: "baseline" },
-      { kind: "candidate", baselineSha256: "a".repeat(64) },
-      { kind: "prepared", baselineSha256: "a".repeat(64), candidateSha256: "b".repeat(64) },
-    ]) {
-      const value = { ...fixture(), generation };
-      expect(parse(value)).toEqual(value);
+  const value = fixture();
+  const { generation, databases, ...legacy } = value;
+  const [root, config, database] = value.entries;
+  const second = path.join(value.stateDir, "second.sqlite");
+  const missing = (sourcePath: string, sqlite = false) => ({
+    kind: "missing",
+    sourcePath,
+    sqlite,
+    directory: false,
+  });
+  const file = {
+    kind: "file",
+    sourcePath: value.configPath,
+    archivePath: "payload/0",
+    size: 7,
+    sha256: "c".repeat(64),
+    sqlite: false,
+    mode: 0o600,
+  };
+  const captured = { ...value, entries: [root, file, database] };
+  const target = path.join(value.stateDir, "included.json");
+  const link = {
+    kind: "symlink",
+    sourcePath: value.configPath,
+    target: "included.json",
+    contentPath: target,
+  };
+  const linked = {
+    ...value,
+    configPaths: [value.configPath, target],
+    entries: [root, database, link, missing(target)],
+  };
+  const canonical = path.join(value.stateDir, "physical", "included.json");
+  const warning = {
+    kind: "undeclared-migration-resources",
+    pluginId: "legacy",
+    message: "Resources are not declared",
+  };
+
+  it("retains valid capture inventories and version metadata", () => {
+    const captures: unknown[] = [
+      value,
+      { ...value, generation: { kind: "candidate", baselineSha256: "a".repeat(64) } },
+      {
+        ...value,
+        generation: {
+          kind: "prepared",
+          baselineSha256: "a".repeat(64),
+          candidateSha256: "b".repeat(64),
+        },
+      },
+      { ...legacy, schemaVersion: 1 },
+      captured,
+      linked,
+      {
+        ...value,
+        configPaths: [value.configPath, canonical],
+        entries: [
+          root,
+          database,
+          { ...link, target: "alias/included.json", contentPath: canonical },
+          { ...file, sourcePath: canonical, size: 2, sha256: "a".repeat(64) },
+        ],
+      },
+      {
+        ...value,
+        entries: [...value.entries, missing(second, true)],
+        databases: [
+          { path: databases[0]?.path, role: "agent", agentId: "main" },
+          { path: second, role: "agent", agentId: "main" },
+        ],
+      },
+      { ...value, warnings: [warning] },
+    ];
+    for (const capture of captures) {
+      expect(parse(capture)).toEqual(capture);
     }
   });
 
-  it("keeps legacy v1 captures readable without inventing generation or owner metadata", () => {
-    const { generation: _generation, databases: _databases, ...value } = fixture();
-    expect(parse({ ...value, schemaVersion: 1 })).toEqual({ ...value, schemaVersion: 1 });
-    expect(() => parse({ ...fixture(), schemaVersion: 1 })).toThrow(/format version/);
-    expect(() => parse(value)).toThrow(/format version/);
-    expect(() => parse({ ...value, generation: { kind: "baseline" } })).toThrow(/format version/);
-  });
-
-  it("rejects missing config entries and missing include inventory without weakening absence", () => {
-    const value = fixture();
-    expect(() => parse({ ...value, entries: [value.entries[0], value.entries[2]] })).toThrow(
-      /configuration inventory/,
-    );
-    expect(() =>
-      parse({
-        ...value,
-        configPaths: [value.configPath, path.join(value.stateDir, "included.json")],
-      }),
-    ).toThrow(/configuration inventory/);
-    expect(() => parse({ ...value, configPaths: [value.configPath, value.configPath] })).toThrow(
-      /configuration inventory/,
-    );
-    expect(parse(value).configPaths).toEqual([value.configPath]);
-  });
-
-  it("requires symlink configs to retain their captured target inventory", () => {
-    const value = fixture();
-    const target = path.join(value.stateDir, "included.json");
-    const linked = {
-      ...value,
-      configPaths: [value.configPath, target],
-      entries: [
-        value.entries[0],
-        value.entries[2],
+  it.each<{ name: string; error?: RegExp; captures: unknown[] }>([
+    {
+      name: "format version",
+      error: /format version/,
+      captures: [
+        { ...value, schemaVersion: 1 },
+        legacy,
+        { ...legacy, generation: { kind: "baseline" } },
+      ],
+    },
+    {
+      name: "configuration inventory",
+      error: /configuration inventory/,
+      captures: [
+        { ...value, entries: [root, database] },
+        { ...value, configPaths: [value.configPath, target] },
+        { ...value, configPaths: [value.configPath, value.configPath] },
+        { ...linked, configPaths: [value.configPath] },
+        { ...linked, entries: linked.entries.slice(0, -1) },
         {
-          kind: "symlink",
-          sourcePath: value.configPath,
-          target: "included.json",
-          contentPath: target,
+          ...linked,
+          entries: [
+            root,
+            database,
+            link,
+            {
+              kind: "symlink",
+              sourcePath: target,
+              target: "openclaw.json",
+              contentPath: value.configPath,
+            },
+          ],
         },
-        { kind: "missing", sourcePath: target, sqlite: false, directory: false },
       ],
-    };
-    expect(parse(linked)).toEqual(linked);
-    expect(() => parse({ ...linked, configPaths: [value.configPath] })).toThrow(
-      /configuration inventory/,
-    );
-    expect(() => parse({ ...linked, entries: linked.entries.slice(0, -1) })).toThrow(
-      /configuration inventory/,
-    );
-  });
-
-  it("rejects duplicate or noncanonical database identities and uncaptured SQLite owners", () => {
-    const value = fixture();
-    expect(() => parse({ ...value, databases: [...value.databases, ...value.databases] })).toThrow(
-      /database identity/,
-    );
-    expect(() =>
-      parse({
-        ...value,
-        databases: [{ ...value.databases[0], role: "agent", agentId: "Not Canonical" }],
-      }),
-    ).toThrow(/database identity/);
-    expect(() =>
-      parse({
-        ...value,
-        databases: [
-          { path: path.join(value.stateDir, "other.sqlite"), role: "agent", agentId: "main" },
-        ],
-      }),
-    ).toThrow(/SQLite inventory/);
-    expect(() =>
-      parse({
-        ...value,
-        entries: [value.entries[0], value.entries[1], { ...value.entries[2], sqlite: false }],
-      }),
-    ).toThrow();
-  });
-
-  it("rejects ambiguous database owners and directory-shaped missing databases", () => {
-    const value = fixture();
-    const second = path.join(value.stateDir, "second.sqlite");
-    const entries = [
-      ...value.entries,
-      { kind: "missing", sourcePath: second, sqlite: true, directory: false },
-    ];
-    expect(() =>
-      parse({
-        ...value,
-        entries,
-        databases: [...value.databases, { path: second, role: "global" }],
-      }),
-    ).toThrow(/database identity/);
-    // Recovery inventories retain old and new physical locations for one agent.
-    const retainedAgentPaths = {
-      ...value,
-      entries,
-      databases: [
-        { path: value.databases[0]?.path, role: "agent", agentId: "main" },
-        { path: second, role: "agent", agentId: "main" },
+    },
+    {
+      name: "database identity",
+      error: /database identity/,
+      captures: [
+        { ...value, databases: [...databases, ...databases] },
+        { ...value, databases: [{ ...databases[0], role: "agent", agentId: "Not Canonical" }] },
+        {
+          ...value,
+          entries: [...value.entries, missing(second, true)],
+          databases: [...databases, { path: second, role: "global" }],
+        },
       ],
-    };
-    expect(parse(retainedAgentPaths)).toEqual(retainedAgentPaths);
-    expect(() =>
-      parse({
-        ...value,
-        entries: [value.entries[0], value.entries[1], { ...value.entries[2], directory: true }],
-      }),
-    ).toThrow(/SQLite inventory/);
+    },
+    {
+      name: "SQLite inventory",
+      error: /SQLite inventory/,
+      captures: [
+        { ...value, databases: [{ path: second, role: "agent", agentId: "main" }] },
+        { ...value, entries: [root, config, { ...database, sqlite: false }] },
+      ],
+    },
+    {
+      name: "source",
+      error: /source/,
+      captures: [
+        { ...value, entries: [...value.entries, config] },
+        { ...value, entries: [...value.entries, missing(value.stateDir + "-other/file")] },
+      ],
+    },
+    {
+      name: "root entry",
+      error: /root entry/,
+      captures: [{ ...value, entries: value.entries.slice(1) }],
+    },
+    {
+      name: "duplicate payload",
+      error: /Duplicate.*payload/,
+      captures: [
+        {
+          ...captured,
+          entries: [
+            ...captured.entries,
+            { ...file, sourcePath: path.join(value.stateDir, "second.json") },
+          ],
+        },
+      ],
+    },
+    {
+      name: "payload metadata",
+      captures: [
+        { ...captured, entries: [root, { ...file, archivePath: "../payload/0" }, database] },
+        { ...captured, entries: [root, { ...file, size: -1 }, database] },
+        { ...captured, entries: [root, { ...file, sha256: "invalid" }, database] },
+      ],
+    },
+    {
+      name: "migration warnings",
+      captures: [
+        { ...value, warnings: [{ ...warning, kind: "ignore-capture" }] },
+        { ...value, warnings: [{ ...warning, pluginId: "" }] },
+      ],
+    },
+  ])("rejects invalid $name", ({ captures, error }) => {
+    for (const capture of captures) {
+      expect(() => parse(capture)).toThrow(error);
+    }
   });
 
   it.each([1, 2])("rejects contradictory unowned SQLite absence in format v%s", (schemaVersion) => {
-    const { generation, databases, ...legacy } = fixture();
-    const value = {
+    const sourcePath = path.join(value.stateDir, "plugin.sqlite");
+    const capture = {
       ...legacy,
       schemaVersion,
       ...(schemaVersion === 2 ? { generation, databases } : {}),
-      entries: [
-        ...legacy.entries,
-        {
-          kind: "missing",
-          sourcePath: path.join(legacy.stateDir, "plugin.sqlite"),
-          sqlite: true,
-          directory: true,
-        },
-      ],
+      entries: [...legacy.entries, { ...missing(sourcePath, true), directory: true }],
     };
-    expect(() => parse(value)).toThrow(/SQLite inventory/);
-    value.entries[value.entries.length - 1] = {
-      kind: "missing",
-      sourcePath: path.join(legacy.stateDir, "plugin.sqlite"),
-      sqlite: true,
-      directory: false,
-    };
-    expect(parse(value).entries.at(-1)).toMatchObject({ sqlite: true, directory: false });
+    expect(() => parse(capture)).toThrow(/SQLite inventory/);
+    capture.entries[capture.entries.length - 1] = missing(sourcePath, true);
+    expect(parse(capture).entries.at(-1)).toMatchObject({ sqlite: true, directory: false });
   });
 
-  it("rejects config symlinks whose resolved content is another link instead of captured data", () => {
-    const value = fixture();
-    const linked = {
+  it("records an omitted database only as excluded, never retained or missing", () => {
+    const databasePath = value.databases[0]!.path;
+    const omitted = {
       ...value,
-      entries: [
-        value.entries[0],
-        value.entries[2],
-        {
-          kind: "symlink",
-          sourcePath: value.configPath,
-          target: "included.json",
-          contentPath: value.configPath,
-        },
-      ],
+      databases: [],
+      excludedRoots: [databasePath],
+      entries: value.entries.slice(0, 2),
     };
-    expect(() => parse(linked)).toThrow(/configuration inventory/);
-    const second = path.join(value.stateDir, "second.json");
-    expect(() =>
-      parse({
-        ...linked,
-        configPaths: [value.configPath, second],
-        entries: [
-          value.entries[0],
-          value.entries[2],
-          {
-            kind: "symlink",
-            sourcePath: value.configPath,
-            target: "second.json",
-            contentPath: second,
-          },
-          {
-            kind: "symlink",
-            sourcePath: second,
-            target: "openclaw.json",
-            contentPath: value.configPath,
-          },
-        ],
-      }),
-    ).toThrow(/configuration inventory/);
-  });
-
-  it("retains producer-resolved config content through a symlinked parent directory", () => {
-    const value = fixture();
-    const canonical = path.join(value.stateDir, "physical", "included.json");
-    const captured = {
-      ...value,
-      configPaths: [value.configPath, canonical],
-      entries: [
-        value.entries[0],
-        value.entries[2],
-        {
-          kind: "symlink",
-          sourcePath: value.configPath,
-          target: "alias/included.json",
-          contentPath: canonical,
-        },
-        {
-          kind: "file",
-          sourcePath: canonical,
-          archivePath: "payload/0",
-          size: 2,
-          sha256: "a".repeat(64),
-          sqlite: false,
-          mode: 0o600,
-        },
-      ],
-    };
-    expect(parse(captured)).toEqual(captured);
-  });
-
-  it("rejects duplicate sources, absent root entries, and sibling-prefix path escapes", () => {
-    const value = fixture();
-    expect(() => parse({ ...value, entries: [...value.entries, value.entries[1]] })).toThrow(
-      /source/,
+    expect(parse(omitted)).toEqual(omitted);
+    expect(() => parse({ ...omitted, entries: value.entries })).toThrow(/Excluded.*retained/);
+    expect(() => parse({ ...omitted, databases: value.databases })).toThrow(/SQLite inventory/);
+    expect(() => parse({ ...omitted, excludedRoots: [databasePath, databasePath] })).toThrow(
+      /exclusions/,
     );
-    expect(() => parse({ ...value, entries: value.entries.slice(1) })).toThrow(/root entry/);
-    expect(() =>
-      parse({
-        ...value,
-        entries: [
-          ...value.entries,
-          {
-            kind: "missing",
-            sourcePath: value.stateDir + "-other/file",
-            sqlite: false,
-            directory: false,
-          },
-        ],
-      }),
-    ).toThrow(/source/);
-  });
-
-  it("binds each file to a unique constrained payload with digest and byte count", () => {
-    const value = fixture();
-    const file = {
-      kind: "file",
-      sourcePath: value.configPath,
-      archivePath: "payload/0",
-      size: 7,
-      sha256: "c".repeat(64),
-      sqlite: false,
-      mode: 0o600,
-    };
-    const captured = { ...value, entries: [value.entries[0], file, value.entries[2]] };
-    expect(parse(captured)).toEqual(captured);
-    expect(() =>
-      parse({
-        ...captured,
-        entries: [
-          ...captured.entries,
-          { ...file, sourcePath: path.join(value.stateDir, "second.json") },
-        ],
-      }),
-    ).toThrow(/Duplicate.*payload/);
-    for (const patch of [{ archivePath: "../payload/0" }, { size: -1 }, { sha256: "invalid" }]) {
-      expect(() =>
-        parse({
-          ...captured,
-          entries: [value.entries[0], { ...file, ...patch }, value.entries[2]],
-        }),
-      ).toThrow();
+    for (const field of ["roots", "protectedPaths", "configPaths"] as const) {
+      expect(() => parse({ ...omitted, [field]: [...omitted[field], databasePath] })).toThrow(
+        /exclusions/,
+      );
     }
-  });
-
-  it("preserves typed migration warnings and refuses malformed warning declarations", () => {
-    const value = {
-      ...fixture(),
-      warnings: [
-        {
-          kind: "undeclared-migration-resources",
-          pluginId: "legacy",
-          message: "Resources are not declared",
-        },
-      ],
-    };
-    expect(parse(value)).toEqual(value);
-    expect(() =>
-      parse({ ...value, warnings: [{ ...value.warnings[0], kind: "ignore-capture" }] }),
-    ).toThrow();
-    expect(() => parse({ ...value, warnings: [{ ...value.warnings[0], pluginId: "" }] })).toThrow();
   });
 
   it("does not confuse ordinary archives and private recovery captures", () => {
