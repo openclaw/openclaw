@@ -15,7 +15,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderDeclarationConfig,
+} from "../config/types.models.js";
 import type { ProviderCatalogContext, ProviderCatalogResult, ProviderPlugin } from "./types.js";
 
 /** Finds a provider catalog template entry by normalized provider and template id. */
@@ -54,7 +57,7 @@ export function resolveFirstProviderCatalogAuth(
 export async function buildSingleProviderApiKeyCatalog(params: {
   ctx: ProviderCatalogContext;
   providerId: string;
-  buildProvider: () => ModelProviderConfig | Promise<ModelProviderConfig>;
+  buildProvider: () => ModelProviderDeclarationConfig | Promise<ModelProviderDeclarationConfig>;
   allowExplicitBaseUrl?: boolean;
 }): Promise<ProviderCatalogResult> {
   const providerId = normalizeProviderId(params.providerId);
@@ -140,7 +143,7 @@ function buildManifestCatalogModelInput(
 function buildManifestCatalogModel(
   model: ModelCatalogModel,
   options: { providerId?: string; filterDocument?: boolean } = {},
-): ModelDefinitionConfig & Pick<ModelCatalogModel, "contextWindows" | "contextWindowDefault"> {
+): ModelProviderDeclarationConfig["models"][number] {
   if (model.contextWindow === undefined) {
     throw new Error(`Manifest modelCatalog row ${model.id} is missing contextWindow`);
   }
@@ -184,7 +187,7 @@ export function buildManifestModelProviderConfig(params: {
   providerId: string;
   /** Raw manifest modelCatalog provider block to normalize into runtime config. */
   catalog: unknown;
-}): ModelProviderConfig {
+}): ModelProviderDeclarationConfig {
   const catalog = normalizeModelCatalog(
     { providers: { [params.providerId]: params.catalog } },
     { ownedProviders: new Set([params.providerId]) },
@@ -212,7 +215,7 @@ export function buildManifestModelProviderConfig(params: {
 /** Builds runtime provider config from planner-normalized manifest rows. */
 export function buildEffectiveManifestProviderConfig(
   rows: readonly NormalizedModelCatalogRow[],
-): ModelProviderConfig | undefined {
+): ModelProviderDeclarationConfig | undefined {
   const firstRow = rows[0];
   if (!firstRow?.baseUrl || !firstRow.api) {
     return undefined;
@@ -235,8 +238,8 @@ export type ManifestProviderCatalogEntry = {
   id: string;
   label: string;
   baseUrl: string;
-  models: ModelProviderConfig["models"];
-  buildProvider: () => ModelProviderConfig;
+  models: ModelProviderDeclarationConfig["models"];
+  buildProvider: () => ModelProviderDeclarationConfig;
 };
 
 /** Projects an ordered family of manifest catalogs into static provider and model surfaces. */

@@ -1,6 +1,6 @@
 /** Control-plane provider discovery helpers that keep runtime imports lazy until catalog hooks run. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { ModelProviderConfig } from "../config/types.js";
+import type { ModelProviderDeclarationConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -9,7 +9,11 @@ import {
   copyProviderCatalogOutcomes,
   copyProviderCatalogResultProjection,
 } from "./provider-catalog-result.js";
-import type { ProviderCatalogContext, ProviderCatalogOutcome } from "./provider-catalog.types.js";
+import type {
+  ProviderCatalogContext,
+  ProviderCatalogOutcome,
+  ProviderCatalogResult,
+} from "./provider-catalog.types.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];
@@ -19,7 +23,7 @@ const providerRuntimeLoader = createLazyImportLoader(
 
 type PreparedProviderStaticCatalogEntry = Readonly<{
   provider: ProviderPlugin;
-  providerConfigs: Readonly<Record<string, ModelProviderConfig>>;
+  providerConfigs: Readonly<Record<string, ModelProviderDeclarationConfig>>;
 }>;
 
 export type PreparedProviderStaticCatalog = Readonly<{
@@ -93,19 +97,15 @@ export function groupPluginDiscoveryProvidersByOrder(
 /** Normalizes a plugin discovery response into safe provider-config keys. */
 export function normalizePluginDiscoveryResult(params: {
   provider: ProviderPlugin;
-  result:
-    | { provider: ModelProviderConfig }
-    | { providers: Record<string, ModelProviderConfig> }
-    | null
-    | undefined;
-}): Record<string, ModelProviderConfig> {
+  result: ProviderCatalogResult;
+}): Record<string, ModelProviderDeclarationConfig> {
   const result = params.result;
   if (!result) {
     return {};
   }
 
   const projection = copyProviderCatalogResultProjection(result);
-  const normalized = Object.create(null) as Record<string, ModelProviderConfig>;
+  const normalized = Object.create(null) as Record<string, ModelProviderDeclarationConfig>;
   const entries =
     projection.kind === "provider"
       ? [
@@ -232,8 +232,8 @@ export async function prepareProviderStaticCatalog(params: {
 
 export function resolvePreparedProviderStaticConfigs(
   prepared: PreparedProviderStaticCatalog | undefined,
-): Record<string, ModelProviderConfig> {
-  const providers: Record<string, ModelProviderConfig> = {};
+): Record<string, ModelProviderDeclarationConfig> {
+  const providers: Record<string, ModelProviderDeclarationConfig> = {};
   for (const entry of prepared?.entries ?? []) {
     Object.assign(providers, entry.providerConfigs);
   }
