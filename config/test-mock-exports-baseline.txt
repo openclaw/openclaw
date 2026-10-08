@@ -559,7 +559,6 @@
 ["extensions/discord/src/voice/voice-test-mocks.test-support.ts","../runtime.js","dd5452658d78f200b405301b485109efccd3e3bdbaee52fb352312238587c527",1]
 ["extensions/discord/src/voice/voice-test-mocks.test-support.ts","./audio-worker-thread.js","5380264ffb256051bcb2e4d3b8b9bc29a16dac8bb2571c535c8ee766f55006b8",1]
 ["extensions/discord/src/voice/voice-test-mocks.test-support.ts","./sdk-runtime.js","3e401aae8019ca16ed43611db3bc93a38cbaa543b90451c282b5e8bcd569d4d0",1]
-["extensions/discord/src/voice/voice-test-mocks.test-support.ts","openclaw/plugin-sdk/agent-runtime","7224624c87d7c82f418e6b6b8b1fa857da6f01082262dd6c51b0faf341d8f1e8",1]
 ["extensions/discord/src/voice/voice-test-mocks.test-support.ts","openclaw/plugin-sdk/system-event-runtime","59e2e9c873bef9f96e9062ec27848ea426a3bf3768a2a28fe4ec9fcc5d5891b0",1]
 ["extensions/duckduckgo/src/ddg-search-provider.test.ts","./ddg-client.js","839e032937931a930d26039394f95916cce48b15e35d8ba924b230a6b45d3d7c",1]
 ["extensions/elevenlabs/realtime-transcription-provider.test.ts","./config-api.js","0b8f8fe1eabce93a4b61a2d9b2a5319b1007601b330c6d3d188500f110f10329",1]
