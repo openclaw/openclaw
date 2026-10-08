@@ -20,6 +20,7 @@ export type SessionHistoryWorkerRequestRunner = <TResult>(
   receive: (value: SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]]) => TResult,
   signal?: AbortSignal,
   onRequest?: (value: unknown) => void | Promise<WorkerTaskResponse>,
+  timeoutMs?: number,
 ) => Promise<TResult>;
 
 type SessionHistoryWorkerValue = SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]];
@@ -88,6 +89,25 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readTrajectoryRetention: (input, options) => {
+      const captured = {
+        ...input,
+        input: { ...input.input },
+        expectedIdentity: { ...input.expectedIdentity },
+        env: captureSessionTranscriptStorageEnvironment(input.env),
+      };
+      return runRequest(
+        () => ({ kind: "trajectory-retention", ...captured }),
+        JSON.stringify(captured).length * 2,
+        (value) => {
+          assertResultKind(value, "trajectory-retention", "trajectory retention");
+          return value.plan;
+        },
+        options.signal,
+        undefined,
+        options.timeoutMs,
+      );
+    },
     readCleanup: reader("session-cleanup", "a cleanup snapshot", (value) => value),
     readRawDelta: reader("transcript-raw-delta", "raw transcript delta", (value) => value.result),
     readVisibleDelta: reader(

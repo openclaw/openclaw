@@ -11,6 +11,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import {
   createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
   type ModelCatalogDecisionParams,
 } from "../../agents/model-catalog-decisions.js";
@@ -200,12 +201,10 @@ async function prepareOwnedModelsListResult({
     ...(view === "provider-config" ? {} : profiles),
     routeResolverFactory: params.routeResolverFactory,
   };
-  const projector = await withCurrentReadAuthority(
-    authority,
-    () =>
-      (usedPreloadedCatalog ? params.catalogProjector : undefined) ??
-      createModelCatalogDecisions(projectorParams),
-  );
+  const preloadedProjector = usedPreloadedCatalog ? params.catalogProjector : undefined;
+  const projector = preloadedProjector
+    ? await withCurrentReadAuthority(authority, () => preloadedProjector)
+    : await prepareModelCatalogDecisions(projectorParams, authority);
   if (view !== "provider-config") {
     await projector.prepareSelectedAccountCatalog(
       () => {

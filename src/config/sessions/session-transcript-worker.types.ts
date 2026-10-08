@@ -20,6 +20,10 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { VoiceSessionMatch } from "../../talk/client-voice-session-store.js";
 import type {
+  TrajectoryRetentionWorkerInput,
+  TrajectoryRuntimeRetentionPlan,
+} from "../../trajectory/runtime-retention.contract.js";
+import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
 } from "./activity-summary-source.types.js";
@@ -355,6 +359,7 @@ type BoardWidgetDocumentWorkerInput = BoardReadWorkerInput<
 >;
 
 export type SessionHistoryWorkerInput =
+  | TrajectoryRetentionWorkerInput
   | SessionCleanupReadInput
   | BoardSnapshotWorkerInput
   | BoardWidgetDocumentWorkerInput
@@ -430,6 +435,10 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
+  "trajectory-retention": {
+    kind: "trajectory-retention";
+    plan: TrajectoryRuntimeRetentionPlan;
+  };
   "session-cleanup": SessionCleanupReadResult;
   "transcript-raw-delta": { kind: "transcript-raw-delta"; result: SessionTranscriptRawDeltaResult };
   "transcript-visible-delta": {
@@ -584,6 +593,10 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
+  readTrajectoryRetention: (
+    input: Omit<TrajectoryRetentionWorkerInput, "kind" | "database">,
+    options: { signal?: AbortSignal; timeoutMs: number },
+  ) => Promise<TrajectoryRuntimeRetentionPlan>;
   readCleanup: SessionHistoryReader<SessionCleanupReadInput>;
   readRawDelta: CancellableSessionHistoryReader<
     Extract<SessionTranscriptDeltaWorkerInput, { kind: "transcript-raw-delta" }>,

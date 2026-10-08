@@ -16,6 +16,32 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Gateway deleted-agent checks batch ACP metadata candidates through the shared-state
+reader only for free ACP keys whose agent is absent. When a foreign commit requires
+the content-version marker to be refreshed, the reader fetches that marker and the
+first metadata cohort in one statement. Admission validates the marker before
+consuming metadata; the existing read revision owns subsequent row reuse.
+Reset rebinding uses the ACP
+writer after the session entry commits, retaining that entry writer's physical
+custody and accepted cleanup authority until the metadata settles. If the session
+owner already has an admitted native handle, transaction and commit grants retain
+a synchronous final-authority guard: one indexed lifecycle
+predicate on the original admitted agent handle. Foreign and native SDK writers
+can change that row without publishing revocation, so prepared facts cannot grant
+the mutation. Retire this guard when the next Plugin SDK major removes raw
+synchronous writers and the lifecycle owner has complete revocation publications.
+Cold callers use the existing worker source reader; they never open a native handle
+on the Gateway thread for this guard.
+ACP writes publish the row returned by their upsert,
+and clearing the exact metadata keys publishes absence without a readback. Native
+Doctor writes and the released synchronous SDK reader retain their contracts.
+Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
+
+Reset reuses its prepared entry snapshot across transcript-only cold restoration;
+the committing worker still compares the complete current target before changing
+it. ACP transactions use the shared writer's retained handle and validate ownership
+after `BEGIN`, without a duplicate ownership read before the transaction.
+
 Conversation directory registration and outbound binding predicates use the existing
 agent writer. Registration retains the selected physical store across directory
 discovery; transaction and commit grants recheck live routing authority. Delivery
@@ -133,6 +159,19 @@ actual database and current caller authority. Registry admission likewise reuses
 exact canonical audit definitions from admitted schema facts, retaining structural
 validation for other supported shapes. Schemas, stored bytes, retention, and update
 behavior are unchanged.
+
+Completed full expected-schema descriptions are shared across bundled module
+copies and inherited by newly created workers through that same launcher. The
+Gateway prepares the canonical shared-state and agent descriptions during boot
+admission, after SQLite runtime selection and before starting database workers.
+The cache is keyed by complete canonical SQL, so same-version additive definitions
+remain distinct. Only expected definitions are transferred: every admission still
+inspects its actual database, and newer database versions remain refused. Retained
+supervisors forward the caller's current definitions when creating each worker.
+Runtime shared-state comparisons select their existing table and index view from
+the full description. They do not construct another comparison database for that
+subset. The full maintenance policy still validates present lazy objects, and
+physical schema creation and migration SQL are unchanged.
 
 Runtime canonical-session readiness carries the pending work's captured physical
 source into the existing reclamation worker. The worker rereads current rows and
@@ -3604,3 +3643,26 @@ at both shared-state write grants, with native admission completed beforehand.
 No question policy is projected when image cancellation finds no pending question;
 ordinary steering retains its own admission. Schemas, retention, durability,
 configuration, and update behavior are unchanged.
+
+OAuth peer fencing, restoration, and settlement use the existing auth reader and
+agent writer. Discovery retains each candidate's physical database identity,
+including registered custom paths. The writer compares the exact credential
+under its transaction, publishes acknowledged changes, and preserves provisional
+claim custody when a fence reply is lost. Accepted refreshes retain their auth
+work owner through provider waits and peer settlement; Gateway close rejects new
+work and joins that settlement before closing the transports.
+
+Lazy shared-auth bootstrap runs in the existing shared-state worker. An empty
+legacy source keeps its existing-file write reservation through the shared
+ownership commit; live host grants recheck source identity and ownership. The
+worker rereads ownership and pending migration cleanup before relocating an
+empty store. Unreadable or populated legacy stores remain with Doctor. The
+released synchronous `agent-runtime` auth-store save API and Doctor retain their
+native preparation; the synchronous candidate reader also serves the CLI's
+immediate shared-key replacement guard.
+
+Personal model catalog selection prepares its default links and selected
+credentials together in one auth-worker request. Catalog composition retains the
+original credential and link authority through that read and checks it before
+publication. These changes preserve schemas, stored bytes, retention, and update
+behavior.

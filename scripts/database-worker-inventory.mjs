@@ -1274,6 +1274,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/acp/runtime/session-meta.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["writeAcpSessionMetaForMigration"],
+        evidence:
+          "The native writer is retained only by src/infra/state-migrations.acp-session-metadata.ts and test fixtures. Gateway reset rebinding uses session-meta-reset.ts -> commitAcpSessionMutation in the shared-state worker; synchronous SDK readers retain their separate native classification.",
+      },
+    ],
+  ],
+  [
     "src/claws/cron.ts",
     [
       {

@@ -48,6 +48,7 @@ import type { GatewayShutdownRuntime } from "./server-shutdown.runtime.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { refreshGatewayHealthSnapshot } from "./server/health-state.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
+import { prepareTalkConnectionClose } from "./talk/session-registry.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayKernelState>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -65,6 +66,7 @@ export async function prepareGatewayLifecycle(params: {
   const requestEntryLifetime = new GatewayRequestEntryLifetime();
   const worktreeRunEnd = prepareWorktreeRunEndClose();
   const sandboxRegistry = prepareSandboxRegistryClose();
+  const talkClose = prepareTalkConnectionClose(runtime.clients, log);
   const {
     minimalTestGateway,
     transportBridge,
@@ -387,6 +389,7 @@ export async function prepareGatewayLifecycle(params: {
     browserAuthRateLimiter.dispose();
     worktreeRunEnd.beginClose();
     sandboxRegistry.beginClose();
+    talkClose.beginClose();
     if (prelude) {
       beginCronReceiptAuthorityClose();
     }
@@ -430,6 +433,7 @@ export async function prepareGatewayLifecycle(params: {
       step("mention-inbox", () => mentionInbox.dispose()),
       step("worktree-run-end", () => worktreeRunEnd.drain()),
       step("sandbox-registry", () => sandboxRegistry.drain()),
+      step("talk-persistence", () => talkClose.drain()),
     ]);
   const beginClosePrelude = async (options?: GatewayCloseOptions) => {
     await step("prelude-fence", () => markClosePreludeStarted(options));
@@ -485,15 +489,7 @@ export async function prepareGatewayLifecycle(params: {
     );
   };
   const connectionDependentSidecarStopOwner = createGatewaySidecarStopOwner();
-  const stopConnectionDependentSidecars = async () => {
-    // Failed worker stops still need their supervisor transport and runtime dependencies.
-    try {
-      await connectionDependentSidecarStopOwner.stop();
-    } finally {
-      // Acquisition publishes before yielding; seal its late cleanup before transport closes.
-      await connectionDependentSidecarStopOwner.sealAndJoin();
-    }
-  };
+  const stopConnectionDependentSidecars = connectionDependentSidecarStopOwner.stopAndJoin;
   const postReadySidecarStopOwner = runtimeState.postReadySidecars;
   const gatewayLifetimeSidecarStopOwner = runtimeState.gatewayLifetimeSidecars;
   const sealAndJoinRegisteredSidecarStops = async () => {

@@ -27,6 +27,9 @@ export async function startGatewayServer(
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
   const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
   await initializeSqliteRuntimeCapabilities();
+  const { prepareOpenClawDatabaseSchemaContracts } =
+    await import("../state/openclaw-database-schema-contracts.js");
+  prepareOpenClawDatabaseSchemaContracts();
   const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
   const ownedLock = opts.gatewayStateOwner
     ? null

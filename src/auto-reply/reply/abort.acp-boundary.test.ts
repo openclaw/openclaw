@@ -12,7 +12,7 @@ import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -363,7 +363,7 @@ it.each([
         reason: "fast-abort",
       });
       await turn;
-      expect(readAcpSessionMeta({ cfg, sessionKey: acpKey })?.state).toBe(
+      expect(readAcpSessionEntry({ cfg, sessionKey: acpKey })?.acp?.state).toBe(
         !active && completion === "reject" ? "error" : "idle",
       );
     } finally {
