@@ -73,7 +73,7 @@ export async function resolveAcpSpawnRequesterState(params: {
   cfg: OpenClawConfig;
   parentSessionKey?: string;
   requesterAgentId: string;
-  targetAgentId: string;
+  ownerAgentId: string;
   ctx: AcpSpawnRequesterContext;
 }): Promise<AcpSpawnRequesterState> {
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
@@ -108,7 +108,7 @@ export async function resolveAcpSpawnRequesterState(params: {
         : false,
     origin: resolveRequesterOriginForChild({
       cfg: params.cfg,
-      targetAgentId: params.targetAgentId,
+      targetAgentId: params.ownerAgentId,
       requesterAgentId: params.requesterAgentId,
       requesterChannel: params.ctx.agentChannel,
       requesterAccountId: params.ctx.agentAccountId,

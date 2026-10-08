@@ -1192,65 +1192,91 @@ describe("spawnAcpDirect", () => {
     expect(gatewayRequest("agent")?.params?.accountId).toBe("work");
   });
 
-  it("uses the target agent's bound account for cross-agent ACP thread spawns", async () => {
-    const boundRoom = "!room:example.org";
-    configureChannelBindings("matrix", "bot-alpha");
-    hoisted.state.cfg.acp = { ...hoisted.state.cfg.acp, allowedAgents: ["codex", "bot-alpha"] };
-    hoisted.state.cfg.bindings = [
-      {
-        type: "route",
-        agentId: "bot-alpha",
-        match: {
-          channel: "matrix",
-          peer: { kind: "channel", id: boundRoom },
-          accountId: "bot-alpha",
+  it.each(["bot-alpha", "reviewer", undefined])(
+    "uses the owner's bound account for ACP thread spawn (%s)",
+    async (agentId) => {
+      const boundRoom = "!room:example.org";
+      const ownerAgentId = agentId === "bot-alpha" ? "bot-alpha" : "reviewer";
+      hoisted.state.cfg.channels = {
+        matrix: {
+          threadBindings: { enabled: true, spawnSessions: true },
+          accounts: { "bot-alpha": {}, "bot-beta": {} },
         },
-      },
-    ];
-    registerBindingAdapter("matrix", "bot-alpha");
-    mockConversationBinding("matrix", "bot-alpha");
+      };
+      hoisted.state.cfg.acp = {
+        ...hoisted.state.cfg.acp,
+        defaultAgent: "reviewer",
+        allowedAgents: ["codex", "bot-alpha"],
+      };
+      hoisted.state.cfg.agents = {
+        ...hoisted.state.cfg.agents,
+        entries: {
+          main: {},
+          "bot-alpha": {},
+          reviewer: { runtime: { type: "acp", acp: { agent: "codex" } } },
+        },
+      };
+      hoisted.state.cfg.bindings = [
+        {
+          type: "route",
+          agentId: ownerAgentId,
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: boundRoom },
+            accountId: "bot-alpha",
+          },
+        },
+      ];
+      registerBindingAdapter("matrix", "bot-alpha");
+      registerBindingAdapter("matrix", "bot-beta");
+      mockConversationBinding("matrix", ownerAgentId);
 
-    const result = await spawn(
-      {
-        agentId: "bot-alpha",
-        mode: "session",
-        thread: true,
-      },
-      {
-        agentSessionKey: "agent:main:matrix:room:requester",
-        agentChannel: "matrix",
-        agentAccountId: "bot-beta",
-        agentTo: `room:${boundRoom}`,
-      },
-    );
+      const result = await spawn(
+        {
+          agentId,
+          mode: "session",
+          thread: true,
+        },
+        {
+          agentSessionKey: "agent:main:matrix:room:requester",
+          agentChannel: "matrix",
+          agentAccountId: "bot-beta",
+          agentTo: `room:${boundRoom}`,
+        },
+      );
 
-    expect(result.status).toBe("accepted");
-    expectBindingCallFields({
-      placement: "child",
-      conversation: {
+      expect(result.status).toBe("accepted");
+      expectInitializeSessionFields({
+        agentId: ownerAgentId,
+        agent: agentId === "bot-alpha" ? "bot-alpha" : "codex",
+      });
+      expectBindingCallFields({
+        placement: "child",
+        conversation: {
+          channel: "matrix",
+          accountId: "bot-alpha",
+          conversationId: boundRoom,
+        },
+      });
+      expectRecordFields(gatewayRequest("agent").params, {
+        deliver: true,
         channel: "matrix",
         accountId: "bot-alpha",
-        conversationId: boundRoom,
-      },
-    });
-    expectRecordFields(gatewayRequest("agent").params, {
-      deliver: true,
-      channel: "matrix",
-      accountId: "bot-alpha",
-      to: `room:${boundRoom}`,
-    });
-    expectRegisteredSubagentRun(
-      hoisted.registerSubagentRunMock,
-      {
-        requesterOrigin: expect.objectContaining({
-          channel: "matrix",
-          accountId: "bot-alpha",
-          to: `room:${boundRoom}`,
-        }),
-      },
-      { assertCurrent: undefined },
-    );
-  });
+        to: `room:${boundRoom}`,
+      });
+      expectRegisteredSubagentRun(
+        hoisted.registerSubagentRunMock,
+        {
+          requesterOrigin: expect.objectContaining({
+            channel: "matrix",
+            accountId: "bot-alpha",
+            to: `room:${boundRoom}`,
+          }),
+        },
+        { assertCurrent: undefined },
+      );
+    },
+  );
 
   it("rejects disallowed ACP agents", async () => {
     hoisted.state.cfg.acp = { enabled: true, backend: "acpx", allowedAgents: ["claudecode"] };

@@ -6,6 +6,7 @@ import {
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
+import type { AcpInitializeSessionInput } from "../../../acp/control-plane/manager.types.js";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -54,8 +55,8 @@ type AcpSpawnInitializedSession = Awaited<
 
 export type AcpSpawnInitializedRuntime = {
   initialized: AcpSpawnInitializedSession;
-  sessionId?: string;
-  sessionEntry: SessionEntry | undefined;
+  sessionId: string;
+  sessionEntry: SessionEntry;
 };
 
 type AcpSpawnRuntimeOptions = {
@@ -147,6 +148,7 @@ export async function initializeAcpSpawnRuntime(params: {
   runtimeMode: AcpRuntimeSessionMode;
   backendId?: string;
   resumeSessionId?: string;
+  revalidateResume?: AcpInitializeSessionInput["revalidateResume"];
   runtimeOptions?: AcpSpawnRuntimeOptions;
   modelExplicit?: boolean;
   thinkingExplicit?: boolean;
@@ -161,6 +163,7 @@ export async function initializeAcpSpawnRuntime(params: {
     agent: params.runtimeAgentId,
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
+    revalidateResume: params.revalidateResume,
     runtimeOptions: params.runtimeOptions,
     modelExplicit: params.modelExplicit,
     thinkingExplicit: params.thinkingExplicit,

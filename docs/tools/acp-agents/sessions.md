@@ -74,6 +74,8 @@ Two ways to start an ACP session:
   `acp.defaultAgent` if set. Raw harnesses create children under the requesting
   OpenClaw agent; configured aliases own their children. The harness remains
   the ACP runtime identity in either case.
+  For cross-agent aliases, thread binding and inline delivery use the owner's bound channel account.
+  A raw harness keeps the requesting agent's active inbound account.
 </ParamField>
 <ParamField path="thread" type="boolean" default="false">
   Request thread binding flow where supported.

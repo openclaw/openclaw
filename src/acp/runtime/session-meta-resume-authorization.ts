@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -14,17 +13,13 @@ type AcpResumeSessionOwnership = {
   assertCurrent?: () => void;
 };
 
-const spawnResumeOwnership = new AsyncLocalStorage<
-  AcpResumeSessionOwnership & {
-    sessionKey: string;
-    observeSource: (agentId: string, sessionKey: string) => void;
-  }
->();
-
-export async function withAcpSpawnResumeOwnership<T>(
-  ownership: AcpResumeSessionOwnership & { sessionKey: string },
-  initialize: () => Promise<T>,
+export async function withAcpResumeSessionAuthorization<T>(
+  ownership: AcpResumeSessionOwnership,
+  initialize: (revalidateResume?: () => Promise<() => void>) => Promise<T>,
 ): Promise<T> {
+  if (!normalizeOptionalString(ownership.resumeSessionId)) {
+    return initialize();
+  }
   let current = true;
   const sources = new Map<string, Set<string>>();
   const unsubscribe = sessionChanges.subscribeFacts((change) => {
@@ -45,49 +40,37 @@ export async function withAcpSpawnResumeOwnership<T>(
       current = false;
     }
   });
-  const scope = {
-    ...ownership,
-    assertCurrent() {
-      ownership.assertCurrent?.();
-      if (!current) {
-        throw new Error("ACP resume source authority changed; retry from the current session.");
-      }
-    },
-    observeSource(agentId: string, sessionKey: string) {
-      const agents = sources.get(sessionKey) ?? new Set<string>();
-      agents.add(agentId);
-      sources.set(sessionKey, agents);
-    },
+  const assertCurrent = () => {
+    ownership.assertCurrent?.();
+    if (!current) {
+      throw new Error("ACP resume source authority changed; retry from the current session.");
+    }
   };
   try {
-    return await spawnResumeOwnership.run(scope, initialize);
+    return await initialize(async () => {
+      assertCurrent();
+      const result = await validateAcpResumeSessionOwnership(
+        { ...ownership, assertCurrent },
+        (agentId, sessionKey) => {
+          const agents = sources.get(sessionKey) ?? new Set<string>();
+          agents.add(agentId);
+          sources.set(sessionKey, agents);
+        },
+      );
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      return assertCurrent;
+    });
   } finally {
     current = false;
     unsubscribe();
   }
 }
 
-/** Re-read source authority after manager preparation, before entering the external runtime. */
-export async function assertAcpSpawnResumeOwnership(
-  sessionKey: string,
-): Promise<(() => void) | undefined> {
-  const ownership = spawnResumeOwnership.getStore();
-  if (!ownership) {
-    return undefined;
-  }
-  ownership.assertCurrent?.();
-  if (ownership.sessionKey !== sessionKey) {
-    throw new Error("ACP resume initialization authority expired or changed.");
-  }
-  const result = await validateAcpResumeSessionOwnership(ownership);
-  if (!result.ok) {
-    throw new Error(result.error);
-  }
-  return ownership.assertCurrent;
-}
-
 export async function validateAcpResumeSessionOwnership(
   params: AcpResumeSessionOwnership,
+  observeSource?: (agentId: string, sessionKey: string) => void,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const resumeSessionId = normalizeOptionalString(params.resumeSessionId);
   if (!resumeSessionId) {
@@ -107,8 +90,7 @@ export async function validateAcpResumeSessionOwnership(
       ...params,
       agentId,
       resumeSessionId,
-      onCandidate: (sessionKey) =>
-        spawnResumeOwnership.getStore()?.observeSource(agentId, sessionKey),
+      onCandidate: (sessionKey) => observeSource?.(agentId, sessionKey),
     });
     params.assertCurrent?.();
     if (!owner) {

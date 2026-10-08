@@ -7,7 +7,7 @@ import { ManagerRuntimeHandleCache } from "../../../acp/control-plane/manager.ru
 import { buildAcpDatabaseSessionKey } from "../../../acp/runtime/session-meta-keys.js";
 import {
   validateAcpResumeSessionOwnership,
-  withAcpSpawnResumeOwnership,
+  withAcpResumeSessionAuthorization,
 } from "../../../acp/runtime/session-meta-resume-authorization.js";
 import {
   readAcpSessionEntryAsync,
@@ -287,7 +287,6 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
       const authorization = {
         ...input,
         ownerAgentId: "reviewer",
-        sessionKey: target.sessionKey,
         resumeSessionId: `final-effect-${mutation}`,
         assertCurrent,
       };
@@ -310,8 +309,10 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
       const prepared = createDeferred();
       const release = createDeferred();
       const runtimeHandles = new ManagerRuntimeHandleCache();
-      const operation = withAcpSpawnResumeOwnership(authorization, () =>
-        runManagerInitializeSession({
+      const retained: { revalidateResume?: () => Promise<() => void> } = {};
+      const operation = withAcpResumeSessionAuthorization(authorization, (revalidateResume) => {
+        retained.revalidateResume = revalidateResume;
+        return runManagerInitializeSession({
           input: {
             cfg,
             sessionKey: target.sessionKey,
@@ -321,6 +322,7 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
             resumeSessionId: authorization.resumeSessionId,
             backendId: "fixture",
             assertActive: assertCurrent,
+            revalidateResume,
           },
           sessionKey: target.sessionKey,
           agentId: "reviewer",
@@ -335,8 +337,8 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
           },
           runtimeHandles,
           writeSessionMeta: upsertAcpSessionMeta,
-        }),
-      );
+        });
+      });
       const outcome = operation.then(
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error }),
@@ -393,6 +395,12 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
       }
       const result = await outcome.finally(() => restoreRead?.());
       expect(result.ok, mutation).toBe(mutation === "unchanged");
+      if (!retained.revalidateResume) {
+        throw new Error("resume authorization callback was not provided");
+      }
+      await expect(retained.revalidateResume()).rejects.toThrow(
+        mutation === "retired" ? "request retired" : "ACP resume source authority changed",
+      );
       if (result.ok) {
         expect(ensureSession).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({

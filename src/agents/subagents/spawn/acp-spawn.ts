@@ -5,7 +5,7 @@ import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../../../acp/policy.js";
 import {
   validateAcpResumeSessionOwnership,
-  withAcpSpawnResumeOwnership,
+  withAcpResumeSessionAuthorization,
 } from "../../../acp/runtime/session-meta-resume-authorization.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -270,7 +270,7 @@ export async function spawnAcpDirect(
     cfg,
     parentSessionKey,
     requesterAgentId,
-    targetAgentId,
+    ownerAgentId,
     ctx,
   });
   ctx.assertActive?.();
@@ -314,7 +314,7 @@ export async function spawnAcpDirect(
   if (!admission.ok) {
     return buildAcpSpawnError("subagent_policy", admission.error, "forbidden");
   }
-  const resumeAuthorization = await validateAcpResumeSessionOwnership({
+  const resumeOwnership = {
     cfg,
     ownerAgentId,
     runtimeAgentId: targetAgentId,
@@ -322,7 +322,8 @@ export async function spawnAcpDirect(
     requesterSessionKey: requesterInternalKey,
     resumeSessionId: params.resumeSessionId,
     assertCurrent: ctx.assertActive,
-  });
+  };
+  const resumeAuthorization = await validateAcpResumeSessionOwnership(resumeOwnership);
   ctx.assertActive?.();
   if (!resumeAuthorization.ok) {
     return buildAcpSpawnError("resume_forbidden", resumeAuthorization.error, "forbidden");
@@ -502,20 +503,12 @@ export async function spawnAcpDirect(
           },
           { assertCommitAllowed: ctx.assertActive },
         )) ?? undefined;
-      const initializedSession = await withAcpSpawnResumeOwnership(
-        {
-          cfg,
-          sessionKey,
-          ownerAgentId,
-          runtimeAgentId: targetAgentId,
-          backendId,
-          requesterSessionKey: requesterInternalKey,
-          resumeSessionId: params.resumeSessionId,
-          assertCurrent: ctx.assertActive,
-        },
-        () =>
+      const initializedSession = await withAcpResumeSessionAuthorization(
+        resumeOwnership,
+        (revalidateResume) =>
           initializeAcpSpawnRuntime({
             assertActive: ctx.assertActive,
+            revalidateResume,
             cfg,
             sessionKey,
             ownerAgentId,
