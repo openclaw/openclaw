@@ -154,21 +154,26 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         });
         return [];
       }
-      return result.rows.map((row): MemorySearchResult => ({
-        path: row.path,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        score: 0,
-        snippet: row.text,
-        source: "memory",
-        ...projectRecallMetadata(row),
-        provenance: {
+      return result.rows.map((row): MemorySearchResult => {
+        const candidate: MemorySearchResult = {
+          path: row.path,
+          startLine: row.start_line,
+          endLine: row.end_line,
+          score: 0,
+          snippet: row.text,
+          source: "memory",
+        };
+        Object.assign(candidate, projectRecallMetadata(row));
+        candidate.provenance = {
           originClass: row.origin_class,
           sessionKind: row.session_kind,
           observedAt: row.observed_at,
-          ...(typeof row.supersedes_key === "string" ? { supersedesKey: row.supersedes_key } : {}),
-        },
-      }));
+        };
+        if (typeof row.supersedes_key === "string") {
+          candidate.provenance.supersedesKey = row.supersedes_key;
+        }
+        return candidate;
+      });
     });
   }
 

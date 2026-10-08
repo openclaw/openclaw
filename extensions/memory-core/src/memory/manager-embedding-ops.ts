@@ -185,7 +185,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
 
   protected acquireProviderUse(provider: EmbeddingProvider): () => void {
     const use = this.activeProviderUses.get(provider) ?? {
-      ...createDeferred<void>(),
+      ...createDeferred(),
       count: 0,
     };
     use.count += 1;

@@ -111,7 +111,7 @@ async function runShortTermDreamingPromotion(params: {
           triggerAgentId && agentIds.includes(triggerAgentId)
             ? triggerAgentId
             : (agentIds.toSorted()[0] ?? triggerAgentId);
-        return { ...(agentId ? { agentId } : {}), agentIds, workspaceDir };
+        return agentId ? { agentId, agentIds, workspaceDir } : { agentIds, workspaceDir };
       })
     : [];
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
