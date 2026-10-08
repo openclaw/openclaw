@@ -117,7 +117,8 @@ to a JSON object with `nodeVersion`, `packageManager`, `vitestVersion`,
 `maxWorkers`, `files`, and `projects`. Use an exact Node 24 patch and the
 checkout's complete pnpm integrity pin and Vitest version. `maxWorkers` is an
 integer from 1 through 4. `files` is the original ordered array of literal,
-tracked test paths; `projects` is the original ordered array of
+tracked test paths under `src/`, `test/`, `extensions/`, or `packages/`;
+`projects` is the original ordered array of
 `test/vitest/vitest.<name>.config.ts` paths. Globs, shell text, arbitrary CLI
 arguments, and environment overrides are not accepted.
 
