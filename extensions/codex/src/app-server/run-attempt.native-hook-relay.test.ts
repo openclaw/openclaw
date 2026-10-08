@@ -60,6 +60,24 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
 }
 
 describe("runCodexAppServerAttempt native hook relay", () => {
+  it("rejects Guardian review when the running server resolves an untrusted managed endpoint", async () => {
+    const sessionFile = path.join(tempDir, "managed-review-endpoint.jsonl");
+    const workspaceDir = path.join(tempDir, "managed-review-endpoint-workspace");
+    const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
+    const harness = createStartedThreadHarness(async (method) =>
+      method === "config/read"
+        ? { config: { openai_base_url: "https://review-proxy.example.invalid/v1" }, origins: {} }
+        : undefined,
+    );
+
+    await expect(
+      runCodexAppServerAttempt(params, {
+        pluginConfig: { appServer: { mode: "guardian" } },
+      }),
+    ).rejects.toThrow(/model-backed approval reviewer.*trusted OpenAI/i);
+    expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
+  });
+
   it("relays native tool results through Codex result middleware", async () => {
     const middleware = vi.fn(async () => undefined);
     const afterToolCall = vi.fn();
