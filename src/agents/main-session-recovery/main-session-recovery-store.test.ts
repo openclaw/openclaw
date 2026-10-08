@@ -140,6 +140,25 @@ describe("main session recovery store", () => {
     return result.transition.reservation;
   }
 
+  it("admits work for a yielded session that keeps its continuation fence", async () => {
+    // `sessions_yield` ends the segment while retaining a nonterminal fence as durable
+    // child-continuation custody. That custody is not restart recovery, so admission must
+    // proceed without clearing it (#166771).
+    await write({
+      sessionId: "session-1",
+      updatedAt: 100,
+      abortedLastRun: false,
+      endedAt: 1000,
+      activeWriterRunId: "yielded-run",
+      lifecycleRunId: "yielded-run",
+      restartRecoveryRuns: [{ runId: "yielded-run", lifecycleGeneration }],
+      restartRecoveryTerminalRunIds: ["previous-terminal-run"],
+    });
+
+    await expect(claimRecovery()).resolves.toMatchObject({ kind: "not_required" });
+    expect(read().restartRecoveryRuns).toEqual([{ runId: "yielded-run", lifecycleGeneration }]);
+  });
+
   it.each(["interrupted", "killed"] as const)(
     "does not infer recovery authority from a %s outcome",
     async (status) => {

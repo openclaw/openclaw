@@ -3,6 +3,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import {
   hasMainSessionRecoveryClaim,
   isMainRestartRecoveryCandidate,
+  isYieldedContinuationFence,
 } from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -254,8 +255,12 @@ export async function claimMainSessionRecoveryOwner(params: {
   const healthyExpectedSession =
     claim.entry &&
     (claim.entry.abortedLastRun !== true || !hasMainSessionRecoveryClaim(claim.entry)) &&
-    claim.entry.restartRecoveryRuns === undefined &&
-    claim.entry.mainRestartRecovery === undefined &&
+    // A yielded run keeps its own fence as continuation custody. Nothing clears it: the
+    // claim command leaves a non-interrupted row unchanged and startup reconciliation skips
+    // it, so demanding an absent fence here rejects every later wake and reply (#166771).
+    ((claim.entry.restartRecoveryRuns === undefined &&
+      claim.entry.mainRestartRecovery === undefined) ||
+      isYieldedContinuationFence(claim.entry)) &&
     (claim.entry.sessionId === params.sessionId ||
       claim.entry.sessionId === params.replacementSessionId);
   if (

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeRunId } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -550,6 +551,26 @@ export function hasMainSessionRecoveryClaim(entry: InternalSessionEntry | undefi
     entry?.restartRecoveryRuns?.some((run) => !hasRestartRecoveryTerminalRun(entry, run.runId)) ||
     entry?.restartRecoveryDeliveryRunId ||
     entry?.pendingFinalDelivery,
+  );
+}
+
+/**
+ * A yielded run ends its execution segment while keeping its own nonterminal fence as durable
+ * child-continuation custody: a recorded segment end, no terminal status, no interrupted run,
+ * and no recovery cycle or delivery debt. Startup reconciliation recognizes this same entry
+ * shape before consulting the subagent registry, so this is retained custody rather than
+ * changed state and ordinary work admission must proceed without clearing the fence (#166771).
+ */
+export function isYieldedContinuationFence(entry: InternalSessionEntry | undefined): boolean {
+  return Boolean(
+    entry &&
+    entry.status === undefined &&
+    entry.abortedLastRun !== true &&
+    entry.pendingFinalDelivery === undefined &&
+    asFiniteNumber(entry.endedAt) !== undefined &&
+    !entry.mainRestartRecovery &&
+    entry.restartRecoveryDeliveryRunId === undefined &&
+    entry.restartRecoveryRuns?.length,
   );
 }
 
