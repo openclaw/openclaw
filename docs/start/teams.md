@@ -24,7 +24,7 @@ role bootstrap, and operations, follow [Deploy a team server](/gateway/team-serv
 
 A gateway is one trust domain. Everyone who can message a tool-enabled agent shares that agent's delegated tool authority, and everyone with operator access shares one control plane. That is the right model for a team whose members already trust each other - session ownership, presence, and [roles](/gateway/operator-scopes#named-operator-roles) are collaboration guardrails inside the boundary, not isolation between adversaries.
 
-If you need to serve mutually untrusted people or organizations, run one gateway per tenant instead: [Multi-tenant hosting](/gateway/multi-tenant-hosting).
+If you need to serve mutually untrusted people or organizations, run one gateway per tenant instead: [Security trust model](/gateway/security/trust-model).
 
 ## Step 1: Give the team access to the Gateway
 
@@ -149,7 +149,7 @@ container network when that access needs tighter controls. See
 ## When to split things up
 
 - **Separate workspaces or personas** (projects that must not share memory or files): use multiple agents on one gateway - see [Multi-agent routing](/concepts/multi-agent).
-- **Mutually untrusted users, customers, or organizations:** separate gateways, ideally separate OS users or hosts - see [Multi-tenant hosting](/gateway/multi-tenant-hosting) and [Security](/gateway/security).
+- **Mutually untrusted users, customers, or organizations:** separate gateways, ideally separate OS users or hosts - see [Security trust model](/gateway/security/trust-model) and [Security](/gateway/security).
 
 ## Related
 

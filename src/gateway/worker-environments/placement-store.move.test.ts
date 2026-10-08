@@ -476,6 +476,47 @@ describe("worker session placement moves", () => {
     });
   });
 
+  it.each(["generation", "environment", "epoch"] as const)(
+    "Stop retains a Move belonging to a different source %s",
+    async (change) => {
+      const active = await seedActiveEnvironment();
+      const begun = await store.beginPlacementMove({
+        sessionId: SESSION.sessionId,
+        source: sourceFor(active),
+        target: { kind: "gateway" },
+      });
+      const reconciling = await store.startReconcile({
+        sessionId: SESSION.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: begun.placement.generation,
+      });
+      // A foreign owner has replaced the intent's source before Stop's final CAS.
+      const columns = {
+        generation: { name: "source_generation", value: active.generation + 1 },
+        environment: { name: "source_environment_id", value: "replacement-environment" },
+        epoch: { name: "source_owner_epoch", value: active.activeOwnerEpoch + 1 },
+      };
+      const column = columns[change];
+      database.db
+        .prepare(
+          `UPDATE worker_session_placement_moves SET ${column.name} = ? WHERE session_id = ?`,
+        )
+        .run(column.value, SESSION.sessionId);
+      const replacement = store.getPlacementMove(SESSION.sessionId);
+
+      await expect(
+        store.transition({
+          sessionId: SESSION.sessionId,
+          from: "reconciling",
+          to: "reclaimed",
+          expectedGeneration: reconciling.generation,
+        }),
+      ).resolves.toMatchObject({ state: "reclaimed" });
+      expect(store.getPlacementMove(SESSION.sessionId)).toEqual(replacement);
+    },
+  );
+
   it("fences move errors and Gateway completion by operation id", async () => {
     const active = await seedActiveEnvironment();
     const begun = await store.beginPlacementMove({

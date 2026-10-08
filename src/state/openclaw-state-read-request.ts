@@ -466,9 +466,6 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       bytes,
     );
   }
-  if (command.type === "fleet.get") {
-    return bytes + Buffer.byteLength(command.tenantId, "utf8");
-  }
   if (command.type === "onboardingRecommendations.read") {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
   }

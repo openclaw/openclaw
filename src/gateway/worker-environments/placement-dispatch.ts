@@ -1,4 +1,8 @@
 import { getRuntimeConfig } from "../../config/config.js";
+import {
+  assertRequiredWorkerDispatch,
+  RequiredWorkerProfileError,
+} from "../../config/required-worker-profile.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import type { WorkerNodePlacementAuthority } from "./device-placement-eligibility.js";
 import { composePlacementAuthorization } from "./placement-authorization.js";
@@ -56,6 +60,7 @@ type WorkerLocalDispatchBarrier = (params: {
   agentId: string;
   executionMode: WorkerPlacementDispatchRequest["executionMode"];
   authorize?: WorkerPlacementAuthorization;
+  requiredProfile?: string;
   signal?: AbortSignal;
   startDispatch: () => Promise<WorkerDispatchPlacement>;
 }) => Promise<WorkerDispatchPlacement>;
@@ -113,7 +118,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   ): Promise<WorkerActiveDispatchPlacement> => {
     const assertCurrent = composePlacementAuthorization(authorize, () => {
       signal?.throwIfAborted();
+      assertRequiredWorkerDispatch(getRuntimeConfig(), request);
     });
+    assertCurrent();
     let placement: WorkerDispatchPlacement | undefined;
     try {
       signal?.throwIfAborted();
@@ -123,6 +130,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         agentId: request.agentId,
         executionMode: request.executionMode,
         authorize: assertCurrent,
+        requiredProfile: request.requiredProfile,
         signal,
         startDispatch: async () => {
           placement = await placements.startDispatch(
@@ -393,11 +401,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 cleanupError ?? "Failed cloud worker environment cleanup is still pending",
               );
             }
-            if (request.recoverToGateway) {
-              const assertCurrent = () => {
-                reauthorize?.();
-                beforeDrain?.();
-              };
+            const assertCurrent = request.recoverToGateway
+              ? composePlacementAuthorization(reauthorize, () => beforeDrain?.())
+              : undefined;
+            if (assertCurrent) {
               assertCurrent();
               if (options.prepareGatewayMove) {
                 await options.prepareGatewayMove({ ...request, assertCurrent });
@@ -414,7 +421,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 to: "local",
                 expectedGeneration: failed.generation,
               },
-              request.recoverToGateway ? reauthorize : undefined,
+              assertCurrent,
             );
             if (local.state !== "local") {
               throw new Error("Failed cloud worker reclaim did not produce a local placement");
@@ -447,6 +454,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
     const assertGatewayRecoverySource = (captured?: WorkerDispatchPlacement) => {
+      if (request.recoverToGateway && getRuntimeConfig().cloudWorkers?.requiredProfile) {
+        throw new RequiredWorkerProfileError(
+          "Gateway recovery is disabled by the required worker profile policy; Stop retains the workspace for remote recovery.",
+        );
+      }
       if (!request.recoverToGateway) {
         return;
       }

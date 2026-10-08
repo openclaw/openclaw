@@ -3,7 +3,7 @@ import type { SessionTranscriptWriteScope } from "./session-accessor.types.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
 import type { SqliteSessionTurnOptions } from "./session-turn.types.js";
 
-export type SessionColdTurnGuard = {
+type SessionColdTurnGuard = {
   kind: "turn";
   sources?: SessionSourcePredicate[];
   requireActive?: boolean;
