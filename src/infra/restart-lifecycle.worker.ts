@@ -9,7 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import type { GatewayRestartHandoff } from "./restart-handoff.js";
+import type { GatewayRestartHandoff } from "./restart-lifecycle.types.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,

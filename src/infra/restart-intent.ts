@@ -37,6 +37,7 @@ import {
   normalizeRestartIntentReason,
   decodeGatewayRestartIntent,
 } from "./restart-intent-payload.js";
+import type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 import { spawnPsSync } from "./spawn-ps.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import {
@@ -45,6 +46,7 @@ import {
 } from "./sqlite-worker-operation-admission.js";
 
 export { normalizeRestartIntentReason } from "./restart-intent-payload.js";
+export type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 
 const GATEWAY_RESTART_INTENT_KEY = "gateway-restart";
 const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "gateway_restart_intent", {
@@ -58,18 +60,6 @@ type GatewayRestartIntentWriteReceipt = Omit<
   OpenClawStateKyselyDatabase["gateway_restart_intent"],
   "intent_key"
 >;
-
-export type GatewayRestartIntent = {
-  reason?: string;
-  force?: boolean;
-  waitMs?: number;
-  // Process-local only: persisted restart requests cannot delegate successor ownership.
-  successorOwner?: {
-    kind: "managed-update-handoff";
-    handoffId: string;
-    installRoot: string;
-  };
-};
 
 export function writeGatewayRestartIntentSync(opts: {
   env?: NodeJS.ProcessEnv;

@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { GatewayRestartIntent } from "./restart-intent.js";
+import type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 
 const GATEWAY_RESTART_INTENT_TTL_MS = 60_000;
 

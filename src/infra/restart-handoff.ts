@@ -15,10 +15,18 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type {
+  GatewayRestartHandoff,
+  GatewayRestartHandoffRestartKind,
+  GatewayRestartHandoffSource,
+  GatewayRestartHandoffSupervisorMode,
+} from "./restart-lifecycle.types.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
+
+export type { GatewayRestartHandoff } from "./restart-lifecycle.types.js";
 
 // Restart handoff rows let a supervisor explain a recent gateway restart after
 // the old process exits. The row is short-lived, bounded, and replaced on write.
@@ -37,34 +45,6 @@ type GatewayRestartHandoffRow = Omit<
   Selectable<GatewayRestartHandoffDatabase["gateway_restart_handoff"]>,
   "handoff_key" | "updated_at_ms"
 >;
-
-type GatewayRestartHandoffRestartKind = "full-process" | "update-process";
-type GatewayRestartHandoffSource =
-  | "config-write"
-  | "gateway-update"
-  | "operator-restart"
-  | "plugin-change"
-  | "signal"
-  | "unknown";
-type GatewayRestartHandoffSupervisorMode = "launchd" | "systemd" | "schtasks" | "external";
-
-export type GatewayRestartHandoff = {
-  kind: typeof GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND;
-  version: typeof GATEWAY_RESTART_HANDOFF_SCHEMA_VERSION;
-  intentId: string;
-  pid: number;
-  processInstanceId?: string;
-  createdAt: number;
-  expiresAt: number;
-  reason?: string;
-  source: GatewayRestartHandoffSource;
-  restartKind: GatewayRestartHandoffRestartKind;
-  supervisorMode: GatewayRestartHandoffSupervisorMode;
-  restartTrace?: {
-    startedAt: number;
-    lastAt: number;
-  };
-};
 
 type GatewayRestartHandoffConsumeResult =
   | {
