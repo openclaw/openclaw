@@ -6,6 +6,7 @@ import type {
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { validatePluginStateComparison } from "./plugin-state-store.comparison.js";
 import {
   preparePluginStateJournalValue,
@@ -77,6 +78,8 @@ import {
   lookupPluginStateInWorker,
   registerPluginStateIfAbsentInWorker,
   registerPluginStateInWorker,
+  replacePluginStateInWorker,
+  replacePluginStateEntryInWorker,
 } from "./plugin-state-worker-client.js";
 import { serializePluginStoreJson } from "./plugin-store-validation.js";
 
@@ -626,6 +629,54 @@ export function createCorePluginStateKeyedStore<T>(
   options: OpenAsyncKeyedStoreOptions & { ownerId: `core:${string}` },
 ): Required<PluginStateKeyedStore<T>> {
   return createKeyedStoreForPluginId<T>(options.ownerId, options);
+}
+
+/** Bind a core catalog read and its later replacement to the same physical store. */
+export function prepareCorePluginStateReplacement<T>(
+  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+) {
+  const prepared = prepareKeyedStoreOptions(options.ownerId, options);
+  const context = captureOpenClawStateWorkerContext({ env: prepared.env });
+  const scope = { ...prepared, context };
+  return {
+    async entries(): Promise<PluginStateEntry<T>[]> {
+      // SAFETY: This namespace stores the core caller's serialized JSON value type.
+      return (await listPluginStateInWorker(scope)) as PluginStateEntry<T>[];
+    },
+    async replace(entries: ReadonlyMap<string, T>): Promise<void> {
+      const values = Array.from(entries, ([key, value]) =>
+        prepareRegisterParams(key, value, prepared.defaultTtlMs, undefined, prepared.namespace),
+      );
+      await replacePluginStateInWorker({ ...scope, entries: values });
+    },
+  };
+}
+
+/** Revoke the prior entry before installing its replacement, including failed preparation. */
+export async function replaceCorePluginStateEntry(
+  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+  key: string,
+  value: unknown,
+  opts?: { ttlMs?: number; assertCurrent?: () => void },
+): Promise<void> {
+  const prepared = prepareKeyedStoreOptions(options.ownerId, options);
+  const context = captureOpenClawStateWorkerContext({ env: prepared.env });
+  const normalizedKey = validateKey(key);
+  const scope = { ...prepared, context, assertCurrent: opts?.assertCurrent };
+  let entry: PreparedRegisterParams;
+  try {
+    entry = prepareRegisterParams(
+      normalizedKey,
+      value,
+      prepared.defaultTtlMs,
+      opts,
+      prepared.namespace,
+    );
+  } catch (error) {
+    await deletePluginStateInWorker({ ...scope, key: normalizedKey });
+    throw error;
+  }
+  await replacePluginStateEntryInWorker({ ...scope, ...entry });
 }
 
 /** Opens a sync plugin-state namespace for a trusted core owner id. */

@@ -29,12 +29,8 @@ export function filterSkillEntries(
   const normalized = normalizeSkillFilter(skillFilter);
   const filtered = entries.filter(
     (entry) =>
-      isSessionSkillEnabled(
-        entry.skill.name,
-        normalized,
-        skillOverrides,
-        resolveSkillKey(entry.skill, entry),
-      ) && shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility, hasBin, platform }),
+      isSessionSkillEnabled(entry.skill.name, normalized, skillOverrides, resolveSkillKey(entry)) &&
+      shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility, hasBin, platform }),
   );
   if (skillFilter !== undefined || skillOverrides !== undefined) {
     const label = normalized?.length ? normalized.join(", ") : "(none)";

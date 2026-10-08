@@ -103,8 +103,9 @@ export type DiscordModelPickerPage<T> = {
   hasNext: boolean;
 };
 
-export type DiscordModelPickerModelPage = DiscordModelPickerPage<string> & {
-  provider: string;
+type DiscordModelPickerBucketPage<T> = DiscordModelPickerPage<T> & {
+  bucket: DiscordModelPickerBucket | null;
+  buckets: DiscordModelPickerBucket[];
 };
 
 const loadModelsProviderRuntime = createLazyRuntimeModule(
@@ -128,16 +129,13 @@ export function normalizeModelPickerPage(value: number | undefined): number {
 }
 
 function parseRawPage(value: unknown): number {
-  if (typeof value === "number") {
-    return normalizeModelPickerPage(value);
-  }
-  if (typeof value === "string") {
-    const parsed = parseStrictInteger(value);
-    if (parsed !== undefined) {
-      return normalizeModelPickerPage(parsed);
-    }
-  }
-  return 1;
+  return normalizeModelPickerPage(
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? parseStrictInteger(value)
+        : undefined,
+  );
 }
 
 function coerceString(value: unknown): string {
@@ -395,10 +393,7 @@ export function findModelBucketId(
   provider: string,
   model: string,
 ): string | undefined {
-  const modelSet = data.byProvider.get(normalizeProviderId(provider));
-  return modelSet
-    ? findModelPickerBucketLocation([...modelSet].toSorted(compareBucketItems), model)?.bucket
-    : undefined;
+  return resolveDiscordModelPickerPageForModel({ data, provider, model }).bucket;
 }
 
 function findModelPickerBucketLocation(
@@ -423,10 +418,7 @@ function paginateDiscordModelPickerBucket<T>(params: {
   itemLabels: string[];
   page?: number;
   bucket?: string;
-}): DiscordModelPickerPage<T> & {
-  bucket: DiscordModelPickerBucket | null;
-  buckets: DiscordModelPickerBucket[];
-} {
+}): DiscordModelPickerBucketPage<T> {
   const buckets = computeAlphaBuckets(params.itemLabels);
   const bucket = buckets.find((entry) => entry.id === params.bucket) ?? buckets[0] ?? null;
   const items = bucket ? params.items.slice(bucket.start, bucket.end) : params.items;
@@ -452,10 +444,7 @@ export function getDiscordModelPickerProviderPage(params: {
   data: ModelsProviderData;
   page?: number;
   bucket?: string;
-}): DiscordModelPickerPage<DiscordModelPickerProviderItem> & {
-  bucket: DiscordModelPickerBucket | null;
-  buckets: DiscordModelPickerBucket[];
-} {
+}): DiscordModelPickerBucketPage<DiscordModelPickerProviderItem> {
   const providers = [...params.data.providers].toSorted();
   return paginateDiscordModelPickerBucket({
     ...params,
@@ -472,12 +461,7 @@ export function getDiscordModelPickerModelPage(params: {
   provider: string;
   page?: number;
   bucket?: string;
-}):
-  | (DiscordModelPickerModelPage & {
-      bucket: DiscordModelPickerBucket | null;
-      buckets: DiscordModelPickerBucket[];
-    })
-  | null {
+}): (DiscordModelPickerBucketPage<string> & { provider: string }) | null {
   const provider = normalizeProviderId(params.provider);
   const modelSet = params.data.byProvider.get(provider);
   if (!modelSet) {

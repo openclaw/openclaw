@@ -104,18 +104,6 @@ function projectGatewaySkillProposalReadResult(proposal: SkillProposalReadResult
   };
 }
 
-function buildRevisionAgentInstruction(proposal: SkillProposalReadResult) {
-  return [
-    `Revise Skill Workshop proposal \`${proposal.record.id}\` (${resolveSkillProposalName(proposal.record.kind, proposal.record.target)}).`,
-    "",
-    "Use `skill_workshop` with `action=inspect` first, then `action=revise` for that pending proposal.",
-    "The proposal ID and expected revision hash are bound by this run; do not substitute them.",
-    "Do not apply, approve, reject, quarantine, or install the proposal.",
-    "",
-    "Requested changes:",
-  ].join("\n");
-}
-
 export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsCuratorHandlers,
   ...skillsLibraryHandlers,
@@ -330,7 +318,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
       evaluateSkillProposal({
         ...parsedParams,
         ...proposalWorkspaceOptions(resolved),
-        expectedRevisionHash: parsedParams.expectedRevisionHash,
         trigger: "manual",
       }).then(projectGatewaySkillProposalResult),
   ),
@@ -379,7 +366,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
           client: options.client,
           context: options.context,
         }),
-        expectedRevisionHash: parsedParams.expectedRevisionHash,
       }).then(projectGatewaySkillProposalReadResult),
   ),
   "skills.proposals.requestRevision": defineSkillsProposalWorkspaceHandler(
@@ -412,7 +398,15 @@ export const skillsHandlers: GatewayRequestHandlers = {
         message: instructions,
         deliver: false,
         queueMode: "followup" as const,
-        systemProvenanceReceipt: buildRevisionAgentInstruction(proposal),
+        systemProvenanceReceipt: [
+          `Revise Skill Workshop proposal \`${proposal.record.id}\` (${resolveSkillProposalName(proposal.record.kind, proposal.record.target)}).`,
+          "",
+          "Use `skill_workshop` with `action=inspect` first, then `action=revise` for that pending proposal.",
+          "The proposal ID and expected revision hash are bound by this run; do not substitute them.",
+          "Do not apply, approve, reject, quarantine, or install the proposal.",
+          "",
+          "Requested changes:",
+        ].join("\n"),
         suppressCommandInterpretation: true,
         idempotencyKey,
       };
@@ -439,7 +433,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
       applySkillProposal({
         ...parsedParams,
         ...proposalWorkspaceOptions(resolved),
-        expectedRevisionHash: parsedParams.expectedRevisionHash,
       }).then(projectGatewaySkillProposalResult),
   ),
   "skills.proposals.reject": defineSkillsProposalWorkspaceHandler(
@@ -449,7 +442,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
       rejectSkillProposal({
         ...parsedParams,
         ...proposalWorkspaceOptions(resolved),
-        expectedRevisionHash: parsedParams.expectedRevisionHash,
       }).then(projectGatewaySkillProposalRecord),
   ),
   "skills.proposals.quarantine": defineSkillsProposalWorkspaceHandler(
@@ -459,7 +451,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
       quarantineSkillProposal({
         ...parsedParams,
         ...proposalWorkspaceOptions(resolved),
-        expectedRevisionHash: parsedParams.expectedRevisionHash,
       }).then(projectGatewaySkillProposalRecord),
   ),
   "skills.install": handleSkillsInstall,
@@ -469,21 +460,15 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     if ("source" in p) {
-      if (!p.slug && !p.all) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, 'clawhub skills.update requires "slug" or "all"'),
-        );
-        return;
-      }
-      if (p.slug && p.all) {
+      if (Boolean(p.slug) === Boolean(p.all)) {
         respond(
           false,
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            'clawhub skills.update accepts either "slug" or "all", not both',
+            p.slug
+              ? 'clawhub skills.update accepts either "slug" or "all", not both'
+              : 'clawhub skills.update requires "slug" or "all"',
           ),
         );
         return;

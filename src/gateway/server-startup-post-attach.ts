@@ -10,7 +10,6 @@ import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
@@ -35,7 +34,10 @@ import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js"
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
-import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
+import {
+  isChannelStartupSuppressedByEnvironment,
+  type GatewaySidecarStartupMode,
+} from "./server-sidecar-startup-mode.js";
 import { scheduleGatewayPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import {
@@ -188,9 +190,7 @@ export async function startGatewaySidecars(params: {
     }
   });
 
-  const skipChannels =
-    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  const skipChannels = isChannelStartupSuppressedByEnvironment();
   const getModelRuntimeConfig = params.getModelRuntimeConfig ?? (() => params.cfg);
   // Agent RPC remains available when transports are disabled. Publish configured/static facts before
   // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
@@ -590,6 +590,7 @@ export async function startGatewayPostAttachRuntime(
     startChannels: () => Promise<void>;
     refreshChatMetadata?: () => Promise<void>;
     recoveryRuntime: GatewayRecoveryRuntime;
+    isRestartRecoverySuppressed: () => boolean;
     resolveGatewayContext: GatewayContextResolver;
     logHooks: {
       info: (msg: string) => void;
@@ -797,12 +798,10 @@ export async function startGatewayPostAttachRuntime(
           const prepared = await Promise.allSettled([
             candidateCanary
               ? Promise.resolve()
-              : markGatewayStartupMainSessionOrphans({
-                  cfg: params.gatewayPluginConfigAtStart,
-                  startupCheckedStorePaths: mainSessionRecoveryStartupCheckedStorePaths,
-                  startupTrace: params.startupTrace,
-                  log: params.log,
-                }),
+              : markGatewayStartupMainSessionOrphans(
+                  params,
+                  mainSessionRecoveryStartupCheckedStorePaths,
+                ),
             loadStartupPluginsIfNeeded(),
           ]);
           const failed = prepared.find((outcome) => outcome.status === "rejected");

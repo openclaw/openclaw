@@ -1,6 +1,9 @@
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import type { createChildOwner } from "./update-command-executor-children.js";
 
+const asUpdateError = (cause: unknown, message = "Update execution failed") =>
+  cause instanceof Error ? cause : new Error(message, { cause });
+
 /** Join every admitted descendant before the command scope settles. */
 export async function runUpdateCommandExecutorOperation<T>(params: {
   operation: () => Promise<T>;
@@ -14,9 +17,7 @@ export async function runUpdateCommandExecutorOperation<T>(params: {
         try {
           operationOutcome = { result: await params.operation() };
         } catch (cause) {
-          operationOutcome = {
-            error: cause instanceof Error ? cause : new Error("Update execution failed", { cause }),
-          };
+          operationOutcome = { error: asUpdateError(cause) };
         }
         // Admitted children retain authority after the callback returns or
         // rejects. Join them before this scope stops its remaining commands.
@@ -33,9 +34,7 @@ export async function runUpdateCommandExecutorOperation<T>(params: {
                 ? new AggregateError([operationOutcome.error, cause], "Update cleanup failed", {
                     cause,
                   })
-                : cause instanceof Error
-                  ? cause
-                  : new Error("Update settlement failed", { cause }),
+                : asUpdateError(cause, "Update settlement failed"),
           };
         }
         if ("error" in operationOutcome) {
@@ -45,8 +44,6 @@ export async function runUpdateCommandExecutorOperation<T>(params: {
       }),
     };
   } catch (cause) {
-    return {
-      error: cause instanceof Error ? cause : new Error("Update execution failed", { cause }),
-    };
+    return { error: asUpdateError(cause) };
   }
 }

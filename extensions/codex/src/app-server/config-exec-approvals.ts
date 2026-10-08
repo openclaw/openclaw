@@ -15,22 +15,6 @@ import type {
 } from "./config-contracts.js";
 import { readExecAsk, readExecSecurity, readRecord } from "./config-utils.js";
 
-function resolveOpenClawExecPolicyFromConfig(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-}): OpenClawExecPolicyForCodexAppServer {
-  const globalExec = readRecord(params.config?.tools?.exec);
-  const globalPolicy = applyOpenClawExecPolicyLayer(
-    { ...resolveOpenClawExecPolicyForMode("full"), touched: false },
-    globalExec,
-  );
-  const agentId = params.agentId?.trim();
-  const agentExec = agentId
-    ? readRecord(resolveAgentConfig(params.config ?? {}, agentId)?.tools?.exec)
-    : undefined;
-  return applyOpenClawExecPolicyLayer(globalPolicy, agentExec);
-}
-
 export function resolveOpenClawExecPolicyForCodexAppServer(params: {
   permissionMode?: EmbeddedRunAttemptParamsV2["permissionMode"];
   execOverrides?: {
@@ -43,12 +27,18 @@ export function resolveOpenClawExecPolicyForCodexAppServer(params: {
   agentId?: string;
 }): OpenClawExecPolicyForCodexAppServer {
   if (params.permissionMode === "full") {
-    return { ...resolveOpenClawExecPolicyForMode("full"), touched: true };
+    return resolveOpenClawExecPolicy({ mode: "full" });
   }
-  const basePolicy = resolveOpenClawExecPolicyFromConfig({
-    config: params.config,
-    agentId: params.agentId,
-  });
+  const globalExec = readRecord(params.config?.tools?.exec);
+  const globalPolicy = applyOpenClawExecPolicyLayer(
+    resolveOpenClawExecPolicy({ mode: "full" }, false),
+    globalExec,
+  );
+  const agentId = params.agentId?.trim();
+  const agentExec = agentId
+    ? readRecord(resolveAgentConfig(params.config ?? {}, agentId)?.tools?.exec)
+    : undefined;
+  const basePolicy = applyOpenClawExecPolicyLayer(globalPolicy, agentExec);
   const overridePolicy = applyOpenClawExecPolicyLayer(basePolicy, params.execOverrides);
   const approvalFloors = params.approvals
     ? resolveExecApprovalsFromFile({
@@ -69,24 +59,14 @@ function applyOpenClawExecPolicyLayer(
   }
   const mode = readExecMode(exec.mode);
   if (mode !== undefined) {
-    return {
-      ...resolveOpenClawExecPolicyForMode(mode),
-      touched: true,
-    };
+    return resolveOpenClawExecPolicy({ mode });
   }
   const security = readExecSecurity(exec.security);
   const ask = readExecAsk(exec.ask);
   if (security === undefined && ask === undefined) {
     return base;
   }
-  const nextSecurity = security ?? base.security;
-  const nextAsk = ask ?? base.ask;
-  return {
-    mode: execPolicy.resolveExecModePolicy({ security: nextSecurity, ask: nextAsk }).mode,
-    security: nextSecurity,
-    ask: nextAsk,
-    touched: true,
-  };
+  return resolveOpenClawExecPolicy({ security: security ?? base.security, ask: ask ?? base.ask });
 }
 
 function applyOpenClawExecApprovalFloors(
@@ -103,23 +83,19 @@ function applyOpenClawExecApprovalFloors(
   if (nextSecurity === base.security && nextAsk === base.ask) {
     return base;
   }
-  return {
-    mode: execPolicy.resolveExecModePolicy({ security: nextSecurity, ask: nextAsk }).mode,
-    security: nextSecurity,
-    ask: nextAsk,
-    touched: true,
-  };
+  return resolveOpenClawExecPolicy({ security: nextSecurity, ask: nextAsk });
 }
 
-function resolveOpenClawExecPolicyForMode(
-  mode: OpenClawExecMode,
-): Omit<OpenClawExecPolicyForCodexAppServer, "touched"> {
-  const { security, ask } = execPolicy.resolveExecModePolicy({
-    mode,
-    security: "full",
-    ask: "off",
+function resolveOpenClawExecPolicy(
+  policy: OpenClawExecApprovalFloorsForCodexAppServer & { mode?: OpenClawExecMode },
+  touched = true,
+): OpenClawExecPolicyForCodexAppServer {
+  const { mode, security, ask } = execPolicy.resolveExecModePolicy({
+    mode: policy.mode,
+    security: policy.security ?? "full",
+    ask: policy.ask ?? "off",
   });
-  return { mode, security, ask };
+  return { mode, security, ask, touched };
 }
 
 function readExecMode(value: unknown): OpenClawExecMode | undefined {

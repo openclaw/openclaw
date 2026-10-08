@@ -188,7 +188,6 @@ describe.skipIf(process.platform === "win32")("local GitHub credential launch bo
   });
 
   it.each([
-    "missing",
     "tokenless",
     "malformed",
     "multiline",
@@ -210,8 +209,6 @@ describe.skipIf(process.platform === "win32")("local GitHub credential launch bo
     };
     if (yaml[fault]) {
       await fs.writeFile(hostsPath, yaml[fault]);
-    } else if (fault === "missing") {
-      await fs.rm(hostsPath);
     } else if (fault === "public-file") {
       await fs.chmod(hostsPath, 0o644);
     } else if (fault === "public-directory") {

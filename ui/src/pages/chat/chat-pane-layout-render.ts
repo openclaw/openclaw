@@ -143,10 +143,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           ></openclaw-chat-outbox-recovery>`;
     const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
     const panePresentation = { owner: this, isPresented: () => this.presented };
-    const slotPresentation = (slot: SidebarSlotId) => ({
+    const slotPresentation = (slot: SidebarSlotId, mode: "visible" | "active" = "visible") => ({
       owner: this,
       isPresented: () =>
-        this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, slot),
+        this.presented &&
+        (mode === "active" ? this.active : this.visuallyPresented) &&
+        isSidebarSlotVisible(sidebarLayout, slot),
     });
     // Only a full pane has a Subagents panel of its own. Elsewhere a subagent's
     // name still opens its session and their count stays text.
@@ -203,11 +205,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const companionPresented = slotPresentation("companion");
     // Capture the opening before the lazy rail can yield to newer input intent.
     this.syncSessionCompanionPresentation(companionPresented.isPresented());
-    const browserPresented = {
-      owner: this,
-      isPresented: () =>
-        this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser"),
-    };
+    const browserPresented = slotPresentation("browser", "active");
     const browserTabsInHeader = sidebarMainPanel(sidebarLayout)?.slot !== "browser";
     const terminalTabsInHeader = sidebarMainPanel(sidebarLayout)?.slot !== "terminal";
     // Another pane can own keyboard focus while this desktop remains visible.
@@ -317,11 +315,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       discussionOpenUrl: discussion?.openUrl ?? null,
       discussionSourceGeneration: this.connectionGeneration,
       pluginPanels: this.context.plugins.registrations("panels"),
-      isPluginPanelPresented: (slot) => ({
-        owner: this,
-        isPresented: () =>
-          this.active && this.presented && isSidebarSlotVisible(sidebarLayout, slot),
-      }),
+      isPluginPanelPresented: (slot) => slotPresentation(slot, "active"),
     });
     const connectionGeneration = this.connectionGeneration;
     // Main panel actions share the task toolbar. Content roots stay in the
@@ -342,20 +336,17 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
                 panelDefinitions,
                 subagentStop,
               )}
-              <div class="chat-session-accessories">
-                <openclaw-plugin-contributions
-                  .kind=${"session-header"}
-                  .sessionKey=${state.sessionKey}
-                  .agentId=${currentAgentId}
-                  .session=${selectedSession}
-                  .presented=${livePresentation({
-                    owner: this,
-                    isPresented: () => this.visuallyPresented,
-                    preview: () =>
-                      !this.presented && this.connectionGeneration === connectionGeneration,
-                  })}
-                ></openclaw-plugin-contributions>
-              </div>`;
+              <openclaw-plugin-contributions
+                .kind=${"session-header"}
+                .sessionKey=${state.sessionKey}
+                .agentId=${currentAgentId}
+                .presented=${livePresentation({
+                  owner: this,
+                  isPresented: () => this.visuallyPresented,
+                  preview: () =>
+                    !this.presented && this.connectionGeneration === connectionGeneration,
+                })}
+              ></openclaw-plugin-contributions>`;
     const content = renderSidebarRegion({
       presentationId: this.presentationId,
       conversationTab: {

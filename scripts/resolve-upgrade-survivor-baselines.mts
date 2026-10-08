@@ -1,5 +1,3 @@
-// Resolves Docker upgrade-survivor baseline specs from requested tokens and
-// live release history JSON captured by release workflows.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
@@ -42,7 +40,6 @@ export function parseArgs(argv: string[]) {
 function splitSpecs(raw: unknown) {
   return scalarText(raw)
     .split(/[,\s]+/u)
-    .map((token) => token.trim())
     .filter(Boolean);
 }
 
@@ -150,9 +147,6 @@ function readStableReleases(file: string, publishedVersions?: Set<string>) {
     .toSorted((a, b) => b.publishedAt.localeCompare(a.publishedAt));
 }
 
-/**
- * Resolves the last N stable release versions from release metadata.
- */
 function resolveLastStable(args: Map<string, string>, count: number) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
@@ -171,9 +165,6 @@ function resolveLastStable(args: Map<string, string>, count: number) {
   );
 }
 
-/**
- * Resolves all stable release versions at or after the requested minimum.
- */
 function resolveAllSince(args: Map<string, string>, minimumVersion: string) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
@@ -241,9 +232,6 @@ function resolveSupportedLines(args: Map<string, string>) {
   );
 }
 
-/**
- * Expands requested baseline tokens into normalized package/version specs.
- */
 export function resolveBaselines(args: Map<string, string>) {
   const requested = args.get("requested") ?? "";
   const fallback = args.get("fallback") ?? "openclaw@latest";

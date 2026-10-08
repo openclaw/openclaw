@@ -86,8 +86,6 @@ export const forcedUnitFastTestFiles = [
   "src/acp/persistent-bindings.test.ts",
   "src/acp/server.startup.test.ts",
   "src/acp/translator.final-snapshots.test.ts",
-  "src/acp/translator.prompt-size.test.ts",
-  "src/acp/translator.session-config.test.ts",
   "src/acp/translator.session-setup.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
   "src/system-agent/assistant.configured.test.ts",
@@ -196,7 +194,6 @@ const ownerRoutedUnitTestPatterns = [
   "src/agents/openai-transport-stream.*.test.ts",
   // Split transport suites install module mocks through their shared harness.
   "src/agents/provider-transport-fetch.*.test.ts",
-  "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
   "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
@@ -282,7 +279,8 @@ const disqualifyingPatterns = [
   },
   {
     code: "runtime-singleton-state",
-    pattern: /\b(?:setActivePluginRegistry|resetPluginRuntimeStateForTest|reset.*ForTest)\s*\(/u,
+    pattern:
+      /\b(?:drainGlobalSingletonLifecycleState|setActivePluginRegistry|resetPluginRuntimeStateForTest|reset.*ForTest)\s*\(/u,
   },
 ];
 

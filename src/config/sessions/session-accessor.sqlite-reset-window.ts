@@ -560,7 +560,6 @@ export function* iterateVisibleMessageRange(
         ? iterateSqliteQuerySync(
             projection.database.db,
             selectMessagePayload(
-              projection.database,
               selectMessageRows(projection.database, projection.resolved.sessionId, range),
             ),
           )

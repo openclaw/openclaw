@@ -272,6 +272,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     props.offline && props.queuedOutboxCount
       ? t("chat.composer.offlineQueuedHint", { count: String(props.queuedOutboxCount) })
       : null;
+  const composerError = mentionError || state.dictationError;
   const primaryComposerStatus = props.disabledReason
     ? {
         text: props.disabledReason,
@@ -282,13 +283,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             ? icons.alertTriangle
             : icons.shieldQuestion,
       }
-    : mentionError
-      ? { text: mentionError, tone: "danger" as const, icon: icons.alertTriangle }
-      : state.dictationError
-        ? { text: state.dictationError, tone: "danger" as const, icon: icons.alertTriangle }
-        : offlineText
-          ? { text: offlineText, tone: "info" as const, icon: icons.inbox }
-          : null;
+    : composerError
+      ? { text: composerError, tone: "danger" as const, icon: icons.alertTriangle }
+      : offlineText
+        ? { text: offlineText, tone: "info" as const, icon: icons.inbox }
+        : null;
   const composerStatus =
     showComposerInput && primaryComposerStatus
       ? html`<div class="agent-chat__composer-status" data-tone=${primaryComposerStatus.tone}>
@@ -423,15 +422,21 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   : nothing
               }
               <div class="agent-chat__composer-lede">
-                <openclaw-mcp-app-catalog
-                  surface="thread"
-                  .sessionKey=${props.sessionKey}
-                  .agentId=${props.currentAgentId}
-                ></openclaw-mcp-app-catalog>
-                <openclaw-mcp-app-resources
-                  .sessionKey=${props.sessionKey}
-                  .agentId=${props.currentAgentId}
-                ></openclaw-mcp-app-resources>
+                ${
+                  props.sessionAdmitted === false
+                    ? nothing
+                    : html`
+                        <openclaw-mcp-app-catalog
+                          surface="thread"
+                          .sessionKey=${props.sessionKey}
+                          .agentId=${props.currentAgentId}
+                        ></openclaw-mcp-app-catalog>
+                        <openclaw-mcp-app-resources
+                          .sessionKey=${props.sessionKey}
+                          .agentId=${props.currentAgentId}
+                        ></openclaw-mcp-app-resources>
+                      `
+                }
                 ${goalComposer.render()}
                 ${renderSelectedHumanMentions(
                   visibleDraft,
@@ -474,10 +479,16 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       `
                     : nothing
                 }
-                <openclaw-mcp-app-context-strip
-                  .sessionKey=${props.sessionKey}
-                  .agentId=${props.currentAgentId}
-                ></openclaw-mcp-app-context-strip>
+                ${
+                  props.sessionAdmitted === false
+                    ? nothing
+                    : html`
+                        <openclaw-mcp-app-context-strip
+                          .sessionKey=${props.sessionKey}
+                          .agentId=${props.currentAgentId}
+                        ></openclaw-mcp-app-context-strip>
+                      `
+                }
                 ${renderAttachmentPreview(props)}
                 ${renderAttachmentReadStatus(props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0)}
                 ${renderComposerDictationStatus(dictation)}

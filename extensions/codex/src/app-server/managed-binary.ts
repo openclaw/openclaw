@@ -46,7 +46,6 @@ export function setManagedCodexPluginRoot(pluginRoot: string | undefined): void 
   registeredCodexPlugin.root = pluginRoot;
 }
 
-/** Rewrites managed stdio start options to point at an executable Codex binary path. */
 export async function resolveManagedCodexAppServerStartOptions(
   startOptions: CodexAppServerStartOptions,
   options: ResolveManagedCodexAppServerOptions = {},
@@ -144,7 +143,6 @@ export function resolvePackagedCodexNativeCommand(entrypoint: string): string | 
   return resolveManagedCodexNativeCommand(entrypoint);
 }
 
-/** Returns whether a command is one of the standard macOS desktop app executables. */
 export function isManagedCodexDesktopCommand(
   command: string,
   platform: NodeJS.Platform = process.platform,

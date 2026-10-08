@@ -297,7 +297,7 @@ async function runSessionsLifecycleCommand(
           "sessions.patch",
           rpcOptions,
           {
-            key: session.key,
+            key: keys[index],
             ...(agent ? { agentId: agent } : {}),
             ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
             archived: true,
@@ -313,7 +313,7 @@ async function runSessionsLifecycleCommand(
           "sessions.delete",
           rpcOptions,
           {
-            key: session.key,
+            key: keys[index],
             ...(agent ? { agentId: agent } : {}),
             ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
             deleteTranscript: true,

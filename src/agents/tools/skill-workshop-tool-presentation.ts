@@ -47,22 +47,14 @@ export function listProposalEntries(params: {
       });
     })
     .toSorted((a, b) => {
-      if (a.status === "pending" && b.status !== "pending") {
-        return -1;
-      }
-      if (a.status !== "pending" && b.status === "pending") {
-        return 1;
-      }
-      return b.updatedAt.localeCompare(a.updatedAt);
+      const pendingOrder = Number(b.status === "pending") - Number(a.status === "pending");
+      return pendingOrder || b.updatedAt.localeCompare(a.updatedAt);
     })
     .slice(0, limit);
 }
 
 function normalizeProposalSearchText(value: string): string {
-  return value
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/g, "-")
-    .replaceAll(/^-|-$/g, "");
+  return value.replaceAll(/[^a-z0-9]+/g, "-").replaceAll(/^-|-$/g, "");
 }
 
 export function formatProposalList(proposals: readonly SkillProposalManifestEntry[]): string {

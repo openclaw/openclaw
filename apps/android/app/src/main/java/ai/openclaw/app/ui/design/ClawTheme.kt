@@ -58,8 +58,8 @@ internal data class ClawColors(
   val danger: Color,
   val dangerSoft: Color,
   val codeBg: Color,
-  val codeText: Color,
-  val codeBorder: Color,
+  val codeText: Color = text,
+  val codeBorder: Color = border,
 )
 
 @Immutable
@@ -132,8 +132,6 @@ private val ClawDarkColors =
     danger = Color(0xFFF87171),
     dangerSoft = Color(0x26F87171),
     codeBg = Color(0xFF0A0C10),
-    codeText = Color(0xFFF4F4F5),
-    codeBorder = Color(0xFF1E2028),
   )
 
 // Light mirrors the dark hierarchy on a neutral canvas and keeps the same red
@@ -163,8 +161,6 @@ private val ClawLightColors =
     danger = Color(0xFFB91C1C),
     dangerSoft = Color(0x22B91C1C),
     codeBg = Color(0xFFF1F1F4),
-    codeText = Color(0xFF101014),
-    codeBorder = Color(0xFFE4E4EA),
   )
 
 private data class WebThemePalette(
@@ -182,102 +178,72 @@ private data class WebThemePalette(
   val secondary: Long,
 )
 
-private fun webThemePalette(
-  family: AppearanceThemeFamily,
-  dark: Boolean,
-): WebThemePalette? =
-  when (family) {
-    AppearanceThemeFamily.Claw -> {
-      null
-    }
+private data class WebThemePalettes(
+  val dark: WebThemePalette,
+  val light: WebThemePalette,
+)
 
-    AppearanceThemeFamily.Knot -> {
-      if (dark) {
-        WebThemePalette(0xFF080808, 0xFF111113, 0xFF141416, 0xFF1A1A1E, 0xFFE5243B, 0xFF202026, 0xFF303038, 0xFFC6C6CB, 0xFF8A8A94, 0xFFD92A3F, 0xFFFAFAFA, 0xFFB8BDC4)
-      } else {
-        WebThemePalette(0xFFF9F9FB, 0xFFF2F2F5, 0xFFFFFFFF, 0xFFEAEAEF, 0xFFC41E30, 0xFFE2E2E8, 0xFFCCCCD4, 0xFF3A3A42, 0xFF68676F, 0xFFC41E30, 0xFFFFFFFF, 0xFF5A626E)
-      }
-    }
-
-    AppearanceThemeFamily.Dash -> {
-      if (dark) {
-        WebThemePalette(0xFF1A1210, 0xFF221A16, 0xFF28201C, 0xFF302822, 0xFFCF8B4D, 0xFF362A1C, 0xFF4C3E2C, 0xFFD8C8B8, 0xFFA18F80, 0xFFCF8B4D, 0xFF1A1210, 0xFFDCB878)
-      } else {
-        WebThemePalette(0xFFF7F2EC, 0xFFF0E8E0, 0xFFFFFFFF, 0xFFE8DDD2, 0xFF8A512C, 0xFFDDD0C2, 0xFFC8B8A6, 0xFF4A3828, 0xFF725D4D, 0xFF8A512C, 0xFFFFFFFF, 0xFF7D6027)
-      }
-    }
-
-    AppearanceThemeFamily.Absolutely -> {
-      if (dark) {
-        WebThemePalette(0xFF1C1C1A, 0xFF232320, 0xFF292825, 0xFF302F2B, 0xFFD97757, 0xFF2E2C27, 0xFF3D3A33, 0xFFE4DFD4, 0xFFABA498, 0xFFD97757, 0xFF241F1B, 0xFFB8926A)
-      } else {
-        WebThemePalette(0xFFFAF9F5, 0xFFF3F1E9, 0xFFFFFFFF, 0xFFEDEAE0, 0xFFA8452A, 0xFFE3DFD2, 0xFFCDC7B6, 0xFF3D3A33, 0xFF6B655B, 0xFFA8452A, 0xFFFFFFFF, 0xFF8A6A44)
-      }
-    }
-
-    AppearanceThemeFamily.Tide -> {
-      if (dark) {
-        WebThemePalette(0xFF10151B, 0xFF161D25, 0xFF1B232C, 0xFF212B36, 0xFF5AB6D8, 0xFF222C37, 0xFF33414F, 0xFFC9D2DA, 0xFF9DABB9, 0xFF5AB6D8, 0xFF0B1116, 0xFF7F9BB5)
-      } else {
-        WebThemePalette(0xFFF7F9FB, 0xFFEEF2F7, 0xFFFFFFFF, 0xFFE8EDF2, 0xFF1F6F8F, 0xFFDFE5EC, 0xFFC5CFD9, 0xFF333C45, 0xFF5F6B76, 0xFF1F6F8F, 0xFFFFFFFF, 0xFF3D6D88)
-      }
-    }
-
-    AppearanceThemeFamily.Beacon -> {
-      if (dark) {
-        WebThemePalette(0xFF000000, 0xFF0A0A0A, 0xFF141414, 0xFF1C1C1C, 0xFFFFC233, 0xFF4A4A4A, 0xFF6E6E6E, 0xFFFFFFFF, 0xFFC9C9C9, 0xFFFFC233, 0xFF000000, 0xFF8ECDFF)
-      } else {
-        WebThemePalette(0xFFFFFFFF, 0xFFF4F4F4, 0xFFFFFFFF, 0xFFEDEDED, 0xFF6E4A00, 0xFF8A8A8A, 0xFF5A5A5A, 0xFF000000, 0xFF3A3A3A, 0xFF6E4A00, 0xFFFFFFFF, 0xFF09428D)
-      }
-    }
-
-    AppearanceThemeFamily.Phosphor -> {
-      if (dark) {
-        WebThemePalette(0xFF0A0F0A, 0xFF0E150E, 0xFF121A12, 0xFF18221A, 0xFF4ADE80, 0xFF1D291F, 0xFF2C3D2F, 0xFFCFE0CF, 0xFF93AC95, 0xFF4ADE80, 0xFF07120A, 0xFF8FD6A5)
-      } else {
-        WebThemePalette(0xFFF4F7F4, 0xFFECF1EC, 0xFFFFFFFF, 0xFFE4EBE5, 0xFF10693A, 0xFFDBE4DC, 0xFFBFCDC1, 0xFF2A352B, 0xFF566B58, 0xFF10693A, 0xFFFFFFFF, 0xFF2F6B47)
-      }
-    }
-
-    AppearanceThemeFamily.Crt -> {
-      if (dark) {
-        WebThemePalette(0xFF090A09, 0xFF0D0F0D, 0xFF111412, 0xFF171B18, 0xFF3AFF7D, 0xFF202521, 0xFF303833, 0xFFC2CAC3, 0xFF90A094, 0xFF3AFF7D, 0xFF052B12, 0xFFFFCF5C)
-      } else {
-        WebThemePalette(0xFFF5F5F4, 0xFFECECEA, 0xFFFFFFFF, 0xFFE3E4E1, 0xFF0A612B, 0xFFDCDEDB, 0xFFC0C5BF, 0xFF343A34, 0xFF5B655C, 0xFF0A612B, 0xFFFFFFFF, 0xFF7A5D10)
-      }
-    }
-
-    AppearanceThemeFamily.Manuscript -> {
-      if (dark) {
-        WebThemePalette(0xFF211E18, 0xFF262218, 0xFF2A271F, 0xFF363126, 0xFF8FA8E0, 0xFF3B3527, 0xFF4F4732, 0xFFD8D0BC, 0xFFAB9F84, 0xFF8FA8E0, 0xFF101C33, 0xFFCFA85E)
-      } else {
-        WebThemePalette(0xFFF6F1E4, 0xFFEFE8D6, 0xFFFDFBF3, 0xFFE7DDC4, 0xFF31549B, 0xFFDDD2B8, 0xFFC0B28A, 0xFF322D22, 0xFF6A604E, 0xFF31549B, 0xFFFFFFFF, 0xFF7D6118)
-      }
-    }
-
-    AppearanceThemeFamily.Rose -> {
-      if (dark) {
-        WebThemePalette(0xFF191724, 0xFF1D1B2A, 0xFF1F1D2E, 0xFF26233A, 0xFFEBBCBA, 0xFF29263C, 0xFF3D3958, 0xFFD5D2EB, 0xFF9793B0, 0xFFEBBCBA, 0xFF3F2224, 0xFFF6C177)
-      } else {
-        WebThemePalette(0xFFFAF4ED, 0xFFF5ECE2, 0xFFFFFAF3, 0xFFEEE3D5, 0xFF9C4F66, 0xFFE3D9CB, 0xFFC8BBA7, 0xFF3E3857, 0xFF665D87, 0xFF9C4F66, 0xFFFFFFFF, 0xFF286983)
-      }
-    }
-
-    AppearanceThemeFamily.Miami -> {
-      if (dark) {
-        WebThemePalette(0xFF140F1E, 0xFF181226, 0xFF1C1530, 0xFF251B40, 0xFFF472B6, 0xFF2C2150, 0xFF453471, 0xFFCFC7E8, 0xFF968BBD, 0xFFF472B6, 0xFF3C0A24, 0xFF5FD7E8)
-      } else {
-        WebThemePalette(0xFFF7F3F6, 0xFFF1E9F0, 0xFFFEFCFE, 0xFFE6DBE4, 0xFFB0246F, 0xFFE2D7E0, 0xFFC4B4C2, 0xFF3C3244, 0xFF6B5F74, 0xFFB0246F, 0xFFFFFFFF, 0xFF0F6F7D)
-      }
-    }
-  }
+private val webThemePalettes =
+  mapOf(
+    AppearanceThemeFamily.Knot to
+      WebThemePalettes(
+        dark = WebThemePalette(0xFF080808, 0xFF111113, 0xFF141416, 0xFF1A1A1E, 0xFFE5243B, 0xFF202026, 0xFF303038, 0xFFC6C6CB, 0xFF8A8A94, 0xFFD92A3F, 0xFFFAFAFA, 0xFFB8BDC4),
+        light = WebThemePalette(0xFFF9F9FB, 0xFFF2F2F5, 0xFFFFFFFF, 0xFFEAEAEF, 0xFFC41E30, 0xFFE2E2E8, 0xFFCCCCD4, 0xFF3A3A42, 0xFF68676F, 0xFFC41E30, 0xFFFFFFFF, 0xFF5A626E),
+      ),
+    AppearanceThemeFamily.Dash to
+      WebThemePalettes(
+        dark = WebThemePalette(0xFF1A1210, 0xFF221A16, 0xFF28201C, 0xFF302822, 0xFFCF8B4D, 0xFF362A1C, 0xFF4C3E2C, 0xFFD8C8B8, 0xFFA18F80, 0xFFCF8B4D, 0xFF1A1210, 0xFFDCB878),
+        light = WebThemePalette(0xFFF7F2EC, 0xFFF0E8E0, 0xFFFFFFFF, 0xFFE8DDD2, 0xFF8A512C, 0xFFDDD0C2, 0xFFC8B8A6, 0xFF4A3828, 0xFF725D4D, 0xFF8A512C, 0xFFFFFFFF, 0xFF7D6027),
+      ),
+    AppearanceThemeFamily.Absolutely to
+      WebThemePalettes(
+        dark = WebThemePalette(0xFF1C1C1A, 0xFF232320, 0xFF292825, 0xFF302F2B, 0xFFD97757, 0xFF2E2C27, 0xFF3D3A33, 0xFFE4DFD4, 0xFFABA498, 0xFFD97757, 0xFF241F1B, 0xFFB8926A),
+        light = WebThemePalette(0xFFFAF9F5, 0xFFF3F1E9, 0xFFFFFFFF, 0xFFEDEAE0, 0xFFA8452A, 0xFFE3DFD2, 0xFFCDC7B6, 0xFF3D3A33, 0xFF6B655B, 0xFFA8452A, 0xFFFFFFFF, 0xFF8A6A44),
+      ),
+    AppearanceThemeFamily.Tide to
+      WebThemePalettes(
+        dark = WebThemePalette(0xFF10151B, 0xFF161D25, 0xFF1B232C, 0xFF212B36, 0xFF5AB6D8, 0xFF222C37, 0xFF33414F, 0xFFC9D2DA, 0xFF9DABB9, 0xFF5AB6D8, 0xFF0B1116, 0xFF7F9BB5),
+        light = WebThemePalette(0xFFF7F9FB, 0xFFEEF2F7, 0xFFFFFFFF, 0xFFE8EDF2, 0xFF1F6F8F, 0xFFDFE5EC, 0xFFC5CFD9, 0xFF333C45, 0xFF5F6B76, 0xFF1F6F8F, 0xFFFFFFFF, 0xFF3D6D88),
+      ),
+    AppearanceThemeFamily.Beacon to
+      WebThemePalettes(
+        dark = WebThemePalette(0xFF000000, 0xFF0A0A0A, 0xFF141414, 0xFF1C1C1C, 0xFFFFC233, 0xFF4A4A4A, 0xFF6E6E6E, 0xFFFFFFFF, 0xFFC9C9C9, 0xFFFFC233, 0xFF000000, 0xFF8ECDFF),
+        light = WebThemePalette(0xFFFFFFFF, 0xFFF4F4F4, 0xFFFFFFFF, 0xFFEDEDED, 0xFF6E4A00, 0xFF8A8A8A, 0xFF5A5A5A, 0xFF000000, 0xFF3A3A3A, 0xFF6E4A00, 0xFFFFFFFF, 0xFF09428D),
+      ),
+    AppearanceThemeFamily.Phosphor to
+      WebThemePalettes(
+        dark = WebThemePalette(0xFF0A0F0A, 0xFF0E150E, 0xFF121A12, 0xFF18221A, 0xFF4ADE80, 0xFF1D291F, 0xFF2C3D2F, 0xFFCFE0CF, 0xFF93AC95, 0xFF4ADE80, 0xFF07120A, 0xFF8FD6A5),
+        light = WebThemePalette(0xFFF4F7F4, 0xFFECF1EC, 0xFFFFFFFF, 0xFFE4EBE5, 0xFF10693A, 0xFFDBE4DC, 0xFFBFCDC1, 0xFF2A352B, 0xFF566B58, 0xFF10693A, 0xFFFFFFFF, 0xFF2F6B47),
+      ),
+    AppearanceThemeFamily.Crt to
+      WebThemePalettes(
+        dark = WebThemePalette(0xFF090A09, 0xFF0D0F0D, 0xFF111412, 0xFF171B18, 0xFF3AFF7D, 0xFF202521, 0xFF303833, 0xFFC2CAC3, 0xFF90A094, 0xFF3AFF7D, 0xFF052B12, 0xFFFFCF5C),
+        light = WebThemePalette(0xFFF5F5F4, 0xFFECECEA, 0xFFFFFFFF, 0xFFE3E4E1, 0xFF0A612B, 0xFFDCDEDB, 0xFFC0C5BF, 0xFF343A34, 0xFF5B655C, 0xFF0A612B, 0xFFFFFFFF, 0xFF7A5D10),
+      ),
+    AppearanceThemeFamily.Manuscript to
+      WebThemePalettes(
+        dark = WebThemePalette(0xFF211E18, 0xFF262218, 0xFF2A271F, 0xFF363126, 0xFF8FA8E0, 0xFF3B3527, 0xFF4F4732, 0xFFD8D0BC, 0xFFAB9F84, 0xFF8FA8E0, 0xFF101C33, 0xFFCFA85E),
+        light = WebThemePalette(0xFFF6F1E4, 0xFFEFE8D6, 0xFFFDFBF3, 0xFFE7DDC4, 0xFF31549B, 0xFFDDD2B8, 0xFFC0B28A, 0xFF322D22, 0xFF6A604E, 0xFF31549B, 0xFFFFFFFF, 0xFF7D6118),
+      ),
+    AppearanceThemeFamily.Rose to
+      WebThemePalettes(
+        dark = WebThemePalette(0xFF191724, 0xFF1D1B2A, 0xFF1F1D2E, 0xFF26233A, 0xFFEBBCBA, 0xFF29263C, 0xFF3D3958, 0xFFD5D2EB, 0xFF9793B0, 0xFFEBBCBA, 0xFF3F2224, 0xFFF6C177),
+        light = WebThemePalette(0xFFFAF4ED, 0xFFF5ECE2, 0xFFFFFAF3, 0xFFEEE3D5, 0xFF9C4F66, 0xFFE3D9CB, 0xFFC8BBA7, 0xFF3E3857, 0xFF665D87, 0xFF9C4F66, 0xFFFFFFFF, 0xFF286983),
+      ),
+    AppearanceThemeFamily.Miami to
+      WebThemePalettes(
+        dark = WebThemePalette(0xFF140F1E, 0xFF181226, 0xFF1C1530, 0xFF251B40, 0xFFF472B6, 0xFF2C2150, 0xFF453471, 0xFFCFC7E8, 0xFF968BBD, 0xFFF472B6, 0xFF3C0A24, 0xFF5FD7E8),
+        light = WebThemePalette(0xFFF7F3F6, 0xFFF1E9F0, 0xFFFEFCFE, 0xFFE6DBE4, 0xFFB0246F, 0xFFE2D7E0, 0xFFC4B4C2, 0xFF3C3244, 0xFF6B5F74, 0xFFB0246F, 0xFFFFFFFF, 0xFF0F6F7D),
+      ),
+  )
 
 private fun familyColors(
   dark: Boolean,
   family: AppearanceThemeFamily,
 ): ClawColors {
   val base = if (dark) ClawDarkColors else ClawLightColors
-  val palette = webThemePalette(family, dark) ?: return base
+  val palettes = webThemePalettes[family] ?: return base
+  val palette = if (dark) palettes.dark else palettes.light
   val canvas = Color(palette.canvas)
   val accent = Color(palette.accent)
   return base.copy(

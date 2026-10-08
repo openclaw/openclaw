@@ -53,17 +53,16 @@ function isQueuedGoalOnlyBlock(block: string, injectedGoals: ReadonlySet<string>
   );
 }
 
-function refreshActiveGoalContextText(params: {
-  text: string;
-  injectedGoals: ReadonlySet<string>;
-  activeGoalContext: string | undefined;
-}): string {
-  const blocks = params.text.split(/\n{2,}/u);
+function refreshActiveGoalContextText(
+  text: string,
+  injectedGoals: ReadonlySet<string>,
+  activeGoalContext: string | undefined,
+): string {
+  const blocks = text.split(/\n{2,}/u);
   let insertionIndex: number | undefined;
   const retained: string[] = [];
   for (const block of blocks) {
-    const isInjected =
-      params.injectedGoals.has(block) || isQueuedGoalOnlyBlock(block, params.injectedGoals);
+    const isInjected = injectedGoals.has(block) || isQueuedGoalOnlyBlock(block, injectedGoals);
     if (isInjected && insertionIndex === undefined) {
       insertionIndex = retained.length;
     }
@@ -71,14 +70,14 @@ function refreshActiveGoalContextText(params: {
       retained.push(block);
     }
   }
-  if (!params.activeGoalContext) {
+  if (!activeGoalContext) {
     return retained.join("\n\n");
   }
   if (insertionIndex === undefined) {
     const anchorIndex = retained.findLastIndex((block) => block.startsWith("Current message:"));
     insertionIndex = anchorIndex >= 0 ? anchorIndex : retained.length;
   }
-  retained.splice(Math.min(insertionIndex, retained.length), 0, params.activeGoalContext);
+  retained.splice(Math.min(insertionIndex, retained.length), 0, activeGoalContext);
   return retained.join("\n\n");
 }
 
@@ -94,17 +93,13 @@ export function refreshActiveGoalContext(
       : undefined;
   }
   const injectedGoals = new Set(context.injectedGoalContexts ?? []);
-  const refreshedText = refreshActiveGoalContextText({
-    text: context.text,
+  const refreshedText = refreshActiveGoalContextText(
+    context.text,
     injectedGoals,
     activeGoalContext,
-  });
+  );
   const refreshedResumableText = context.resumableText
-    ? refreshActiveGoalContextText({
-        text: context.resumableText,
-        injectedGoals,
-        activeGoalContext,
-      })
+    ? refreshActiveGoalContextText(context.resumableText, injectedGoals, activeGoalContext)
     : undefined;
   if (!refreshedText) {
     return undefined;
@@ -224,9 +219,6 @@ function formatChannelStructuredContextLabel(label: unknown): string {
 
 function formatStructuredContextRelation(value: unknown): string | undefined {
   const relation = sanitizeTranscriptField(value);
-  if (relation === "before_current_message") {
-    return "before current message";
-  }
   if (relation === "around_reply_target") {
     return "around replied-to message";
   }
@@ -441,14 +433,12 @@ function formatConversationTimestamp(
 
 function resolveInboundChannel(ctx: TemplateContext): string | undefined {
   const surfaceValue = normalizePromptMetadataString(ctx.Surface);
-  let channelValue = normalizePromptMetadataString(ctx.OriginatingChannel) ?? surfaceValue;
-  if (!channelValue) {
-    const provider = normalizePromptMetadataString(ctx.Provider);
-    if (provider !== "webchat" && surfaceValue !== "webchat") {
-      channelValue = provider;
-    }
+  const channelValue = normalizePromptMetadataString(ctx.OriginatingChannel) ?? surfaceValue;
+  if (channelValue) {
+    return channelValue;
   }
-  return channelValue;
+  const provider = normalizePromptMetadataString(ctx.Provider);
+  return provider === "webchat" ? undefined : provider;
 }
 
 function resolveInboundSourceModality(ctx: TemplateContext): string | undefined {

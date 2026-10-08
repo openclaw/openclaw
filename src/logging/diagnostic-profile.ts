@@ -226,7 +226,9 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     await starting;
     // The event loop owns this timer. Requested duration is not a hard wall-time
     // or V8 allocation bound when the Gateway is blocked; return native actual timing.
-    await delay(options.durationMs, undefined, { signal: options.signal });
+    if (options.durationMs > 0) {
+      await delay(options.durationMs, undefined, { signal: options.signal });
+    }
     assertActive();
     stopAttempted = true;
     ({ profile } = await options.stop(session));

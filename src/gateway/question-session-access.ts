@@ -54,7 +54,6 @@ export type PreparedQuestionSession = {
   assertCurrent: () => void;
   canAccess: (
     client: GatewayClient | null,
-    access: "read" | "mutate",
     narrow: boolean,
     binding?: QuestionSessionAccess,
   ) => boolean;
@@ -250,7 +249,7 @@ export async function withPreparedQuestionSessions<T>(
               target,
               read,
               assertCurrent,
-              canAccess: (client, _access, narrow, binding = selection.binding) => {
+              canAccess: (client, narrow, binding = selection.binding) => {
                 try {
                   if (narrow && binding) {
                     binding.assertCurrent(preparedSession);
@@ -480,7 +479,6 @@ function canAccessSessionQuestion(
   observation: QuestionObservation | null,
   prepared: PreparedQuestionSession | undefined,
   client: GatewayClient | null,
-  access: "read" | "mutate",
 ): boolean {
   try {
     if (
@@ -491,7 +489,7 @@ function canAccessSessionQuestion(
     ) {
       return false;
     }
-    const allowed = prepared.canAccess(client, access, true, observation.sessionAccess);
+    const allowed = prepared.canAccess(client, true, observation.sessionAccess);
     if (!allowed) {
       // A worker may have just proved the original binding invalid. Settle that
       // exact entry now; neither a transient read failure nor a successor is cancellation.
@@ -550,7 +548,7 @@ export function prepareQuestionAuthorization(
           actor?.kind !== "operator" ||
           current?.kind !== "operator" ||
           current.profileId !== actor.profileId ||
-          !canAccessSessionQuestion(observation, prepared, options.client, access)
+          !canAccessSessionQuestion(observation, prepared, options.client)
         ) {
           return questionNotFound(id);
         }
@@ -563,7 +561,7 @@ export function prepareQuestionAuthorization(
       ) {
         return null;
       }
-      if (!prepared?.canAccess(options.client, "read", false)) {
+      if (!prepared?.canAccess(options.client, false)) {
         return questionNotFound(id);
       }
       return access === "mutate" ? prepared.authorizeMutation(options.client) : null;
@@ -683,7 +681,7 @@ export function questionBroadcastOptions(params: {
         return false;
       }
       if (usesOwnRunQuestionAccess(client)) {
-        return canAccessSessionQuestion(observation, prepared, client, "read");
+        return canAccessSessionQuestion(observation, prepared, client);
       }
       if (prepared) {
         return prepared.canReceive(client);

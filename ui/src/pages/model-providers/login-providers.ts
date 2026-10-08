@@ -31,20 +31,26 @@ export function buildLoginProviders({
 }): LoginProvider[] {
   const groups = new Map<string, LoginProvider>();
   const choices = new Set<string>();
+  const ensureGroup = (id: string, authProvider: string) => {
+    const group: LoginProvider = groups.get(id) ?? {
+      id,
+      label: "",
+      choices: [],
+      authProviders: [],
+    };
+    if (!group.authProviders.includes(authProvider)) {
+      group.authProviders.push(authProvider);
+    }
+    groups.set(id, group);
+    return group;
+  };
   for (const capability of authStatus?.providerCapabilities ?? []) {
     if (providers && !providers.includes(capability.provider)) {
       continue;
     }
     for (const option of capability.loginOptions ?? []) {
-      let group = groups.get(option.brandId);
-      if (!group) {
-        group = { id: option.brandId, label: "", choices: [], authProviders: [] };
-        groups.set(group.id, group);
-      }
+      const group = ensureGroup(option.brandId, capability.provider);
       group.label ||= option.groupLabel?.trim() ?? "";
-      if (!group.authProviders.includes(capability.provider)) {
-        group.authProviders.push(capability.provider);
-      }
       if (!choices.has(option.id)) {
         choices.add(option.id);
         group.choices.push(option);
@@ -57,11 +63,8 @@ export function buildLoginProviders({
         ? capability.loginOptions.map((option) => option.brandId)
         : [capability.provider];
       for (const id of new Set(brands)) {
-        const group = groups.get(id) ?? { id, label: "", choices: [], authProviders: [] };
-        if (!group.authProviders.includes(capability.provider)) {
-          group.authProviders.push(capability.provider);
-        }
-        groups.set(id, { ...group, apiKeyProvider: group.apiKeyProvider ?? capability.provider });
+        const group = ensureGroup(id, capability.provider);
+        group.apiKeyProvider ??= capability.provider;
       }
     }
   }
@@ -71,11 +74,8 @@ export function buildLoginProviders({
       if (choices.has(option.id) || (providers && !providers.includes(id))) {
         continue;
       }
-      const group = groups.get(id) ?? { id, label: "", choices: [], authProviders: [] };
+      const group = ensureGroup(id, id);
       group.label ||= option.groupLabel?.trim() || option.label;
-      if (!group.authProviders.includes(id)) {
-        group.authProviders.push(id);
-      }
       const duplicateLabel = group.choices.some((choice) => choice.label === option.label);
       group.choices.push({
         ...option,
@@ -90,7 +90,6 @@ export function buildLoginProviders({
           : {}),
       });
       choices.add(option.id);
-      groups.set(id, group);
     }
   }
   for (const group of groups.values()) {

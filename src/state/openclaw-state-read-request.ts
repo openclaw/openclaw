@@ -16,12 +16,14 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
     command.type === "sessionState.versions" ||
     command.type === "sessionState.ambientTargets" ||
     command.type === "sessionState.events" ||
+    command.type === "operatorApprovals.placementGrant" ||
     command.type === "operatorApprovals.history" ||
     command.type === "diagnostic.latest" ||
     command.type === "diagnostic.configAuditFacts" ||
     command.type === "operatorApprovals.listCronGrants" ||
     command.type === "operatorApprovals.validateCronGrant" ||
     command.type === "acpSessions.metadata" ||
+    command.type === "sessionRows.sharedFacts" ||
     command.type === "githubPublication.knownPullRequestUrls" ||
     command.type === "githubRepository.knownPullRequestUrls" ||
     command.type === "workers.placementProjection"
@@ -266,6 +268,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       bytes,
     );
   }
+  if (command.type === "sessionRows.sharedFacts") {
+    return bytes + Buffer.byteLength(JSON.stringify(command.entries), "utf8");
+  }
   if (command.type === "capture.readOnlyEvents") {
     return bytes + Buffer.byteLength(command.sessionId, "utf8") + 8;
   }
@@ -380,7 +385,10 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       16
     );
   }
-  if (command.type === "operatorApprovals.validateCronGrant") {
+  if (
+    command.type === "operatorApprovals.validateCronGrant" ||
+    command.type === "operatorApprovals.placementGrant"
+  ) {
     return bytes + Buffer.byteLength(JSON.stringify(command.input), "utf8");
   }
   if (command.type === "operatorApprovals.listCronGrants") {
@@ -458,9 +466,6 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       bytes,
     );
   }
-  if (command.type === "fleet.get") {
-    return bytes + Buffer.byteLength(command.tenantId, "utf8");
-  }
   if (command.type === "onboardingRecommendations.read") {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
   }
@@ -481,7 +486,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     );
   }
   if (command.type === "userProfiles.githubIdentity.cached") {
-    return bytes + Buffer.byteLength(command.email, "utf8") + 8;
+    return (
+      bytes +
+      ("login" in command
+        ? Buffer.byteLength(command.login, "utf8")
+        : Buffer.byteLength(command.email, "utf8") + 8)
+    );
   }
   if (
     command.type === "userProfiles.githubAttribution.resolve" ||

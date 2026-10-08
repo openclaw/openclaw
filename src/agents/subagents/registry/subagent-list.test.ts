@@ -51,9 +51,12 @@ describe("buildSubagentList", () => {
         { agentId: "main", name: "recent", ended: true },
         { agentId: "research", name: "other-store", ended: false },
         { agentId: "research", name: "missing", ended: false },
-      ].map(({ agentId, name, ended }, index): SubagentRunRecord => ({
+        { agentId: "main", name: "main-global", ended: false, raw: true },
+        { agentId: "research", name: "research-global", ended: false, raw: true },
+      ].map(({ agentId, name, ended, raw }, index): SubagentRunRecord => ({
         runId: `run-${name}`,
-        childSessionKey: `agent:${agentId}:subagent:${name}`,
+        childSessionKey: raw ? "global" : `agent:${agentId}:subagent:${name}`,
+        childAgentId: raw ? agentId : undefined,
         requesterSessionKey: "agent:main:main",
         requesterDisplayKey: "main",
         task: name,
@@ -64,9 +67,9 @@ describe("buildSubagentList", () => {
           ? { status: "terminal", endedAt: now - 100, outcome: { status: "ok" } }
           : { status: "running", startedAt: now - 1000 - index },
       }));
-      for (const run of runs.slice(0, 3)) {
+      for (const run of runs.filter((entry) => entry.task !== "missing")) {
         await replaceSessionEntry(
-          { sessionKey: run.childSessionKey },
+          { sessionKey: run.childSessionKey, agentId: run.childAgentId },
           {
             sessionId: run.runId,
             updatedAt: now,
@@ -82,6 +85,8 @@ describe("buildSubagentList", () => {
           { sessionKey: runs[0]!.childSessionKey, model: "openai/saved-active" },
           { sessionKey: runs[2]!.childSessionKey, model: "openai/saved-other-store" },
           { sessionKey: runs[3]!.childSessionKey, model: "openai/run-fallback" },
+          { sessionKey: "global", model: "openai/saved-main-global" },
+          { sessionKey: "global", model: "openai/saved-research-global" },
         ],
       );
       expect((await list()).recent).toMatchObject([{ model: "openai/saved-recent" }]);
@@ -90,6 +95,37 @@ describe("buildSubagentList", () => {
         { sessionId: runs[0]!.runId, updatedAt: now + 1, model: "openai/replaced" },
       );
       expect((await list()).active[0]?.model).toBe("openai/replaced");
+    });
+  });
+
+  it("reads a raw child's metadata from its recorded owner in a custom store", async () => {
+    await withOpenClawTestState({ label: "subagent-list-custom-store" }, async (state) => {
+      const storePath = state.statePath("custom/sessions.sqlite");
+      const now = Date.now();
+      const run: SubagentRunRecord = {
+        runId: "research-global",
+        childSessionKey: "global",
+        childAgentId: "research",
+        requesterSessionKey: "agent:research:main",
+        requesterDisplayKey: "research",
+        task: "Read the custom store",
+        cleanup: "keep",
+        createdAt: now,
+        execution: { status: "running", startedAt: now },
+      };
+      await replaceSessionEntry(
+        { agentId: "research", storePath, sessionKey: "global" },
+        { sessionId: "research-global", updatedAt: now, model: "openai/research-model" },
+      );
+      const list = await buildSubagentList({
+        cfg: { session: { store: storePath } },
+        runs: [run],
+        recentMinutes: 30,
+        readSnapshot: new Map(),
+      });
+      expect(list.active).toMatchObject([
+        { runId: "research-global", sessionKey: "global", model: "openai/research-model" },
+      ]);
     });
   });
 

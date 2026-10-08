@@ -76,6 +76,10 @@ Changing an account-bound job to a payload that does not run tools and later bac
 to an agent turn preserves its account restriction. A payload conversion does not
 reauthorize that job as an operator-created job.
 
+Doctor checks scheduled tool authority only for agent turns, script payloads, and
+jobs with a condition script. A command payload without a condition script does
+not need agent-tool provenance; its retained account restriction stays unchanged.
+
 Management edits cannot restore missing policy metadata as operator authority.
 For a legacy job that has lost its policy, an authenticated operator can explicitly
 reauthorize it, or an authenticated creator can recreate it with a fresh tool cap.

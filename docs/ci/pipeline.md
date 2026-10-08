@@ -90,7 +90,7 @@ the job's uploaded artifacts.
 | Job                              | Purpose                                                                                                                                                                                                                                                                                                  | When it runs                                          |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
 | `preflight`                      | Detect changed scopes and build the CI manifest; all-Blacksmith canonical Node-relevant runs also restore the exact dependency cache before fanout                                                                                                                                                       | Always on non-draft pushes and PRs                    |
-| `security-fast`                  | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                                                                                                                                                                                                                | Always on non-draft pushes and PRs                    |
+| `security-fast`                  | Private key detection and changed-workflow audit via `zizmor`; warn-only production lockfile audit for release dispatches                                                                                                                                                                                | Always on non-draft pushes and PRs                    |
 | `build-artifacts`                | Build `dist/`, Control UI, built-CLI smoke checks, startup memory, and embedded built-artifact checks                                                                                                                                                                                                    | Node-relevant changes                                 |
 | `control-ui-performance`         | Compare Control UI CSS with the exact base revision and enforce asset budgets independently of artifact generation                                                                                                                                                                                       | UI/build/dependency/import owners and manual CI       |
 | `control-ui-i18n`                | Verify generated Control UI locale bundles, metadata, and translation memory; advisory on automatic runs, blocking on manual release CI                                                                                                                                                                  | Control UI i18n-relevant changes and manual CI        |
@@ -100,7 +100,7 @@ the job's uploaded artifacts.
 | `checks-fast-contracts-plugins`  | One setup shared by two sequential weighted plugin contract processes; frozen targets keep separate rows                                                                                                                                                                                                 | Node-relevant changes                                 |
 | `checks-fast-contracts-channels` | One setup shared by two sequential weighted channel contract envelopes; frozen targets keep separate rows                                                                                                                                                                                                | Node-relevant changes                                 |
 | `checks-node-*`                  | Changed-target Node tests on pull requests; compact integration shards on `main`; metadata-complete compact fallback on broad PRs; full named shards on manual and release runs                                                                                                                          | Node-relevant changes                                 |
-| `docker-seed-e2e`                | One Docker scheduler job; main retains the published-upgrade survivor with legacy operator state and an authenticated managed restart; ordinary manual/release CI adds the five MCP, update-channel, and Fleet cache lanes                                                                               | Every admitted canonical main run; ordinary manual CI |
+| `docker-seed-e2e`                | One Docker scheduler job; main retains the published-upgrade survivor with legacy operator state and an authenticated managed restart; ordinary manual/release CI adds the four MCP and update-channel lanes                                                                                             | Every admitted canonical main run; ordinary manual CI |
 | `check-*`                        | Sharded main local gate equivalent: guards, transient npm-lock validation, bundled-channel config metadata, prod types, lint, dependencies, test types                                                                                                                                                   | Node-relevant changes                                 |
 | `check-additional-*`             | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture; the pure-reporting plugin SDK API diff runs on manual and release dispatches only | Node-relevant changes                                 |
 | `checks-node-compat-node24`      | Node 24 minimum compatibility build and smoke lane                                                                                                                                                                                                                                                       | Full Release Validation and manual dispatches only    |
@@ -180,6 +180,16 @@ Vitest without dropping coverage. Production sources remain free to change and
 are still exercised. Extra Vitest arguments, including cache-warming collection,
 retain the existing Vitest path.
 
+A changed shared setup fingerprint invalidates the entire native cohort.
+Refreshing those fingerprints requires fresh qualification of the retained
+entries; tests without matching proof keep their Vitest coverage.
+CI preflight inspects the recorded fingerprints once per workflow attempt. When
+shared setup, test, or fixture-helper inputs change or become unreadable, it adds
+one notice and a job-summary section listing the stale entries and affected
+inputs. This report does not change runtime selection or fail CI. Shards do not
+repeat the notice; local planning and historical targets without the inspector
+remain silent.
+
 Native Bun receives explicit file paths, the existing hermetic environment setup,
 the repository tsconfig, and the shared test deadline. It disables automatic env
 file loading and runs one test process inside the existing plan and worker budget.
@@ -222,6 +232,11 @@ existing CI resource budgets. Precise PR targets use the existing
 test-project planner to find their owners. The runtime owner admits only qualified
 configs, exact files, and partitions; ambiguous selections retain Node. No tests
 are removed from the selected inventory.
+
+The complete CLI and embedded-agent-run leaf configs also support Bun. Their
+existing pools, exclusions, and worker limits remain in effect. CLI-process and
+other agent owners keep their separate qualification policies. Dual validation
+runs each complete selected owner on Node before Bun in the same worker slot.
 
 Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`),
 OpenAI realtime worker messaging (`extensions/openai/realtime-quicksilver-peer-worker.test.ts`),
@@ -322,14 +337,14 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `667c4ab22cbf6b101b3376c550b81cabc8c00518` with WebKit
-`f1e1ca1156c8cb3b468bec0e1989fbfa08899661` in prerelease
-`openclaw-v1.4.3-20261005-667c4ab22c-webkit-f1e1ca1156`.
-WebKit advances from `1ee09069fe` in the previous `bf0b6cde28` pin. This build
-syncs Bun to canary `9bd19c98`, fixes namespace interoperability and embedded
-module suffix keys, and supports `module.stripTypeScriptTypes`. It adds allocation
-sampling, Node-compatible stack positions, and ArrayBuffer/external accounting
-with busy-worker snapshots. The release publishes the four Darwin/Linux targets;
+The pinned build pairs Bun `fc53bf8c0fccd0dcbcccfcf75e2c306ab8953cae` with WebKit
+`cb8d6f202b5a396caa204ee1bb75d78175aa841a` in prerelease
+`openclaw-v1.4.3-20261007-fc53bf8c0f-webkit-cb8d6f202b`.
+WebKit advances from `f1e1ca1156` in the previous `667c4ab22c` pin. This build
+fixes worker heap-cap termination, detached `import.meta.resolve` origins,
+external-URL package validation, and unlimited-child `bun test` deadlines.
+It includes GC cadence improvements and wakeups for idle worker event loops
+and passive collectors. The release publishes the four Darwin/Linux targets;
 Windows publication remains gated on signing.
 
 The build adds an adaptive, bounded `node:vm` compilation cache for large module
@@ -547,18 +562,20 @@ Main, including hourly `validation_tier=main` dispatches, prepares its smoke tar
 JavaScript, plugin assets, Control UI, metadata, and public SDK declarations;
 the canonical packer still runs its complete tarball integrity check. The
 scheduler consumes that tarball through `OPENCLAW_CURRENT_PACKAGE_TGZ` without
-rebuilding it. Full-tier manual and release CI retain the declaration-complete full
-package build.
+rebuilding it. Full Release Validation children use the same smoke package;
+ordinary full-tier manual CI retains the declaration-complete full package build.
 
 Ordinary canonical manual CI retains the survivor and adds
-`cron-mcp-cleanup`, `fleet-cache`, `mcp-channels`, `mcp-code-mode-gateway`, and
+`cron-mcp-cleanup`, `mcp-channels`, `mcp-code-mode-gateway`, and
 `update-channel-switch`. This includes Full Release Validation's `normal_ci`
 child in `full`, `npm-beta`, and `npm-stable` scopes. Frozen targets
 must declare the Docker seed capability; targets without `resolveDockerSeedLanes`
 retain the survivor fallback. CI loads the target's Docker tier planner directly.
 
-The scheduler retains one 16-class Blacksmith runner on eligible main pushes
-and its existing serial main/manual lane admission. Pull requests and their
+The scheduler retains one 16-class Blacksmith runner on eligible main pushes.
+Full Release Validation children also use that class when no release runner group
+is configured; hosted outage overrides and retries retain hosted recovery.
+Main, release, and ordinary manual CI retain serial weighted admission. Pull requests and their
 exact-head fallback dispatches do not select this proof. Installed-driver
 upgrade coverage remains required on every admitted canonical main run and
 ordinary manual/release CI; the existing infrastructure timeout stays unchanged.
@@ -849,7 +866,7 @@ automation account, and SecOps-owned-path cases before declaring enforcement act
 ## Fail-fast order
 
 1. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs. Canonical `main` starts immediately in one of two parity slots; each slot admits one complete run and coalesces later pushes into its newest pending tip. Downstream jobs wait for the manifest, then eligible Blacksmith jobs restore exact dependencies from the trusted warmer or fall back to the ordinary pnpm-store cache on a miss. Pushes, pull requests, and manual runs targeting the workflow revision run preflight with native Node and skip dependency setup. Manual runs targeting a different revision install dependencies and retain that target's `tsx` tooling.
-2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs. Additional checks start directly after preflight. Narrow PRs with additional checks also place the existing `check-guards` and `check-dependencies` rows there: their complete guard, dependency, unused-file, and export scans do not consume the installed compiler/lint plan. Guards use the same commands and fetch the exact comparison base during checkout. Full selections and runs without that family retain the central rows, and the aggregate requires each selected owner. Extension-only compiler inputs can be planned from the four noncore graphs when an already selected additional boundary row owns the full core graph check. This requires existing regular source files without symlink aliases; mixed source changes retain complete discovery, and missing or uncertain inputs retain full checking. Known full selections skip discovery and retain boundary proof in an already selected additional boundary row or the required planner. No extra boundary row is admitted for that optimization. The production dependency audit sends one complete graph with up to four attempts and a four-minute total request budget, including retries and response reading. Timeouts, native fetch failures, HTTP 429, and 5xx responses retry with exponential backoff; retryable HTTP responses honor `Retry-After`. Attempts and recovery are logged. Persistent unavailability, vulnerability findings, invalid inputs, malformed advisory data, oversized responses, and permanent HTTP failures block CI. An unavailable audit is incomplete coverage, not a clean result. CI dispatched by Full Release Validation or release publication records a failing audit as a warning instead, because advisories never block a release. Local pre-commit and release dependency audits use the same bounded request owner and fail on unavailability; release dependency evidence blocks only on known malware.
+2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs. Additional checks start directly after preflight. Narrow PRs with additional checks also place the existing `check-guards` and `check-dependencies` rows there: their complete guard, dependency, unused-file, and export scans do not consume the installed compiler/lint plan. Guards use the same commands and fetch the exact comparison base during checkout. Full selections and runs without that family retain the central rows, and the aggregate requires each selected owner. Extension-only compiler inputs can be planned from the four noncore graphs when an already selected additional boundary row owns the full core graph check. This requires existing regular source files without symlink aliases; mixed source changes retain complete discovery, and missing or uncertain inputs retain full checking. Known full selections skip discovery and retain boundary proof in an already selected additional boundary row or the required planner. No extra boundary row is admitted for that optimization. Ordinary pull-request, push, and scheduled CI skip the production dependency audit. Only `workflow_dispatch` IDs beginning with `full-release-validation-` or `release-native-android-` run it. The audit sends one complete graph with up to four attempts and a four-minute total request budget, including retries and response reading. Every non-zero audit exit produces a warning and exits 0, including findings, unavailable advisories, and invalid data. An unavailable audit is incomplete coverage, not a clean result. The optional pre-commit audit hook uses the same warn-only wrapper. The separate daily [Dependency Audit](/ci/scheduled-workflows#dependency-audit) remains strict for triage, is not a required PR check, and points to a dependency-bump follow-up. Release dependency evidence retains its separate known-malware gate; vulnerability advisories remain warnings.
 3. `build-artifacts` and the locale checks overlap with the fast Linux lanes. Control UI and native app source PRs exclude generated locale snapshots/resources; their serialized refresh workflows repair and auto-merge isolated generated PRs in the background. Source CI still blocks stale source inventories and unsafe localization calls. Generated PRs, manual CI, and release prep enforce full translated/platform-generated parity. Canonical `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
 4. Baseline ratchets and selected Node test shards start independently after preflight. Node rows consume the manifest, not ratchet outputs. `ci-gate` still requires every selected ratchet to pass, and the PR failure monitor still cancels remaining work after a ratchet failure. Frozen targets retain their existing ratchet selection.
 5. Current plans with guards run `check:coercion-helpers` there once; fast-only plans retain its standalone row. Other platform and runtime lanes fan out independently: `checks-fast-core` (including startup corpus), `checks-fast-contracts-plugins`, `checks-fast-contracts-channels`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, the screenshot shards, and `android`.

@@ -70,7 +70,7 @@ export function formatScheduledToolPolicyAdvisory(params: {
   }
   lines.push(
     "- These jobs continue through restrictive sender-policy resolution; doctor will not infer authority from delivery or current configuration.",
-    "- Reauthorize with an exact explicit cap: `openclaw cron edit <id> --tools <tool,...>`.",
+    "- Recreate the job from a fresh authenticated creator turn, or reauthorize its complete tool cap from a trusted operator shell: `openclaw automations edit <id> --tools <tool,...>`.",
   );
   return lines.join("\n");
 }

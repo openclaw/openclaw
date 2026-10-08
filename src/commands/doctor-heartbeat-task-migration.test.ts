@@ -13,6 +13,7 @@ import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.
 import { CronService } from "../cron/service.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
+import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-schedule.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -103,9 +104,9 @@ tasks:
   } as OpenClawConfig;
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   const cron = createTestCronService(storePath, cfg, nowMs);
-  const spec = resolveHeartbeatMonitorPlan(cfg, []).specs.find(
-    (entry) => entry.input.agentId === agentId,
-  );
+  const spec = resolveHeartbeatMonitorPlan(cfg, [], {
+    schedulerSeed: resolveHeartbeatSchedulerSeed(undefined, { env }),
+  }).specs.find((entry) => entry.input.agentId === agentId);
   if (!spec) {
     throw new Error("expected heartbeat monitor spec");
   }
@@ -118,7 +119,7 @@ tasks:
     expectedRevision: 0,
     options: { env },
   });
-  const session = resolveHeartbeatSession(
+  const session = await resolveHeartbeatSession(
     cfg,
     agentId,
     cfg.agents?.defaults?.heartbeat,
@@ -334,7 +335,7 @@ describe("heartbeat scratch task cron migration", () => {
     expect(scratch?.content).toContain("# Keep alerts concise");
     expect(scratch?.content).not.toContain("tasks:");
     expect(
-      resolveHeartbeatSession(fixture.cfg, "main", undefined, undefined, fixture.env).entry
+      (await resolveHeartbeatSession(fixture.cfg, "main", undefined, undefined, fixture.env)).entry
         ?.heartbeatTaskState,
     ).toBeUndefined();
 
@@ -372,7 +373,7 @@ tasks:
     const jobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob);
     expect(jobs).toEqual([existingSnapshot]);
     expect(
-      resolveHeartbeatSession(fixture.cfg, "main", undefined, undefined, fixture.env).entry
+      (await resolveHeartbeatSession(fixture.cfg, "main", undefined, undefined, fixture.env)).entry
         ?.heartbeatTaskState,
     ).toEqual({ inbox: fixture.nowMs - 30 * 60_000 });
   });
@@ -418,7 +419,7 @@ tasks:
     expect(committedJobs).toHaveLength(2);
     expect(readScratch(fixture).scratch?.content).not.toContain("tasks:");
     expect(
-      resolveHeartbeatSession(fixture.cfg, "main", undefined, undefined, fixture.env).entry
+      (await resolveHeartbeatSession(fixture.cfg, "main", undefined, undefined, fixture.env)).entry
         ?.heartbeatTaskState,
     ).toEqual({ inbox: fixture.nowMs - 30 * 60_000 });
 
@@ -608,7 +609,7 @@ tasks:
       store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
     };
     const suppliedEnv = { ...fixture.env, HOME: suppliedHome };
-    const suppliedSession = resolveHeartbeatSession(
+    const suppliedSession = await resolveHeartbeatSession(
       fixture.cfg,
       "main",
       fixture.cfg.agents?.defaults?.heartbeat,
@@ -627,7 +628,7 @@ tasks:
         heartbeatTaskState: { inbox: fixture.nowMs - 30 * 60_000 },
       },
     );
-    const ambientSession = resolveHeartbeatSession(
+    const ambientSession = await resolveHeartbeatSession(
       fixture.cfg,
       "main",
       fixture.cfg.agents?.defaults?.heartbeat,
@@ -659,10 +660,10 @@ tasks:
       anchorMs: fixture.nowMs + 30 * 60_000,
     });
     expect(
-      resolveHeartbeatSession(fixture.cfg, "main", undefined, undefined, suppliedEnv).entry
+      (await resolveHeartbeatSession(fixture.cfg, "main", undefined, undefined, suppliedEnv)).entry
         ?.heartbeatTaskState,
     ).toBeUndefined();
-    expect(resolveHeartbeatSession(fixture.cfg, "main").entry?.heartbeatTaskState).toEqual({
+    expect((await resolveHeartbeatSession(fixture.cfg, "main")).entry?.heartbeatTaskState).toEqual({
       inbox: fixture.nowMs - 10 * 60_000,
       untouched: fixture.nowMs - 5_000,
     });

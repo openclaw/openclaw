@@ -126,19 +126,17 @@ export function resolveDiscordComponentAttachmentName(value: string): string {
   return readAttachmentName(value, "Attachment reference");
 }
 
+const buttonStyles = new Map<string, ButtonStyle>([
+  ["secondary", ButtonStyle.Secondary],
+  ["success", ButtonStyle.Success],
+  ["danger", ButtonStyle.Danger],
+  ["link", ButtonStyle.Link],
+]);
+
 export function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle {
-  switch (normalizeLowercaseStringOrEmpty(style ?? "primary")) {
-    case "secondary":
-      return ButtonStyle.Secondary;
-    case "success":
-      return ButtonStyle.Success;
-    case "danger":
-      return ButtonStyle.Danger;
-    case "link":
-      return ButtonStyle.Link;
-    default:
-      return ButtonStyle.Primary;
-  }
+  return (
+    buttonStyles.get(normalizeLowercaseStringOrEmpty(style ?? "primary")) ?? ButtonStyle.Primary
+  );
 }
 
 export function mapTextInputStyle(style?: DiscordModalFieldSpec["style"]) {

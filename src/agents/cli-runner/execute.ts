@@ -328,7 +328,7 @@ export async function executePreparedCliRun(
           provider: params.provider,
           model: context.normalizedModel,
           promptChars: basePrompt.length,
-          trigger: params.trigger,
+          trigger: params.isolatedCompletionPurpose ?? params.trigger,
           useResume,
           cliSessionId: cliSessionIdToUse,
           resolvedSessionId,

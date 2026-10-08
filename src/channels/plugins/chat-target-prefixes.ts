@@ -124,12 +124,9 @@ export function resolveServicePrefixedChatTarget<TService extends string, TTarge
     ...(params.extraChatPrefixes ?? []),
   ];
   return resolveServicePrefixedTarget({
-    trimmed: params.trimmed,
-    lower: params.lower,
-    servicePrefixes: params.servicePrefixes,
+    ...params,
     isChatTarget: (remainderLower) =>
       chatPrefixes.some((prefix) => remainderLower.startsWith(prefix)),
-    parseTarget: params.parseTarget,
   });
 }
 
@@ -229,11 +226,7 @@ export function createAllowedChatSenderMatcher(params: {
 }): (input: ChatSenderAllowParams) => boolean {
   return (input) =>
     isAllowedParsedChatSender({
-      allowFrom: input.allowFrom,
-      sender: input.sender,
-      chatId: input.chatId,
-      chatGuid: input.chatGuid,
-      chatIdentifier: input.chatIdentifier,
+      ...input,
       allowConversationTargets:
         input.allowConversationTargets ?? params.allowConversationTargets ?? false,
       normalizeSender: params.normalizeSender,

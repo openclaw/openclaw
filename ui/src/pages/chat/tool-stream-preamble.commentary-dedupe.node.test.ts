@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
+import { handleChatGatewayEvent } from "./chat-gateway.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
+import type { ChatState } from "./chat-state-contract.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { visibleAssistantStreamParts } from "./stream-reconciliation.ts";
 import { reconcilePersistedAssistantStream } from "./stream-segment-pruning.ts";
 import {
@@ -10,6 +16,26 @@ import {
 import { handleAgentEvent } from "./tool-stream.ts";
 
 const COMMENTARY = "I'll list the workspace files first.";
+
+function renderedTexts(host: ChatState) {
+  return buildChatItems({
+    paneId: "commentary-dedupe",
+    sessionKey: host.sessionKey,
+    runId: host.chatRunId,
+    messages: host.chatMessages ?? [],
+    toolMessages: [],
+    streamSegments: host.chatStreamSegments ?? [],
+    stream: host.chatStream,
+    streamStartedAt: host.chatStreamStartedAt,
+    showToolCalls: true,
+  }).flatMap((item) =>
+    item.kind === "group"
+      ? item.messages.map(({ message }) => extractText(message))
+      : item.kind === "stream"
+        ? [item.text.trim()]
+        : [],
+  );
+}
 
 function visibleParts(host: ReturnType<typeof createHost>) {
   return visibleAssistantStreamParts(host, {
@@ -31,6 +57,113 @@ function preamble(host: ReturnType<typeof createHost>, itemId: string, text: str
 
 describe("keyed commentary after an unphased live stream", () => {
   afterEach(() => vi.useRealTimers());
+  it.each(["history-first", "delta-first"] as const)(
+    "keeps persisted commentary once when the identified delta is %s",
+    (order) => {
+      const earlier = "An earlier observation remains visible.";
+      const text = "The saved commentary should appear once.";
+      const host = makeChatHost({ chatRunId: "run-1", sessionKey: "main", chatStream: earlier });
+      const persist = () =>
+        applySessionMessagePayload(
+          host,
+          {
+            runId: "run-1",
+            messageId: "saved-commentary-1",
+            messageSeq: 1,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              __openclaw: { id: "saved-commentary-1", seq: 1, runId: "run-1" },
+              openclawStreamFallback: { source: "segment", itemId: "commentary-1" },
+            },
+          },
+          true,
+          { kind: "live", activeRunId: "run-1" },
+        );
+      const receiveDelta = () =>
+        handleChatGatewayEvent(host, {
+          sessionKey: "main",
+          runId: "run-1",
+          seq: 2,
+          state: "delta",
+          itemId: "commentary-1",
+          itemStartOffset: `${earlier}\n\n`.length,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: `${earlier}\n\n${text}` }],
+          },
+        });
+
+      if (order === "history-first") {
+        persist();
+        receiveDelta();
+      } else {
+        receiveDelta();
+        persist();
+      }
+
+      const later = "The next identified item remains visible.";
+      const prior = `${earlier}\n\n${text}`;
+      handleChatGatewayEvent(host, {
+        sessionKey: "main",
+        runId: "run-1",
+        seq: 3,
+        state: "delta",
+        itemId: "commentary-2",
+        itemStartOffset: `${prior}\n\n`.length,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `${prior}\n\n${later}` }],
+        },
+      });
+
+      expect(renderedTexts(host)).toEqual([earlier, text, later]);
+    },
+  );
+  it("does not let stale item identity prune a newer unscoped append", () => {
+    const host = makeChatHost({ chatRunId: "run-1", sessionKey: "main" });
+    handleChatGatewayEvent(host, {
+      sessionKey: "main",
+      runId: "run-1",
+      seq: 1,
+      state: "delta",
+      itemId: "commentary-1",
+      itemStartOffset: 0,
+      message: { role: "assistant", content: [{ type: "text", text: COMMENTARY }] },
+    });
+    handleChatGatewayEvent(host, {
+      sessionKey: "main",
+      runId: "run-1",
+      seq: 2,
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `${COMMENTARY}\n\nNewer response` }],
+      },
+    });
+
+    applySessionMessagePayload(
+      host,
+      {
+        runId: "run-1",
+        messageId: "persisted-commentary",
+        messageSeq: 1,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: COMMENTARY }],
+          __openclaw: { id: "persisted-commentary", runId: "run-1", seq: 1 },
+          openclawStreamFallback: { source: "segment", itemId: "commentary-1" },
+        },
+      },
+      true,
+      { kind: "live", activeRunId: "run-1" },
+    );
+
+    expect(host.chatStreamItemId).toBeUndefined();
+    expect(host.chatStreamItemStartOffset).toBeUndefined();
+    expect(host.chatMessages?.map(extractText)).toEqual([COMMENTARY]);
+    expect(host.chatStream).toContain("Newer response");
+  });
   it("renders tool-boundary commentary once across item and chat stream", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });

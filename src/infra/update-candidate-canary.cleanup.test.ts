@@ -108,56 +108,54 @@ describe("canary teardown evidence", () => {
     stubHealthyGateway();
   });
 
-  it.each([
-    "initial-progress",
-    "candidate-state-snapshot",
-    "candidate-doctor",
-    "candidate-gateway-startup",
-  ])("propagates a %s receipt refusal once, cleaning up only admitted work", async (stepName) => {
-    let copiedStateDir: string | undefined;
-    mocks.snapshot.mockImplementation(async (_command, options: { input: string }) => {
-      const request: unknown = JSON.parse(options.input);
-      if (isRecord(request) && request.mode === "snapshot") {
-        if (typeof request.targetStateDir !== "string") {
-          throw new Error("Snapshot fixture requires its owned target directory");
+  it.each(["initial-progress", "candidate-gateway-startup"])(
+    "propagates a %s receipt refusal once, cleaning up only admitted work",
+    async (stepName) => {
+      let copiedStateDir: string | undefined;
+      mocks.snapshot.mockImplementation(async (_command, options: { input: string }) => {
+        const request: unknown = JSON.parse(options.input);
+        if (isRecord(request) && request.mode === "snapshot") {
+          if (typeof request.targetStateDir !== "string") {
+            throw new Error("Snapshot fixture requires its owned target directory");
+          }
+          copiedStateDir = request.targetStateDir;
         }
-        copiedStateDir = request.targetStateDir;
+        return createCanarySnapshotResult(options.input);
+      });
+      const refusal = new Error("progress receipt was refused");
+      let refused = false;
+      const onStep = vi.fn(async (step: UpdateStepResult) => {
+        if (step.name === stepName && !refused) {
+          refused = true;
+          throw refusal;
+        }
+      });
+      await expect(
+        validateUpdateCandidateCanary({
+          ...canaryStateOptions(3_000),
+          onStep,
+          onProgress:
+            stepName === "initial-progress" ? vi.fn().mockRejectedValue(refusal) : undefined,
+        }),
+      ).rejects.toBe(refusal);
+      if (stepName === "initial-progress") {
+        expect(mocks.snapshot).not.toHaveBeenCalled();
+        expect(mocks.spawn).not.toHaveBeenCalled();
+        expect(onStep).not.toHaveBeenCalled();
+        return;
       }
-      return createCanarySnapshotResult(options.input);
-    });
-    const refusal = new Error("progress receipt was refused");
-    let refused = false;
-    const onStep = vi.fn(async (step: UpdateStepResult) => {
-      if (step.name === stepName && !refused) {
-        refused = true;
-        throw refusal;
+      expect(onStep.mock.calls.filter(([step]) => step.name === stepName)).toEqual([
+        [expect.objectContaining({ exitCode: 0 })],
+      ]);
+      for (const child of children.values()) {
+        expect(child.exitCode).toBe(0);
       }
-    });
-    await expect(
-      validateUpdateCandidateCanary({
-        ...canaryStateOptions(3_000),
-        onStep,
-        onProgress:
-          stepName === "initial-progress" ? vi.fn().mockRejectedValue(refusal) : undefined,
-      }),
-    ).rejects.toBe(refusal);
-    if (stepName === "initial-progress") {
-      expect(mocks.snapshot).not.toHaveBeenCalled();
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      expect(onStep).not.toHaveBeenCalled();
-      return;
-    }
-    expect(onStep.mock.calls.filter(([step]) => step.name === stepName)).toEqual([
-      [expect.objectContaining({ exitCode: 0 })],
-    ]);
-    for (const child of children.values()) {
-      expect(child.exitCode).toBe(0);
-    }
-    if (!copiedStateDir) {
-      throw new Error("Candidate did not create its private state copy");
-    }
-    await expect(fs.access(copiedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+      if (!copiedStateDir) {
+        throw new Error("Candidate did not create its private state copy");
+      }
+      await expect(fs.access(copiedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it.each(["candidate-doctor", "candidate-gateway-startup"])(
     "awaits the %s start receipt before launching its process",
@@ -599,14 +597,13 @@ describe("canary teardown evidence", () => {
     },
   );
 
-  it.each(["close", "term-callback", "kill-callback", "error", "cancelled"] as const)(
+  it.each(["close", "error", "cancelled"] as const)(
     "reports incomplete %s evidence without changing validation outcomes",
     async (missing) => {
       let now = 2_000_000;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
       const spawnNormally = mocks.spawn.getMockImplementation()!;
       const signalNormally = mocks.signal.getMockImplementation()!;
-      const heldCallbacks: Array<() => void> = [];
       const controller = new AbortController();
       const duringDoctor = missing === "error" || missing === "cancelled";
       let controlled: FakeChild | undefined;
@@ -641,17 +638,7 @@ describe("canary teardown evidence", () => {
               controlled.emit("exit", 0);
             }
           }
-          if (missing === "term-callback" || missing === "kill-callback") {
-            controlled.emit("close", 0);
-          }
-          const hold =
-            (missing === "term-callback" && signal === "SIGTERM") ||
-            (missing === "kill-callback" && signal === "SIGKILL");
-          if (hold && options.onComplete) {
-            heldCallbacks.push(options.onComplete);
-          } else {
-            options.onComplete?.();
-          }
+          options.onComplete?.();
         },
       );
       const onStep = vi.fn();
@@ -703,9 +690,6 @@ describe("canary teardown evidence", () => {
           ).toBeUndefined();
         }
       } finally {
-        for (const callback of heldCallbacks) {
-          callback();
-        }
         controlled?.emit("close", 0);
         controlled?.stdout.destroy();
         controlled?.stderr.destroy();

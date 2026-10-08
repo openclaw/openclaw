@@ -91,6 +91,29 @@ describe("prepared model runtime owner selection", () => {
     },
   );
 
+  it("prepares prompt-only runtime owners separately from the configured agent generation", async () => {
+    const config = gatewayConfig();
+    await publishGateway(config, { catalogMode: "static" });
+    const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
+    const lease = await acquireAgentRunPreparedModelRuntime(
+      {
+        ...fixture.agentInput("default", config),
+        runtimePluginPurpose: "isolated-completion",
+        runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5" }],
+      },
+      { catalogMode: "static" },
+    );
+    try {
+      expect(lease.pluginGeneration).not.toBe(published.pluginGeneration);
+      expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.calls[0]?.[0]).toMatchObject({
+        purpose: "isolated-completion",
+      });
+    } finally {
+      await lease[Symbol.asyncDispose]();
+    }
+  });
+
   it.each(["static", undefined] as const)(
     "keeps isolated executable catalogs separate from live discovery (%s)",
     async (catalogMode) => {

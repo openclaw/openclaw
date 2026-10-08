@@ -515,7 +515,6 @@ function shouldUseOpenAIResponsesTransport(params: {
   return isPlatformEndpoint;
 }
 
-/** Resolves the effective authored OpenAI config route for one model. */
 function resolveAuthoredOpenAIConfigRoute(params: {
   provider: string;
   modelId?: string;
@@ -567,7 +566,6 @@ function resolveAuthoredOpenAICompletionsRoute(params: {
 }
 
 function shouldUseCodexResponsesHooks(params: {
-  provider?: string;
   api?: ProviderRuntimeModel["api"] | null;
   baseUrl?: string;
 }): boolean {
@@ -580,7 +578,6 @@ function shouldUseCodexResponsesHooks(params: {
 function shouldResolveDynamicModelThroughCodex(ctx: ProviderResolveDynamicModelContext): boolean {
   if (
     shouldUseCodexResponsesHooks({
-      provider: ctx.provider,
       api: ctx.providerConfig?.api,
       baseUrl: ctx.providerConfig?.baseUrl,
     })
@@ -888,7 +885,6 @@ export function buildOpenAIProvider(): ProviderPlugin {
       }
       if (
         shouldUseCodexResponsesHooks({
-          provider: ctx.provider,
           api: ctx.model.api,
           baseUrl: ctx.model.baseUrl,
         })
@@ -931,7 +927,6 @@ export function buildOpenAIProvider(): ProviderPlugin {
       const providerConfig = ctx.config?.models?.providers?.[PROVIDER_ID];
       const useCodexTransport =
         shouldUseCodexResponsesHooks({
-          provider: ctx.provider,
           api: ctx.model?.api,
           baseUrl: ctx.model?.baseUrl,
         }) ||

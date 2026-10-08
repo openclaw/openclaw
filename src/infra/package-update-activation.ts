@@ -43,7 +43,7 @@ import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 export type { PackageActivationStatus } from "./package-update-activation-status.js";
 
-/** Read-only correlation; callers still need a privately registered live fence. */
+/** Reconcile completed receipts; unfinished operations still require a live fence. */
 function readPackageActivationContinuation(installKey: string) {
   const anchor = resolvePackageActivationAnchor(installKey);
   const released = readReleasedPackageActivationReceipt(installKey);
@@ -65,7 +65,7 @@ function readPackageActivationContinuation(installKey: string) {
     }
     return undefined;
   }
-  const record = openPackageActivationJournal(anchor).read();
+  const record = openPackageActivationJournal(anchor).readForAdmission(installKey);
   if (isPackageActivationComplete(anchor, record)) {
     return undefined;
   }

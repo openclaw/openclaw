@@ -1,5 +1,3 @@
-// Gateway credential resolution.
-// Selects token/password credentials from explicit, env, local, and remote config inputs.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createGatewayCredentialPlan,
@@ -22,16 +20,12 @@ export function resolveExplicitGatewayAuth(auth?: ExplicitGatewayAuth): Explicit
   };
 }
 
-/** Selects local Gateway credentials or remote Gateway client credentials. */
 export type GatewayCredentialMode = "local" | "remote";
 
-/** Chooses whether environment credentials or config credentials win for local auth. */
 export type GatewayCredentialPrecedence = "env-first" | "config-first";
 
-/** Chooses whether remote config or environment credentials win for remote client auth. */
 export type GatewayRemoteCredentialPrecedence = "remote-first" | "env-first";
 
-/** Controls whether remote client auth may fall back to env/local credentials. */
 export type GatewayRemoteCredentialFallback = "remote-env-local" | "remote-only";
 
 const GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE = "GATEWAY_SECRET_REF_UNAVAILABLE"; // pragma: allowlist secret
@@ -54,7 +48,6 @@ export class GatewaySecretRefUnavailableError extends Error {
   }
 }
 
-/** Type guard for unresolved Gateway secret-ref errors, optionally scoped to a config path. */
 export function isGatewaySecretRefUnavailableError(
   error: unknown,
   expectedPath?: string,
@@ -65,7 +58,6 @@ export function isGatewaySecretRefUnavailableError(
   );
 }
 
-/** Resolve direct token/password values with caller-selected env-vs-config precedence. */
 export function resolveGatewayCredentialsFromValues(params: {
   configToken?: unknown;
   configPassword?: unknown;
@@ -230,7 +222,6 @@ function resolveRemoteGatewayCredentials(params: {
   return { token, password };
 }
 
-/** Resolve Gateway credentials from config, explicit auth, URL overrides, and mode policy. */
 export function resolveGatewayCredentialsFromConfig(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

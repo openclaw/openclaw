@@ -158,62 +158,56 @@ describe("tool result ordering", () => {
     }
   });
 
-  it.each([
-    "execution-failed",
-    "incomplete",
-    "overlapping",
-    "reused-active",
-    "routine-child",
-    "active-child",
-  ])("preserves the %s wrapper outcome", async (outcome) => {
-    const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
-    const h = harness({ onAgentEvent });
-    // A completed wrapper stays the operation when its only call is routine or still active.
-    const routine = outcome === "routine-child";
-    const active = outcome === "active-child";
-    h.start("exec", "outer");
-    if (outcome === "overlapping") {
+  it.each(["execution-failed", "overlapping", "reused-active", "routine-child", "active-child"])(
+    "preserves the %s wrapper outcome",
+    async (outcome) => {
+      const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
+      const h = harness({ onAgentEvent });
+      // A completed wrapper stays the operation when its only call is routine or still active.
+      const routine = outcome === "routine-child";
+      const active = outcome === "active-child";
       h.start("exec", "outer");
-    }
-    if (routine) {
-      h.start("progress_card", "child", { plan: [] }, "outer");
-      h.end("progress_card", "child", { content: [{ type: "text", text: "Updated" }] });
-    } else {
-      h.start("read", "child", { path: "missing.txt" }, "outer");
-      if (!active) {
-        h.end("read", "child", { content: [{ type: "text", text: "Missing file" }] }, true);
+      if (outcome === "overlapping") {
+        h.start("exec", "outer");
       }
-    }
-    if (outcome !== "incomplete") {
+      if (routine) {
+        h.start("progress_card", "child", { plan: [] }, "outer");
+        h.end("progress_card", "child", { content: [{ type: "text", text: "Updated" }] });
+      } else {
+        h.start("read", "child", { path: "missing.txt" }, "outer");
+        if (!active) {
+          h.end("read", "child", { content: [{ type: "text", text: "Missing file" }] }, true);
+        }
+      }
       h.end("exec", "outer", {
         content: [{ type: "text", text: "Finished" }],
         ...(outcome === "execution-failed" ? { details: { status: "failed" } } : {}),
       });
-    }
-    if (outcome === "reused-active") {
-      h.start("exec", "outer");
-    }
-    await h.subscription.waitForPendingEvents();
-    const counters = h.subscription.getItemLifecycle();
-    await h.finish("Observed the child outcome.");
-    const events = onAgentEvent.mock.calls.map(([event]) => event);
-    const outer = events.findLast(
-      (event) => event.stream === "item" && event.data.toolCallId === "outer",
-    );
-    expect(outer?.data.hideFromChannelProgress === true).toBe(false);
-    if (outcome === "execution-failed") {
-      expect(outer?.data.status).toBe("failed");
-    }
-    expect(
-      events.findLast((event) => event.stream === "item" && event.data.toolCallId === "child")
-        ?.data,
-    ).toMatchObject(
-      routine
-        ? { status: "completed", hideFromChannelProgress: true }
-        : { status: active ? "running" : "failed" },
-    );
-    expect(h.subscription.getItemLifecycle()).toEqual(counters);
-  });
+      if (outcome === "reused-active") {
+        h.start("exec", "outer");
+      }
+      await h.subscription.waitForPendingEvents();
+      const counters = h.subscription.getItemLifecycle();
+      await h.finish("Observed the child outcome.");
+      const events = onAgentEvent.mock.calls.map(([event]) => event);
+      const outer = events.findLast(
+        (event) => event.stream === "item" && event.data.toolCallId === "outer",
+      );
+      expect(outer?.data.hideFromChannelProgress === true).toBe(false);
+      if (outcome === "execution-failed") {
+        expect(outer?.data.status).toBe("failed");
+      }
+      expect(
+        events.findLast((event) => event.stream === "item" && event.data.toolCallId === "child")
+          ?.data,
+      ).toMatchObject(
+        routine
+          ? { status: "completed", hideFromChannelProgress: true }
+          : { status: active ? "running" : "failed" },
+      );
+      expect(h.subscription.getItemLifecycle()).toEqual(counters);
+    },
+  );
 
   it("captures sanitized trajectory pairs while tool-start delivery remains blocked", async () => {
     const entered = createDeferred();

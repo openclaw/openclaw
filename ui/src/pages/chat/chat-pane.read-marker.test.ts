@@ -324,6 +324,26 @@ describe("chat pane read markers", () => {
       ]);
     });
 
+    it("does not acknowledge a hidden child's active attention when its parent opens", () => {
+      const blocked = run("blocked", {
+        agentStatus: {
+          note: "Waiting for debugger authentication",
+          attention: "key",
+          expiresAt: Date.now() + 60_000,
+        },
+      });
+      const { pane, state, patch } = createParentPane([blocked]);
+      pane.markSessionRead(parent);
+      expect(patch).not.toHaveBeenCalled();
+      state.sessionsResult = sessionsResult([parent, { ...blocked, agentStatus: undefined }], 21);
+      pane.markSessionRead(parent);
+      expect(patch).toHaveBeenCalledExactlyOnceWith(
+        blocked.key,
+        { unread: false },
+        { agentId: "main", expectedMarkedUnreadAt: null },
+      );
+    });
+
     it("leaves persistent children, read runs, failures, and manual markers unread", () => {
       const { pane, patch } = createParentPane([
         {

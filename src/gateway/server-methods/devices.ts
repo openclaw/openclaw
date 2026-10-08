@@ -60,9 +60,6 @@ import type {
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-const DEVICE_PAIR_APPROVAL_DENIED_MESSAGE = "device pairing approval denied";
-const DEVICE_PAIR_REJECTION_DENIED_MESSAGE = "device pairing rejection denied";
-
 function redactPairedDevice(device: PairedDevice, connected?: boolean): RedactedPairedDevice {
   // Pairing lists are visible to operators; expose token lifecycle metadata
   // without returning raw token material or the internal approved-scope set.
@@ -175,6 +172,38 @@ function emitDevicePairingDeniedSecurityEvent(params: {
   });
 }
 
+function authorizePairingDecision(
+  operation: "approve" | "reject",
+  requestId: string,
+  pending: Awaited<ReturnType<typeof getPendingDevicePairing>>,
+  authz: DeviceSessionAuthz,
+  { respond, context }: Pick<GatewayRequestHandlerOptions, "respond" | "context">,
+): boolean {
+  const reason = pending
+    ? authz.callerDeviceId && pending.deviceId.trim() !== authz.callerDeviceId
+      ? "device-ownership-mismatch"
+      : operation === "approve" && requestsNonOperatorDeviceRole(pending)
+        ? "role-management-requires-admin"
+        : undefined
+    : undefined;
+  if (pending && !reason) {
+    return true;
+  }
+  const decision = operation === "approve" ? "approval" : "rejection";
+  const message = `device pairing ${decision} denied`;
+  if (pending && reason) {
+    context.logGateway.warn(`${message} request=${requestId} reason=${reason}`);
+    emitDevicePairingDeniedSecurityEvent({
+      authz,
+      targetDeviceId: pending.deviceId,
+      controlId: `device.pair.${operation}`,
+      reason,
+    });
+  }
+  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+  return false;
+}
+
 function emitDevicePairingLifecycleSecurityEvent(params: {
   action:
     | "device.pairing.approved"
@@ -257,35 +286,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     const authz = resolveDeviceSessionAuthz(client);
     if (!authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
-      if (!pending) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_APPROVAL_DENIED_MESSAGE),
-        );
-        return;
-      }
-      const reason =
-        authz.callerDeviceId && pending.deviceId.trim() !== authz.callerDeviceId
-          ? "device-ownership-mismatch"
-          : requestsNonOperatorDeviceRole(pending)
-            ? "role-management-requires-admin"
-            : undefined;
-      if (reason) {
-        context.logGateway.warn(
-          `device pairing approval denied request=${requestId} reason=${reason}`,
-        );
-        emitDevicePairingDeniedSecurityEvent({
-          authz,
-          targetDeviceId: pending.deviceId,
-          controlId: "device.pair.approve",
-          reason,
-        });
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_APPROVAL_DENIED_MESSAGE),
-        );
+      if (!authorizePairingDecision("approve", requestId, pending, authz, { respond, context })) {
         return;
       }
     }
@@ -359,29 +360,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     const authz = resolveDeviceSessionAuthz(client);
     if (authz.callerDeviceId && !authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
-      if (!pending) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_REJECTION_DENIED_MESSAGE),
-        );
-        return;
-      }
-      if (pending.deviceId.trim() !== authz.callerDeviceId) {
-        context.logGateway.warn(
-          `device pairing rejection denied request=${requestId} reason=device-ownership-mismatch`,
-        );
-        emitDevicePairingDeniedSecurityEvent({
-          authz,
-          targetDeviceId: pending.deviceId,
-          controlId: "device.pair.reject",
-          reason: "device-ownership-mismatch",
-        });
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_REJECTION_DENIED_MESSAGE),
-        );
+      if (!authorizePairingDecision("reject", requestId, pending, authz, { respond, context })) {
         return;
       }
     }

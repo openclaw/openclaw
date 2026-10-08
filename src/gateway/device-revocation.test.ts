@@ -5,6 +5,7 @@ import {
   bindGatewayDeviceRevocation,
   captureGatewayDeviceRevocation,
   closeGatewayDeviceRevocation,
+  hasPreparedGatewayDeviceAuthority,
   invalidateGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
   retainGatewayDeviceRevocation,
@@ -27,7 +28,10 @@ describe("Gateway device revocation", () => {
     );
     transportCurrent = false;
     expect(request.isCurrent()).toBe(false);
+    const client = { invalidated: true };
+    expect(hasPreparedGatewayDeviceAuthority(client, request.isCurrent)).toBe(false);
     expect(acceptGatewayDeviceSourceAuthority(request.isCurrent)).toBe(true);
+    expect(hasPreparedGatewayDeviceAuthority(client, request.isCurrent)).toBe(true);
     const accepted = expectDefined(
       readAcceptedGatewayDeviceSourceAuthority(request.isCurrent),
       "accepted source",
@@ -38,6 +42,7 @@ describe("Gateway device revocation", () => {
     expect(accepted()).toBe(true);
     sourceCurrent = false;
     expect(request.isCurrent()).toBe(false);
+    expect(hasPreparedGatewayDeviceAuthority(client, request.isCurrent)).toBe(false);
     expect(accepted()).toBe(false);
     sourceCurrent = true;
     releaseInput();
@@ -46,6 +51,7 @@ describe("Gateway device revocation", () => {
     expect(request.isCurrent()).toBe(false);
     expect(accepted()).toBe(false);
     expect(acceptGatewayDeviceSourceAuthority(request.isCurrent)).toBe(false);
+    expect(hasPreparedGatewayDeviceAuthority(client, request.isCurrent)).toBe(false);
     expect(() => retainGatewayDeviceRevocation(request.isCurrent)).toThrow("no longer active");
   });
 

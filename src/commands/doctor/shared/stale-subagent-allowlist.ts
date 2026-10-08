@@ -57,10 +57,7 @@ function collectStaleAllowlistEntries(params: {
       continue;
     }
     const normalizedAgentId = normalizeAgentId(trimmed);
-    if (params.configuredTargetIds.has(normalizedAgentId)) {
-      continue;
-    }
-    if (seen.has(normalizedAgentId)) {
+    if (params.configuredTargetIds.has(normalizedAgentId) || seen.has(normalizedAgentId)) {
       continue;
     }
     seen.add(normalizedAgentId);

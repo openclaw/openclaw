@@ -578,6 +578,7 @@ it("joins admitted restore checks without starting carrier work after a delayed 
             callId: "restored-expired",
             providerCallId: "provider-expired",
             startedAt: Date.now() - 400_000,
+            answeredAt: Date.now() - 400_000,
           }),
         ),
       );
@@ -690,6 +691,7 @@ it("observes restore write failures while awaiting another carrier", async () =>
             callId: "restore-expired-second",
             providerCallId: "provider-expired-second",
             startedAt: Date.now() - 400_000,
+            answeredAt: Date.now() - 400_000,
           }),
         ),
       );

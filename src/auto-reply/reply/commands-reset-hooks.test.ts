@@ -69,7 +69,8 @@ vi.mock("./commands-handlers.runtime.js", () => ({
   loadCommandHandlers: () => [],
 }));
 
-vi.mock("./route-reply.runtime.js", () => ({
+vi.mock("./route-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./route-reply.js")>()),
   routeReply: (params: unknown) => routeReplyMock(params),
 }));
 

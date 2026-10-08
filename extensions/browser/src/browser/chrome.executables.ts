@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { pathExistsSync as exists } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -223,11 +224,10 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
   if (!desktopId) {
     return null;
   }
-  const trimmed = desktopId.trim();
-  if (!CHROMIUM_DESKTOP_IDS.has(trimmed)) {
+  if (!CHROMIUM_DESKTOP_IDS.has(desktopId)) {
     return null;
   }
-  const desktopPath = findDesktopFilePath(trimmed);
+  const desktopPath = findDesktopFilePath(desktopId);
   if (!desktopPath) {
     return null;
   }
@@ -485,15 +485,34 @@ function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecuta
   return candidates;
 }
 
+function getPlaywrightEnv(name: string): string | undefined {
+  const suffix = name.toLowerCase();
+  return (
+    process.env[name] ??
+    process.env[`npm_config_${suffix}`] ??
+    process.env[`npm_package_config_${suffix}`]
+  );
+}
+
 function getPlaywrightBrowserCachePaths(): string[] {
-  const configured = normalizeOptionalString(process.env[PLAYWRIGHT_BROWSERS_PATH_ENV]);
+  const configured = getPlaywrightEnv(PLAYWRIGHT_BROWSERS_PATH_ENV);
   const cacheHome = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
-  return [
-    ...new Set([
-      ...(configured && configured !== "0" ? [configured] : []),
-      path.join(cacheHome, "ms-playwright"),
-    ]),
-  ];
+  const candidates = [path.join(cacheHome, "ms-playwright")];
+  if (configured === "0") {
+    try {
+      const packageRoot = path.dirname(
+        fileURLToPath(import.meta.resolve("playwright-core/package.json")),
+      );
+      candidates.unshift(path.join(packageRoot, ".local-browsers"));
+    } catch {
+      // A missing Playwright package must not hide the default cache.
+    }
+  } else if (configured) {
+    candidates.unshift(configured);
+  }
+  // Match Playwright's install-time base without importing its browser runtime.
+  const base = getPlaywrightEnv("INIT_CWD") || process.cwd();
+  return [...new Set(candidates.map((candidate) => path.resolve(base, candidate)))];
 }
 
 function readSortedDirNames(dir: string): string[] {

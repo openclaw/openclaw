@@ -246,6 +246,18 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     ]);
   });
 
+  it("gives the restart-auth lane a job timeout above its lane budget", () => {
+    expect(
+      planTargetedDockerLaneGroups({
+        groupSize: 1,
+        lanes: "update-restart-auth plugin-update",
+      }),
+    ).toEqual([
+      { docker_lanes: "update-restart-auth", label: "update-restart-auth", timeout_minutes: 75 },
+      { docker_lanes: "plugin-update", label: "plugin-update" },
+    ]);
+  });
+
   it("shards published upgrade survivor by baseline while preserving surrounding lanes", () => {
     expect(
       planTargetedDockerLaneGroups({

@@ -87,6 +87,10 @@ const formatProbeLine = (
   if (!record) {
     return null;
   }
+  if (record.timedOut === true) {
+    const error = typeof record.error === "string" ? record.error : "health collection timed out";
+    return `warning - ${sanitizeTerminalText(error)}`;
+  }
   const ok = typeof record.ok === "boolean" ? record.ok : undefined;
   if (ok === undefined) {
     return null;
@@ -239,9 +243,11 @@ export const formatHealthChannelLines = (
       continue;
     }
 
-    const failedSummary = activeSummaries.find(
-      (account) => asNullableRecord(account.probe)?.ok === false,
-    );
+    const failedSummary =
+      activeSummaries.find((account) => {
+        const probe = asNullableRecord(account.probe);
+        return probe?.ok === false && probe.timedOut !== true;
+      }) ?? activeSummaries.find((account) => asNullableRecord(account.probe)?.timedOut === true);
     if (failedSummary) {
       const failureLine = formatProbeLine(failedSummary.probe);
       if (failureLine) {

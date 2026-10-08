@@ -445,6 +445,7 @@ export async function prepareImplicitProviderStaticCatalog(
   });
   const prepared = await prepareProviderStaticCatalog({
     signal: params.signal,
+    ...(staticCatalogProviderIds ? { providerIds: [...staticCatalogProviderIds] } : {}),
     providers: staticCatalogProviderIds
       ? eligibleProviders.filter((provider) => {
           if ([...staticCatalogProviderIds].some((id) => matchesProviderPluginRef(provider, id))) {

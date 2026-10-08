@@ -288,6 +288,7 @@ describe("plugin session extension SessionEntry projection", () => {
       "completion-custody": "restartRecoveryHarnessCompletion",
       "retired-execsecurity": "execSecurity",
       "retired-execask": "execAsk",
+      "retired-conversation-link": "conversationLink",
     };
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({

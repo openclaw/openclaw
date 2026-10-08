@@ -146,6 +146,7 @@ describe("restart health", () => {
     await expect(
       confirmGatewayReachable({
         port: 18_789,
+        auth: { token: "fixture-token" },
         configuredProbe,
         config: { gateway: { tls: { enabled: true } } },
       }),

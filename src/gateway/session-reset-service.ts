@@ -3,13 +3,11 @@
 import { randomUUID } from "node:crypto";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
@@ -30,7 +28,8 @@ import {
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { acquireAgentRuntimeCleanupRegistries } from "../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import { readRegistryWorktree } from "../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../agents/worktrees/run-end-lifecycle.js";
 import {
   clearSessionResetRuntimeState,
   createSessionResetCleanupGuard,
@@ -88,6 +87,7 @@ import {
   handleSessionStateSessionDeleted,
   handleSessionStateSessionReset,
 } from "../sessions/session-state-events.js";
+import { finalizeDetachedSessionWorktree } from "../sessions/session-worktree-lifecycle.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
@@ -547,6 +547,8 @@ export async function performGatewaySessionReset(params: {
     }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
+  const worktreeContext = captureWorktreeRunEndContext(process.env);
+  const worktreeEnv = { ...process.env, ...worktreeContext.environment };
   const resetTarget = await resolveSessionResetTarget(getRuntimeConfig(), params);
   if (!resetTarget.ok) {
     return resetTarget;
@@ -823,12 +825,18 @@ export async function performGatewaySessionReset(params: {
         return invalidSessionRequest(placementRetirementError.message);
       }
       if (entry?.worktree?.id) {
-        const record = managedWorktrees.findLiveById(entry.worktree.id);
-        if (record) {
+        const record = await readRegistryWorktree(worktreeContext, entry.worktree.id);
+        params.assertCurrent?.();
+        if (record && record.removedAt === undefined) {
           const { withSettledLocalWorkspace } =
             await import("./worker-environments/local-workspace-projection.js");
           await withSettledLocalWorkspace(
-            { worktree: record, assertCurrent: params.assertCurrent, retireRuntime: true },
+            {
+              worktree: record,
+              env: worktreeEnv,
+              assertCurrent: params.assertCurrent,
+              retireRuntime: true,
+            },
             async () => {},
           );
         }
@@ -1327,24 +1335,13 @@ export async function performGatewaySessionReset(params: {
             );
           }
           if (detachedWorktreeId) {
-            postCommitActions.push(async () => {
-              // Finalize the old checkout before the fence opens to same-key successors.
-              try {
-                if (!(await managedWorktrees.removeIfLossless(detachedWorktreeId))) {
-                  const retained = managedWorktrees.findLiveById(detachedWorktreeId);
-                  if (retained) {
-                    const safePath = truncateUtf16Safe(sanitizeForLog(retained.path), 256);
-                    reportLifecycleCleanupError(
-                      new Error(
-                        `worktree retained: branch=${retained.branch} path=${safePath} outcome=${retained.runEndCleanup?.outcome}`,
-                      ),
-                    );
-                  }
-                }
-              } catch (error) {
-                reportLifecycleCleanupError(error);
-              }
-            });
+            postCommitActions.push(() =>
+              finalizeDetachedSessionWorktree({
+                id: detachedWorktreeId,
+                env: worktreeEnv,
+                context: worktreeContext,
+              }).catch(reportLifecycleCleanupError),
+            );
           }
           clearBootstrapSnapshotOnSessionBoundary({
             boundaryAppended: resetBoundaryAppended,

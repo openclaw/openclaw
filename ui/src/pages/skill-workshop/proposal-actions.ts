@@ -216,9 +216,7 @@ export async function runSkillWorkshopEvaluation(
     return false;
   }
   const requestAgentId = loadedSkillWorkshopAgentId(state, context);
-  if (state.skillWorkshopAgentId === null) {
-    state.skillWorkshopAgentId = requestAgentId;
-  }
+  state.skillWorkshopAgentId ??= requestAgentId;
   state.skillWorkshopActionBusy = { key: proposalId, action: "evaluate" };
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;
@@ -311,9 +309,7 @@ export async function requestSkillWorkshopRevision(
     return null;
   }
   const proposalAgentId = loadedSkillWorkshopAgentId(state, context);
-  if (state.skillWorkshopAgentId === null) {
-    state.skillWorkshopAgentId = proposalAgentId;
-  }
+  state.skillWorkshopAgentId ??= proposalAgentId;
   state.skillWorkshopActionBusy = { key: proposalId, action: "revise" };
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;

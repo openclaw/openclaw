@@ -14,6 +14,12 @@ import {
 } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
+  affectsPlacementObservation,
+  applyPlacementReadPublication,
+  hasPendingPublication,
+  retainSessionPlacementRead,
+} from "./placement-read-authority.js";
+import {
   isCurrentPlacementTurnClaim,
   sameWorkerSessionTurnClaim,
   required,
@@ -21,78 +27,21 @@ import {
   type WorkerSessionTurnClaim,
   type WorkerSessionTurnClaimFacts,
 } from "./placement-record.js";
+import type {
+  ClaimChange,
+  PlacementAuthorityOwner,
+  PlacementTurnClaimAuthority,
+  RetainedClaim,
+  WorkspaceResultFacts,
+  WorkspaceResultPostimage,
+} from "./placement-turn-authority.types.js";
 import {
   isCurrentWorkerWorkspacePendingResultOwner,
   matchesWorkspaceResultClaim,
 } from "./placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
-export type PlacementTurnClaimAuthority = {
-  readonly claim: WorkerSessionTurnClaim;
-  readonly identity: Readonly<{ agentId: string; sessionKey: string }>;
-  isCurrent: () => boolean;
-  onRevoked: (listener: () => void) => () => void;
-  release: () => void;
-};
-
-type ClaimChange = {
-  sessionId: string;
-  sequence?: number;
-  indeterminate?: true;
-} & (
-  | {
-      kind: "claim";
-      localOnly?: boolean;
-      facts?: WorkerSessionTurnClaimFacts;
-      workspaceResult?: WorkspaceResultPostimage;
-      workspacePlacement?: WorkerSessionPlacementRecord;
-    }
-  | { kind: "workspace-result"; facts?: WorkspaceResultPostimage }
-  | { kind: "journal"; uncertain?: true }
-  | { kind: "tools"; claimId: string; authority?: ToolAuthority }
-);
-type WorkspaceResultPostimage = {
-  placement: WorkerSessionPlacementRecord;
-  pendingResult: WorkerWorkspacePendingResult | undefined;
-};
-type WorkspaceResultFacts = WorkspaceResultPostimage & {
-  pendingResult: WorkerWorkspacePendingResult;
-};
-type ToolAuthority = { claim: WorkerSessionTurnClaim; toolNames: readonly string[] };
-type RetainedClaim = {
-  claim: WorkerSessionTurnClaim;
-  facts?: WorkerSessionTurnClaimFacts;
-  createdSequence: number;
-  publicationSequence: number;
-  revoked: boolean;
-  released: boolean;
-  listeners: Set<() => void>;
-};
-type PlacementAuthorityOwner = {
-  identity: DatabasePathIdentity;
-  active: boolean;
-  claims: Map<string, Set<RetainedClaim>>;
-  observations: Map<string | undefined, Set<{ revoked: boolean; indeterminate: boolean }>>;
-  pending: Set<ClaimChange>;
-  settlementListeners: Set<() => void>;
-  sequence: number;
-  published: Map<string, number>;
-  tools: Map<string, { sequence: number; authority?: ToolAuthority }>;
-  workspaceResults: Map<string, WorkspaceResultFacts>;
-};
-
-function hasPendingPublication(owner: PlacementAuthorityOwner, sessionId?: string): boolean {
-  return [...owner.pending].some((change) => affectsPlacementObservation(change, sessionId));
-}
-
-function affectsPlacementObservation(change: ClaimChange, sessionId?: string): boolean {
-  return (
-    change.kind !== "tools" &&
-    (sessionId === undefined
-      ? change.kind !== "claim" || !change.localOnly
-      : change.sessionId === sessionId)
-  );
-}
+export type { PlacementTurnClaimAuthority } from "./placement-turn-authority.types.js";
 
 function notifyRevoked(claim: RetainedClaim): void {
   if (!claim.revoked) {
@@ -120,6 +69,7 @@ function closeOwner(owner: PlacementAuthorityOwner): void {
   }
   owner.claims.clear();
   owner.observations.clear();
+  owner.placementReaders.clear();
 }
 
 const owners = resolveGlobalSingleton(
@@ -143,6 +93,7 @@ function ownerFor(identity: DatabasePathIdentity): PlacementAuthorityOwner {
     active: true,
     claims: new Map(),
     observations: new Map(),
+    placementReaders: new Map(),
     pending: new Set(),
     settlementListeners: new Set(),
     sequence: 0,
@@ -182,6 +133,7 @@ function prunePublication(owner: PlacementAuthorityOwner, sessionId: string): vo
     !owner.claims.has(sessionId) &&
     !owner.workspaceResults.has(sessionId) &&
     !owner.observations.has(sessionId) &&
+    !owner.placementReaders.has(sessionId) &&
     ![...owner.pending].some((change) => change.sessionId === sessionId)
   ) {
     owner.published.delete(sessionId);
@@ -197,6 +149,7 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
   if (!owner.active) {
     return;
   }
+  applyPlacementReadPublication(owner, change, sequence);
   const tools = owner.tools.get(change.sessionId);
   if (change.kind === "tools") {
     if (sequence > (tools?.sequence ?? -1)) {
@@ -344,10 +297,20 @@ export async function preparePlacementAuthorityRead<T>(
   sessionId: string,
   read: () => Promise<T>,
 ) {
-  const { authority, observation, owner, assertUsable } = capturePlacementObservation(
-    pathname,
-    sessionId,
-  );
+  return await preparePlacementRead(pathname, sessionId, read, (value, { authority }) => ({
+    value,
+    ...authority,
+  }));
+}
+
+async function preparePlacementRead<T, Result>(
+  pathname: string,
+  sessionId: string,
+  read: () => Promise<T>,
+  consume: (value: T, captured: ReturnType<typeof capturePlacementObservation>) => Result,
+): Promise<Result> {
+  const captured = capturePlacementObservation(pathname, sessionId);
+  const { authority, observation, owner, assertUsable } = captured;
   const signal = getAsyncWorkSignal();
   const assertReading = () => {
     signal?.throwIfAborted();
@@ -370,13 +333,24 @@ export async function preparePlacementAuthorityRead<T>(
       const value = await read();
       assertReading();
       if (!observation.revoked && !hasPendingPublication(owner, sessionId)) {
-        return { value, ...authority };
+        return consume(value, captured);
       }
     }
   } catch (error) {
     authority.release();
     throw error;
   }
+}
+
+/** Retain writer postimages, rather than invalidating a destination on ordinary turn claims. */
+export async function prepareSessionPlacementRead(
+  pathname: string,
+  sessionId: string,
+  read: () => Promise<WorkerSessionPlacementRecord | undefined>,
+) {
+  return await preparePlacementRead(pathname, sessionId, read, (placement, captured) => {
+    return retainSessionPlacementRead(sessionId, placement, captured);
+  });
 }
 
 function stageChange(db: DatabaseSync, change: ClaimChange): void {
@@ -417,12 +391,14 @@ export function stagePlacementTurnClaimWorkerPublication(
   facts: WorkerSessionTurnClaimFacts,
   workspaceResult?: WorkspaceResultPostimage,
   previousState?: WorkerSessionTurnClaimFacts["state"] | null,
+  workspacePlacement?: WorkerSessionPlacementRecord,
 ): { commit: () => void; rollback: () => void; invalidate: () => void } {
   return stageWorkerChange(identity, {
     kind: "claim",
     localOnly: facts.state === "local" && (previousState === null || previousState === "local"),
     sessionId: facts.sessionId,
     facts: freezeJsonSnapshot(facts),
+    workspacePlacement: freezeJsonSnapshot(workspacePlacement),
     workspaceResult: captureWorkspaceResultPostimage(facts.sessionId, workspaceResult),
   });
 }
@@ -459,6 +435,19 @@ export function stagePlacementWorkspaceJournalWorkerPublication(
   sessionId: string,
 ) {
   return stageWorkerChange(identity, { kind: "journal", sessionId });
+}
+
+export function stagePlacementRetirementWorkerPublication(
+  identity: DatabasePathIdentity,
+  sessionId: string,
+  previousState: WorkerSessionTurnClaimFacts["state"],
+) {
+  return stageWorkerChange(identity, {
+    kind: "claim",
+    sessionId,
+    localOnly: previousState === "local",
+    retired: true,
+  });
 }
 
 /** Current result custody is published by its writer; discovery snapshots grant no authority. */
@@ -643,11 +632,13 @@ export function publishPlacementTurnClaimCleared(
   db: DatabaseSync,
   sessionId: string,
   previousState?: WorkerSessionTurnClaimFacts["state"] | null,
+  retired?: true,
 ): void {
   stageChange(db, {
     kind: "claim",
     sessionId,
     localOnly: previousState === null || previousState === "local",
+    retired,
   });
 }
 

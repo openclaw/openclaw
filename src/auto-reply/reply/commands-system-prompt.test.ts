@@ -5,13 +5,9 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import {
-  resolveChannelMessageToolHints,
-  resolveChannelReactionGuidance,
-} from "../../agents/channel-tools.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
-import { collectRuntimeChannelCapabilities } from "../../agents/runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "../../agents/runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { detectRuntimeShell } from "../../agents/shell-utils.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
@@ -26,37 +22,31 @@ import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const {
-  collectRuntimeChannelCapabilitiesMock,
+  resolveRuntimeChannelPromptContextMock,
   createOpenClawCodingToolsAsyncMock,
   detectRuntimeShellMock,
   getMachineDisplayNameMock,
   logWarnMock,
   makeBootstrapWarnMock,
-  resolveChannelMessageToolHintsMock,
-  resolveChannelReactionGuidanceMock,
   resolveRuntimeOsLabelMock,
 } = vi.hoisted(() => ({
-  collectRuntimeChannelCapabilitiesMock: vi.fn(() => ["voice"]),
+  resolveRuntimeChannelPromptContextMock: vi.fn<typeof resolveRuntimeChannelPromptContext>(() => ({
+    runtimeChannel: "telegram",
+    runtimeCapabilities: ["voice"],
+    reactionGuidance: { level: "minimal", channel: "Telegram" },
+    messageToolHints: ["Use the message tool."],
+  })),
   createOpenClawCodingToolsAsyncMock: vi.fn(() => []),
   detectRuntimeShellMock: vi.fn(() => "zsh"),
   getMachineDisplayNameMock: vi.fn(async () => "test-host"),
   logWarnMock: vi.fn(),
   makeBootstrapWarnMock: vi.fn((params: { warn?: (message: string) => void }) => params.warn),
-  resolveChannelMessageToolHintsMock: vi.fn(() => ["Use the message tool."]),
-  resolveChannelReactionGuidanceMock: vi.fn(() => ({
-    level: "minimal" as const,
-    channel: "Telegram",
-  })),
   resolveRuntimeOsLabelMock: vi.fn(() => "TestOS 1.0"),
 }));
 
-vi.mock("../../agents/channel-tools.js", () => ({
-  resolveChannelMessageToolHints: resolveChannelMessageToolHintsMock,
-  resolveChannelReactionGuidance: resolveChannelReactionGuidanceMock,
-}));
-
+// mock-isolation: Fix channel prompt facts without loading live channel plugin state.
 vi.mock("../../agents/runtime-capabilities.js", () => ({
-  collectRuntimeChannelCapabilities: collectRuntimeChannelCapabilitiesMock,
+  resolveRuntimeChannelPromptContext: resolveRuntimeChannelPromptContextMock,
 }));
 
 vi.mock("../../agents/shell-utils.js", () => ({
@@ -286,17 +276,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
     params.command.to = "slash:8460800771";
     await resolveCommandsSystemPromptBundle(params);
 
-    expect(vi.mocked(collectRuntimeChannelCapabilities)).toHaveBeenCalledWith({
-      cfg: params.cfg,
-      channel: "telegram",
-      accountId: "work",
-    });
-    expect(vi.mocked(resolveChannelReactionGuidance)).toHaveBeenCalledWith({
-      cfg: params.cfg,
-      channel: "telegram",
-      accountId: "work",
-    });
-    expect(vi.mocked(resolveChannelMessageToolHints)).toHaveBeenCalledWith({
+    expect(vi.mocked(resolveRuntimeChannelPromptContext)).toHaveBeenCalledExactlyOnceWith({
       cfg: params.cfg,
       channel: "telegram",
       accountId: "work",

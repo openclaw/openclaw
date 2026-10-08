@@ -2,6 +2,10 @@ import { etc, getPublicKeyAsync, hashes, signAsync, utils } from "@noble/ed25519
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  DEVICE_AUTH_STORAGE_KEY_PREFIX,
+  LEGACY_DEVICE_AUTH_STORAGE_KEY,
+} from "../../../../src/shared/control-ui-storage.js";
+import {
   type DeviceAuthEntry,
   type DeviceAuthStore,
   normalizeDeviceAuthRole,
@@ -44,8 +48,6 @@ type DeviceIdentity = {
   privateKey: string;
 };
 
-const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
-const DEVICE_AUTH_STORAGE_KEY_PREFIX = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:`;
 const DEVICE_IDENTITY_STORAGE_KEY = "openclaw-device-identity-v1";
 
 function deviceAuthStorageKey(gatewayUrl: string): string {

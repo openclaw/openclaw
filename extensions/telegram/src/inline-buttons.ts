@@ -11,18 +11,11 @@ import { listTelegramAccountIds } from "./accounts.js";
 
 const DEFAULT_INLINE_BUTTONS_SCOPE: TelegramInlineButtonsScope = "allowlist";
 
+const INLINE_BUTTONS_SCOPES = ["off", "dm", "group", "all", "allowlist"] as const;
+
 function normalizeInlineButtonsScope(value: unknown): TelegramInlineButtonsScope | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
-  if (
-    trimmed === "off" ||
-    trimmed === "dm" ||
-    trimmed === "group" ||
-    trimmed === "all" ||
-    trimmed === "allowlist"
-  ) {
-    return trimmed;
-  }
-  return undefined;
+  return INLINE_BUTTONS_SCOPES.find((scope) => scope === trimmed);
 }
 
 export function resolveTelegramInlineButtonsConfigScope(

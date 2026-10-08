@@ -19,6 +19,51 @@ import * as realtimeTalkInput from "./talk/input.ts";
 const discoverRealtimeTalkInputsMock = vi.fn();
 const openMicrophoneMock = vi.fn();
 
+describe("composer typing lifecycle", () => {
+  it.each([
+    { name: "Enter", key: {} },
+    { name: "Control+Enter", key: { ctrlKey: true } },
+    { name: "Command+Enter", key: { metaKey: true } },
+    { name: "goal Enter", key: {}, goal: true },
+    { name: "slash argument Enter", key: {}, command: true },
+  ])("stops the submitted preview before $name dispatch", ({ key, goal, command }) => {
+    let draft = command ? "/tools c" : "A shared draft";
+    const onTypingChange = vi.fn();
+    let typingAtSubmit: unknown;
+    const submit = vi.fn(() => {
+      typingAtSubmit = onTypingChange.mock.lastCall;
+    });
+    const { container } = renderComposer({
+      draft,
+      getDraft: () => draft,
+      onDraftChange: (next) => {
+        draft = next;
+      },
+      onTypingChange,
+      onSend: submit,
+      ...(goal
+        ? {
+            goalDraftMode: { action: "start" as const },
+            onGoalSubmit: async () => {
+              submit();
+              return true;
+            },
+          }
+        : {}),
+    });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(onTypingChange).toHaveBeenLastCalledWith(true, draft);
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", ...key, bubbles: true, cancelable: true }),
+    );
+    expect(submit).toHaveBeenCalledOnce();
+    expect(typingAtSubmit).toEqual([false]);
+    expect(onTypingChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
 describe("suggestion composer", () => {
   it("labels the send action as Suggest and emits ephemeral typing state", () => {
     const onTypingChange = vi.fn();

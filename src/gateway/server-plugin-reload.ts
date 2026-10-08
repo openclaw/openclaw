@@ -5,7 +5,6 @@ import { validateConfiguredBindings } from "../channels/plugins/configured-bindi
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { prepareDecisionProviderReload } from "../decisions/runtime.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareGatewayPluginMetadataSnapshotPublication } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
@@ -50,6 +49,7 @@ import {
   GatewayConfigReloadSupersededError,
   type GatewayReloadHandlerParams,
 } from "./server-reload-contracts.js";
+import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
 
@@ -127,9 +127,7 @@ export async function reloadGatewayPlugins(
   const channels = createPluginReloadChannels({
     channelManager,
     previousRegistry,
-    skipChannels:
-      isTruthyEnvValue(params.env?.OPENCLAW_SKIP_CHANNELS) ||
-      isTruthyEnvValue(params.env?.OPENCLAW_SKIP_PROVIDERS),
+    skipChannels: isChannelStartupSuppressedByEnvironment(params.env ?? {}),
     previousStopStarted: () => previousStopStarted,
     reloadParams: params,
     ambientEnvTriggers,
@@ -176,16 +174,19 @@ export async function reloadGatewayPlugins(
       throw new GatewayConfigReloadSupersededError();
     }
   };
-  try {
+  const checkpoint = async () => {
+    // Reconcile this operation's file watcher echoes before checking source ownership.
     await params.checkpoint?.();
     assertCurrent();
+  };
+  try {
+    await checkpoint();
     recordCleanup(
       await withPluginHostCleanupTimeout("pending plugin retirement", () =>
         kernel.pluginMetadata.waitForRetirement(),
       ),
     );
-    await params.checkpoint?.();
-    assertCurrent();
+    await checkpoint();
     // Match startup's workspace inventory so a narrower scan cannot replace or drop other owners.
     const nextMetadata = await withPluginCache(cache, () =>
       resolveConfigWidePluginMetadataSnapshotAsync({
@@ -194,8 +195,7 @@ export async function reloadGatewayPlugins(
         allowCurrent: false,
       }),
     );
-    await params.checkpoint?.();
-    assertCurrent();
+    await checkpoint();
     const activationConfig = resolveGatewayStartupPluginActivationConfig({
       runtimeConfig: params.nextConfig,
       activationSourceConfig: params.sourceConfig,
@@ -245,8 +245,7 @@ export async function reloadGatewayPlugins(
       log.warn(warning);
       recordWarning(warning);
     }
-    await params.checkpoint?.();
-    assertCurrent();
+    await checkpoint();
     // Reserve and gate new model runs atomically; admitted runs keep their callbacks until settled.
     releaseResourceHandoff = reserveResourceHandoff(resourceHandoffIds);
     const configEffects = params.prepareConfigEffects({
@@ -257,14 +256,14 @@ export async function reloadGatewayPlugins(
     phase = "drain";
     replacement.setReloadStatus({ phase: "reloading", pluginIds: [...changedPluginIds] });
     await drainRetainedWork(resourceHandoffIds, drainSignal, replacement.setReloadStatus);
-    assertCurrent();
+    await checkpoint();
     decisionReplacement = prepareDecisionProviderReload(previousRegistry, changedPluginIds);
     channels.pause();
     quiesceInstances();
     await drainRetainedWork(resourceHandoffIds, drainSignal, replacement.setReloadStatus, {
       includeCalls: true,
     });
-    assertCurrent();
+    await checkpoint();
     configEffects.retire();
     for (const sidecar of runtimeState.gatewayLifetimeSidecars.snapshot()) {
       const prepared = sidecar.preparePluginReload?.({
@@ -293,9 +292,9 @@ export async function reloadGatewayPlugins(
       resourceHandoffIds,
       drainSignal,
       replacement.setReloadStatus,
-      assertCurrent,
+      checkpoint,
     );
-    assertCurrent();
+    await checkpoint();
     replacement.setReloadStatus({ phase: "reloading", pluginIds: [...changedPluginIds] });
     // Channel monitors and services hold long-lived consumers until stop cancels
     // their loops. Ask those owners to stop before joining the remaining work.
@@ -324,8 +323,7 @@ export async function reloadGatewayPlugins(
         `Previous plugin cleanup failed; automatic recovery could not safely start: ${stopErrors.map(formatErrorMessage).join("; ")}`,
       );
     }
-    await params.checkpoint?.();
-    assertCurrent();
+    await checkpoint();
     phase = "activate";
     loaded = withPluginCache(cache, () => preparePlugins(loadParams));
     nextRegistry = loaded.pluginRegistry;
@@ -351,8 +349,7 @@ export async function reloadGatewayPlugins(
       ),
     );
     await channels.stopAdditional(nextRegistry, changedPluginIds);
-    await params.checkpoint?.();
-    assertCurrent();
+    await checkpoint();
     const startedServices = await withPluginRegistryPreparationScope(nextRegistry, () =>
       startPluginServices({
         scheduler: runtime.scheduler,
@@ -368,8 +365,7 @@ export async function reloadGatewayPlugins(
         throwOnStartError: true,
       }),
     );
-    await params.checkpoint?.();
-    assertCurrent();
+    await checkpoint();
     // Publication owns every independent activation tail, even when an earlier one fails.
     const activationErrors: unknown[] = [];
     try {

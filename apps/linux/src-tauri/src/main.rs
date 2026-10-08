@@ -1044,10 +1044,7 @@ impl DesktopState {
                 .permit_local(true, None);
             // Keep the first-run page that owns the pending bootstrap reply.
             if !state.main_window_has_local_content(&main_window(&app)?) {
-                let mut url = state.inner.local_url.clone();
-                url.query_pairs_mut()
-                    .clear()
-                    .append_pair("mode", "reconnecting");
+                let url = state.local_url("reconnecting");
                 app.state::<native_browser_bridge::NativeBrowserBridgeState>()
                     .clear(&app);
                 replace_main_webview(&app, url, None, None)?;
@@ -1408,10 +1405,7 @@ impl DesktopState {
                 SettingsReturnTarget::Local(target)
             }
         };
-        let mut url = self.inner.local_url.clone();
-        url.query_pairs_mut()
-            .clear()
-            .append_pair("mode", "connectionSettings");
+        let url = self.local_url("connectionSettings");
         operations
             .while_current(selection, || {
                 navigation.begin_settings(selection, target)?;
@@ -1536,9 +1530,8 @@ impl DesktopState {
                                 "reconnecting".to_string()
                             }
                         };
-                        let mut recovery = self.inner.local_url.clone();
+                        let mut recovery = self.local_url(&mode);
                         recovery.set_fragment(None);
-                        recovery.query_pairs_mut().clear().append_pair("mode", &mode);
                         let bridge =
                             app.state::<native_browser_bridge::NativeBrowserBridgeState>();
                         // The bridge scopes the whole dashboard, not just this session.
@@ -1759,6 +1752,12 @@ impl DesktopState {
         self.with_tray(|tray| tray.update(snapshot));
     }
 
+    fn local_url(&self, mode: &str) -> Url {
+        let mut url = self.inner.local_url.clone();
+        url.query_pairs_mut().clear().append_pair("mode", mode);
+        url
+    }
+
     fn show_missing_cli(
         &self,
         app: &AppHandle,
@@ -1925,8 +1924,7 @@ impl DesktopState {
         force: bool,
         expected_generation: Option<u64>,
     ) -> Result<bool, String> {
-        let mut url = self.inner.local_url.clone();
-        url.query_pairs_mut().clear().append_pair("mode", mode);
+        let url = self.local_url(mode);
         // Status/watchdog updates may change the hidden WebView, but must not reveal it.
         self.navigate_local(app, url.as_str(), force, expected_generation, false)
     }
@@ -2008,10 +2006,7 @@ impl DesktopState {
             let Ok(_operation) = state.inner.operation.try_lock() else {
                 continue;
             };
-            let snapshot = match gateway::status(&cli) {
-                Ok(snapshot) => snapshot,
-                Err(error) => GatewaySnapshot::reconnecting(error),
-            };
+            let snapshot = gateway::status(&cli).unwrap_or_else(GatewaySnapshot::reconnecting);
             if snapshot.reachable {
                 state.update_tray(&snapshot);
                 if let Err(error) =
@@ -2060,10 +2055,8 @@ impl DesktopState {
                             }
                         }
                     }
-                    let snapshot = match gateway::status(&cli) {
-                        Ok(snapshot) => snapshot,
-                        Err(error) => GatewaySnapshot::reconnecting(error),
-                    };
+                    let snapshot =
+                        gateway::status(&cli).unwrap_or_else(GatewaySnapshot::reconnecting);
                     state.update_tray(&snapshot);
                     if snapshot.reachable {
                         if let Ok(ready) = gateway::dashboard(&cli, snapshot) {
@@ -2946,11 +2939,7 @@ pub(crate) fn recover_primary_navigation(
     }
 
     let mut navigation = state.inner.navigation.lock().expect("navigation");
-    let mut recovery = state.inner.local_url.clone();
-    recovery
-        .query_pairs_mut()
-        .clear()
-        .append_pair("mode", "remoteError");
+    let recovery = state.local_url("remoteError");
     // Back must return to local recovery, never to the failed browser document.
     navigation.settings_return = None;
     navigation.begin_settings(
@@ -2959,11 +2948,7 @@ pub(crate) fn recover_primary_navigation(
     )?;
     navigation.record_remote_failure(snapshot.clone(), None);
     navigation.remote_snapshot = Some(snapshot.clone());
-    let mut settings = state.inner.local_url.clone();
-    settings
-        .query_pairs_mut()
-        .clear()
-        .append_pair("mode", "connectionSettings");
+    let settings = state.local_url("connectionSettings");
     app.state::<native_browser_bridge::NativeBrowserBridgeState>()
         .clear(app);
     replace_main_webview(app, settings, None, None)?;

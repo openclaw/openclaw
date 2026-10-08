@@ -5,7 +5,6 @@ import { ensureRecord } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
-  isOpenAICodexModelRef,
   modelRefUsesCodexRuntime,
   readModelConfigPrimaryRef,
   resolveImplicitDefaultAgentModelRef,
@@ -39,14 +38,10 @@ function collectModelsMapRefs(params: {
     return;
   }
   for (const modelRef of Object.keys(record)) {
-    if (!isOpenAICodexModelRef(modelRef)) {
-      continue;
-    }
     recordCodexModelHit({
-      hits: params.hits,
+      ...params,
       path: `${params.path}.${modelRef}`,
       model: modelRef,
-      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
 }
@@ -63,10 +58,9 @@ function collectModelPolicyAllowRefs(params: {
   }
   for (const [index, modelRef] of allow.entries()) {
     collectStringModelSlot({
-      hits: params.hits,
+      ...params,
       path: `${params.path}.allow.${index}`,
       value: modelRef,
-      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
 }
@@ -83,57 +77,49 @@ function collectAgentModelRefs(params: {
   }
   for (const key of AGENT_MODEL_CONFIG_KEYS) {
     collectModelConfigSlot({
-      hits: params.hits,
+      ...params,
       path: `${params.path}.${key}`,
       value: agent[key],
-      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
   const mediaModels = asMutableRecord(agent.mediaModels);
   for (const key of ["image", "video", "music"] as const) {
     collectModelConfigSlot({
-      hits: params.hits,
+      ...params,
       path: `${params.path}.mediaModels.${key}`,
       value: mediaModels?.[key],
-      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
   collectStringModelSlot({
-    hits: params.hits,
+    ...params,
     path: `${params.path}.heartbeat.model`,
     value: asMutableRecord(agent.heartbeat)?.model,
-    blockedModelIdentities: params.blockedModelIdentities,
   });
   collectModelConfigSlot({
-    hits: params.hits,
+    ...params,
     path: `${params.path}.subagents.model`,
     value: asMutableRecord(agent.subagents)?.model,
-    blockedModelIdentities: params.blockedModelIdentities,
   });
   const compaction = asMutableRecord(agent.compaction);
   collectStringModelSlot({
-    hits: params.hits,
+    ...params,
     path: `${params.path}.compaction.model`,
     value: compaction?.model,
-    blockedModelIdentities: params.blockedModelIdentities,
   });
   collectStringModelSlot({
-    hits: params.hits,
+    ...params,
     path: `${params.path}.compaction.memoryFlush.model`,
     value: asMutableRecord(compaction?.memoryFlush)?.model,
-    blockedModelIdentities: params.blockedModelIdentities,
   });
   collectModelsMapRefs({
-    hits: params.hits,
+    ...params,
     path: `${params.path}.models`,
     models: agent.models,
-    blockedModelIdentities: params.blockedModelIdentities,
   });
   collectModelPolicyAllowRefs({
-    hits: params.hits,
+    ...params,
     path: `${params.path}.modelPolicy`,
     modelPolicy: agent.modelPolicy,
-    blockedModelIdentities: params.blockedModelIdentities,
   });
 }
 
@@ -170,10 +156,7 @@ export function collectDisabledCodexPluginRouteHits(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): CodexRuntimeRouteHit[] {
-  if (!isCodexPluginUnavailableByConfig(cfg)) {
-    return [];
-  }
-  return collectCodexRuntimeRouteHits(cfg, env);
+  return isCodexPluginUnavailableByConfig(cfg) ? collectCodexRuntimeRouteHits(cfg, env) : [];
 }
 
 /** Find effective configured model routes that select the Codex runtime. */
@@ -328,13 +311,10 @@ export function enableCodexPluginForRequiredRoutes(params: {
   return { cfg, changes };
 }
 
-function codexPluginIsBlockedOutsideEntry(cfg: OpenClawConfig): boolean {
-  return cfg.plugins?.enabled === false || pluginIdListIncludes(cfg.plugins?.deny, "codex");
-}
-
 export function codexPluginRepairIsBlocked(cfg: OpenClawConfig): boolean {
   return (
-    codexPluginIsBlockedOutsideEntry(cfg) ||
+    cfg.plugins?.enabled === false ||
+    pluginIdListIncludes(cfg.plugins?.deny, "codex") ||
     asMutableRecord(asMutableRecord(cfg.plugins?.entries)?.codex)?.enabled === false
   );
 }

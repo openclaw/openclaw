@@ -47,10 +47,7 @@ function getFileReferencePatterns() {
 }
 
 function wrapStandaloneFileRef(match: string, prefix: string, filename: string): string {
-  if (filename.startsWith("//")) {
-    return match;
-  }
-  if (/https?:\/\/$/i.test(prefix)) {
+  if (filename.startsWith("//") || /https?:\/\/$/i.test(prefix)) {
     return match;
   }
   return `${prefix}<code>${escapeTelegramHtml(filename)}</code>`;

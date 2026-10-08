@@ -26,9 +26,7 @@ import {
 
 /** File-operation details stored on generated compaction entries. */
 export interface CompactionDetails {
-  /** Files read in the compacted history. */
   readFiles: string[];
-  /** Files modified in the compacted history. */
   modifiedFiles: string[];
   /** Run-owned request that remains active across another compaction generation. */
   latestUnresolvedUserRequest?: string;
@@ -91,7 +89,6 @@ export interface CompactionResult<T = unknown> {
   summary: string;
   /** Entry id where retained history starts. */
   firstKeptEntryId: string;
-  /** Estimated context tokens before compaction. */
   tokensBefore: number;
   /** Optional implementation-specific details stored with the compaction entry. */
   details?: T;
@@ -201,7 +198,6 @@ export function fitCompactionSummary<T extends { summary: string }>(
       );
 }
 
-/** Compaction thresholds and retention settings. */
 export interface CompactionSettings {
   /** Enable automatic compaction decisions. */
   enabled: boolean;
@@ -211,14 +207,12 @@ export interface CompactionSettings {
   keepRecentTokens: number;
 }
 
-/** Default compaction settings used by the harness. */
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
   enabled: true,
   reserveTokens: 16384,
   keepRecentTokens: 20000,
 };
 
-/** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
   if (usage.contextUsage?.state === "available") {
     return usage.contextUsage.totalTokens;
@@ -253,7 +247,6 @@ function isUnavailableContextBarrier(message: AgentMessage): boolean {
   return calculateContextTokens(usage) === 0;
 }
 
-/** Return usage from the last valid assistant message in session entries. */
 export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | undefined {
   for (const entry of entries.toReversed()) {
     if (entry.type === "message") {
@@ -269,7 +262,6 @@ export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | unde
   return undefined;
 }
 
-/** Estimated context-token usage for a message list. */
 export interface ContextUsageEstimate {
   /** Estimated total context tokens. */
   tokens: number;
@@ -315,7 +307,6 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
   };
 }
 
-/** Return whether context usage exceeds the configured compaction threshold. */
 export function shouldCompact(
   contextTokens: number,
   contextWindow: number,
@@ -432,7 +423,6 @@ export function findTurnStartIndex(
   return -1;
 }
 
-/** Cut point selected for compaction. */
 interface CutPointResult {
   /** Index of the first entry retained after compaction. */
   firstKeptEntryIndex: number;
@@ -633,7 +623,6 @@ export type CompactionSummaryPrompt =
   | { kind: "turn-prefix" }
   | { kind: "custom"; instructions: string };
 
-/** Generate or update a conversation summary for compaction. */
 export async function generateSummary(
   currentMessages: AgentMessage[],
   model: Model,
@@ -685,7 +674,6 @@ export async function generateSummary(
   });
 }
 
-/** Prepared inputs for a compaction run. */
 export interface CompactionPreparation {
   /** Remaining foreground summary tokens, independent of the summarizer's context window. */
   summaryTokenBudget?: number;
@@ -695,11 +683,9 @@ export interface CompactionPreparation {
   messagesToSummarize: AgentMessage[];
   /** Prefix messages summarized separately when compaction splits a turn. */
   turnPrefixMessages: AgentMessage[];
-  /** Whether compaction splits a turn. */
   isSplitTurn: boolean;
   /** Bounded request that the run owner will resume after compaction. */
   latestUnresolvedUserRequest?: string;
-  /** Estimated context tokens before compaction. */
   tokensBefore: number;
   /** Previous compaction summary used for iterative updates. */
   previousSummary?: string;
@@ -707,7 +693,6 @@ export interface CompactionPreparation {
   previousSummaryDetails?: CompactionDetails;
   /** File operations extracted from summarized history. */
   fileOps: FileOperations;
-  /** Settings used to prepare compaction. */
   settings: CompactionSettings;
 }
 
@@ -881,7 +866,6 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
 
 export { serializeConversation } from "./utils.js";
 
-/** Generate compaction summary data from prepared session history. */
 export async function compact(
   preparation: CompactionPreparation,
   model: Model,

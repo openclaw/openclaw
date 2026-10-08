@@ -322,32 +322,27 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           onOutputDelta: refreshCompactionWatchdogs,
         });
 
-        const prior = await sanitizeSessionHistory({
-          messages: session.messages,
+        const replayContext = () => ({
           modelApi: effectiveModel.api,
           modelId,
           provider,
-          allowedToolNames,
           config: params.config,
           workspaceDir: effectiveWorkspace,
           env: process.env,
           model: effectiveModel,
-          sessionManager,
           sessionId: params.sessionId,
           policy: transcriptPolicy,
+        });
+        const prior = await sanitizeSessionHistory({
+          ...replayContext(),
+          messages: session.messages,
+          allowedToolNames,
+          sessionManager,
           preserveLatestAssistantThinking: false,
         });
         const validated = await validateReplayTurns({
+          ...replayContext(),
           messages: prior,
-          modelApi: effectiveModel.api,
-          modelId,
-          provider,
-          config: params.config,
-          workspaceDir: effectiveWorkspace,
-          env: process.env,
-          model: effectiveModel,
-          sessionId: params.sessionId,
-          policy: transcriptPolicy,
         });
         const dedupedValidated = dedupeDuplicateUserMessagesForCompaction(validated);
         // Apply validated transcript to the live session even when no history limit is configured,
@@ -391,17 +386,20 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           estimateTokensFn: estimateTokens,
         });
         const hookSessionKey = sessionTarget.sessionKey;
-        await runCompactionHooks({
-          phase: "before",
+        const hookContext = () => ({
           hookRunner,
           sessionId: params.sessionId,
           sessionKey: hookSessionKey,
           sessionAgentId,
           workspaceDir: effectiveWorkspace,
           messageProvider: resolvedMessageProvider,
-          metrics: beforeHookMetrics,
           assertActive,
           onHookMessages: params.onCompactionHookMessages,
+        });
+        await runCompactionHooks({
+          ...hookContext(),
+          phase: "before",
+          metrics: beforeHookMetrics,
         });
         const { messageCountOriginal, tokenCountBefore: limitedTranscriptTokensBefore } =
           beforeHookMetrics;
@@ -570,7 +568,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         }
         // Compaction succeeded: post-processing gets its own full watchdog window.
         params.compactionTimeoutReset?.();
-        const effectiveFirstKeptEntryId = clientResult?.firstKeptEntryId;
         const tokensBefore = serverResult?.usage.input_tokens ?? clientResult!.tokensBefore;
         const tokensAfter = serverResult
           ? serverTokensAfter
@@ -618,22 +615,15 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           );
         }
         await runCompactionHooks({
+          ...hookContext(),
           phase: "after",
-          hookRunner,
-          sessionId: params.sessionId,
-          sessionAgentId,
-          sessionKey: hookSessionKey,
-          workspaceDir: effectiveWorkspace,
-          messageProvider: resolvedMessageProvider,
           messageCountAfter,
           tokensAfter,
           compactedCount,
           sessionFile: activeSessionFile,
           summaryLength: clientResult?.summary.length,
           tokensBefore,
-          firstKeptEntryId: effectiveFirstKeptEntryId,
-          assertActive,
-          onHookMessages: params.onCompactionHookMessages,
+          firstKeptEntryId: clientResult?.firstKeptEntryId,
         });
         const resultSessionTarget: ContextEngineSessionTarget = {
           agentId: sessionTarget.agentId,

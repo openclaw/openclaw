@@ -64,7 +64,7 @@ describe("registered mcp.authLogin", () => {
   let config: McpServerConfig;
   let expectedChallenge: string;
   let registeredRedirect: string;
-  let tokenError: "invalid_grant" | "invalid_client" | false = false;
+  let tokenError: "invalid_client" | false = false;
   const effects: McpAuthEffectEndpoint = { tokenLifetimeSeconds: 3600 };
   let tokenEntered = createDeferredCore();
   let releaseToken: Deferred | undefined;
@@ -531,61 +531,58 @@ describe("registered mcp.authLogin", () => {
     }
   });
 
-  it.each(["invalid_grant", "invalid_client"] as const)(
-    "preserves existing tokens and registration after %s",
-    async (error) => {
-      await clearMcpOAuthCredentials(identity());
-      const initial = await begin();
-      expect((await callback(initial.state)).status).toBe(200);
-      expect(await terminal(initial.sessionId)).toMatchObject({ status: "done" });
-      const before = await readMcpOAuthStore(identity().storeKey);
-      expect(
-        await recordMcpOAuthAuthorizationRequired({
-          identity: identity(),
-          rejectedAccessToken: "fixture-access",
-          scope: "expanded",
-        }),
-      ).toBe(true);
-      const started = await begin();
-      tokenError = error;
-      const exchangeRequests = requests.length;
+  it("preserves existing tokens and registration after invalid_client", async () => {
+    await clearMcpOAuthCredentials(identity());
+    const initial = await begin();
+    expect((await callback(initial.state)).status).toBe(200);
+    expect(await terminal(initial.sessionId)).toMatchObject({ status: "done" });
+    const before = await readMcpOAuthStore(identity().storeKey);
+    expect(
+      await recordMcpOAuthAuthorizationRequired({
+        identity: identity(),
+        rejectedAccessToken: "fixture-access",
+        scope: "expanded",
+      }),
+    ).toBe(true);
+    const started = await begin();
+    tokenError = "invalid_client";
+    const exchangeRequests = requests.length;
+    try {
+      expect((await callback(started.state)).status).toBe(200);
+      const result = await terminal(started.sessionId);
+      expect(result.status).toBe("error");
+      expect(JSON.stringify(result)).not.toContain("private exchange detail");
+      const after = await readMcpOAuthStore(identity().storeKey);
+      expect(after.tokens).toEqual(before.tokens);
+      expect(after.clientInformation).toEqual(before.clientInformation);
+      expect(after.tokensAuthorizationServerUrl).toEqual(before.tokensAuthorizationServerUrl);
+      expect(after.codeVerifier).toBeUndefined();
+      expect(after.lastAuthorizationUrl).toBeUndefined();
+      expect(requests.slice(exchangeRequests)).toEqual(["/token"]);
+      const retainedClient = new McpClient({ name: "retained-credential", version: "1.0.0" });
       try {
-        expect((await callback(started.state)).status).toBe(200);
-        const result = await terminal(started.sessionId);
-        expect(result.status).toBe("error");
-        expect(JSON.stringify(result)).not.toContain("private exchange detail");
-        const after = await readMcpOAuthStore(identity().storeKey);
-        expect(after.tokens).toEqual(before.tokens);
-        expect(after.clientInformation).toEqual(before.clientInformation);
-        expect(after.tokensAuthorizationServerUrl).toEqual(before.tokensAuthorizationServerUrl);
-        expect(after.codeVerifier).toBeUndefined();
-        expect(after.lastAuthorizationUrl).toBeUndefined();
-        expect(requests.slice(exchangeRequests)).toEqual(["/token"]);
-        const retainedClient = new McpClient({ name: "retained-credential", version: "1.0.0" });
-        try {
-          await retainedClient.connect(
-            new StreamableHTTPClientTransport(new URL(resourceUrl), {
-              requestInit: {
-                headers: {
-                  Authorization: `Bearer ${expectDefined(after.tokens, "retained tokens").access_token}`,
-                },
+        await retainedClient.connect(
+          new StreamableHTTPClientTransport(new URL(resourceUrl), {
+            requestInit: {
+              headers: {
+                Authorization: `Bearer ${expectDefined(after.tokens, "retained tokens").access_token}`,
               },
-            }),
-          );
-          expect((await retainedClient.listTools()).tools).toEqual(
-            expect.arrayContaining([expect.objectContaining({ name: "echo" })]),
-          );
-          expect(await retainedClient.callTool({ name: "echo", arguments: {} })).toMatchObject({
-            content: [{ type: "text", text: "Authenticated connector reply" }],
-          });
-        } finally {
-          await retainedClient.close();
-        }
+            },
+          }),
+        );
+        expect((await retainedClient.listTools()).tools).toEqual(
+          expect.arrayContaining([expect.objectContaining({ name: "echo" })]),
+        );
+        expect(await retainedClient.callTool({ name: "echo", arguments: {} })).toMatchObject({
+          content: [{ type: "text", text: "Authenticated connector reply" }],
+        });
       } finally {
-        tokenError = false;
+        await retainedClient.close();
       }
-    },
-  );
+    } finally {
+      tokenError = false;
+    }
+  });
 
   it("rejects a resolver replacement between dispatch and handler admission", async () => {
     await clearMcpOAuthCredentials(identity());

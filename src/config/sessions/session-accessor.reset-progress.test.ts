@@ -24,12 +24,13 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 
 it.each(
   (["single", "batched"] as const).flatMap((writer) =>
-    (["clear", "preserve-tail"] as const).flatMap((context) =>
-      (context === "clear" ? [false, true] : [false]).map((rollback) => ({
-        writer,
-        context,
-        rollback,
-      })),
+    (writer === "single" ? (["clear"] as const) : (["clear", "preserve-tail"] as const)).flatMap(
+      (context) =>
+        (context === "clear" ? [false, true] : [false]).map((rollback) => ({
+          writer,
+          context,
+          rollback,
+        })),
     ),
   ),
 )(

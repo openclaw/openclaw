@@ -180,7 +180,7 @@ export function createPluginNativeAdmission(
   const targets = new Map<string, string>();
   const hardlinkedTargets = new Set<string>();
   const pendingTargets = new Set<string>();
-  let assertReference = createPluginNativeReferenceValidator(directory);
+  let assertReference = createPluginNativeReferenceValidator(directory, owner?.pluginId ?? rootDir);
   const recoveredFiles = new Map<string, PluginNativeArtifactFact>();
   let hostRoot: string | undefined;
   let finalReceipt: NativeReceipt | undefined;
@@ -669,7 +669,7 @@ export function createPluginNativeAdmission(
     },
     linkHost(selectedHost: string) {
       // Explicit host selection is a new admission boundary, even without newly captured files.
-      assertReference = createPluginNativeReferenceValidator(directory);
+      assertReference = createPluginNativeReferenceValidator(directory, owner?.pluginId ?? rootDir);
       linkHost(selectedHost);
       assertReferenceNamespaces(hardlinkedTargets);
       publish();

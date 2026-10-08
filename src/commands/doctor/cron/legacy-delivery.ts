@@ -42,11 +42,10 @@ export function normalizeLegacyDeliveryInput(params: {
   if (hints.channel ?? hints.provider) {
     next.channel = hints.channel ?? hints.provider;
   }
-  if (hints.to) {
-    next.to = hints.to;
-  }
-  if (hints.threadId) {
-    next.threadId = hints.threadId;
+  for (const key of ["to", "threadId"] as const) {
+    if (hints[key]) {
+      next[key] = hints[key];
+    }
   }
   if (hints.bestEffortDeliver !== undefined) {
     next.bestEffort = hints.bestEffortDeliver;

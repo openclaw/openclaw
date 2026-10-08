@@ -7,6 +7,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -147,6 +148,33 @@ describe("anonymous published session reader", () => {
       await patchSessionEntryCore(locator, () => ({ publicShare: undefined }));
       expect(isPublicSessionShareActive(cfg, locator)).toBe(false);
       expect(await readPublicSessionShare(cfg, locator)).toBeNull();
+    });
+  });
+
+  it("reconciles sharing facts invalidated during the history read", async () => {
+    await withPublicTestState(async () => {
+      await seed(["Still published"]);
+      const read = transcriptReaders.readSessionMessagesPageWithStatsAsync;
+      vi.spyOn(transcriptReaders, "readSessionMessagesPageWithStatsAsync").mockImplementationOnce(
+        async (...args) => {
+          const result = await read(...args);
+          sessionChanges.emit({
+            agentId: locator.agentId,
+            sessionKey: locator.sessionKey,
+            factsInvalidated: "category",
+          });
+          expect(
+            currentProjection().sharingTargetState({
+              key: locator.sessionKey,
+              agentId: locator.agentId,
+            }).status,
+          ).toBe("pending");
+          return result;
+        },
+      );
+      expect((await readPublicSessionShare(cfg, locator))?.messages).toMatchObject([
+        { content: "Still published" },
+      ]);
     });
   });
 

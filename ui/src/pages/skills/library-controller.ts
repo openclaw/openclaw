@@ -39,6 +39,30 @@ export type LibraryDraft = {
   proposal: SkillsProposalInspectResult | null;
 };
 
+function libraryDraft(
+  connection: GatewayConnectionScope,
+  target: LibraryDraft["target"],
+  agentId: string | null,
+  read?: SkillsLibraryReadResult,
+): LibraryDraft {
+  return {
+    target,
+    connection,
+    agentId,
+    entry: read ? read.entry : null,
+    slug: read ? read.entry.slug : "",
+    description: read ? read.entry.description : "",
+    content: read ? read.content : "",
+    files: read ? read.files : [],
+    baseFiles: read ? read.files.map((file) => ({ ...file })) : [],
+    revisions: read ? read.revisions : [],
+    selectedFile: "SKILL.md",
+    rollbackRevision: "",
+    dirty: false,
+    proposal: null,
+  };
+}
+
 export class SkillLibraryController {
   list: SkillsLibraryListResult | null = null;
   view: LibraryView | null = null;
@@ -168,22 +192,7 @@ export class SkillLibraryController {
     if (!connection || !this.canCreate || this.createTarget === "unavailable") {
       return;
     }
-    this.draft = {
-      target: this.createTarget,
-      connection,
-      agentId: this.selectedAgent(),
-      entry: null,
-      slug: "",
-      description: "",
-      content: "",
-      files: [],
-      baseFiles: [],
-      revisions: [],
-      selectedFile: "SKILL.md",
-      rollbackRevision: "",
-      dirty: false,
-      proposal: null,
-    };
+    this.draft = libraryDraft(connection, this.createTarget, this.selectedAgent());
     this.clearFeedback();
     this.newFilePath = "";
     this.changed();
@@ -216,22 +225,7 @@ export class SkillLibraryController {
       if (!this.gateway.isCurrent(connection) || sequence !== this.readSequence) {
         return;
       }
-      this.draft = {
-        target: "personal",
-        connection,
-        agentId: null,
-        entry: read.entry,
-        slug: read.entry.slug,
-        description: read.entry.description,
-        content: read.content,
-        files: read.files,
-        baseFiles: read.files.map((file) => ({ ...file })),
-        revisions: read.revisions,
-        selectedFile: "SKILL.md",
-        rollbackRevision: "",
-        dirty: false,
-        proposal: null,
-      };
+      this.draft = libraryDraft(connection, "personal", null, read);
     });
   }
 
@@ -433,27 +427,25 @@ export class SkillLibraryController {
       }
       // Record the committed mutation even if the follow-up list or revision read fails.
       await this.receipt(receipt);
-      if (!this.gateway.isCurrent(draft.connection)) {
+      if (!this.gateway.isCurrent(draft.connection) || action === "remove") {
         return;
       }
-      if (action !== "remove") {
-        if (action === "rollback") {
-          const read = await draft.connection.client.request<SkillsLibraryReadResult>(
-            "skills.library.read",
-            { skillId: receipt.entry.skillId, revision: receipt.entry.revision },
-          );
-          if (!this.gateway.isCurrent(draft.connection)) {
-            return;
-          }
-          draft.content = read.content;
-          draft.files = read.files;
-          draft.baseFiles = read.files.map((file) => ({ ...file }));
-          draft.revisions = read.revisions;
-          draft.selectedFile = "SKILL.md";
-          draft.rollbackRevision = "";
+      if (action === "rollback") {
+        const read = await draft.connection.client.request<SkillsLibraryReadResult>(
+          "skills.library.read",
+          { skillId: receipt.entry.skillId, revision: receipt.entry.revision },
+        );
+        if (!this.gateway.isCurrent(draft.connection)) {
+          return;
         }
-        draft.entry = receipt.entry;
+        draft.content = read.content;
+        draft.files = read.files;
+        draft.baseFiles = read.files.map((file) => ({ ...file }));
+        draft.revisions = read.revisions;
+        draft.selectedFile = "SKILL.md";
+        draft.rollbackRevision = "";
       }
+      draft.entry = receipt.entry;
     });
   }
 

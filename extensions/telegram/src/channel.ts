@@ -124,35 +124,8 @@ function resolveTelegramProbe() {
   );
 }
 
-async function readStartupBotInfoCache(params: {
-  accountId: string;
-  token: string;
-  log?: { debug?: (message: string) => void };
-}): Promise<TelegramBotInfo | undefined> {
-  try {
-    const cached = await readCachedTelegramBotInfo({
-      accountId: params.accountId,
-      botToken: params.token,
-    });
-    return cached?.botInfo;
-  } catch (err) {
-    if (getTelegramRuntime().logging.shouldLogVerbose()) {
-      params.log?.debug?.(`[${params.accountId}] bot info cache read failed: ${String(err)}`);
-    }
-    return undefined;
-  }
-}
-
 async function deleteStartupBotInfoCache(accountId: string): Promise<void> {
   await deleteCachedTelegramBotInfo({ accountId }).catch(() => undefined);
-}
-
-async function clearTelegramAccountRuntimeCache(accountId: string): Promise<void> {
-  const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
-  await Promise.all([
-    deleteTelegramUpdateOffset({ accountId }),
-    deleteStartupBotInfoCache(accountId),
-  ]);
 }
 
 function formatTelegramUnauthorizedTokenError(
@@ -226,8 +199,8 @@ const telegramMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawC
   outbound: telegramChannelOutbound,
 });
 
-function normalizeTelegramAcpConversationId(conversationId: string) {
-  const parsed = parseTelegramTopicConversation({ conversationId });
+function normalizeTelegramAcpConversationId(conversationId: string, parentConversationId?: string) {
+  const parsed = parseTelegramTopicConversation({ conversationId, parentConversationId });
   if (!parsed || !parsed.chatId.startsWith("-")) {
     return null;
   }
@@ -246,21 +219,13 @@ function matchTelegramAcpConversation(params: {
   if (!binding) {
     return null;
   }
-  const incoming = parseTelegramTopicConversation({
-    conversationId: params.conversationId,
-    parentConversationId: params.parentConversationId,
-  });
-  if (!incoming || !incoming.chatId.startsWith("-")) {
-    return null;
-  }
-  if (binding.conversationId !== incoming.canonicalConversationId) {
-    return null;
-  }
-  return {
-    conversationId: incoming.canonicalConversationId,
-    parentConversationId: incoming.chatId,
-    matchPriority: 2,
-  };
+  const incoming = normalizeTelegramAcpConversationId(
+    params.conversationId,
+    params.parentConversationId,
+  );
+  return incoming && binding.conversationId === incoming.conversationId
+    ? { ...incoming, matchPriority: 2 }
+    : null;
 }
 
 function targetsMatchTelegramReplySuppression(params: {
@@ -396,13 +361,8 @@ function shouldStripTelegramThreadFromAnnounceOrigin(params: {
   requester: {
     channel?: string;
     to?: string;
-    threadId?: string | number;
   };
-  entry: {
-    channel?: string;
-    to?: string;
-    threadId?: string | number;
-  };
+  entry: { to?: string };
 }): boolean {
   const requesterChannel = normalizeOptionalLowercaseString(params.requester.channel);
   if (requesterChannel && requesterChannel !== "telegram") {
@@ -573,12 +533,14 @@ async function resolveTelegramTargets(params: {
   inputs: string[];
   kind: "user" | "group";
 }) {
+  const unresolved = (input: string, note: string) => ({ input, resolved: false as const, note });
   if (params.kind !== "user") {
-    return params.inputs.map((input) => ({
-      input,
-      resolved: false as const,
-      note: "Telegram runtime target resolution only supports usernames for direct-message lookups.",
-    }));
+    return params.inputs.map((input) =>
+      unresolved(
+        input,
+        "Telegram runtime target resolution only supports usernames for direct-message lookups.",
+      ),
+    );
   }
   const account = resolveTelegramAccount({
     cfg: params.cfg,
@@ -586,21 +548,15 @@ async function resolveTelegramTargets(params: {
   });
   const token = account.token.trim();
   if (!token) {
-    return params.inputs.map((input) => ({
-      input,
-      resolved: false as const,
-      note: "Telegram bot token is required to resolve @username targets.",
-    }));
+    return params.inputs.map((input) =>
+      unresolved(input, "Telegram bot token is required to resolve @username targets."),
+    );
   }
   return await Promise.all(
     params.inputs.map(async (input) => {
       const trimmed = input.trim();
       if (!trimmed) {
-        return {
-          input,
-          resolved: false as const,
-          note: "Telegram target is required.",
-        };
+        return unresolved(input, "Telegram target is required.");
       }
       const normalized = trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
       try {
@@ -614,11 +570,10 @@ async function resolveTelegramTargets(params: {
           network: account.config.network,
         });
         if (!id) {
-          return {
+          return unresolved(
             input,
-            resolved: false as const,
-            note: "Telegram username could not be resolved by the configured bot.",
-          };
+            "Telegram username could not be resolved by the configured bot.",
+          );
         }
         return {
           input,
@@ -627,11 +582,7 @@ async function resolveTelegramTargets(params: {
           name: normalized,
         };
       } catch (error) {
-        return {
-          input,
-          resolved: false as const,
-          note: formatErrorMessage(error),
-        };
+        return unresolved(input, formatErrorMessage(error));
       }
     }),
   );
@@ -691,26 +642,17 @@ export const telegramPlugin = createChatChannelPlugin({
       supportsCurrentConversationBinding: true,
       bindingStore: "adapter",
       defaultTopLevelPlacement: "current",
-      resolveConversationRef: ({
-        accountId: _accountId,
-        conversationId,
-        parentConversationId,
-        threadId,
-      }) =>
+      resolveConversationRef: ({ conversationId, parentConversationId, threadId }) =>
         resolveTelegramInboundConversation({
           to: conversationId,
           conversationId,
           parentConversationId,
           threadId: threadId ?? undefined,
         }),
-      buildBoundReplyPayload: ({ operation, conversation }) => {
-        if (operation !== "acp-spawn") {
-          return null;
-        }
-        return conversation.conversationId.includes(":topic:")
+      buildBoundReplyPayload: ({ operation, conversation }) =>
+        operation === "acp-spawn" && conversation.conversationId.includes(":topic:")
           ? { delivery: { pin: { enabled: true, notify: false } } }
-          : null;
-      },
+          : null,
       shouldStripThreadFromAnnounceOrigin: shouldStripTelegramThreadFromAnnounceOrigin,
       ...telegramThreadBindingLifecycle,
     },
@@ -775,7 +717,11 @@ export const telegramPlugin = createChatChannelPlugin({
         }
       },
       onAccountRemoved: async ({ accountId }) => {
-        await clearTelegramAccountRuntimeCache(accountId);
+        const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
+        await Promise.all([
+          deleteTelegramUpdateOffset({ accountId }),
+          deleteStartupBotInfoCache(accountId),
+        ]);
       },
     },
     heartbeat: {
@@ -837,16 +783,11 @@ export const telegramPlugin = createChatChannelPlugin({
           const botId = probe.bot.id ? ` (${probe.bot.id})` : "";
           lines.push({ text: `Bot: @${probe.bot.username}${botId}` });
         }
-        const flags: string[] = [];
-        if (typeof probe?.bot?.canJoinGroups === "boolean") {
-          flags.push(`joinGroups=${probe.bot.canJoinGroups}`);
-        }
-        if (typeof probe?.bot?.canReadAllGroupMessages === "boolean") {
-          flags.push(`readAllGroupMessages=${probe.bot.canReadAllGroupMessages}`);
-        }
-        if (typeof probe?.bot?.supportsInlineQueries === "boolean") {
-          flags.push(`inlineQueries=${probe.bot.supportsInlineQueries}`);
-        }
+        const flags = Object.entries({
+          joinGroups: probe?.bot?.canJoinGroups,
+          readAllGroupMessages: probe?.bot?.canReadAllGroupMessages,
+          inlineQueries: probe?.bot?.supportsInlineQueries,
+        }).flatMap(([name, value]) => (typeof value === "boolean" ? [`${name}=${value}`] : []));
         if (flags.length > 0) {
           lines.push({ text: `Flags: ${flags.join(" ")}` });
         }
@@ -937,6 +878,32 @@ export const telegramPlugin = createChatChannelPlugin({
         let telegramBotLabel = "";
         let unauthorizedTokenReason: string | null = null;
         let botInfo: TelegramBotInfo | undefined;
+        const accessBotInfoCache = async <T>(
+          operation: "read" | "write",
+          access: () => Promise<T>,
+        ): Promise<T | undefined> => {
+          try {
+            return await access();
+          } catch (err) {
+            if (getTelegramRuntime().logging.shouldLogVerbose()) {
+              ctx.log?.debug?.(
+                `[${account.accountId}] bot info cache ${operation} failed: ${String(err)}`,
+              );
+            }
+            return undefined;
+          }
+        };
+        const restoreCachedBotInfo = async () => {
+          botInfo = await accessBotInfoCache(
+            "read",
+            async () =>
+              (await readCachedTelegramBotInfo({ accountId: account.accountId, botToken: token }))
+                ?.botInfo,
+          );
+          if (botInfo) {
+            telegramBotLabel = ` (@${botInfo.username})`;
+          }
+        };
         try {
           const probe = await withTelegramStartupProbeSlot(ctx.abortSignal, () =>
             resolveTelegramProbe()(token, resolveTelegramStartupProbeTimeoutMs(undefined), {
@@ -952,50 +919,31 @@ export const telegramPlugin = createChatChannelPlugin({
           if (username) {
             telegramBotLabel = ` (@${username})`;
           }
-          botInfo = probe.ok ? probe.botInfo : undefined;
-          if (probe.ok && probe.botInfo) {
-            try {
-              await writeCachedTelegramBotInfo({
+          const probedBotInfo = probe.ok ? probe.botInfo : undefined;
+          botInfo = probedBotInfo;
+          if (probedBotInfo) {
+            await accessBotInfoCache("write", () =>
+              writeCachedTelegramBotInfo({
                 accountId: account.accountId,
                 botToken: token,
-                botInfo: probe.botInfo,
-              });
-            } catch (err) {
-              if (getTelegramRuntime().logging.shouldLogVerbose()) {
-                ctx.log?.debug?.(
-                  `[${account.accountId}] bot info cache write failed: ${String(err)}`,
-                );
-              }
-            }
+                botInfo: probedBotInfo,
+              }),
+            );
           }
           if (!probe.ok && (probe.status === 401 || probe.status === 404)) {
             await deleteStartupBotInfoCache(account.accountId);
             unauthorizedTokenReason = formatTelegramUnauthorizedTokenError(account, probe.status);
           } else if (!probe.ok) {
-            botInfo = await readStartupBotInfoCache({
-              accountId: account.accountId,
-              token,
-              log: ctx.log,
-            });
-            if (botInfo) {
-              telegramBotLabel = ` (@${botInfo.username})`;
-            }
+            await restoreCachedBotInfo();
           }
         } catch (err) {
           if (ctx.abortSignal.aborted) {
             return;
           }
           if (getTelegramRuntime().logging.shouldLogVerbose()) {
-            ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+            ctx.log?.debug?.(`[${account.accountId}] bot check failed: ${String(err)}`);
           }
-          botInfo = await readStartupBotInfoCache({
-            accountId: account.accountId,
-            token,
-            log: ctx.log,
-          });
-          if (botInfo) {
-            telegramBotLabel = ` (@${botInfo.username})`;
-          }
+          await restoreCachedBotInfo();
         }
         if (unauthorizedTokenReason) {
           ctx.log?.error?.(`[${account.accountId}] ${unauthorizedTokenReason}`);

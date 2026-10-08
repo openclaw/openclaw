@@ -17,7 +17,7 @@ import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { updatePreparedSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
-import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { recordSessionParticipantFromWorker } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import {
   applySessionGroupCategoryMutation,
@@ -150,7 +150,7 @@ export function bindSqliteWorkerBackend(
                 );
               }
               if (command.type === "participant") {
-                const value = recordSessionParticipant(scope, command.input.params);
+                const value = recordSessionParticipantFromWorker(scope, command.input.params);
                 participantResult = {
                   value,
                   projectionChanged: false,

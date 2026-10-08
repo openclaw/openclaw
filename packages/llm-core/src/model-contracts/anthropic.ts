@@ -53,6 +53,20 @@ export const CLAUDE_SONNET_55_THINKING_PROFILE = {
   defaultLevel: "high",
 } as const;
 
+export const CLAUDE_HAIKU_55_THINKING_PROFILE = {
+  ...CLAUDE_SONNET_55_THINKING_PROFILE,
+  defaultLevel: "medium",
+} as const;
+
+/** Resolve Haiku 5.5 through direct ids, cloud ids, aliases, or deployment metadata. */
+export function resolveClaudeHaiku55ModelIdentity(ref: ClaudeModelRef): string | undefined {
+  const normalized = resolveClaudeModelIdentity(ref);
+  if (normalized === "haiku" || normalized === "haiku-5-5") {
+    return "claude-haiku-5-5";
+  }
+  return /^claude-haiku-5-5(?=$|[^a-z0-9])/.test(normalized) ? normalized : undefined;
+}
+
 /** Resolve the canonical normalized Claude model id for one runtime model ref. */
 export function resolveClaudeModelIdentity(ref: ClaudeModelRef): string {
   const configuredCanonicalModelId =
@@ -86,11 +100,12 @@ export function resolveClaudeMythos5ModelIdentity(ref: ClaudeModelRef): string |
 }
 
 /**
- * Opus 5.5, Sonnet 5.5, and Fable 5.1 require append-only runtime context.
+ * Opus 5.5, Sonnet 5.5, Haiku 5.5, and Fable 5.1 require append-only runtime context.
  * Extend only with live replay proof (Mythos 5.1 remains unproven).
  */
 export function bindsClaudeThinkingPrefix(ref: ClaudeModelRef): boolean {
   return (
+    resolveClaudeHaiku55ModelIdentity(ref) !== undefined ||
     resolveClaudeOpus55ModelIdentity(ref) !== undefined ||
     resolveClaudeSonnet55ModelIdentity(ref) !== undefined ||
     /^claude-fable-5-1(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity(ref))
@@ -100,6 +115,7 @@ export function bindsClaudeThinkingPrefix(ref: ClaudeModelRef): boolean {
 /** Return whether Claude accepts operator instructions within conversation history. */
 export function supportsClaudeInHistorySystemMessages(ref: ClaudeModelRef): boolean {
   return (
+    resolveClaudeHaiku55ModelIdentity(ref) !== undefined ||
     resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
     resolveClaudeSonnet5ModelIdentity(ref) !== undefined ||
     resolveClaudeFable5ModelIdentity(ref) !== undefined ||
@@ -172,6 +188,7 @@ export function resolveClaudeOpus55ModelIdentity(ref: ClaudeModelRef): string | 
 export function supportsClaudeAdaptiveThinking(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
+    resolveClaudeHaiku55ModelIdentity(ref) !== undefined ||
     resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
     resolveClaudeSonnet5ModelIdentity(ref) !== undefined ||
     /(?:^|-)claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:6|7|8)|sonnet-4-6)(?=$|[^a-z0-9])/.test(
@@ -199,6 +216,7 @@ export function supportsClaudeFastMode(ref: ClaudeModelRef): boolean {
 export function supportsClaudeNativeMaxEffort(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
+    resolveClaudeHaiku55ModelIdentity(ref) !== undefined ||
     resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
     resolveClaudeSonnet5ModelIdentity(ref) !== undefined ||
     /(?:^|-)claude-(?:fable-5|mythos-5|opus-4-(?:6|7|8)|sonnet-4-6)(?=$|[^a-z0-9])/.test(modelId)
@@ -209,6 +227,7 @@ export function supportsClaudeNativeMaxEffort(ref: ClaudeModelRef): boolean {
 export function supportsClaudeNativeXhighEffort(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
+    resolveClaudeHaiku55ModelIdentity(ref) !== undefined ||
     resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
     resolveClaudeSonnet5ModelIdentity(ref) !== undefined ||
     /(?:^|-)claude-(?:fable-5|mythos-5|opus-4-(?:7|8))(?=$|[^a-z0-9])/.test(modelId)

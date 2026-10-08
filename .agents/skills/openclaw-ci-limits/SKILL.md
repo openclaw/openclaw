@@ -56,6 +56,27 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 ## Rejected Experiments
 
+- **Declaration-fixture owner selection (2026-10-02):**
+  `test/scripts/tsdown-declaration-fixture.ts` copies 26 real runtime owners by
+  path, so product PRs that edit one do not select the four declaration suites
+  built on it. [PR #162614](https://github.com/openclaw/openclaw/pull/162614)
+  broke `write-unified-entry-dts` that way; hourly scheduled CI
+  ([run 36979748808](https://github.com/openclaw/openclaw/actions/runs/36979748808))
+  caught it about 35 minutes after merge and `0a188c4f038f0` repaired the
+  fixture within the hour. Declaring the owners as `new URL(..., import.meta.url)`
+  literals reaches the suites only below aggressive selection's 20-importer
+  hub cutoff: the incident owner and seven others are hubs, so the replayed
+  #162614 diff still selected none. Replaying all 92 main commits from the
+  prior 30 days that touched an owner through the canonical PR planner options,
+  URL literals newly covered 12 (+35 rows, +1,689 class-vCPU-minutes). Full
+  coverage, such as a policy watch over the same list, newly selects the suites
+  for 81 and starts `build-artifacts` (median 330s on the 16-class across 12 PR
+  runs) for 69, because the suites are build owners in `ci-build-manifest.mjs`:
+  +242 rows and +11,628 class-vCPU-minutes, a median +161 (+8%) per affected
+  PR. That buys one escaped owner break in seven weeks, so keep the plain
+  paths; hourly scheduled CI, tooling-owner PRs and release validation own this
+  proof. Reconsider with a materially higher escape rate or a selection that
+  does not also start `build-artifacts`.
 - **Boundary asynchronous input preparation (2026-09-26):** Adding the existing
   `CompilerInputSnapshot.prepare()` calls at the three declaration/boundary
   callers increased full cold validation from 464.21s to 544.68s on the same

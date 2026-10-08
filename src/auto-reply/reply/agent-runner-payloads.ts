@@ -30,7 +30,7 @@ import { applyReplyThreading, resolveReplyThreadingPayloads } from "./reply-payl
 import { createReplyDeliveryContext } from "./reply-threading.js";
 
 const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
-  () => import("./reply-payloads-dedupe.runtime.js"),
+  () => import("./reply-payloads-dedupe.js"),
 );
 
 async function normalizeSentMediaUrlsForDedupe(params: {

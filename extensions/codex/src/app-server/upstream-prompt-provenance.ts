@@ -7,33 +7,33 @@ import {
 const UPSTREAM_USER_TEXT_META_KEY = "upstreamUserText" as const;
 const MIRROR_IDENTITY_META_KEY = "mirrorIdentity" as const;
 const CODEX_META_KEY = "__openclaw";
+function readCodexMeta(message: AgentMessage | undefined) {
+  return message && CODEX_META_KEY in message
+    ? asOptionalRecord(message[CODEX_META_KEY])
+    : undefined;
+}
 
-export function attachCodexMirrorIdentity<T extends AgentMessage>(message: T, identity: string): T {
-  const existing = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  const baseMeta = asOptionalRecord(existing) ?? {};
+function attachCodexMeta<T extends AgentMessage>(message: T, key: string, value: string): T {
   return {
     ...message,
-    __openclaw: { ...baseMeta, [MIRROR_IDENTITY_META_KEY]: identity },
+    __openclaw: { ...readCodexMeta(message), [key]: value },
   };
+}
+
+export function attachCodexMirrorIdentity<T extends AgentMessage>(message: T, identity: string): T {
+  return attachCodexMeta(message, MIRROR_IDENTITY_META_KEY, identity);
 }
 
 export function readMirrorIdentity(message: AgentMessage): string | undefined {
-  const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  return readNonEmptyStringPreservingWhitespace(asOptionalRecord(meta)?.[MIRROR_IDENTITY_META_KEY]);
+  return readNonEmptyStringPreservingWhitespace(readCodexMeta(message)?.[MIRROR_IDENTITY_META_KEY]);
 }
 
 export function attachUpstreamUserText<T extends AgentMessage>(message: T, text: string): T {
-  const existing = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  const baseMeta = asOptionalRecord(existing) ?? {};
-  return {
-    ...message,
-    __openclaw: { ...baseMeta, [UPSTREAM_USER_TEXT_META_KEY]: text },
-  };
+  return attachCodexMeta(message, UPSTREAM_USER_TEXT_META_KEY, text);
 }
 
 export function readUpstreamUserText(message: AgentMessage | undefined): string | undefined {
-  const meta = message && CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
   return readNonEmptyStringPreservingWhitespace(
-    asOptionalRecord(meta)?.[UPSTREAM_USER_TEXT_META_KEY],
+    readCodexMeta(message)?.[UPSTREAM_USER_TEXT_META_KEY],
   );
 }

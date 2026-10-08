@@ -4,10 +4,9 @@ import { acknowledgeInternalToolResult } from "openclaw/plugin-sdk/agent-harness
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   isCodexTurnAbortMarkerNotification,
-  isPendingOpenClawDynamicToolCompletionNotification,
+  completePendingOpenClawDynamicToolNotification,
   isRawFunctionToolOutputCompletionNotification,
   readCodexNotificationItem,
-  readNotificationItemId,
   readRawResponseToolCallId,
   updateActiveTurnItemIds,
 } from "./attempt-notifications.js";
@@ -48,27 +47,16 @@ export function createCodexAttemptNotificationController(
     maybeAnnounceFastModeAutoOff,
   } = lifecycle;
   const pendingNativeCommandItems = new Set<string>();
-  const nativeItemObservers = new Set<() => void>();
+  let nativeItemsCompletion: ReturnType<typeof createDeferred<void>> | undefined;
   const waitForNativeTerminalItems = async (signal: AbortSignal) => {
     // Exited commands disappear from native inventory before their final item arrives.
     // Receipt-owned command facts exclude older turns and withheld dynamic replies.
     if (pendingNativeCommandItems.size === 0) {
       return;
     }
-    const completion = createDeferred<void>();
-    const observe = () => {
-      if (pendingNativeCommandItems.size === 0) {
-        completion.resolve();
-      }
-    };
-    nativeItemObservers.add(observe);
-    try {
-      observe();
-      if (!(await waitForPromiseOrAbort(completion.promise, signal))) {
-        signal.throwIfAborted();
-      }
-    } finally {
-      nativeItemObservers.delete(observe);
+    const completion = (nativeItemsCompletion ??= createDeferred<void>());
+    if (!(await waitForPromiseOrAbort(completion.promise, signal))) {
+      signal.throwIfAborted();
     }
   };
   const readTerminalTurn = (notification: CodexServerNotification, notificationTurnId: string) =>
@@ -113,17 +101,10 @@ export function createCodexAttemptNotificationController(
         updateActiveTurnItemIds(notification, activeTurnItemIds);
         noteProgress(`notification:${notification.method}`);
         reportExecutionNotification(notification);
-        if (
-          isPendingOpenClawDynamicToolCompletionNotification(
-            notification,
-            pendingOpenClawDynamicToolCompletionIds,
-          )
-        ) {
-          const itemId = readNotificationItemId(notification);
-          if (itemId) {
-            pendingOpenClawDynamicToolCompletionIds.delete(itemId);
-          }
-        }
+        completePendingOpenClawDynamicToolNotification(
+          notification,
+          pendingOpenClawDynamicToolCompletionIds,
+        );
         if (notification.method === "item/completed") {
           if (activeTurnItemIds.size === 0) {
             scheduleTerminalDynamicToolReleaseCheck();
@@ -154,7 +135,7 @@ export function createCodexAttemptNotificationController(
         }
         if (
           isCodexTurnAbortMarkerNotification(notification, {
-            currentPromptTexts: [turnState.codexTurnPromptText],
+            currentPromptText: turnState.codexTurnPromptText,
           })
         ) {
           state.sawCodexInterruptMarker = true;
@@ -181,8 +162,9 @@ export function createCodexAttemptNotificationController(
           pendingNativeCommandItems.delete(item.id);
         }
       }
-      for (const observe of nativeItemObservers) {
-        observe();
+      if (pendingNativeCommandItems.size === 0) {
+        nativeItemsCompletion?.resolve();
+        nativeItemsCompletion = undefined;
       }
       if (completedTurn) {
         // App-server collapses abort reasons; the marker preserves explicit

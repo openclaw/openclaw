@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../../agents/embedded-agent-runner/run-state.js";
 import { isEmbeddedRunHandleCompacting } from "../../agents/embedded-agent-runner/runs.probes.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { notifyGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   resolveRunStaleThresholdMs,
@@ -152,14 +153,6 @@ export const evictReplyOperationByOperation =
   replyRunState.evictOperationByOperation ??
   (replyRunState.evictOperationByOperation = new WeakMap<ReplyOperation, () => void>());
 
-function clearWaitSessionIds(sessionKey: string): void {
-  for (const [sessionId, mappedKey] of replyRunState.waitKeysBySessionId) {
-    if (mappedKey === sessionKey) {
-      replyRunState.waitKeysBySessionId.delete(sessionId);
-    }
-  }
-}
-
 export function notifyReplyRunEnded(sessionKey: string): void {
   // Rekey departures invalidate reads without granting destination-lane lineage.
   for (const observation of replyRunCompletionObservations.get(sessionKey) ?? []) {
@@ -220,6 +213,7 @@ const executionStartedOperations =
   (replyRunState.executionStartedOperations = new WeakSet<ReplyOperation>());
 export function markReplyOperationExecutionStarted(operation: ReplyOperation): void {
   executionStartedOperations.add(operation);
+  notifyGatewayWorkMetricsChanged();
 }
 export function hasReplyOperationExecutionStarted(operation: ReplyOperation): boolean {
   return executionStartedOperations.has(operation);
@@ -588,13 +582,8 @@ export function waitForReplyBarrierSettlement(
 ): Promise<void> {
   // Owners may extend this for bounded retry envelopes; all barriers retain a failsafe.
   return new Promise<void>((resolve) => {
-    let settled = false;
     let timer: ReturnType<typeof setTimeout>;
     const finish = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       clearTimeout(timer);
       resolve();
     };
@@ -697,7 +686,12 @@ export function clearReplyRunState(params: {
   if (replyRunState.activeKeysBySessionId.get(params.sessionId) === params.sessionKey) {
     replyRunState.activeKeysBySessionId.delete(params.sessionId);
   }
-  clearWaitSessionIds(params.sessionKey);
+  for (const [sessionId, mappedKey] of replyRunState.waitKeysBySessionId) {
+    if (mappedKey === params.sessionKey) {
+      replyRunState.waitKeysBySessionId.delete(sessionId);
+    }
+  }
+  notifyGatewayWorkMetricsChanged();
   notifyReplyRunEnded(params.sessionKey);
 }
 

@@ -763,6 +763,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
 
 describe("controlUi.linkPreview", () => {
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -783,6 +784,51 @@ describe("controlUi.linkPreview", () => {
     );
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it.each(["authority", "config", "principal"] as const)(
+    "suppresses a preview when %s changes during the fetch",
+    async (change) => {
+      let cfg: OpenClawConfig = { gateway: { port: 19010 } };
+      setRuntimeConfigSnapshot(cfg);
+      let current = true;
+      const client = { ...identifiedClient("preview-reader"), connId: "preview-connection" };
+      const started = createDeferred();
+      const gate = createDeferred<Response>();
+      const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+        if ((input instanceof Request ? input.url : input.toString()).endsWith("/favicon.ico")) {
+          return new Response(null, { status: 404 });
+        }
+        started.resolve();
+        return gate.promise;
+      });
+      vi.stubGlobal("fetch", fetch);
+      const respond = vi.fn();
+      const pending = createControlUiHandlers()["controlUi.linkPreview"]!({
+        ...requestOptions({ url: `https://rpc-preview.example/retired-${change}` }, respond, {
+          client,
+          context: { getRuntimeConfig: () => cfg },
+        }),
+        hasCurrentClientAuthority: () => current,
+      });
+      await started.promise;
+      if (change === "authority") {
+        current = false;
+      } else if (change === "config") {
+        cfg = { gateway: { port: 19011 } };
+        setRuntimeConfigSnapshot(cfg);
+      } else {
+        client.authenticatedUserId = "another-reader";
+      }
+      gate.resolve(
+        new Response("<head><title>Retired preview</title></head>", {
+          headers: { "content-type": "text/html" },
+        }),
+      );
+      await pending;
+      expect(respond).toHaveBeenCalledWith(true, {}, undefined);
+      expect(fetch).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([true, false])(
     "projects public metadata only when fetching is enabled: %s",

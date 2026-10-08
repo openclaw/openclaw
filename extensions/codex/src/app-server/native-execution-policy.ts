@@ -53,14 +53,18 @@ export function resolveCodexNativeExecutionPolicy(params: {
     parseAgentIdFromSessionKey(sessionKey) ??
     tryResolveDefaultAgentId(config);
   const canReadSessionEntry =
-    Boolean(agentId) &&
+    agentId &&
+    sessionKey &&
     params.readRuntimeSessionEntry &&
-    shouldReadRuntimeSessionEntry({ config, sessionKey, agentId });
-  const sessionEntry =
-    params.sessionEntry ??
-    (canReadSessionEntry && sessionKey && agentId
-      ? readRuntimeSessionEntryBestEffort({ sessionKey, agentId })
-      : undefined);
+    (parseAgentIdFromSessionKey(sessionKey) ?? tryResolveDefaultAgentId(config)) === agentId;
+  let sessionEntry = params.sessionEntry ?? undefined;
+  if (sessionEntry === undefined && canReadSessionEntry && sessionKey && agentId) {
+    try {
+      sessionEntry = getSessionEntry({ sessionKey, agentId, hydrateSkillPromptRefs: false });
+    } catch {
+      sessionEntry = undefined;
+    }
+  }
   const sandboxAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? agentId;
   const sandboxAvailable =
     params.sandboxAvailable ??
@@ -123,25 +127,6 @@ function parseAgentIdFromSessionKey(sessionKey?: string): string | undefined {
   return normalizeAgentIdOrDefault(parts[1]);
 }
 
-function shouldReadRuntimeSessionEntry(params: {
-  config: OpenClawConfig;
-  sessionKey?: string;
-  agentId?: string;
-}): boolean {
-  if (!params.sessionKey) {
-    return false;
-  }
-  const explicitAgentId = normalizeAgentIdOrDefault(params.agentId);
-  if (!explicitAgentId) {
-    return true;
-  }
-  const sessionAgentId = parseAgentIdFromSessionKey(params.sessionKey);
-  if (!sessionAgentId) {
-    return normalizeAgentId(explicitAgentId) === tryResolveDefaultAgentId(params.config);
-  }
-  return sessionAgentId === explicitAgentId;
-}
-
 function normalizeAgentIdOrDefault(value?: string | null): string | undefined {
   const normalized = normalizeAgentId(value);
   return normalized === "main" && !(value ?? "").trim() ? undefined : normalized;
@@ -158,19 +143,4 @@ function normalizeExecTarget(value?: string | null): ExecTarget | undefined {
     return normalized;
   }
   return undefined;
-}
-
-function readRuntimeSessionEntryBestEffort(params: {
-  sessionKey: string;
-  agentId: string;
-}): SessionEntry | undefined {
-  try {
-    return getSessionEntry({
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      hydrateSkillPromptRefs: false,
-    });
-  } catch {
-    return undefined;
-  }
 }

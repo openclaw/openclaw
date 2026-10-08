@@ -123,7 +123,11 @@ Proactive heartbeat behavior is opt-in:
   night-time pings in your configured local timezone (see
   [Timezone](/concepts/timezone)).
 
-Heartbeat can react to completion events from background execution.
+Heartbeat can react to completion events from background execution. A completion carrying a captured delivery route returns to that account, conversation, and thread; the monitor's configured `target`, `to`, or `accountId` cannot redirect it. Intentional `target: "none"`, direct-message restrictions, notification opt-outs, and disabled heartbeat controls still apply. Plugin normalization that would change the captured route fails closed. Ordinary scheduled heartbeats retain their configured destinations.
+
+Captured exec completions with different delivery routes run in separate turns, including different accounts or topics. Identical completion text does not suppress a different completion occurrence.
+
+If a completion cannot enter delivery, its original-route event remains available for the existing bounded wake retry. Once the durable delivery queue owns an attempt, that queue owns transport retries; an unrelated wake must not regenerate its result. An unresolved attempt without confirmed delivery custody is withheld from model replay. Use `process poll` to collect an exec result, and verify whether a message arrived before manually resending an ambiguous delivery. This does not change node protocol negotiation or legacy notification behavior.
 
 If you want a heartbeat to do something very specific (e.g. "check Gmail PubSub stats" or "verify gateway health"), set `agents.defaults.heartbeat.prompt` (or `agents.entries.*.heartbeat.prompt`) to a custom body (sent verbatim).
 

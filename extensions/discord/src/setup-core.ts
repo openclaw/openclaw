@@ -29,6 +29,18 @@ const DISCORD_TOKEN_HELP_LINES = [
   t("wizard.channels.docs", { link: formatDocsLink("/discord", "discord") }),
 ];
 
+export function getDiscordAllowFromHelpLines(): string[] {
+  return [
+    t("wizard.discord.allowlistIntro"),
+    t("wizard.discord.examples"),
+    "- 123456789012345678",
+    "- @alice",
+    "- alice#1234",
+    t("wizard.discord.multipleEntries"),
+    t("wizard.channels.docs", { link: formatDocsLink("/discord", "discord") }),
+  ];
+}
+
 type DiscordGuildChannelAllowlistEntry = {
   guildKey: string;
   channelKey?: string;
@@ -74,7 +86,7 @@ function setDiscordGuildChannelAllowlist(
       : (cfg.channels?.discord?.accounts?.[accountId]?.guilds ?? {});
   const guilds: Record<string, DiscordGuildEntry> = { ...baseGuilds };
   for (const entry of entries) {
-    const guildKey = entry.guildKey || "*";
+    const guildKey = entry.guildKey;
     const existing = guilds[guildKey] ?? {};
     if (entry.channelKey) {
       const channels = { ...existing.channels };
@@ -198,15 +210,7 @@ export function createDiscordSetupWizardBase(handlers: {
       channel,
       credentialInputKey: "token",
       helpTitle: "Discord allowlist",
-      helpLines: [
-        t("wizard.discord.allowlistIntro"),
-        t("wizard.discord.examples"),
-        "- 123456789012345678",
-        "- @alice",
-        "- alice#1234",
-        t("wizard.discord.multipleEntries"),
-        t("wizard.channels.docs", { link: formatDocsLink("/discord", "discord") }),
-      ],
+      helpLines: getDiscordAllowFromHelpLines(),
       message: t("wizard.discord.allowFromPrompt"),
       placeholder: "@alice, 123456789012345678",
       invalidWithoutCredentialNote: t("wizard.discord.allowFromInvalidWithoutToken"),

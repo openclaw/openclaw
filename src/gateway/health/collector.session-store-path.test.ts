@@ -83,8 +83,7 @@ describe("health session store paths", () => {
       for (const agentId of agentIds) {
         for (const timestamp of [30, 70, 10, 60, 40, 20, 50]) {
           const updatedAt = timestamp + (agentId === "other" ? 100 : 0);
-          now.mockReturnValue(updatedAt);
-          await sessionAccessor.upsertSessionEntryCore(
+          await sessionAccessor.replaceSessionEntry(
             { agentId, env, sessionKey: `agent:${agentId}:session-${timestamp}`, storePath },
             {
               sessionId: `session-${agentId}-${timestamp}`,

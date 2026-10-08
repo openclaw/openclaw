@@ -13,7 +13,10 @@ import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
 } from "../state/agent-deletion-journal.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -194,7 +197,7 @@ describe("runSessionRegistryMaintenance", () => {
         const mainKey = await writeStaleCronSession(mainStorePath, "main");
         const retainedKey = await writeStaleCronSession(retainedStorePath, "retained");
         const databasePath = resolveSqliteTargetFromSessionStorePath(retainedStorePath).path;
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(state.stateDir);
         runOpenClawStateWriteTransaction((database) => {
           database.db.exec("DROP TABLE agent_deletion_journal");
           if (history === "reconstructed") {

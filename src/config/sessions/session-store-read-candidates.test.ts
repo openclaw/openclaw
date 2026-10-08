@@ -33,6 +33,24 @@ test("keeps custody when a captured alias later resolves to the same file", () =
   expect(assertSessionStoreReadCandidate(capturedAlias, [candidate])).toBe(canonicalPath);
 });
 
+test.runIf(process.platform !== "win32")(
+  "keeps exact custody across POSIX lexical and physical directory spellings",
+  () => {
+    const root = tempDirs.make("session-store-posix-alias-");
+    const physicalDir = path.join(root, "physical");
+    const aliasDir = path.join(root, "alias");
+    fs.mkdirSync(physicalDir);
+    fs.symlinkSync(physicalDir, aliasDir, "junction");
+    const physicalPath = path.join(physicalDir, "openclaw-agent.sqlite");
+    const aliasPath = path.join(aliasDir, "openclaw-agent.sqlite");
+    fs.writeFileSync(physicalPath, "");
+
+    const candidate = { path: aliasPath, physicalPath };
+    expect(isSessionStoreReadCandidateCurrent(candidate)).toBe(true);
+    expect(assertSessionStoreReadCandidate(physicalPath, [candidate])).toBe(physicalPath);
+  },
+);
+
 test("keeps custody when Windows preserves distinct short and long spellings for one file", () => {
   const root = tempDirs.make("session-store-windows-alias-");
   const shortPath = path.join(root, "OPENCL~1");

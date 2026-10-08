@@ -298,6 +298,14 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       deferredTtsTextPending.trim() &&
       (replies.length === 0 || deferFinalTtsText)
     ) {
+      const sendTtsFinal = async (payload: ReplyPayload) => {
+        const finalReply = await state.sendFinalPayload(payload, {
+          abortSignal: getDispatchAbortSignal(),
+          skipTts: true,
+        });
+        queuedFinal = finalReply.queuedFinal || queuedFinal;
+        routedFinalCount += finalReply.routedFinalCount;
+      };
       try {
         await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
         throwIfDispatchOperationAborted();
@@ -337,12 +345,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           ttsOnlyPayload = ttsSyntheticReply;
         }
         if (ttsOnlyPayload) {
-          const finalReply = await state.sendFinalPayload(ttsOnlyPayload, {
-            abortSignal: getDispatchAbortSignal(),
-            skipTts: true,
-          });
-          queuedFinal = finalReply.queuedFinal || queuedFinal;
-          routedFinalCount += finalReply.routedFinalCount;
+          await sendTtsFinal(ttsOnlyPayload);
         }
       } catch (err) {
         if (isDispatchReplyOperationAbortedError(err)) {
@@ -353,12 +356,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         );
         const deferredVisibleText = cleanDeferredFinalText(deferredTtsTextPending);
         if (deferFinalTtsText && deferredVisibleText.trim()) {
-          const finalReply = await state.sendFinalPayload(
-            { text: deferredVisibleText },
-            { abortSignal: getDispatchAbortSignal(), skipTts: true },
-          );
-          queuedFinal = finalReply.queuedFinal || queuedFinal;
-          routedFinalCount += finalReply.routedFinalCount;
+          await sendTtsFinal({ text: deferredVisibleText });
         }
       }
     }

@@ -65,6 +65,12 @@ function commitReceipt(value: unknown): DevicePairingCommitReceipt {
       (entry) =>
         isRecord(entry) &&
         typeof entry.deviceId === "string" &&
+        (entry.operatorBinding === undefined ||
+          entry.operatorBinding === null ||
+          (isRecord(entry.operatorBinding) &&
+            typeof entry.operatorBinding.identity === "string" &&
+            Array.isArray(entry.operatorBinding.scopes) &&
+            entry.operatorBinding.scopes.every((scope) => typeof scope === "string"))) &&
         (entry.binding === null ||
           (isRecord(entry.binding) &&
             typeof entry.binding.identity === "string" &&
@@ -112,6 +118,9 @@ function commitReceipt(value: unknown): DevicePairingCommitReceipt {
     ...(workerEnvironment ? { workerEnvironment } : {}),
     changed: value.changed.map((entry) => ({
       deviceId: entry.deviceId,
+      operatorBinding: entry.operatorBinding
+        ? { identity: entry.operatorBinding.identity, scopes: [...entry.operatorBinding.scopes] }
+        : null,
       binding:
         entry.binding === null
           ? null
@@ -131,7 +140,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
     baseDir?: string;
     context?: OpenClawStateWorkerContext;
     assertCurrent?: () => void;
-    admit?: (facts: DevicePairingAdmissionFacts) => void;
+    admit?: (facts: Exclude<DevicePairingAdmissionFacts, { kind: "pairing-publication" }>) => void;
     onTokensReplaced?: (deviceId: string, roles: readonly string[]) => void;
     /** Map a refused operation only after its admission and publication have settled. */
     onAuthorityRefused?: () => DevicePairingWorkerOperations[Key]["output"];
@@ -177,10 +186,10 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
             updatedAtMs: environment.updatedAtMs,
           });
         }
-        mutation.publish(receipt);
-        invalidatePairedCardRendererCache();
         // A callback can throw or read publication recursively; the commit is already installed.
         published = true;
+        mutation.publish(receipt);
+        invalidatePairedCardRendererCache();
         if (environmentPublished) {
           sessionChanges.emit({ all: true, scope: "worker-environments" });
         }
@@ -210,8 +219,19 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
               }
               context.admission.assertCurrent();
               options.assertCurrent?.();
-              for (const facts of admissionFacts(request.facts)) {
-                options.admit?.(facts);
+              const facts = admissionFacts(request.facts);
+              // Publication receipts belong to this broker, not domain policy callbacks.
+              for (const fact of facts) {
+                if (fact.kind !== "pairing-publication") {
+                  options.admit?.(fact);
+                }
+              }
+              if (request.stage === "commit" && mutation) {
+                const publicationFact = facts.find((fact) => fact.kind === "pairing-publication");
+                if (!publicationFact) {
+                  throw new Error("Pairing commit requires its prospective publication");
+                }
+                mutation.prepare(commitReceipt(publicationFact.receipt));
               }
               if (request.stage === "commit" && captured.type === "bootstrap.consume") {
                 publishEnvironment = reserveWorkerEnvironmentNativePublication(

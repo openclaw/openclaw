@@ -195,6 +195,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
                   facts.placement,
                   resultFacts,
                   previousState,
+                  facts.placement,
                 )
               : stagePlacementWorkspaceResultWorkerPublication(
                   context.admission.identity,

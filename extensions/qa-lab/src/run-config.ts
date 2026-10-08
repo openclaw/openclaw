@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { uniqueStrings, uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { z } from "zod";
 import type {
-  QaLabExecutionKind,
   QaLabResolvedRunPlan,
   QaLabRunnerSnapshot,
   QaLabRunSelection,
@@ -390,9 +389,7 @@ export function resolveQaLabRunPlan(params: {
   if (selectedScenarios.length === 0) {
     errors.push("QA run plan selected no runnable scenarios.");
   }
-  const executionKinds = uniqueStrings(
-    selectedScenarios.map((scenario) => scenario.execution.kind),
-  ) as QaLabExecutionKind[];
+  const executionKinds = uniqueValues(selectedScenarios.map((scenario) => scenario.execution.kind));
   return {
     status: errors.length > 0 ? "invalid" : "ready",
     profile: selection.profile,
