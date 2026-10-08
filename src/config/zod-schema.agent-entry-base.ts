@@ -39,23 +39,16 @@ export const AgentModelMapSchema = z
   .record(z.string(), AgentModelRuntimeEntrySchema)
   .superRefine((models, ctx) => {
     for (const [ref, entry] of Object.entries(models)) {
-      if (
-        entry.pickerRuntimes !== undefined &&
-        (ref.includes("*") || !parseProviderModelRef(ref))
-      ) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [ref, "pickerRuntimes"],
-          message: "Picker runtimes require an exact provider/model entry.",
-        });
-      }
-      if (entry.codeMode !== undefined && (ref.includes("*") || !parseProviderModelRef(ref))) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [ref, "codeMode"],
-          message:
-            "Code Mode requires an exact provider/model entry; wildcard and bare model keys are not supported.",
-        });
+      for (const [key, message] of [
+        ["pickerRuntimes", "Picker runtimes require an exact provider/model entry."],
+        [
+          "codeMode",
+          "Code Mode requires an exact provider/model entry; wildcard and bare model keys are not supported.",
+        ],
+      ] as const) {
+        if (entry[key] !== undefined && (ref.includes("*") || !parseProviderModelRef(ref))) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: [ref, key], message });
+        }
       }
     }
   });

@@ -441,12 +441,15 @@ export async function withSessionStoreReaderInWorker<T>(
     dataOnly = false,
     logical,
     prepareSource,
+    capturePhysicalSource = false,
   }: {
     backing?: boolean;
     lane?: SessionHistoryWorkerLane;
     dataOnly?: boolean;
     logical?: { assertCurrent?: () => void; onReadError?: (error: unknown) => Promise<T> };
     prepareSource?: SessionEntryReadSourcePreparation;
+    /** Retain existing-file identity across caller preparation and final data disclosure. */
+    capturePhysicalSource?: boolean;
   } = {},
 ): Promise<T> {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
@@ -527,9 +530,10 @@ export async function withSessionStoreReaderInWorker<T>(
       return withSessionHistoryWorkerDatabase(
         { ...database, requestedPaths: [storePath, sourcePath], env },
         async (reader) => {
-          const sourceIdentity = prepareSource
-            ? readDatabasePathIdentitySync(database.path)
-            : undefined;
+          const sourceIdentity =
+            prepareSource || capturePhysicalSource
+              ? readDatabasePathIdentitySync(database.path)
+              : undefined;
           let active = true;
           const assertCapturedCurrent = () => {
             assertSourcesCurrent();

@@ -42,7 +42,7 @@ import {
   readSessionEntryInWorker,
   withSessionEntriesFromStoresInWorker,
 } from "./session-entry-read-runtime.js";
-import { historyLane } from "./session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
 let state: OpenClawTestState;
 beforeAll(async () => {
@@ -614,18 +614,20 @@ it.each([
         await release.promise;
       }
     };
-    const closeResources = historyLane.pool.closeResources.bind(historyLane.pool);
-    const rotate = historyLane.pool.rotate.bind(historyLane.pool);
+    const closeResources = targetDiscoveryLane.pool.closeResources.bind(targetDiscoveryLane.pool);
+    const rotate = targetDiscoveryLane.pool.rotate.bind(targetDiscoveryLane.pool);
     const closeIntercept = vi
-      .spyOn(historyLane.pool, "closeResources")
+      .spyOn(targetDiscoveryLane.pool, "closeResources")
       .mockImplementation(async (key) => {
         await closeResources(key);
         await holdDiscoveryCleanup();
       });
-    const rotateIntercept = vi.spyOn(historyLane.pool, "rotate").mockImplementation(async () => {
-      await rotate();
-      await holdDiscoveryCleanup();
-    });
+    const rotateIntercept = vi
+      .spyOn(targetDiscoveryLane.pool, "rotate")
+      .mockImplementation(async () => {
+        await rotate();
+        await holdDiscoveryCleanup();
+      });
     const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
     const intercept = vi
       .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
@@ -732,19 +734,25 @@ it.each(
     ["global", "topic"].map((sessionKey) => ({ agentId, sessionKey })),
   ),
 )(
-  "preserves a populated incognito owner for a mismatched explicit locator ($agentId, $sessionKey)",
+  "preserves a populated incognito owner for an explicit locator ($agentId, $sessionKey)",
   async ({ agentId, sessionKey }) => {
     const owner = { agentId: `ops-memory-${agentId ?? "missing"}-${sessionKey}`, env: state.env };
     const storePath = resolveIncognitoOpenClawAgentSqlitePath(owner);
     const ownedScope = { ...owner, storePath, sessionKey };
-    replaceSessionEntrySync(ownedScope, { sessionId: "private-ops-session", updatedAt: 1 });
+    const entry = { sessionId: "private-ops-session", updatedAt: 1 };
+    replaceSessionEntrySync(ownedScope, entry);
+    const database = openOpenClawAgentDatabase({ ...owner, path: storePath });
     const scope = { env: state.env, storePath, sessionKey, agentId };
-    expect(() => loadSessionEntry(scope)).toThrow(/already open for agent ops-memory-/);
+    if (agentId === undefined) {
+      expect(loadSessionEntry(scope)).toMatchObject(entry);
+      await expect(readSessionEntryInWorker(scope)).resolves.toMatchObject(entry);
+    } else {
+      const mismatch = "Explicit incognito database target does not match its agent and state root";
+      expect(() => loadSessionEntry(scope)).toThrow(mismatch);
+      await expect(readSessionEntryInWorker(scope)).rejects.toThrow(mismatch);
+    }
     expect(fs.existsSync(storePath)).toBe(false);
-    await expect
-      .soft(readSessionEntryInWorker(scope, () => {}))
-      .rejects.toThrow(/already open for agent ops-memory-/);
-    expect.soft(fs.existsSync(storePath)).toBe(false);
-    expect(loadSessionEntry(ownedScope)).toMatchObject({ sessionId: "private-ops-session" });
+    expect(openOpenClawAgentDatabase({ ...owner, path: storePath })).toBe(database);
+    expect(loadSessionEntry(ownedScope)).toMatchObject(entry);
   },
 );

@@ -588,10 +588,18 @@ export async function prepareReplyAgentPayloads(state: {
   const statusPayload = guardedReplyPayloads.find(
     (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
   );
+  // Media admission owns runs under the tools' runtime policy key, not a shared main key.
+  const mediaSessionKey =
+    implicitContinuation && !continuationOwner
+      ? (runtimePolicySessionKey ?? sessionKey ?? followupRun.run.sessionKey)
+      : undefined;
   if (statusPayload) {
     await attachWaitingStatusProgressContinuation({
       payload: statusPayload,
       acceptedSessionSpawns: runResult.acceptedSessionSpawns,
+      mediaRequester: mediaSessionKey
+        ? { sessionKey: mediaSessionKey, agentId: followupRun.run.agentId }
+        : undefined,
       operation: replyOperation,
     });
   }

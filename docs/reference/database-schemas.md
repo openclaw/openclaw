@@ -22,6 +22,13 @@ Schema-version, integrity, canonical-index, and table-existence checks belong to
 
 Shared-state and agent read-only connections reuse bounded prepared statements under their native connection lifecycle. Prepared-statement reuse alone does not retain query results. Read admission shares one freshness check within its synchronous operation; schema-fact lookups reuse the admitted handle without checking again. Write transactions refresh after acquiring `BEGIN`, before consuming those facts. Explicit fresh checks always execute, even inside another read operation. A foreign commit compares the schema and user versions before retaining or replacing schema facts, preserving active SQLite snapshots. Closing or replacing the connection clears retained statements and facts.
 
+Shared-state content-version checks reuse their value at the admitted connection
+revision. Foreign commits, local writes, schema changes, and connection closure
+invalidate reuse. Native transactions, pinned snapshots, unadmitted handles, and
+dynamic authorizers continue reading the marker directly. Cold admission still
+checks freshness after catalog capture before validating the supported version.
+Schema versions, stored bytes, and upgrade or downgrade behavior are unchanged.
+
 New agent readers share the initial freshness probe with schema validation;
 subsequent unpinned uses still probe again. Shared-state worker reads keep admission
 and query execution in the same freshness scope. Point transcript statistics, mutation clocks, pending-archive checks, and

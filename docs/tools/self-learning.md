@@ -88,9 +88,9 @@ skill: the review patches the survivor and archives the rest with
 worked before the stop.
 
 It does not capture environment-specific or transient failures, negative claims
-about tools, unresolved failures or guesses, one-off tasks, personal facts,
-secrets, or generic advice without concrete commands, paths, or ids. When
-nothing durable was learned, it changes nothing.
+about tools, unresolved failures or guesses, knowledge about one codebase,
+one-off tasks, personal facts, secrets, or generic advice without concrete
+commands, paths, or ids. When nothing durable was learned, it changes nothing.
 
 ## What you see
 

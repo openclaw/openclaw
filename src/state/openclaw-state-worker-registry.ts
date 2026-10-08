@@ -37,6 +37,7 @@ import type { TelemetryWorkerOperations } from "../infra/telemetry-store.worker.
 import type { GeneratedHtmlProvenanceOperations } from "../media/generated-html-provenance.worker-contract.js";
 import type { ModelCatalogWorkerOperations } from "../model-catalog/remote-store.worker.js";
 import type { NodeWorkerJournalWorkerOperations } from "../node-host/node-worker-journal.worker-contract.js";
+import type { ChannelPairingWorkerOperations } from "../pairing/pairing-store.worker-contract.js";
 import type { PluginBlobWorkerOperations } from "../plugin-state/plugin-blob-store.worker.js";
 import type { PluginRuntimeWorkerOperations } from "../plugins/state.worker-contract.js";
 import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
@@ -70,6 +71,7 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBoo
   SessionDeliveryWorkerOperations &
   CurrentConversationBindingWorkerOperations &
   DevicePairingWorkerOperations &
+  ChannelPairingWorkerOperations &
   McpOAuthWorkerOperations &
   LegacyMcpOAuthWorkerOperations &
   NativeHookRelayStoreWorkerOperations &
@@ -191,6 +193,8 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
     import("../node-host/node-worker-journal.worker.js").then((m) => m.nodeWorkerJournalOperations),
   channelIngress: () =>
     import("../channels/message/ingress-queue.worker.js").then((m) => m.channelIngressOperations),
+  channelPairing: () =>
+    import("../pairing/pairing-store.worker.js").then((m) => m.channelPairingOperations),
   devicePairing: () =>
     import("../infra/device-pairing-core.worker.js").then((m) => m.devicePairingOperations),
   node: () => import("../infra/device-pairing-node.worker.js").then((m) => m.nodePairingOperations),

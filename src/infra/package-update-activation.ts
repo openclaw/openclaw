@@ -242,6 +242,7 @@ export async function settlePendingPackageActivation(installKey: string) {
     !leaseIdentityChanged &&
     replacementIdentity === initial.descriptor.candidate.identity &&
     (initial.phase === "publishing" ||
+      initial.phase === "publication-complete" ||
       (initial.phase === "superseded" &&
         initial.intent?.kind === "publication-settled-external-change"));
   const publicationNotStarted =

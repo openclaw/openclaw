@@ -3,6 +3,7 @@ import type { PreparedAgentCredentialMode } from "../agents/agent-auth-credentia
 import * as authProfiles from "../agents/auth-profiles.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { dualRoutes } from "../agents/model-auth-availability.test-support.js";
+import * as modelCatalogDecisions from "../agents/model-catalog-decisions.js";
 import * as openaiRoutes from "../agents/openai-model-routes.js";
 import { bindPreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
@@ -10,7 +11,6 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import * as userModelAccounts from "../state/user-model-accounts.js";
 import { createStatusModelResolver } from "./status-model-auth.js";
 
 const cfg: OpenClawConfig = {
@@ -186,7 +186,13 @@ describe("status model authentication and endpoint", () => {
           email: "private@example.test",
         },
       };
-      vi.spyOn(userModelAccounts, "readUserModelAuthProfile").mockReturnValue(undefined);
+      vi.spyOn(modelCatalogDecisions, "prepareModelCatalogDecisions").mockImplementation(
+        async (params) =>
+          modelCatalogDecisions.createModelCatalogDecisions({
+            ...params,
+            preparedPersonalCatalog: { links: [], profiles: {}, isCurrent: () => true },
+          }),
+      );
       vi.spyOn(authProfiles, "loadAuthProfileStoreWithoutExternalProfiles").mockReturnValue({
         version: 1,
         profiles,

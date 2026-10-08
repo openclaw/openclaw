@@ -4,8 +4,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
+  deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   replaceSessionEntry,
+  resetSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
 import {
   readTranscriptEventId,
@@ -19,6 +21,11 @@ import { listManagedImageRecordEntries } from "../../gateway/managed-image-recor
 import { managedImageRecordOperations } from "../../gateway/managed-image-record-store.kernel.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -26,22 +33,32 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createCliDeps } from "../isolated-agent.delivery.test-helpers.js";
+import type { CronStoredJob } from "../types.js";
 import { commitCurrentSessionCronCompletion } from "./current-session-completion.js";
 import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
+import { resolveDeliveryTarget } from "./delivery-target.js";
 
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=",
   "base64",
 );
 
-async function createCompletionFixture(state: OpenClawTestState) {
+async function createCompletionFixture(
+  state: OpenClawTestState,
+  sessionTarget: "current" | "isolated" = "current",
+) {
   const sessionKey = "agent:main:webchat:direct:report";
   const sessionId = "report-session";
   const scope = {
@@ -60,7 +77,15 @@ async function createCompletionFixture(state: OpenClawTestState) {
     session: { store: scope.storePath },
   };
   const payload: ReplyPayload = { text: "Example report", mediaUrl: imagePath };
-  const job = makeCronJob({ id: "report-job", sessionTarget: "current", sessionKey });
+  const job: CronStoredJob = {
+    ...makeCronJob({ id: "report-job", sessionTarget, sessionKey }),
+    ...(sessionTarget === "isolated"
+      ? {
+          sourceConversation: { sessionKey, ...generation },
+          delivery: { mode: "announce", channel: "last" },
+        }
+      : {}),
+  };
   const params: DispatchCronDeliveryParams = {
     deliveryAttemptFence: null,
     cfgWithAgentDefaults: cfg,
@@ -127,6 +152,7 @@ async function createCompletionFixture(state: OpenClawTestState) {
   });
   return {
     payload,
+    job,
     params,
     scope,
     records,
@@ -202,6 +228,189 @@ describe("current-session completion delivery", () => {
             requiresExternalDelivery: false,
             deliveryError: "No external channel",
           });
+        } finally {
+          await fixture.dispose();
+        }
+      });
+    },
+  );
+});
+
+describe("isolated completion in the creating conversation", () => {
+  it.each(["unchanged", "reset"] as const)(
+    "fences implicit external delivery against the %s source generation after resolution",
+    async (sourceState) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(state, "isolated");
+        const registry = captureActivePluginRegistrySnapshot();
+        const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "report-message" }));
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "telegram",
+              source: "test",
+              plugin: {
+                ...createChannelTestPluginBase({ id: "telegram" }),
+                outbound: { deliveryMode: "direct", sendText },
+              },
+            },
+          ]),
+        );
+        try {
+          await replaceSessionEntry(fixture.scope, {
+            sessionId: fixture.scope.sessionId,
+            lifecycleRevision: "report-generation",
+            updatedAt: 1,
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "telegram", to: "123" },
+            }),
+          });
+          fixture.params.deliveryPayloads = [{ text: "tick" }];
+          fixture.params.deliveryPayloadHasStructuredContent = false;
+          fixture.params.synthesizedText = "tick";
+          fixture.params.resolvedDelivery = await resolveDeliveryTarget(
+            fixture.params.cfgWithAgentDefaults,
+            "main",
+            { ...fixture.job, ...fixture.params.deliveryPlan },
+          );
+          expect(fixture.params.resolvedDelivery).toMatchObject({
+            ok: true,
+            channel: "telegram",
+            to: "123",
+          });
+          if (sourceState === "reset") {
+            await resetSessionEntryLifecycle({
+              storePath: fixture.scope.storePath,
+              target: {
+                canonicalKey: fixture.scope.sessionKey,
+                storeKeys: [fixture.scope.sessionKey],
+              },
+              buildNextEntry: () => ({
+                sessionId: "replacement-session",
+                lifecycleRevision: "replacement-generation",
+                updatedAt: 3000,
+              }),
+            });
+          }
+
+          const delivery = await dispatchCronDelivery(fixture.params);
+          if (sourceState === "reset") {
+            expect(delivery).toMatchObject({
+              delivered: false,
+              deliveryState: { status: "not-delivered" },
+              deliveryError: expect.stringContaining("original session generation"),
+            });
+            expect(sendText).not.toHaveBeenCalled();
+          } else {
+            expect(delivery).toMatchObject({ delivered: true });
+            await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
+              delivered: true,
+            });
+            expect(sendText).toHaveBeenCalledOnce();
+          }
+        } finally {
+          restoreActivePluginRegistrySnapshot(registry);
+          await fixture.dispose();
+        }
+      });
+    },
+  );
+
+  it.each(["deleted", "reset"] as const)(
+    "records a delivery failure when the creating conversation is %s",
+    async (change) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(state, "isolated");
+        try {
+          fixture.params.deliveryPayloads = [{ text: "tick" }];
+          fixture.params.deliveryPayloadHasStructuredContent = false;
+          fixture.params.synthesizedText = "tick";
+          if (change === "deleted") {
+            await deleteSessionEntryLifecycle({
+              archiveTranscript: false,
+              storePath: fixture.scope.storePath,
+              target: {
+                canonicalKey: fixture.scope.sessionKey,
+                storeKeys: [fixture.scope.sessionKey],
+              },
+            });
+          } else {
+            await resetSessionEntryLifecycle({
+              storePath: fixture.scope.storePath,
+              target: {
+                canonicalKey: fixture.scope.sessionKey,
+                storeKeys: [fixture.scope.sessionKey],
+              },
+              buildNextEntry: () => ({
+                sessionId: "replacement-session",
+                lifecycleRevision: "replacement-generation",
+                updatedAt: 3000,
+              }),
+            });
+          }
+
+          const delivery = await dispatchCronDelivery(fixture.params);
+          expect(delivery).toMatchObject({
+            delivered: false,
+            deliveryAttempted: true,
+            deliveryError: expect.stringContaining("session rebound"),
+            disposition: { kind: "error", errorKind: "delivery-target" },
+          });
+          expect(await fixture.messages()).toEqual([]);
+          expect(fixture.updates()).toBe(0);
+        } finally {
+          await fixture.dispose();
+        }
+      });
+    },
+  );
+
+  it("keeps a silent isolated result out of the creating conversation", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const fixture = await createCompletionFixture(state, "isolated");
+      try {
+        fixture.params.deliveryPayloads = [{ text: "NO_REPLY" }];
+        fixture.params.deliveryPayloadHasStructuredContent = false;
+        fixture.params.synthesizedText = "NO_REPLY";
+        await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
+          disposition: { kind: "suppressed" },
+          deliverySuppressionReason: "silent",
+        });
+        expect(await fixture.messages()).toEqual([]);
+        expect(fixture.updates()).toBe(0);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
+
+  it.each(["explicit", "remembered"] as const)(
+    "does not replace an unavailable %s external route with a conversation commit",
+    async (route) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(state, "isolated");
+        try {
+          fixture.params.deliveryPayloads = [{ text: "tick" }];
+          fixture.params.synthesizedText = "tick";
+          if (route === "explicit") {
+            fixture.params.job.delivery = { mode: "announce", channel: "missing-channel" };
+            fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
+          } else {
+            fixture.params.resolvedDelivery = {
+              ok: false,
+              channel: "telegram",
+              mode: "implicit",
+              error: new Error("Remembered channel unavailable"),
+            };
+          }
+          await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
+            delivered: false,
+            deliveryError:
+              route === "explicit" ? "No external channel" : "Remembered channel unavailable",
+            disposition: { kind: "error", errorKind: "delivery-target" },
+          });
+          expect(await fixture.messages()).toEqual([]);
+          expect(fixture.updates()).toBe(0);
         } finally {
           await fixture.dispose();
         }

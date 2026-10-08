@@ -60,9 +60,7 @@ it.each(["before", "after"] as const)(
         retarget();
         // Join any unexpectedly accepted reader so the negative control cannot leak custody.
         await expect(
-          prepareSessionSharingSource(target, () => {}).then((prepared) => {
-            prepared.release();
-          }),
+          prepareSessionSharingSource(target, () => {}).then((prepared) => prepared.release()),
         ).rejects.toThrow("Session sharing source changed");
       } else {
         const prepared = await prepareSessionSharingSource(target, () => {});
@@ -71,7 +69,7 @@ it.each(["before", "after"] as const)(
           retarget();
           expect(() => prepared.assertCurrent()).toThrow("Session sharing source changed");
         } finally {
-          prepared.release();
+          await prepared.release();
         }
       }
     });

@@ -3439,13 +3439,89 @@ export function createNodeTestShardBundles(
 
   const full = [...unbundled, ...bundled];
   return (
-    options.runnerBackend === "github" ? full.flatMap(splitHostedReleaseShard) : full
+    options.runnerBackend === "github"
+      ? packHostedReleaseShards(full.flatMap(splitHostedReleaseShard))
+      : full
   ).toSorted(compareFullNodeTestAdmissionOrder);
 }
 
-// Unfitted whole rows observed at 41-61 hosted minutes (FRV 37557136793,
-// 37623751955; core-runtime-config was cancelled at the 60-minute cap). Splitting
-// them would exceed the full manual manifest budget, so give them job headroom.
+const HOSTED_RELEASE_JOB_SECONDS = 720;
+
+function packHostedReleaseShards(shards: NodeTestShard[]): NodeTestShard[] {
+  const unmeasured = shards.filter(
+    (shard) => shard.requiresDist || !shard.predictedSeconds || shard.groups,
+  );
+  const measured = shards
+    .filter((shard) => !unmeasured.includes(shard))
+    .toSorted(
+      (a, b) => b.predictedSeconds! - a.predictedSeconds! || a.shardName.localeCompare(b.shardName),
+    );
+  const seconds = (bin: readonly NodeTestShard[]) =>
+    bin.reduce((sum, shard) => sum + shard.predictedSeconds!, 0);
+  const bins = packNodeTestGroups(measured, (bin, shard) => {
+    const first = bin[0];
+    return (
+      first.runner === shard.runner &&
+      first.pretestBuildMode === shard.pretestBuildMode &&
+      first.timeoutMinutes === shard.timeoutMinutes &&
+      JSON.stringify(first.env) === JSON.stringify(shard.env) &&
+      bin.length < COMPACT_NODE_TEST_JOB_GROUPS &&
+      seconds([...bin, shard]) <= HOSTED_RELEASE_JOB_SECONDS
+    );
+  });
+  return [
+    ...unmeasured,
+    ...bins.map((bin, index): NodeTestShard => {
+      if (bin.length === 1) {
+        return bin[0];
+      }
+      const first = bin[0];
+      const shardName = `release-packed-${index + 1}`;
+      // Keep every measured selection in its own process and timing identity.
+      // Summed whole-job walls conservatively retain each group's setup cost.
+      return {
+        checkName: formatNodeTestShardCheckName(shardName),
+        shardName,
+        configs: [...new Set(bin.flatMap((shard) => shard.configs))],
+        groups: bin.map((shard) => ({
+          shard_name: shard.shardName,
+          timing_key: shard.timing_key,
+          configs: shard.configs,
+          includePatterns: shard.includePatterns,
+          // Serial jobs admit more workers by default; retain the measured
+          // full-release two-worker ceiling for each separate test process.
+          env: {
+            ...shard.env,
+            OPENCLAW_VITEST_MAX_WORKERS: String(
+              Math.min(2, Number(shard.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2)),
+            ),
+          },
+          pretestBuildMode: shard.pretestBuildMode,
+          runner: shard.runner,
+          requiresDist: shard.requiresDist,
+        })),
+        env: first.env,
+        pretestBuildMode: first.pretestBuildMode,
+        runner: first.runner,
+        requiresDist: first.requiresDist,
+        timeoutMinutes: first.timeoutMinutes,
+        planConcurrency: 1,
+        predictedSeconds: seconds(bin),
+      };
+    }),
+  ];
+}
+
+// These owners retain their execution contract as test inventory changes. Keep
+// complete historical observations until the current selection is measured.
+const RELEASE_TIMING_CONTINUITY_SHARDS = new Set([
+  "agentic-cli-process",
+  "agentic-control-plane-agent-chat",
+  "agentic-gateway-methods",
+  "core-runtime-config",
+]);
+
+// Preserve existing whole-job headroom until these owners have complete timings.
 const LONG_UNFITTED_RELEASE_SHARDS = new Set([
   "agentic-cli-process",
   "agentic-control-plane-agent-chat",
@@ -3456,7 +3532,7 @@ const LONG_UNFITTED_RELEASE_SHARDS = new Set([
 // measured walls separate from compact test-group spans and reserve eight minutes
 // of the 20-minute objective for changes in setup and cold-run overhead.
 function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
-  const budget = 720;
+  const budget = HOSTED_RELEASE_JOB_SECONDS;
   const parentShardName = `release-full-${shard.shardName}`;
   const timings = readCompactGroupTimings("github");
   const files = canSplitWholeConfigGroup(shard.shardName)
@@ -3485,10 +3561,28 @@ function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
       stripes,
     });
   const original = generation([files]);
+  const currentGenerationSeconds = readCompleteSplitGenerationSeconds(
+    timings,
+    original.selectorKey,
+  );
+  const retainHistoricalTimings =
+    RELEASE_TIMING_CONTINUITY_SHARDS.has(shard.shardName) &&
+    timings[parentShardName] === undefined &&
+    currentGenerationSeconds === undefined;
+  const singletonKeys = generation(files.map((file) => [file])).timingKeys;
+  const currentSingletons = new Set(
+    singletonKeys.map((key) => key.match(/#include-1-[a-f0-9]{12}$/u)![0]),
+  );
   const singletonCosts = new Map<string, number>();
   for (const [key, cost] of Object.entries(timings)) {
     const singleton = key.match(/#include-1-[a-f0-9]{12}$/u)?.[0];
-    if (singleton && key.startsWith(`${original.selectorKey}#generation-`)) {
+    if (
+      singleton &&
+      currentSingletons.has(singleton) &&
+      (key.startsWith(`${original.selectorKey}#generation-`) ||
+        (retainHistoricalTimings &&
+          parseCompactSplitTimingKey(key)?.parentShardName === parentShardName))
+    ) {
       singletonCosts.set(singleton, Math.max(singletonCosts.get(singleton) ?? 0, cost));
     }
   }
@@ -3497,22 +3591,12 @@ function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
       `Release shard ${shard.shardName} contains an indivisible test above the hosted budget; split that test before release`,
     );
   }
-  const currentGenerationSeconds = readCompleteSplitGenerationSeconds(
-    timings,
-    original.selectorKey,
-  );
   let seconds = Math.max(
     timings[parentShardName] ?? 0,
     timings[original.timingKeys[0]!] ?? 0,
     currentGenerationSeconds ?? 0,
   );
-  if (
-    shard.shardName === "agentic-gateway-methods" &&
-    timings[parentShardName] === undefined &&
-    currentGenerationSeconds === undefined
-  ) {
-    // This whole owner retains its two-worker contract as files change. Keep
-    // completed historical walls until the new inventory has a full observation.
+  if (retainHistoricalTimings) {
     const selectors = new Set(
       Object.keys(timings).flatMap((key) => {
         const parsed = parseCompactSplitTimingKey(key);
@@ -3542,7 +3626,6 @@ function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
   const weight = (entries: readonly string[]) =>
     entries.reduce((sum, file) => sum + stripeFileWeight(file), 0);
   const totalWeight = weight(files);
-  const singletonKeys = generation(files.map((file) => [file])).timingKeys;
   const knownFileCosts = new Map<string, number>();
   for (const [index, file] of files.entries()) {
     const singleton = singletonKeys[index]!.match(/#include-1-[a-f0-9]{12}$/u)![0];

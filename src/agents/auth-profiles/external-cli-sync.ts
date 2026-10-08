@@ -165,12 +165,9 @@ function listScopedExternalCliProfileIds(params: {
   options?: ExternalCliAuthProfileOptions;
 }): string[] {
   const { options, store } = params;
-  const requestedProfileIds = Array.from(options?.profileIds ?? [])
+  const matchingRequestedProfileIds = Array.from(options?.profileIds ?? [])
     .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  const matchingRequestedProfileIds = requestedProfileIds.filter(
-    (profileId) => MINIMAX_CLI_PROFILE_ID === profileId,
-  );
+    .filter((profileId) => MINIMAX_CLI_PROFILE_ID === profileId);
   if (matchingRequestedProfileIds.length > 0) {
     return matchingRequestedProfileIds;
   }

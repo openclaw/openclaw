@@ -290,6 +290,8 @@ only when it needs Codex app access. See
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
+An explicitly isolated agent-turn job created from a conversation keeps that conversation's identity for delivery. With default `announce` delivery and no explicit or remembered external route, its final result is committed into the creating conversation, including WebChat/Control UI. The run remains isolated and does not read the conversation's history. See [Automation delivery](/automation/cron-jobs/delivery) for generation checks, duplicate prevention, and external-route behavior.
+
 <AccordionGroup>
   <Accordion title="Main session vs current vs isolated vs custom">
     **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and commit the final visible assistant result back to that exact conversation. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.

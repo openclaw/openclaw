@@ -1879,7 +1879,6 @@ src/config/redact-snapshot.ts	4
 src/config/runtime-overrides.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.ts	1
-src/config/sessions/cleanup-service.ts	3
 src/config/sessions/legacy-main-session-migration.ts	4
 src/config/sessions/metadata.ts	1
 src/config/sessions/session-accessor.entry-mutation.ts	2
@@ -1909,7 +1908,6 @@ src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
 src/config/sessions/transcript.ts	13
 src/config/sessions/types.ts	1
-src/config/talk.ts	1
 src/config/validation-channel-rules.ts	1
 src/config/validation-core.ts	1
 src/config/validation-plugin-config.ts	2

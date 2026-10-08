@@ -29,6 +29,10 @@ import {
 } from "../plugin-sdk/session-transcript-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import {
+  createIncognitoCompletionSource,
+  registerIncognitoCompletionTests,
+} from "./openclaw-agent-execution-incognito.history-completion.test-support.js";
 import { registerIncognitoHistoryWiringTests } from "./openclaw-agent-execution-incognito.history-wiring.test-support.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
@@ -949,23 +953,63 @@ registerIncognitoHistoryWiringTests({
   targetInput,
 });
 
+const completionFixture = {
+  authority,
+  get actor() {
+    return actor;
+  },
+  get env() {
+    return env;
+  },
+  targetInput,
+};
+registerIncognitoCompletionTests(completionFixture);
+
 it("ends queued history reads with the typed error when their actor is lost", async () => {
-  const target = await create("actor-loss", lossActor, "loss");
+  const completion = await createIncognitoCompletionSource(
+    completionFixture,
+    "actor-loss",
+    lossActor,
+  );
+  const target = completion.session;
+  const sourceInput = { ...completion.target, claim: completion.claim };
+  const prepared = await lossActor.sessions.retainCompletionSource(authority, sourceInput);
+  prepared.assertCurrent();
+  await prepared.release();
   const { reader, scope } = await computeReader(target, lossActor);
   const barrier = await hold(lossActor);
   const rejected = Promise.all(
     [
       hydrate(target, lossActor),
+      lossActor.sessions.retainCompletionSource(authority, sourceInput),
       reader.memoryEntry("actor-memory"),
       reader.memoryResetRecall(),
       reader.nativeContext(scope, () => "private result"),
     ].map((result) => expect(result).rejects.toMatchObject({ code: "INCOGNITO_SESSION_ENDED" })),
   );
+  let replacing: Promise<IncognitoAgentDatabaseExecution | undefined> | undefined;
   try {
     await lossWorker.terminate();
+    replacing = captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: lossActor.agentId,
+      env,
+      authority,
+    });
   } finally {
     barrier.release.resolve();
     await Promise.allSettled([barrier.held]);
   }
-  await rejected;
+  const successor = await replacing;
+  assert(successor);
+  try {
+    expect(successor.identity).not.toEqual(lossActor.identity);
+    await successor.sessions.create(authority, {
+      sessionKey: target.sessionKey,
+      entry: target.entry,
+    });
+    await rejected;
+  } finally {
+    await successor.close();
+  }
 });

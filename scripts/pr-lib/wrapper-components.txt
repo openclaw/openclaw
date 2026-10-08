@@ -338,6 +338,8 @@ src/agents/worktrees/registry.ts
 src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
+src/talk/client-voice-session-lifecycle.ts
+src/talk/client-voice-session-source.ts
 src/agents/worktrees/run-lease-owner.ts
 src/agents/worktrees/run-lease-store.kernel.ts
 src/agents/worktrees/run-lease-store.ts
@@ -1242,6 +1244,7 @@ src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/mention-inbox-record.ts
 src/plugins/compat/model-account-connect-record.ts
+src/plugins/compat/plugin-sdk-removed-export-records.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/progress-receipt-handoff-record.ts
 src/plugins/compat/registry-records.ts
@@ -1784,7 +1787,6 @@ src/system-agent/agent-id.ts
 src/test-utils/bun-process.ts
 src/trajectory/paths.ts
 src/trajectory/runtime-retention.sqlite.ts
-src/trajectory/runtime-retention.worker.ts
 src/utils.ts
 src/utils/absolute-deadline.ts
 src/utils/boolean.ts

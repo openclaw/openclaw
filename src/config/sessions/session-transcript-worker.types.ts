@@ -20,9 +20,17 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { VoiceSessionMatch } from "../../talk/client-voice-session-store.js";
 import type {
+  TrajectoryRetentionWorkerInput,
+  TrajectoryRuntimeRetentionPlan,
+} from "../../trajectory/runtime-retention.contract.js";
+import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
 } from "./activity-summary-source.types.js";
+import type {
+  SessionCleanupReadInput,
+  SessionCleanupReadResult,
+} from "./cleanup-service-read.types.js";
 import type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
 import type {
   ConversationRowsWorkerInput,
@@ -342,6 +350,8 @@ type BoardWidgetDocumentWorkerInput = BoardReadWorkerInput<
 >;
 
 export type SessionHistoryWorkerInput =
+  | TrajectoryRetentionWorkerInput
+  | SessionCleanupReadInput
   | BoardSnapshotWorkerInput
   | BoardWidgetDocumentWorkerInput
   | SessionStoreProjectionWorkerInput
@@ -415,6 +425,11 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
+  "trajectory-retention": {
+    kind: "trajectory-retention";
+    plan: TrajectoryRuntimeRetentionPlan;
+  };
+  "session-cleanup": SessionCleanupReadResult;
   "transcript-raw-delta": { kind: "transcript-raw-delta"; result: SessionTranscriptRawDeltaResult };
   "transcript-visible-delta": {
     kind: "transcript-visible-delta";
@@ -563,6 +578,11 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
+  readTrajectoryRetention: (
+    input: Omit<TrajectoryRetentionWorkerInput, "kind" | "database">,
+    options: { signal?: AbortSignal; timeoutMs: number },
+  ) => Promise<TrajectoryRuntimeRetentionPlan>;
+  readCleanup: SessionHistoryReader<SessionCleanupReadInput>;
   readRawDelta: CancellableSessionHistoryReader<
     Extract<SessionTranscriptDeltaWorkerInput, { kind: "transcript-raw-delta" }>,
     SessionTranscriptRawDeltaResult

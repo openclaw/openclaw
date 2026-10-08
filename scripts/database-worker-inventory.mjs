@@ -44,14 +44,16 @@ const reviewed = new Map([
     "src/infra/exec-approvals-sqlite.ts",
     {
       priority: 1,
-      evidence: "Approval-policy writes; write-coordination cutover owned separately",
+      evidence:
+        "Final synchronous pre-spawn/2026.9.8 SDK policy reads; native opaque approval guards retain MCP grant kernels until the next SDK major",
     },
   ],
   [
     "src/infra/exec-approvals-store.ts",
     {
       priority: 1,
-      evidence: "Approval-policy writes; write-coordination cutover owned separately",
+      evidence:
+        "Runtime policy mutations use the shared-state writer; native update adapter is Doctor-only",
     },
   ],
   [
@@ -1263,6 +1265,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/acp/runtime/session-meta.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["writeAcpSessionMetaForMigration"],
+        evidence:
+          "The native writer is retained only by src/infra/state-migrations.acp-session-metadata.ts and test fixtures. Gateway reset rebinding uses session-meta-reset.ts -> commitAcpSessionMutation in the shared-state worker; synchronous SDK readers retain their separate native classification.",
+      },
+    ],
+  ],
+  [
     "src/claws/cron.ts",
     [
       {
@@ -1499,10 +1512,10 @@ const reviewedOperations = new Map([
     "src/infra/exec-approvals-sqlite.ts",
     [
       {
-        tier: "T3",
+        tier: "W",
         operations: ["deleteExecApprovalsConfigRow"],
         evidence:
-          "src/cli/exec-policy-cli.ts:405 → src/infra/exec-approvals-store.ts:431 restores an absent row after CLI config-write failure.",
+          "exec-approvals-mutation.worker.ts restores an absent policy row through the shared-state writer.",
       },
     ],
   ],
@@ -1510,10 +1523,10 @@ const reviewedOperations = new Map([
     "src/infra/exec-approvals-store.ts",
     [
       {
-        tier: "T3",
-        operations: ["restoreExecApprovalsSnapshotLocked"],
+        tier: "T2",
+        operations: ["updateExecApprovalsForMaintenance"],
         evidence:
-          "Only src/cli/exec-policy-cli.ts:405 restores the snapshot after CLI config-write failure.",
+          "Only exec-approvals-generated-migration.ts uses the synchronous update adapter in production; runtime edits, removal and restoration dispatch to the writer.",
       },
     ],
   ],
@@ -1691,9 +1704,14 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["updateChannelPairingStateSnapshot"],
+        operations: [
+          "updateChannelPairingStateSnapshot",
+          "readChannelPairingRequests",
+          "readChannelPairingSnapshotFromDatabase",
+          "writeChannelPairingStateToDatabase",
+        ],
         evidence:
-          "Only src/infra/state-migrations.channel-pairing.ts:314,348 invokes the snapshot transaction; registered by state-migrations.doctor.ts:1527.",
+          "Runtime mutations execute in pairing-store.worker.ts through the shared-state writer registry. Native snapshots remain only in state-migrations.channel-pairing.ts for Doctor. The released synchronous SDK reader calls readChannelAllowEntries only; its shared allowlist query remains T1.",
       },
     ],
   ],
@@ -2329,7 +2347,7 @@ function render(rows) {
     "",
     "| Priority | Entry point / owner | Status to verify before a lane |",
     "| --- | --- | --- |",
-    "| 1 | `ensureProfileForEmail`; `updateExecApprovals` | Separate write-coordination lane; exclude from this cutover. The 47% is shared, not a measurement of either method alone. |",
+    "| 1 | `ensureProfileForEmail`; `updateExecApprovals` | Exec policy mutations use the shared-state writer; final SDK authority reads and opaque approval-commit kernels retain their native contract. Profile creation is a separate owner. The 47% is shared, not a measurement of either method alone. |",
     "| 2 | `sessions.list` → `listProjectedSessions` → resident session row projection | Warm requests already reuse resident rows with no host Kysely reads. Hydration, dirty/archived rows, and membership reads remain migration debt; preserve identity-keyed reuse and projection revisions. |",
     "| 3 | `chat.history` → history worker | Ordinary durable pages already use the worker. This cutover moves raw cursor delta reads and JSON parsing through the same owner; display/profile projection, byte budgets, and fresh sharing checks stay on the host. |",
     "| 4 | Transcript search → `session-transcript-search.ts` | The async facade moves durable FTS reads through the existing worker lifecycle for the runtime callers: `sessions-read.ts`, `sessions-search-projected.ts`, and `embedded-gateway-stub.ts`. Callers recheck current scope and authorization after awaiting. |",

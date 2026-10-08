@@ -249,6 +249,9 @@ async function resolveInitSessionStateAttemptContext(
 }
 
 function withoutThreadDelivery(entry: SessionEntry | undefined) {
+  if (entry?.delivery?.kind === "internal") {
+    return entry.delivery;
+  }
   return normalizeSessionDeliveryState({
     route: stripThreadFromSessionRoute(sessionDeliveryRoute(entry)),
     context: stripThreadId(deliveryContextFromSession(entry)),
@@ -822,9 +825,6 @@ async function initSessionStateAttemptLocked(
   });
   if (metaPatch) {
     sessionEntry = { ...sessionEntry, ...metaPatch };
-  }
-  if (isSystemEvent && !isThread) {
-    sessionEntry.delivery = withoutThreadDelivery(sessionEntry);
   }
   if (!sessionEntry.chatType) {
     sessionEntry.chatType = "direct";

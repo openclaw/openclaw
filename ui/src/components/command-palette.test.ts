@@ -1,12 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { loadModelCatalog } from "../lib/model-catalog-store.ts";
-import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
   createContext,
   createGateway,
@@ -15,6 +14,7 @@ import {
   expectPalettePromptMode,
   findPaletteOption,
   mountPalette,
+  registerCommandPaletteTestHooks,
 } from "./command-palette.test-support.ts";
 import "./command-palette.ts";
 import {
@@ -26,31 +26,7 @@ import {
 type CustodianPanelToggleDetail = { open?: boolean };
 
 describe("CommandPalette search", () => {
-  let restoreDialogPolyfill: () => void;
-  let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    restoreDialogPolyfill = installDialogPolyfill();
-    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
-    Object.defineProperty(Element.prototype, "scrollIntoView", {
-      configurable: true,
-      value: vi.fn(),
-    });
-  });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-    restoreDialogPolyfill();
-    if (scrollIntoViewDescriptor) {
-      Object.defineProperty(Element.prototype, "scrollIntoView", scrollIntoViewDescriptor);
-    } else {
-      delete (Element.prototype as Partial<Element>).scrollIntoView;
-    }
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  registerCommandPaletteTestHooks();
 
   it("lazily searches compact automation names once per connection", async () => {
     const request = vi.fn(async (method: string) => {

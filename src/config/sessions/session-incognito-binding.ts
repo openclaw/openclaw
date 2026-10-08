@@ -7,6 +7,7 @@ import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
+  resolveExplicitIncognitoAgentSqliteTarget,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseIncognitoAuthority } from "../../state/openclaw-agent-execution-contract.js";
@@ -47,11 +48,16 @@ export function captureIncognitoSessionBinding(
   const exactPath = Boolean(
     binding && target?.storePath && path.resolve(target.storePath) === binding.actor.path,
   );
+  const explicitTarget =
+    binding && target?.storePath
+      ? resolveExplicitIncognitoAgentSqliteTarget(target.storePath, target)
+      : undefined;
   if (
     !binding ||
     (target &&
       !isIncognitoSessionKey(target.sessionKey) &&
       !exactPath &&
+      !explicitTarget &&
       !(
         target.storePath &&
         isIncognitoOpenClawAgentSqlitePath(target.storePath, {

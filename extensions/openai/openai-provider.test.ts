@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
@@ -106,18 +105,13 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveProviderAuthProfileMetadata: mocks.resolveProviderAuthProfileMetadata,
 }));
 
-const OPENAI_CODEX_MODELS_URL = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${readPinnedCodexClientVersion()}`;
+// mock-isolation: keep npm Codex version lookups off the network and out of shared cache state.
+vi.mock("./codex-client-version.runtime.js", () => ({
+  resolveOpenAICodexModelsEndpoint: async () =>
+    "https://chatgpt.com/backend-api/codex/models?client_version=0.170.0",
+}));
 
-function readPinnedCodexClientVersion(): string {
-  const packageJson = JSON.parse(
-    fs.readFileSync(new URL("../codex/package.json", import.meta.url), "utf8"),
-  ) as { dependencies?: Record<string, unknown> };
-  const version = packageJson.dependencies?.["@openai/codex"];
-  if (typeof version !== "string") {
-    throw new Error("expected an exact @openai/codex dependency");
-  }
-  return version;
-}
+const OPENAI_CODEX_MODELS_URL = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=0.170.0`;
 
 async function runWrappedPayloadCase(params: {
   wrap: NonNullable<ReturnType<typeof buildOpenAIProvider>["wrapStreamFn"]>;
