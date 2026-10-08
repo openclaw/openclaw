@@ -120,8 +120,10 @@ auth health, sandbox images, and plugin installs.
     owner before removing that marker, preserving the job's definition and runtime
     state. Unresolved historical jobs also require Doctor before updates or removal,
     and the current system agent does not gain management access to them. Operator
-    inspection remains available. Current configurations without a legacy marker keep their dynamic
-    system-agent selection.
+    inspection remains available. For a legacy `agents.list` without a default
+    marker, Doctor pins historical ownerless jobs to the first agent in the list
+    before converting the roster. Current keyed `agents.entries` configurations
+    without a legacy marker keep their dynamic system-agent selection.
 
     Missing interval anchors are repaired by Doctor. Runtime scheduling can
     calculate the next run without writing an anchor into an old definition.
