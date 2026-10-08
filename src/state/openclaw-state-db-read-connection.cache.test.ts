@@ -189,7 +189,6 @@ it("batches ACP rows with revision admission and retains the following warm look
 
 it("keeps ACP authorizer refusal through batched admission", async () => {
   const { peer, key, command, workerRead, insert, read } = acpFixture();
-  const { constants } = sqlite.requireNodeSqlite();
   try {
     insert(key, "private");
     expect(await workerRead(command)).toMatchObject({ ok: true });
