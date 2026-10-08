@@ -225,10 +225,9 @@ function observeOutputMessageContent(state: ModelCallObservationState, chunk: un
   if (!isRecord(chunk)) {
     return;
   }
-  let type: unknown;
   let message: unknown;
   try {
-    type = chunk.type;
+    const type = chunk.type;
     message = type === "done" ? chunk.message : type === "error" ? chunk.error : undefined;
   } catch {
     return;
@@ -245,26 +244,31 @@ function observeOutputMessageContent(state: ModelCallObservationState, chunk: un
   }
 }
 
-function observeResultMessageContent(
+function observeModelResponse(
   state: ModelCallObservationState,
   startedAt: number,
-  result: unknown,
+  value: unknown,
+  kind: "chunk" | "result",
 ): void {
   // A result decorator can settle long after the terminal stream chunk. Do not
   // label that bookkeeping delay as new provider activity. Result-only adapters
   // still have an observed response when their result first arrives.
-  if (!state.terminalEventEmitted && state.terminalReason === undefined) {
+  if (!state.terminalEventEmitted && (kind === "chunk" || state.terminalReason === undefined)) {
     state.lastProviderActivityAtMs = Date.now();
   }
   state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
-  observeModelCallTerminalMessage(state, result);
-  if (state.contentCapture?.outputMessages && state.outputMessages === undefined) {
-    state.outputMessages = [cloneDiagnosticContentValue(result)];
+  if (kind === "chunk") {
+    observeOutputMessageContent(state, value);
+  } else {
+    observeModelCallTerminalMessage(state, value);
+    if (state.contentCapture?.outputMessages && state.outputMessages === undefined) {
+      state.outputMessages = [cloneDiagnosticContentValue(value)];
+    }
   }
-  if (state.responseStreamBytes === 0) {
-    const bytes = jsonLength(result, true);
+  if (kind === "chunk" || state.responseStreamBytes === 0) {
+    const bytes = kind === "chunk" ? responseStreamChunkByteLength(value) : jsonLength(value, true);
     if (bytes !== undefined) {
-      state.responseStreamBytes = bytes;
+      state.responseStreamBytes += bytes;
     }
   }
 }
@@ -327,22 +331,6 @@ function maybeEmitModelCallSemanticProgress(
   });
 }
 
-function observeResponseChunk(
-  state: ModelCallObservationState,
-  startedAt: number,
-  chunk: unknown,
-): void {
-  if (!state.terminalEventEmitted) {
-    state.lastProviderActivityAtMs = Date.now();
-  }
-  state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
-  observeOutputMessageContent(state, chunk);
-  const bytes = responseStreamChunkByteLength(chunk);
-  if (bytes !== undefined) {
-    state.responseStreamBytes += bytes;
-  }
-}
-
 export function createModelObserver(params: {
   config?: OpenClawConfig;
   streamContext: unknown;
@@ -373,10 +361,10 @@ export function createModelObserver(params: {
       }
     },
     observeResponseChunk(startedAt: number, chunk: unknown) {
-      observeResponseChunk(state, startedAt, chunk);
+      observeModelResponse(state, startedAt, chunk, "chunk");
     },
     observeFinalResult(eventBase: ModelCallEventBase, startedAt: number, result: unknown) {
-      observeResultMessageContent(state, startedAt, result);
+      observeModelResponse(state, startedAt, result, "result");
       // Queue semantic progress beside model lifecycle events so request starts,
       // progress, and the next request retain their authoritative FIFO ordering.
       maybeEmitModelCallSemanticProgress(eventBase, state, result);

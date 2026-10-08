@@ -39,18 +39,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateChatInjectParams, "chat.inject", respond)) {
       return;
     }
-    const p = params;
-
-    const rawSessionKey = p.sessionKey;
-    const agentIdOverride = normalizeOptionalString(p.agentId);
+    const rawSessionKey = params.sessionKey;
+    const agentIdOverride = normalizeOptionalString(params.agentId);
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedSessionAgentId(cfg, rawSessionKey, agentIdOverride);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const requestedAgentId = requestedAgent.agentId;
-    const sessionLoadOptions = { agentId: requestedAgentId };
+    const sessionLoadOptions = { agentId: requestedAgent.agentId };
     const {
       agentId,
       storePath,
@@ -87,8 +84,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           async () =>
             await appendInjectedAssistantMessageToTranscript({
               sessionKey,
-              message: p.message,
-              label: p.label,
+              message: params.message,
+              label: params.label,
               sessionId,
               storePath,
               agentId,

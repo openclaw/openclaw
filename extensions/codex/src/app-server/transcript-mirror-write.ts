@@ -143,19 +143,20 @@ export async function mirror(params: {
         const ownsTerminal = Boolean(
           ownsRun && terminalOwner && mirrorIdentity === terminalOwner.mirrorIdentity,
         );
-        const ownedMessage =
+        const withRunOwnership = (candidate: AgentMessage) =>
           ownsRun && params.runId
             ? attachCodexMirrorRunId(
-                sourceMessage,
+                candidate,
                 params.runId,
                 ownsTerminal,
                 terminalOwner?.settlementWarning,
               )
-            : sourceMessage;
-        const transcriptMessage = {
-          ...attachCodexMirrorAttestation(ownedMessage, sourceFingerprint),
+            : candidate;
+        const withAttestation = (candidate: AgentMessage) => ({
+          ...attachCodexMirrorAttestation(candidate, sourceFingerprint),
           ...(idempotencyKey ? { idempotencyKey } : {}),
-        };
+        });
+        const transcriptMessage = withAttestation(withRunOwnership(sourceMessage));
         if (idempotencyKey && mirrorFacts.existingIdempotencyKeys.has(idempotencyKey)) {
           const persistedMessage = mirrorFacts.messagesByIdempotencyKey.get(idempotencyKey);
           const persistedAnchor = mirrorFacts.anchorsByIdempotencyKey.get(idempotencyKey);
@@ -219,23 +220,13 @@ export async function mirror(params: {
           runtimeMessage: nextMessage,
           preparedMessage: preparedUserMessage,
         });
-        let messageToAppend = {
-          ...attachCodexMirrorAttestation(restoredMessage, sourceFingerprint),
-          ...(idempotencyKey ? { idempotencyKey } : {}),
-        };
+        let messageToAppend = withAttestation(restoredMessage);
         if (mirrorIdentity) {
           // Hooks may replace the whole message. Restore the provider-owned
           // identity so retries cannot turn a stale idempotency hit into evidence.
           messageToAppend = attachCodexMirrorIdentity(messageToAppend, mirrorIdentity);
         }
-        if (ownsRun && params.runId) {
-          messageToAppend = attachCodexMirrorRunId(
-            messageToAppend,
-            params.runId,
-            ownsTerminal,
-            terminalOwner?.settlementWarning,
-          );
-        }
+        messageToAppend = withRunOwnership(messageToAppend);
         if (message.role === "assistant" && message.openclawAsyncDelivery) {
           // Async delivery ownership is provider-authored. Whole-message hooks may
           // rewrite content, but must not turn the durable row into a terminal answer.

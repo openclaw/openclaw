@@ -73,7 +73,7 @@ export function createWorkerPlacementIdleSweep(options: {
         }
         if (
           projection.workspaceRecoveryPendingSessionIds.has(placement.sessionId) ||
-          options.placements.getPlacementMove(placement.sessionId) ||
+          projection.moves.has(placement.sessionId) ||
           options.isPlacementOperationInFlight?.(placement.sessionId)
         ) {
           continue;

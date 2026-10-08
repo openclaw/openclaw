@@ -28,18 +28,14 @@ export function normalizeHeaders(
   value: Record<string, unknown> | undefined,
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(value ?? {})
-      .map(
-        ([key, child]) =>
-          [
-            key.trim(),
-            normalizeResolvedSecretInputString({
-              value: child,
-              path: `plugins.entries.codex.config.appServer.headers.${key}`,
-            }),
-          ] as const,
-      )
-      .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1])),
+    Object.entries(value ?? {}).flatMap(([key, child]) => {
+      const name = key.trim();
+      const header = normalizeResolvedSecretInputString({
+        value: child,
+        path: `plugins.entries.codex.config.appServer.headers.${key}`,
+      });
+      return name && header ? [[name, header] as const] : [];
+    }),
   );
 }
 

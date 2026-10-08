@@ -151,20 +151,6 @@ export const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPa
         copyReplyPayloadMetadata(payload, { ...payload, text }),
       );
 
-function partitionTelegramControls<T>(
-  controls: readonly T[],
-  blockFor: (control: T) => MessagePresentationInteractiveBlock,
-  options: TelegramButtonBuildOptions,
-): [T[], T[]] {
-  const native: T[] = [];
-  const fallback: T[] = [];
-  for (const control of controls) {
-    const buttons = buildTelegramPresentationButtons({ blocks: [blockFor(control)] }, options);
-    (buttons?.length ? native : fallback).push(control);
-  }
-  return [native, fallback];
-}
-
 function partitionTelegramPresentationBlocks(params: {
   presentation: MessagePresentation;
   presentationControlsSelected: boolean;
@@ -175,37 +161,38 @@ function partitionTelegramPresentationBlocks(params: {
 } {
   const fallbackBlocks: MessagePresentation["blocks"] = [];
   const nativeControlBlocks: MessagePresentationInteractiveBlock[] = [];
+  const partitionControls = <T>(
+    controls: readonly T[],
+    blockFor: (controls: T[]) => MessagePresentationInteractiveBlock,
+  ): boolean => {
+    const native: T[] = [];
+    const fallback: T[] = [];
+    for (const control of controls) {
+      const buttons = buildTelegramPresentationButtons(
+        { blocks: [blockFor([control])] },
+        params.buttonOptions,
+      );
+      (buttons?.length ? native : fallback).push(control);
+    }
+    if (native.length > 0) {
+      nativeControlBlocks.push(blockFor(native));
+    }
+    if (fallback.length > 0) {
+      fallbackBlocks.push(blockFor(fallback));
+    }
+    return fallback.length > 0;
+  };
   for (const block of params.presentation.blocks) {
     if (!params.presentationControlsSelected || !isMessagePresentationInteractiveBlock(block)) {
       fallbackBlocks.push(block);
       continue;
     }
     if (block.type === "buttons") {
-      const [nativeButtons, fallbackButtons] = partitionTelegramControls(
-        block.buttons,
-        (button) => ({ type: "buttons", buttons: [button] }),
-        params.buttonOptions,
-      );
-      if (nativeButtons.length > 0) {
-        nativeControlBlocks.push({ type: "buttons", buttons: nativeButtons });
-      }
-      if (fallbackButtons.length > 0) {
-        fallbackBlocks.push({ type: "buttons", buttons: fallbackButtons });
-      }
-      continue;
-    }
-
-    const [nativeOptions, fallbackOptions] = partitionTelegramControls(
-      block.options,
-      (option) => ({ type: "select", options: [option] }),
-      params.buttonOptions,
-    );
-    if (nativeOptions.length > 0) {
-      nativeControlBlocks.push({ ...block, options: nativeOptions });
-    }
-    if (fallbackOptions.length > 0) {
-      fallbackBlocks.push({ ...block, options: fallbackOptions });
-    } else if (block.placeholder) {
+      partitionControls(block.buttons, (buttons) => ({ type: "buttons", buttons }));
+    } else if (
+      !partitionControls(block.options, (options) => ({ ...block, options })) &&
+      block.placeholder
+    ) {
       // Telegram maps selects to buttons, so retain the select prompt in message text.
       fallbackBlocks.push({ type: "text", text: block.placeholder });
     }

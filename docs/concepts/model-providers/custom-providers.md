@@ -115,16 +115,20 @@ In onboarding/configure model pickers, the Volcengine auth choice prefers both `
 
 <Tabs>
   <Tab title="Standard models">
-    - `volcengine/doubao-seed-1-8-251228` (Doubao Seed 1.8)
-    - `volcengine/doubao-seed-code-preview-251028`
-    - `volcengine/kimi-k2-5-260127` (Kimi K2.5)
-    - `volcengine/glm-4-7-251222` (GLM 4.7)
-    - `volcengine/deepseek-v3-2-251201` (DeepSeek V3.2)
+    - `volcengine/doubao-seed-evolving` (Doubao Seed Evolving)
+    - `volcengine/doubao-seed-2-1-pro-260628` (Doubao Seed 2.1 Pro)
+    - `volcengine/doubao-seed-2-1-turbo-260628` (Doubao Seed 2.1 Turbo)
+    - `volcengine/glm-5-2-260617` (GLM 5.2)
+    - `volcengine/deepseek-v4-pro-260425` (DeepSeek V4 Pro)
+    - `volcengine/deepseek-v4-flash-260425` (DeepSeek V4 Flash)
 
   </Tab>
   <Tab title="Coding models (volcengine-plan)">
-    - `volcengine-plan/ark-code-latest`
-    - `volcengine-plan/doubao-seed-code`
+    - `volcengine-plan/ark-code-latest` (Ark Coding Plan)
+    - `volcengine-plan/doubao-seed-2.1-turbo` (Doubao Seed 2.1 Turbo)
+    - `volcengine-plan/glm-5.2` (GLM 5.2)
+    - `volcengine-plan/deepseek-v4-pro` (DeepSeek V4 Pro)
+    - `volcengine-plan/deepseek-v4-flash` (DeepSeek V4 Flash)
 
   </Tab>
 </Tabs>
@@ -160,15 +164,16 @@ In onboarding/configure model pickers, the BytePlus auth choice prefers both `by
 
 <Tabs>
   <Tab title="Standard models">
-    - `byteplus/seed-1-8-251228` (Seed 1.8)
-    - `byteplus/kimi-k2-5-260127` (Kimi K2.5)
-    - `byteplus/glm-4-7-251222` (GLM 4.7)
+    - `byteplus/dola-seed-2-1-turbo-260628` (Dola Seed 2.1 Turbo)
+    - `byteplus/seed-2-0-code-preview-260328` (Seed 2.0 Code Preview)
+    - `byteplus/glm-5-2-260617` (GLM 5.2)
+    - `byteplus/deepseek-v4-pro-260425` (DeepSeek V4 Pro)
+    - `byteplus/deepseek-v4-flash-260425` (DeepSeek V4 Flash)
 
   </Tab>
   <Tab title="Coding models (byteplus-plan)">
-    - `byteplus-plan/ark-code-latest`
-    - `byteplus-plan/kimi-k2.5`
-    - `byteplus-plan/glm-4.7`
+    - `byteplus-plan/ark-code-latest` (Ark Coding Plan)
+    - `byteplus-plan/kimi-k2.5` (Kimi K2.5 Coding)
 
   </Tab>
 </Tabs>

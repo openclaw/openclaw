@@ -177,6 +177,10 @@ function retainValuePreservingMigrationRefs(
 ): unknown {
   const values = new Map<string, unknown>();
   const ambiguous = new Set<string>();
+  const resolvedEntry = (resolved: unknown, key: string): unknown =>
+    resolved && typeof resolved === "object"
+      ? (resolved as Record<string, unknown>)[key] // SAFETY: non-null object; indexed values remain unknown.
+      : undefined;
   const collect = (authored: unknown, resolved: unknown): void => {
     if (typeof authored === "string" && /\$\{[A-Z_][A-Z0-9_]*\}/.test(authored)) {
       if (values.has(authored) && !isDeepStrictEqual(values.get(authored), resolved)) {
@@ -185,12 +189,7 @@ function retainValuePreservingMigrationRefs(
       values.set(authored, resolved);
     } else if (authored && typeof authored === "object") {
       for (const [key, value] of Object.entries(authored)) {
-        collect(
-          value,
-          resolved && typeof resolved === "object"
-            ? (resolved as Record<string, unknown>)[key] // SAFETY: non-null object; indexed values remain unknown.
-            : undefined,
-        );
+        collect(value, resolvedEntry(resolved, key));
       }
     }
   };
@@ -214,12 +213,7 @@ function retainValuePreservingMigrationRefs(
       return Object.fromEntries(
         Object.entries(authored).map(([key, value]) => [
           key,
-          retain(
-            value,
-            resolved && typeof resolved === "object"
-              ? (resolved as Record<string, unknown>)[key] // SAFETY: non-null object; indexed values remain unknown.
-              : undefined,
-          ),
+          retain(value, resolvedEntry(resolved, key)),
         ]),
       );
     }

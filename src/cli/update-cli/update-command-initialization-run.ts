@@ -118,14 +118,10 @@ export async function initializeAndRunUpdate(
                 resolveConfigPath(env) !== resolveConfigPath()
                   ? (await readUpdateChannelConfig(true)).legacyConfigPlan
                   : undefined;
-              const root = selection.refusal
-                ? selection.refusal.report.root
-                : selection.target.root;
-              const packageAdmission = {
-                serviceRoot: selection.refusal
-                  ? selection.refusal.report.serviceRoot
-                  : selection.target.managedServiceRoot,
-              };
+              const { root, serviceRoot } = selection.refusal
+                ? selection.refusal.report
+                : { root: selection.target.root, serviceRoot: selection.target.managedServiceRoot };
+              const packageAdmission = { serviceRoot };
               const originalCaptureWarnings: string[] = [];
               const initialization: InitializedUpdate = {
                 ...selection,
@@ -136,37 +132,29 @@ export async function initializeAndRunUpdate(
                 registerRun: async (run, dispose) => {
                   registerRun(run);
                   disposePresentation = dispose;
+                  const recordCompletedStep = (step: string, detail: string) =>
+                    recordUpdateCommandTarget(run, {
+                      step: { step, status: "completed", detail },
+                    });
                   for (const result of selectedTarget?.preflightSteps ?? []) {
                     for (const step of updateRunStepsFromResultStep(result)) {
                       recordUpdateCommandTarget(run, { step });
                     }
                   }
                   if (selectedTarget?.inspectionWarning) {
-                    recordUpdateCommandTarget(run, {
-                      step: {
-                        step: "warning:installation-inspection",
-                        status: "completed",
-                        detail: selectedTarget.inspectionWarning,
-                      },
-                    });
+                    recordCompletedStep(
+                      "warning:installation-inspection",
+                      selectedTarget.inspectionWarning,
+                    );
                   }
                   if (initialization.originalRecoveryCapture) {
-                    recordUpdateCommandTarget(run, {
-                      step: {
-                        step: "original-state-capture",
-                        status: "completed",
-                        detail: `Original state retained for manual recovery at ${initialization.originalRecoveryCapture.directory}.`,
-                      },
-                    });
+                    recordCompletedStep(
+                      "original-state-capture",
+                      `Original state retained for manual recovery at ${initialization.originalRecoveryCapture.directory}.`,
+                    );
                   }
                   for (const [index, detail] of originalCaptureWarnings.entries()) {
-                    recordUpdateCommandTarget(run, {
-                      step: {
-                        step: `warning:original-state-capture:${index + 1}`,
-                        status: "completed",
-                        detail,
-                      },
-                    });
+                    recordCompletedStep(`warning:original-state-capture:${index + 1}`, detail);
                   }
                   handleFailure = await prepareUpdateCommandFailureTriage(
                     { ...opts, invocationCwd, run },

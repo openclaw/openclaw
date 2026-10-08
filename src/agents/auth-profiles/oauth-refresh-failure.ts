@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
+  readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeBoundedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
@@ -229,17 +230,10 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
       markOAuthRefreshFailureSettled(this);
     }
     if (structuredCause) {
-      this.code = typeof structuredCause.code === "string" ? structuredCause.code : undefined;
-      if (typeof structuredCause.lockPath === "string") {
-        this.lockPath = structuredCause.lockPath;
-      } else if (
-        typeof structuredCause.cause === "object" &&
-        structuredCause.cause !== null &&
-        "lockPath" in structuredCause.cause &&
-        typeof structuredCause.cause.lockPath === "string"
-      ) {
-        this.lockPath = structuredCause.cause.lockPath;
-      }
+      this.code = readStringField(structuredCause, "code");
+      this.lockPath =
+        readStringField(structuredCause, "lockPath") ??
+        readStringField(asOptionalObjectRecord(structuredCause.cause), "lockPath");
     }
   }
 

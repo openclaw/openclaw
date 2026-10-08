@@ -29,6 +29,43 @@ function withAuditStoreFixture(
 }
 
 describe("SQLite audit record store", () => {
+  it("refreshes sequence and retention facts after foreign writes and duplicate legacy rows", async () => {
+    await withAuditStoreFixture({ prefix: "openclaw-audit-write-facts-" }, async (stateDir) => {
+      const options = {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        scope: "write-facts",
+        maxEntries: 3,
+      };
+      const native = createSqliteAuditRecordStore<{ value: number }>(options);
+      const writer = createSqliteAuditRecordWriter<{ value: number }>(options);
+      native.registerLegacyMany([
+        { key: "legacy", value: { value: 0 }, createdAt: 0 },
+        { key: "legacy", value: { value: 99 }, createdAt: 1 },
+      ]);
+      await writer.register("first", { value: 1 }, 1);
+      native.register("foreign", { value: 2 }, 2);
+      await writer.register("second", { value: 3 }, 3);
+      expect(native.latest({ limit: 5 })).toEqual([
+        { key: "second", value: { value: 3 }, createdAt: 3, sequence: 3 },
+        { key: "foreign", value: { value: 2 }, createdAt: 2, sequence: 2 },
+        { key: "first", value: { value: 1 }, createdAt: 1, sequence: 1 },
+      ]);
+      await writer.register("first", { value: 99 }, 99);
+      expect(native.entries()).toHaveLength(3);
+      await expect(writer.compareAndSet("foreign", { value: 2 }, null)).resolves.toBe(true);
+      native.registerLegacyMany([
+        { key: "legacy", value: { value: 4 }, createdAt: 4 },
+        { key: "legacy", value: { value: 99 }, createdAt: 5 },
+      ]);
+      await writer.register("third", { value: 5 }, 5);
+      expect(native.latest({ limit: 5 })).toEqual([
+        { key: "third", value: { value: 5 }, createdAt: 5, sequence: 4 },
+        { key: "second", value: { value: 3 }, createdAt: 3, sequence: 3 },
+        { key: "first", value: { value: 1 }, createdAt: 1, sequence: 1 },
+      ]);
+    });
+  });
+
   it("scans older config edits and rejects all facts when a later page is corrupt", async () => {
     await withAuditStoreFixture({ prefix: "openclaw-audit-facts-scan-" }, async (stateDir) => {
       const options = {

@@ -54,10 +54,8 @@ export function recordChannelHistoryEntryIfEnabled<T extends HistoryEntry>(param
   if (overflowCount > 0) {
     history.splice(0, overflowCount);
   }
-  if (historyMap.has(historyKey)) {
-    // Refresh insertion order so eviction keeps recently used histories.
-    historyMap.delete(historyKey);
-  }
+  // Refresh insertion order so eviction keeps recently used histories.
+  historyMap.delete(historyKey);
   historyMap.set(historyKey, history);
   evictOldHistoryKeys(historyMap);
   return history;
@@ -188,17 +186,7 @@ export function buildChannelPendingHistoryContext(params: {
   formatEntry: (entry: HistoryEntry) => string;
   lineBreak?: string;
 }): string {
-  if (params.limit <= 0) {
-    return params.currentMessage;
-  }
-  const entries = params.historyMap.get(params.historyKey) ?? [];
-  return buildHistoryContextFromEntries({
-    entries,
-    currentMessage: params.currentMessage,
-    formatEntry: params.formatEntry,
-    lineBreak: params.lineBreak,
-    excludeLast: false,
-  });
+  return buildHistoryContextFromMap({ ...params, entry: undefined, excludeLast: false });
 }
 
 /**
@@ -266,12 +254,7 @@ export function buildHistoryContextFromMap(params: {
     return params.currentMessage;
   }
   const entries = params.entry
-    ? recordChannelHistoryEntryIfEnabled({
-        historyMap: params.historyMap,
-        historyKey: params.historyKey,
-        entry: params.entry,
-        limit: params.limit,
-      })
+    ? recordChannelHistoryEntryIfEnabled(params)
     : (params.historyMap.get(params.historyKey) ?? []);
   return buildHistoryContextFromEntries({
     entries,

@@ -74,19 +74,17 @@ export function composeReplyDispatchBeforeDeliver(
     return undefined;
   }
   const composed: ReplyDispatchBeforeDeliver = async (payload, info) => {
-    let current: ReplyPayload | null = payload;
+    let current = payload;
     for (const stage of stages) {
-      if (!current) {
-        return null;
-      }
       const previousMediaUrls: string[] = collectReplyMediaEntries(current).map(({ url }) => url);
       const next = await runReplyDispatchBeforeDeliverStage(stage, current, info);
-      current = next
-        ? recordReplyPayloadMediaSelectionChange(
-            previousMediaUrls,
-            copyReplyPayloadMetadata(current, next),
-          )
-        : null;
+      if (!next) {
+        return null;
+      }
+      current = recordReplyPayloadMediaSelectionChange(
+        previousMediaUrls,
+        copyReplyPayloadMetadata(current, next),
+      );
     }
     return current;
   };

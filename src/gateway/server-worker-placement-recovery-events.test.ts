@@ -185,8 +185,8 @@ async function withRecoveryRuntime(
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
-        get: (sessionId: string) => placements.get(sessionId),
-        list: () => [...placements.values()],
+        getAsync: async (sessionId: string) => placements.get(sessionId),
+        listAsync: async () => [...placements.values()],
         readChangeSnapshot,
         readProjection: async (sessionIds: readonly string[]) => ({
           placements: new Map(
@@ -197,7 +197,7 @@ async function withRecoveryRuntime(
           ),
           environments: options.environmentRows ?? new Map(),
         }),
-        retireSessionPlacement: ({ sessionId }: { sessionId: string }) => {
+        retireSessionPlacementAsync: async ({ sessionId }: { sessionId: string }) => {
           placements.delete(sessionId);
         },
         pruneOrphanedWorkspaceReconciliations: async () => [],

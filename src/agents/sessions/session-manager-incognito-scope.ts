@@ -78,12 +78,6 @@ export function captureSessionManagerIncognitoAdmissionAssertion(
   };
 }
 
-export function assertSessionManagerIncognitoAdmission(
-  binding: SessionManagerIncognitoBinding,
-): void {
-  captureSessionManagerIncognitoAdmissionAssertion(binding)();
-}
-
 /** Preflight the synchronous SDK entry before warnings, local mutation, or native SQLite. */
 export function prepareSessionManagerSync(
   method: string,

@@ -32,6 +32,22 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 ### Validation and activation
 
+On Windows, candidate commands verify their recorded handoff lease and their own
+PID/start identity even when the launcher process tree changes. A different
+immediate parent no longer causes a valid candidate to fail with `Candidate
+executor binding does not match its parent`. The update owner must remain live,
+and changed or revoked leases still refuse mutation. This check runs in the
+candidate, so it also accepts valid handoffs from older installed updaters.
+
+Channel health collection timeouts are warnings during post-update verification.
+The Gateway must still answer, report the expected version and build, pass HTTP
+readiness, and remain in the same running generation. An explicit negative channel
+probe still fails verification. Timeout warnings remain in the update report even
+if a later probe completes; run `openclaw health` to check the affected channels.
+The seven-second collection budget is unchanged. Updated Gateways also avoid
+reporting collection timeouts as negative probes to older updaters, although those
+updaters cannot add the new warning to their update reports.
+
 If the resolved registry package version equals the installed version without changing the selected channel or installation method, or the Git target SHA equals `HEAD` and the installed runtime passes artifact verification, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`.
 Runtime maintenance can therefore succeed without changing the Git revision.
 A same-version explicit `--channel` or installation-method change finishes successfully.

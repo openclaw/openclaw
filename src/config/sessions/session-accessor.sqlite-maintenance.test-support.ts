@@ -29,7 +29,6 @@ import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
-import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
   createSessionMaintenanceStatisticsOperation,
@@ -666,23 +665,6 @@ export function registerSessionMaintenancePreparationTests() {
       expect(loadSessionEntry(stale)?.archivedAt).toEqual(expect.any(Number));
     });
   });
-}
-
-/** Row changes precede archive publication; join the owner's complete finalization. */
-export function observeSessionMaintenanceCompletion(databasePath: string) {
-  const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
-  const completed = createDeferredCore<Awaited<ReturnType<typeof finalize>>>();
-  const observer = vi
-    .spyOn(maintenance, "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort")
-    .mockImplementation((scope, ...args) => {
-      const result = finalize(scope, ...args);
-      if (scope.path === databasePath) {
-        completed.resolve(result);
-      }
-      return result;
-    });
-  onTestFinished(() => observer.mockRestore());
-  return completed.promise;
 }
 
 /** Observe committed maintenance rows without imposing a worker-startup deadline. */

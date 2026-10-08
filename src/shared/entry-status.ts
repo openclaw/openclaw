@@ -30,13 +30,9 @@ export function evaluateEntryRequirementsForCurrentPlatform(params: {
     metadata?.homepage ?? frontmatter?.homepage ?? frontmatter?.website ?? frontmatter?.url,
   );
   const { required, missing, eligible, configChecks } = evaluateRequirementsFromMetadataWithRemote({
-    always: params.always,
+    ...params,
     metadata: metadata ?? undefined,
-    hasLocalBin: params.hasLocalBin,
     localPlatform: params.platform ?? process.platform,
-    remote: params.remote,
-    isEnvSatisfied: params.isEnvSatisfied,
-    isConfigSatisfied: params.isConfigSatisfied,
   });
   return {
     ...(emoji ? { emoji } : {}),

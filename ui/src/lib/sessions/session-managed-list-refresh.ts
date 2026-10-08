@@ -43,6 +43,7 @@ export function getManagedSessionList(
     query,
     scope: Object.freeze({ ...scope }),
     retainedLimit: query.limit,
+    receivedKeys: new Set(),
     startupRetryAttempt: 0,
     readGeneration: 0,
     connectionEpoch: null,
@@ -215,6 +216,21 @@ export function createSessionManagedListRefresh(
             observed && next.append && requestParams.offset && previous
               ? appendSessionResults(previous, observed)
               : observed;
+          const appending = Boolean(next.append && requestParams.offset && previous);
+          const receivedKeys = new Set(appending ? entry.receivedKeys : []);
+          for (const row of response.sessions) {
+            receivedKeys.add(row.key);
+          }
+          const totalCount =
+            response.totalCount ?? (appending ? entry.snapshot.pagination?.totalCount : undefined);
+          const pageEnd = (response.offset ?? requestParams.offset ?? 0) + response.sessions.length;
+          const hasMore = response.hasMore ?? (totalCount !== undefined && pageEnd < totalCount);
+          const pagination = {
+            count: receivedKeys.size,
+            totalCount,
+            hasMore,
+            nextOffset: response.nextOffset ?? (hasMore ? pageEnd : null),
+          };
           const decorated = host.decorate(nextResult, entry);
           if (decorated) {
             entry.retainedLimit = Math.max(entry.retainedLimit, decorated.sessions.length);
@@ -226,10 +242,12 @@ export function createSessionManagedListRefresh(
             undefined,
             false,
           );
+          entry.receivedKeys = receivedKeys;
           entry.connectionEpoch = scope.epoch;
           entry.startupRetryAttempt = 0;
           const snapshot: SessionListSnapshot = {
             readSucceeded: true,
+            pagination,
             result: decorated,
             agentId: agentId ?? null,
             loading: false,

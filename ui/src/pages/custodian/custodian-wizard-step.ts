@@ -56,14 +56,6 @@ export function custodianWizardSubmission(
   };
 }
 
-export function initialCustodianWizardValue(step: WizardStep): unknown {
-  return step.type === "multiselect"
-    ? Array.isArray(step.initialValue)
-      ? [...step.initialValue]
-      : []
-    : step.initialValue;
-}
-
 export function isCustodianWizardCancelAvailable(context: ApplicationContext | null): boolean {
   return (
     isGatewayCapabilityAdvertised(

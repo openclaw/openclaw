@@ -14,6 +14,7 @@ import {
 } from "./orphan-paths.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import { readRegistryWorktrees } from "./registry-read.js";
+import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { retireExpiredManagedWorktreeSnapshot } from "./snapshot-host.js";
 import { WORKTREE_TEMPLATE_DIRECTORY } from "./template-cache.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -35,14 +36,17 @@ export async function collectRetiredWorktreeArtifacts({
   progress: WorktreeGcProgress;
   withAllocationLease: (run: (guard: WorktreeAllocationGuard) => Promise<void>) => Promise<void>;
 }): Promise<{ orphansDeleted: number; snapshotsPruned: number }> {
+  const context = captureWorktreeRunEndContext(env);
   let orphansDeleted = 0;
   let snapshotsPruned = 0;
-  const pending = await readPendingWorktrees(env);
+  const pending = await readPendingWorktrees(context.environment);
   const expired = records.filter(
     (record) => record.removedAt !== undefined && record.removedAt < expiresBefore,
   );
   const entries = await fs
-    .readdir(path.join(resolveStateDir(env), "worktrees"), { withFileTypes: true })
+    .readdir(path.join(resolveStateDir(context.environment), "worktrees"), {
+      withFileTypes: true,
+    })
     .catch(() => []);
   const hasOrphanCandidates = entries.some(
     (entry) => entry.isDirectory() && entry.name !== WORKTREE_TEMPLATE_DIRECTORY,
@@ -50,7 +54,7 @@ export async function collectRetiredWorktreeArtifacts({
   if (hasOrphanCandidates || expired.length > 0 || pending.length > 0) {
     try {
       await withAllocationLease(async (guard) => {
-        const slots = await readPendingWorktrees(env);
+        const slots = await readPendingWorktrees(context.environment);
         for (const { record, state } of slots) {
           if (state !== "recovering") {
             continue;
@@ -67,10 +71,14 @@ export async function collectRetiredWorktreeArtifacts({
         if (hasOrphanCandidates) {
           try {
             const pendingRecords = slots.map(({ record }) => record);
+            const currentRecords = await readRegistryWorktrees(context.environment, {}, context);
+            context.admission.assertCurrent();
+            guard.signal?.throwIfAborted();
+            guard.commitGuard?.();
             orphansDeleted = await reconcileOrphans(
-              env,
+              context.environment,
               getConfig,
-              [...pendingRecords, ...(await readRegistryWorktrees(env))],
+              [...pendingRecords, ...currentRecords],
               pendingRecords.map((record) => record.path),
               guard,
             );

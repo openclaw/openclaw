@@ -14,7 +14,10 @@ import {
   resolveCliRuntimeOwnerFingerprint,
 } from "../cli-auth-epoch.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
-import { shouldClearInterruptedCliSessionBinding } from "../cli-session.js";
+import {
+  shouldClearFailedCliSessionBinding,
+  shouldClearInterruptedCliSessionBinding,
+} from "../cli-session.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../embedded-agent-runner/delivery-evidence.js";
 import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/auth-profile-failure-policy.js";
@@ -373,6 +376,7 @@ export function buildCliDeliveredFailure(params: {
   preparedContextAgentMeta: { contextTokens?: number };
   sessionBindingDisabled: boolean;
   reusableCliSessionId?: string;
+  bindingReplacedDuringRun?: boolean;
 }): EmbeddedAgentRunResult {
   const {
     context,
@@ -412,7 +416,14 @@ export function buildCliDeliveredFailure(params: {
         provider: runParams.modelProvider ?? runParams.provider,
         model: context.modelId,
         ...preparedContextAgentMeta,
-        ...(sessionBindingDisabled || reusableCliSessionId ? { clearCliSessionBinding: true } : {}),
+        ...(sessionBindingDisabled ||
+        shouldClearFailedCliSessionBinding({
+          error,
+          binding: reusableCliSessionId ? { sessionId: reusableCliSessionId } : undefined,
+          bindingReplacedDuringRun: params.bindingReplacedDuringRun,
+        })
+          ? { clearCliSessionBinding: true }
+          : {}),
       },
     },
     ...projectCliMessagingDeliveryEvidence(evidence),

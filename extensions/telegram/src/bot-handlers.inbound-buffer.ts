@@ -252,21 +252,15 @@ export function createTelegramInboundBuffers({
                   batched && last.debounceLane !== "forward" ? "text-batch" : "inbound-debounce",
                 threadSpec: first.threadSpec,
                 ...promptContextBoundaryOptions(
-                  batched
-                    ? latestPromptContextMinTimestampMs(
-                        ...entries.map((entry) => entry.promptContextMinTimestampMs),
-                      )
-                    : first.promptContextMinTimestampMs,
-                  batched
-                    ? latestPromptContextAmbientWatermark(
-                        ...entries.map((entry) => entry.promptContextAmbientWatermark),
-                      )
-                    : first.promptContextAmbientWatermark,
+                  latestPromptContextMinTimestampMs(
+                    ...entries.map((entry) => entry.promptContextMinTimestampMs),
+                  ),
+                  latestPromptContextAmbientWatermark(
+                    ...entries.map((entry) => entry.promptContextAmbientWatermark),
+                  ),
                 ),
                 ...spooledReplayOptions(participants),
-                channelIngressResolvers: batched
-                  ? entries.flatMap((entry) => entry.channelIngressResolvers)
-                  : first.channelIngressResolvers,
+                channelIngressResolvers: entries.flatMap((entry) => entry.channelIngressResolvers),
               },
               dispatchDedupeClaims,
               spooledReplayParticipants: participants,

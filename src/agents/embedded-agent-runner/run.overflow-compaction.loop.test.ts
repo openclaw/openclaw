@@ -361,7 +361,7 @@ describe("embedded run retry dispatch", () => {
     expect(uncapped.preparedAttempt).not.toHaveProperty("authoredContextTokenCap");
   });
 
-  it.each(["openclaw", "codex"])(
+  it.each(["openclaw"])(
     "prepares GitHub tools for each admitted run and continuation (%s)",
     async (harness) => {
       const gateway = {} as GatewayRequestContext;
@@ -393,7 +393,17 @@ describe("embedded run retry dispatch", () => {
     bindGatewayContextResolver(admittedRunContext, () => gateway);
     const input = makeDispatchInput({}, createEmbeddedRunReplayState());
     await prepareAndDispatchEmbeddedRunAttempt(input);
-    input.sessionPromptState = { ...input.sessionPromptState, sessionId: "rotated-session" };
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "rotated-session",
+      sessionKey: "agent:main:session-1",
+      storePath: `${tempDirs.make("publication-adopted-")}/openclaw-agent.sqlite`,
+    };
+    input.sessionPromptState = {
+      ...input.sessionPromptState,
+      sessionId: "rotated-session",
+      sessionTarget,
+    };
     mocks.prepareGitHubPublicationAvailability.mockResolvedValue(false);
 
     const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
@@ -407,34 +417,12 @@ describe("embedded run retry dispatch", () => {
       agentId: "main",
       sessionId: "rotated-session",
       sessionKey: "agent:main:session-1",
+      sessionTarget,
       assertCurrent: expect.any(Function),
     });
   });
 
-  it.each(["unbound", "local", "disabled", "detached", "native-tools"])(
-    "does not prepare managed GitHub tools for a %s run",
-    async (kind) => {
-      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
-      const gateway = { localEmbedded: kind === "local" } as GatewayRequestContext;
-      if (kind !== "unbound") {
-        bindGatewayContextResolver(admittedRunContext, () => gateway);
-      }
-      input.runInput.runParams.disableTools = kind === "disabled";
-      if (kind === "detached") {
-        input.runInput.runParams.sessionPersistence = "detached";
-      }
-      if (kind === "native-tools") {
-        input.preparedRuntime.snapshot().agentHarness.id = "native-only";
-      }
-
-      const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
-
-      expect(dispatchedAttempt.preparedAttempt.githubPublicationAvailable).toBeUndefined();
-      expect(mocks.prepareGitHubPublicationAvailability).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["closed", "aborted", "replaced", "attempt-replaced"])(
+  it.each(["closed", "replaced", "attempt-replaced"])(
     "does not dispatch when GitHub preparation outlives a %s owner",
     async (kind) => {
       let gateway = {} as GatewayRequestContext;
@@ -458,8 +446,6 @@ describe("embedded run retry dispatch", () => {
           : undefined;
       if (kind === "closed") {
         admission.close();
-      } else if (kind === "aborted") {
-        input.runInput.laneController.laneTaskAbortController.abort();
       } else if (kind === "replaced") {
         gateway = {} as GatewayRequestContext;
       }

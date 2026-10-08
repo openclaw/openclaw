@@ -118,7 +118,7 @@ export async function applyResetModelOverride(params: {
   };
 
   let selection: ModelDirectiveSelection | undefined;
-  let consumed = 0;
+  let consumed = 1;
 
   if (providers.has(normalizeProviderId(first)) && second) {
     // Inventory disambiguates `provider model prompt` from `provider prompt`.
@@ -132,9 +132,6 @@ export async function applyResetModelOverride(params: {
 
   if (!selection) {
     selection = resolveSelection(first, first.includes("/"));
-    if (selection) {
-      consumed = 1;
-    }
   }
 
   if (!selection) {

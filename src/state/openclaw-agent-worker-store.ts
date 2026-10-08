@@ -518,7 +518,9 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
               { retireNativeOnFailure: true },
             );
           } catch (error) {
-            if (outcome.ok && failures.length === 0) {
+            if (error instanceof AgentDatabaseExecutionAdmissionClosedError) {
+              // Refused cleanup retired its captured native generation, including TEMP bindings.
+            } else if (outcome.ok && failures.length === 0) {
               reportCompletedPublicationCleanupFailure(error);
             } else {
               failures.push(error);

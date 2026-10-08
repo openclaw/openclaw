@@ -7,11 +7,14 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readSessionManagerModelContextAsync } from "../agents/sessions/session-manager-incognito.js";
 import {
   withAcquiredIncognitoSessionBinding,
+  withIncognitoSessionActor,
   withIncognitoSessionEntrySummaries,
 } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import * as workerStores from "../infra/sqlite-worker-store.js";
@@ -105,6 +108,9 @@ it("acquires only requested actors and releases the captured root after the cons
   expect(await withAcquiredIncognitoSessionBinding(target, authority, consume)).toBeUndefined();
   expect(consume).not.toHaveBeenCalled();
   expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
+  expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", env, path: pathname })).toBeUndefined();
+  expect(fs.readdirSync(stateRoot, { recursive: true })).toEqual([]);
+  expect(fs.readdirSync(tempRoot, { recursive: true })).toEqual([]);
   const entered = createDeferredCore();
   const finish = createDeferredCore();
   let captured:
@@ -274,7 +280,29 @@ it("converges creating opens, pins released stores, reads only existing targets,
       { existingOnly: true },
     ),
   ).toBeUndefined();
-  await Promise.all([existing.close(), sibling.close()]);
+  const consuming = createDeferredCore();
+  const finishRead = createDeferredCore();
+  const readTarget = captureSessionTranscriptTargetBinding({
+    agentId: "main",
+    env,
+    storePath: sentinel,
+    sessionKey: "agent:main:dashboard:incognito-empty-close",
+    sessionId: "empty-close",
+  });
+  const reading = withIncognitoSessionActor(existing, () =>
+    readSessionManagerModelContextAsync(readTarget, {}, async (context) => {
+      expect(context.events).toEqual([]);
+      consuming.resolve();
+      await finishRead.promise;
+      return context;
+    }),
+  );
+  const rejectedRead = expect(reading).rejects.toBeInstanceOf(IncognitoSessionEndedError);
+  await Promise.race([consuming.promise, reading]);
+  const closing = existing.close();
+  finishRead.resolve();
+  await rejectedRead;
+  await Promise.all([closing, sibling.close()]);
   expect(fs.readdirSync(stateRoot, { recursive: true })).toEqual([]);
   expect(fs.readdirSync(tempRoot, { recursive: true })).toEqual([]);
   const recreated = await open();

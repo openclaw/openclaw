@@ -16,7 +16,6 @@ import type { PackageUpdateStepRunner } from "./package-update-lifecycle.js";
 import {
   prepareStagedPackageInstall,
   discardPackageUpdateStage,
-  resolveNpmUpdateLifecyclePolicy,
   runPackageUpdateLifecycle,
   verifyUnchangedPackageUpdateRecovery,
 } from "./package-update-lifecycle.js";
@@ -52,6 +51,7 @@ import {
   globalInstallArgs,
   listActivePnpmIsolatedGlobalPackages,
   resolveExpectedInstalledVersionFromSpec,
+  resolveNpmLifecyclePolicyGate,
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
@@ -125,7 +125,6 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
     const cleanup = await discardPackageUpdateStage({
       stage: stagedInstall,
-      manager: params.installTarget.manager,
       committed,
     });
     if (cleanup.status === "failed") {
@@ -194,11 +193,17 @@ export async function runGlobalPackageUpdateSteps(params: {
       await inspection.assertUnowned(params.packageRoot);
       await inspection.assertUnowned(params.installTarget.packageRoot);
     }
-    const npmPreflight = await resolveNpmUpdateLifecyclePolicy({
-      installTarget: params.installTarget,
-    });
-    if (npmPreflight.failedStep) {
-      return await packageUpdateFailure(npmPreflight.failedStep);
+    const npmPreflight = resolveNpmLifecyclePolicyGate(params.installTarget);
+    if (npmPreflight.error) {
+      return await packageUpdateFailure({
+        name: "npm-lifecycle-policy-preflight",
+        command: `${params.installTarget.command} --version`,
+        cwd: process.cwd(),
+        durationMs: 0,
+        exitCode: 1,
+        stdoutTail: params.installTarget.npmOwner?.version || null,
+        stderrTail: npmPreflight.error,
+      });
     }
     const pnpmPreflight = await validatePnpmIsolatedUpdate({
       installTarget: params.installTarget,

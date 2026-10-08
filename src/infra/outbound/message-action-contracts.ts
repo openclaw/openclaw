@@ -56,6 +56,7 @@ export type MessageActionInput = Pick<
   | "deliveryIntentId"
   | "deliveryCompletion"
   | "onDeliveryAttempt"
+  | "withDirectAdapterHandoff"
   | "onDeliveryResult"
   | "onPlatformSendDispatch"
   | "assertDirectAdapterHandoff"
@@ -117,6 +118,8 @@ export type MessageActionInput = Pick<
   sandboxContainerWorkdir?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** The run answers another session, so an internal sink write reaches only its transcript. */
+  sourceReplyTranscriptOnly?: boolean;
   sourceReplyFinal?: boolean;
   sourceReplyToolCallId?: string;
   inboundEventKind?: InboundEventKind;
@@ -191,27 +194,21 @@ function resolveMessageSendOutcome(
   if (sendResult?.deliveryStatus === undefined || sendResult.deliveryStatus === "sent") {
     return { ok: true };
   }
-  switch (sendResult.deliveryStatus) {
-    case "suppressed":
-      return {
-        ok: false,
-        error: `${action} send suppressed: ${sendResult.suppressionReason ?? "unknown reason"}.`,
-        ...(sendResult.sentBeforeError ? { sentBeforeError: true } : {}),
-      };
-    case "failed":
-      return {
-        ok: false,
-        error: sendResult.error ?? `${action} send failed.`,
-        ...(sendResult.sentBeforeError ? { sentBeforeError: true } : {}),
-      };
-    case "partial_failed":
-      return {
-        ok: false,
-        error: sendResult.error ?? `${action} send partially failed.`,
-        sentBeforeError: true,
-      };
+  const status = sendResult.deliveryStatus;
+  if (status === "suppressed" || status === "failed" || status === "partial_failed") {
+    return {
+      ok: false,
+      error:
+        status === "suppressed"
+          ? `${action} send suppressed: ${sendResult.suppressionReason ?? "unknown reason"}.`
+          : (sendResult.error ??
+            `${action} send ${status === "failed" ? "failed" : "partially failed"}.`),
+      ...(status === "partial_failed" || sendResult.sentBeforeError
+        ? { sentBeforeError: true }
+        : {}),
+    };
   }
-  return sendResult.deliveryStatus satisfies never;
+  return status satisfies never;
 }
 
 export function resolveMessageActionOutcome(

@@ -248,15 +248,8 @@ function readCodexAppServerRolloutTokenSnapshotLine(
       typeof windowValue === "number" && Number.isFinite(windowValue) && windowValue > 0
         ? Math.floor(windowValue)
         : undefined;
-    const snapshot: CodexAppServerRolloutTokenSnapshot = {};
-    if (totalTokens !== undefined) {
-      snapshot.totalTokens = totalTokens;
-    }
-    if (modelContextWindow !== undefined) {
-      snapshot.modelContextWindow = modelContextWindow;
-    }
-    return snapshot.totalTokens !== undefined || snapshot.modelContextWindow !== undefined
-      ? snapshot
+    return totalTokens !== undefined || modelContextWindow !== undefined
+      ? { totalTokens, modelContextWindow }
       : undefined;
   } catch {
     return undefined;

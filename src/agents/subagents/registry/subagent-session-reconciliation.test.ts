@@ -68,6 +68,26 @@ describe("subagent session reconciliation keys", () => {
 });
 
 describe("subagent session reconciliation ownership", () => {
+  it.each([
+    { status: "failed", outcome: "error" },
+    { status: "timeout", outcome: "timeout" },
+  ] as const)(
+    "retains the persisted $status diagnostic for parent completion",
+    async ({ status, outcome }) => {
+      const key = "agent:main:subagent:failed-diagnostic";
+      const lastRunError = "The synthetic fixture could not load its assigned document.";
+      expect(
+        await resolveCompletion(key, key, { ...terminalSession, status, lastRunError }),
+      ).toMatchObject({ endedAt: 2_000, outcome: { status: outcome, error: lastRunError } });
+      expect(await resolveCompletion(key, key, { ...terminalSession, status })).toMatchObject({
+        outcome:
+          status === "failed"
+            ? { status: "error", error: "session completed before registry settled" }
+            : { status: "timeout" },
+      });
+    },
+  );
+
   it("does not turn an interrupted outcome with an end timestamp into registry completion", async () => {
     const key = "agent:main:subagent:interrupted";
     expect(

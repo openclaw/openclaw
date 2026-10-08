@@ -74,6 +74,7 @@ export function createSubagentSessionStore(
   agentId: string,
   prepared?: PreparedSessionCapabilityEntry,
 ): SessionCapabilityLookup {
+  const readScope = { storePath, agentId, projection: "list" as const };
   const entries = new Map<string, SessionCapabilityEntry | undefined>();
   const ids = new Map<string, SessionCapabilityEntry | undefined>();
   if (prepared && !isInternalSessionEffectsKey(prepared.sessionKey)) {
@@ -95,10 +96,8 @@ export function createSubagentSessionStore(
         if (!entry) {
           try {
             entry = loadExactSessionEntryReadOnly({
-              storePath,
-              agentId,
+              ...readScope,
               sessionKey,
-              projection: "list",
             })?.entry;
           } catch {
             // Preserve the depth/key fallback for missing or unavailable stores.
@@ -117,10 +116,8 @@ export function createSubagentSessionStore(
         let entry: SessionCapabilityEntry | undefined;
         try {
           const selected = loadSessionEntryByIdReadOnly({
-            storePath,
-            agentId,
+            ...readScope,
             sessionId: id,
-            projection: "list",
           });
           entry = selected?.entry;
           if (selected && !entries.has(selected.sessionKey)) {

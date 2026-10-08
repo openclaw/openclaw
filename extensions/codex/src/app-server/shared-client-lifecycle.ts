@@ -296,9 +296,6 @@ export function retirePendingSharedClientEntryIfUnclaimed(
   if (state.clients.get(entry.key) === entry) {
     state.clients.delete(entry.key);
   }
-  if (!entry.client) {
-    return;
-  }
   closeRetiredSharedClientEntry(entry);
 }
 

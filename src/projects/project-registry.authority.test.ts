@@ -1,13 +1,19 @@
 import path from "node:path";
 import { MessageChannel } from "node:worker_threads";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { withWorktreeAllocationLease } from "../agents/worktrees/allocation.js";
-import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  takeSqliteWorkerOperationAdmissionAttachment,
+  withSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionFactory,
+} from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
+import { leaseHeartbeatState } from "../state/openclaw-state-lease-heartbeat-shared.js";
 import type { startOpenClawStateLeaseHeartbeat } from "../state/openclaw-state-lease-heartbeat.js";
 import type { createOpenClawStateLeaseWorkerStorage } from "../state/openclaw-state-lease-worker-storage.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -98,7 +104,31 @@ vi.mock("../state/openclaw-state-lease-worker-storage.js", async (importOriginal
     async acquire(owner) {
       return await owner.runLifecycle("acquire", async (admission) => {
         admission.assertCurrent();
-        return { kind: "acquired" as const, expiresAt: fixture.expiresAt };
+        const settled = createDeferredCore<SqliteWorkerOperationSettlement>();
+        const retained = admission.createAdmission({ settled: settled.promise });
+        try {
+          const attachment = withSqliteWorkerOperationAdmission(
+            { port: retained.admission.port },
+            takeSqliteWorkerOperationAdmissionAttachment,
+          );
+          if (
+            !isRecord(attachment) ||
+            attachment.kind !== "state-lease-expiry" ||
+            !(attachment.observation instanceof SharedArrayBuffer)
+          ) {
+            throw new Error("Missing owner-bound expiry observation");
+          }
+          expect(attachment.identity).toEqual(admission.identity);
+          Atomics.store(
+            new BigInt64Array(attachment.observation),
+            leaseHeartbeatState.expiresAt,
+            BigInt(fixture.expiresAt),
+          );
+          return { kind: "acquired" as const, expiresAt: fixture.expiresAt };
+        } finally {
+          retained.admission.finish();
+          settled.resolve({ kind: "completed" });
+        }
       });
     },
     verify: fixture.forbiddenNative,

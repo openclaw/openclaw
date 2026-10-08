@@ -52,12 +52,8 @@ export type SkillWorkshopContext = {
 export function resolveSkillWorkshopAgentId(context: SkillWorkshopContext): string {
   const snapshot = context.gateway.snapshot;
   const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
-  const selectedAgentId = context.agentSelection.state.selectedId;
-  return selectedAgentId
-    ? normalizeAgentId(selectedAgentId)
-    : sessionAgentId
-      ? normalizeAgentId(sessionAgentId)
-      : resolveUiSelectedGlobalAgentId(snapshot);
+  const agentId = context.agentSelection.state.selectedId || sessionAgentId;
+  return agentId ? normalizeAgentId(agentId) : resolveUiSelectedGlobalAgentId(snapshot);
 }
 
 export function loadedSkillWorkshopAgentId(
@@ -74,7 +70,6 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
   state.skillWorkshopInstalledSkills = [];
   state.skillWorkshopInstalledName = null;
   state.skillWorkshopSelectedKey = null;
-  state.skillWorkshopInspectingKey = null;
   state.skillWorkshopRevisionKey = null;
   state.skillWorkshopRevisionDraft = "";
   state.skillWorkshopFilePreviewKey = null;
@@ -85,15 +80,8 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
 export function mergeProposal(state: SkillWorkshopState, proposal: SkillWorkshopProposal): void {
   const proposals = state.skillWorkshopProposals;
   const index = proposals.findIndex((item) => item.key === proposal.key);
-  if (index < 0) {
-    state.skillWorkshopProposals = [proposal, ...proposals];
-    return;
-  }
-  state.skillWorkshopProposals = [
-    ...proposals.slice(0, index),
-    proposal,
-    ...proposals.slice(index + 1),
-  ];
+  state.skillWorkshopProposals =
+    index < 0 ? [proposal, ...proposals] : proposals.with(index, proposal);
 }
 
 export async function selectSkillWorkshopInstalledSkill(
@@ -238,10 +226,7 @@ export async function loadSkillWorkshopProposals(
   if (state.skillWorkshopAgentId !== requestAgentId) {
     resetSkillWorkshopAgentScope(state, requestAgentId);
   }
-  if (state.skillWorkshopLoading) {
-    return;
-  }
-  if (state.skillWorkshopLoaded && !options?.force) {
+  if (state.skillWorkshopLoading || (state.skillWorkshopLoaded && !options?.force)) {
     return;
   }
   const generation = readGeneration(state);
@@ -356,9 +341,7 @@ async function inspectSkillWorkshopProposal(
   options?: SkillWorkshopLoadOptions,
 ): Promise<boolean> {
   const requestAgentId = loadedSkillWorkshopAgentId(state, context);
-  if (state.skillWorkshopAgentId === null) {
-    state.skillWorkshopAgentId = requestAgentId;
-  }
+  state.skillWorkshopAgentId ??= requestAgentId;
   const generation = readGeneration(state);
   const isCurrentRead = () =>
     readGeneration(state) === generation &&
@@ -369,11 +352,10 @@ async function inspectSkillWorkshopProposal(
   state.skillWorkshopInspectingKey = proposalId;
   state.skillWorkshopError = null;
   try {
-    const requestParams = { agentId: requestAgentId, proposalId };
-    const result = await client.request<SkillsProposalInspectResult>(
-      "skills.proposals.inspect",
-      requestParams,
-    );
+    const result = await client.request<SkillsProposalInspectResult>("skills.proposals.inspect", {
+      agentId: requestAgentId,
+      proposalId,
+    });
     if (!isCurrentRead()) {
       return false;
     }

@@ -6,6 +6,7 @@ import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-
 import { withGatewayMaintenanceDrain } from "../cli/update-cli/update-command-service-drain.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { withGatewayServiceOperationLock } from "../daemon/service-operation-lock.js";
+import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { parsePackageOpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import {
@@ -118,6 +119,10 @@ async function rehearse(
   assertCurrent();
   const result = await validateUpdateCandidateCanary({
     root,
+    sourceBundledPlugins: {
+      packageRoot: record.descriptor.current.path,
+      directory: resolveBundledPluginsDir(env),
+    },
     config,
     stateDir: record.descriptor.service.stateDir,
     env,

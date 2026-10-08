@@ -58,15 +58,13 @@ export function listRuntimeVisibleChannelPlugins(): ChannelPlugin[] {
   }
   // The request handle is the active operation-local view. Replace same-id
   // process-root entries while retaining unrelated root channels.
-  const scopedPluginIds = new Set<string>();
-  const scopedPlugins: ChannelPlugin[] = [];
+  const scopedPlugins = new Map<string, ChannelPlugin>();
   for (const entry of scopedRegistry.channels) {
     const plugin = entry?.plugin;
-    if (!plugin?.id || scopedPluginIds.has(plugin.id)) {
+    if (!plugin?.id || scopedPlugins.has(plugin.id)) {
       continue;
     }
-    scopedPluginIds.add(plugin.id);
-    scopedPlugins.push(plugin);
+    scopedPlugins.set(plugin.id, plugin);
   }
-  return [...plugins.filter((plugin) => !scopedPluginIds.has(plugin.id)), ...scopedPlugins];
+  return [...plugins.filter((plugin) => !scopedPlugins.has(plugin.id)), ...scopedPlugins.values()];
 }

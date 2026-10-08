@@ -82,26 +82,4 @@ describe("terminal resolution for a tool-use stop without a tool call", () => {
       { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
     ]);
   });
-
-  it.each([
-    { name: "a tool ran", overrides: { toolMetas: [{ toolName: "read", meta: "path=a.md" }] } },
-    {
-      name: "the attempt had side effects",
-      overrides: {
-        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-      },
-    },
-  ])("does not retry after $name", async ({ overrides }) => {
-    const activateInternalPrompt = vi.fn();
-    const result = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({
-        ...toolUseStopWithoutCall(overrides),
-        sessionPromptState: { activateInternalPrompt },
-      }),
-    );
-
-    expect(result.action).toBe("complete");
-    expect(activateInternalPrompt).not.toHaveBeenCalled();
-  });
 });

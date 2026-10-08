@@ -9,12 +9,9 @@ type TelegramHtmlVisibleProjection = {
 };
 
 function maskTelegramExcludedText(text: string): string {
-  return text
-    .split("\n")
-    .map((line) =>
-      line.trim() ? `x${" ".repeat(Math.max(0, line.length - 1))}` : " ".repeat(line.length),
-    )
-    .join("\n");
+  return text.replace(/[^\n]+/g, (line) =>
+    line.trim() ? `x${" ".repeat(line.length - 1)}` : " ".repeat(line.length),
+  );
 }
 
 function maskTelegramExcludedRanges(projection: TelegramHtmlVisibleProjection): string {

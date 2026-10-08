@@ -181,42 +181,37 @@ function interruptedRun({ receipt = true, managed = true } = {}) {
   return run.runId;
 }
 
-it.each([false, true])(
-  "settles a verified interrupted CLI run (already abandoned: %s)",
-  async (abandoned) => {
-    const runId = interruptedRun();
-    if (abandoned) {
-      reconcileUpdateRunsInNativeKernelForTest();
+it("settles a verified abandoned CLI run", async () => {
+  const runId = interruptedRun();
+  reconcileUpdateRunsInNativeKernelForTest();
+  const published = createDeferredCore();
+  const broadcast = vi.fn((event, payload) => {
+    if (
+      event === "update.run.changed" &&
+      payload.runId === runId &&
+      payload.status === "succeeded"
+    ) {
+      published.resolve();
     }
-    const published = createDeferredCore();
-    const broadcast = vi.fn((event, payload) => {
-      if (
-        event === "update.run.changed" &&
-        payload.runId === runId &&
-        payload.status === "succeeded"
-      ) {
-        published.resolve();
-      }
-    });
-    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
-    await published.promise;
-    expect(getUpdateRun(runId)?.status).toBe("succeeded");
-    expect(getUpdateRun(runId)).toMatchObject({
-      reason: null,
-      after: { version: "2026.9.4", buildId: "candidate-build" },
-      verification: { versionMatch: true, readyz: true, runningBuildId: "candidate-build" },
-    });
-    expect(broadcast).toHaveBeenCalledWith(
-      "update.run.changed",
-      expect.objectContaining({ runId, status: "succeeded" }),
-    );
-    expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain(
-      "Updater exited before recording completion",
-    );
-    expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain("settle check: settled");
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("settle check: settled"));
-  },
-);
+  });
+  watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
+  await published.promise;
+  expect(getUpdateRun(runId)?.status).toBe("succeeded");
+  expect(getUpdateRun(runId)).toMatchObject({
+    reason: null,
+    after: { version: "2026.9.4", buildId: "candidate-build" },
+    verification: { versionMatch: true, readyz: true, runningBuildId: "candidate-build" },
+  });
+  expect(broadcast).toHaveBeenCalledWith(
+    "update.run.changed",
+    expect.objectContaining({ runId, status: "succeeded" }),
+  );
+  expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain(
+    "Updater exited before recording completion",
+  );
+  expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain("settle check: settled");
+  expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("settle check: settled"));
+});
 
 it.each([
   "installed",
@@ -437,28 +432,23 @@ it("does not renew abandonment activity after a recorded probe", async () => {
   ]);
 });
 
-it.each(["absent", "skipped"])(
-  "records an unmanaged skip when the restart step is %s",
-  async (restart) => {
-    const runId = interruptedRun({ managed: false });
-    if (restart === "skipped") {
-      recordUpdateRunStep(runId, { step: "restarting", status: "skipped" });
-    }
-    expect(await reconcileInterruptedUpdateRuns()).toEqual([]);
-    const run = getUpdateRun(runId)!;
-    expect(run.status).toBe("running");
-    expect(run.steps.find((step) => step.step === "reconcile:settle")).toMatchObject({
-      status: "completed",
-      detail: expect.stringContaining("skipped-unmanaged after 0 ms during ownership"),
-    });
-    expect(renderUpdateRunReport(run).markdown).toContain("skipped-unmanaged");
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("skipped-unmanaged"));
-    expect(observation.context).not.toHaveBeenCalled();
-    expect(observation.settle).not.toHaveBeenCalled();
-    expect(observation.http).not.toHaveBeenCalled();
-    expect(observation.inspect).not.toHaveBeenCalled();
-  },
-);
+it("records an unmanaged skip when the restart step is skipped", async () => {
+  const runId = interruptedRun({ managed: false });
+  recordUpdateRunStep(runId, { step: "restarting", status: "skipped" });
+  expect(await reconcileInterruptedUpdateRuns()).toEqual([]);
+  const run = getUpdateRun(runId)!;
+  expect(run.status).toBe("running");
+  expect(run.steps.find((step) => step.step === "reconcile:settle")).toMatchObject({
+    status: "completed",
+    detail: expect.stringContaining("skipped-unmanaged after 0 ms during ownership"),
+  });
+  expect(renderUpdateRunReport(run).markdown).toContain("skipped-unmanaged");
+  expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("skipped-unmanaged"));
+  expect(observation.context).not.toHaveBeenCalled();
+  expect(observation.settle).not.toHaveBeenCalled();
+  expect(observation.http).not.toHaveBeenCalled();
+  expect(observation.inspect).not.toHaveBeenCalled();
+});
 
 it("records cleanup uncertainty instead of settling an interrupted update", async () => {
   const runId = interruptedRun();

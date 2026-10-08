@@ -1,4 +1,4 @@
-import type { ConversationKind } from "./conversation-identity.js";
+import type { ChatType as ConversationKind } from "../../channels/chat-type.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 
 export type ConversationRecord = {

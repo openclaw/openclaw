@@ -1,6 +1,7 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerClientFactory } from "./app-server/shared-client.js";
 import { createCodexWebSearchProviderBase } from "./web-search-provider.shared.js";
 
@@ -31,13 +32,7 @@ export function createCodexWebSearchProvider(
   return {
     ...createCodexWebSearchProviderBase(),
     createTool: (ctx) => {
-      const nativeConfig = ctx.searchConfig?.openaiCodex;
-      if (
-        nativeConfig &&
-        typeof nativeConfig === "object" &&
-        !Array.isArray(nativeConfig) &&
-        (nativeConfig as { enabled?: unknown }).enabled === false
-      ) {
+      if (asOptionalRecord(ctx.searchConfig?.openaiCodex)?.enabled === false) {
         return null;
       }
       return {

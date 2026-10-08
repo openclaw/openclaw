@@ -141,8 +141,10 @@ function createRecoveryFixture(
   return createPluginReloadRecoveryFixture({ cleanups, logMocks: mocks.log }, options);
 }
 
-it("reopens a shared resource closed by gateway_stop after a setting changes without restarting its sibling", () =>
-  verifySharedResourceReplacement(createRecoveryFixture));
+it.each(["gateway_stop", "runtime-lifecycle"] as const)(
+  "reopens a shared resource closed by %s after a setting changes without restarting its sibling",
+  (cleanup) => verifySharedResourceReplacement(createRecoveryFixture, cleanup),
+);
 
 it("flushes failed candidate services before closing their shared resources", () =>
   verifyCandidateResourceCleanup(createRecoveryFixture));

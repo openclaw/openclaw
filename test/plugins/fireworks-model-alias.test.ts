@@ -19,14 +19,36 @@ vi.mock("../../src/plugins/manifest-registry.js", async (importOriginal) => ({
   loadPluginManifestRegistryCore: manifestMocks.loadPluginManifestRegistryCore,
 }));
 
+import {
+  createEmptyAgentDiscoveryStores,
+  resolveModelAsync,
+} from "../../src/agents/embedded-agent-runner/model.js";
 import { resolveRuntimeHooks } from "../../src/agents/embedded-agent-runner/model.provider-hooks.js";
-import { resolveModelWithRegistry } from "../../src/agents/embedded-agent-runner/model.registry-resolution.js";
 import { resolveBundledStaticCatalogModel } from "../../src/agents/embedded-agent-runner/model.static-catalog.js";
 import { loadPluginManifest } from "../../src/plugins/manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "../../src/plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import { resolveOwningPluginIdsForProviderRef } from "../../src/plugins/providers.js";
 import { resolveBundledPluginPublicModulePath } from "../../src/test-utils/bundled-plugin-public-surface.js";
+
+async function resolveCatalogModel(
+  provider: string,
+  catalogModel: NonNullable<ReturnType<typeof resolveBundledStaticCatalogModel>>,
+  cfg?: OpenClawConfig,
+) {
+  const stores = createEmptyAgentDiscoveryStores();
+  vi.spyOn(stores.modelRegistry, "find").mockImplementation((candidateProvider, candidateId) =>
+    candidateProvider === catalogModel.provider && candidateId === catalogModel.id
+      ? catalogModel
+      : undefined,
+  );
+  const { model } = await resolveModelAsync(provider, catalogModel.id, undefined, cfg, {
+    ...stores,
+    runtimeHooks: resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
+    authProfileMode: "api_key",
+  });
+  return model;
+}
 
 beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
@@ -66,22 +88,7 @@ describe("Fireworks manifest provider alias", () => {
     if (!catalogModel) {
       throw new Error("Missing Fireworks GLM catalog model");
     }
-    return resolveModelWithRegistry({
-      provider,
-      modelId,
-      cfg,
-      modelRegistry: {
-        getAll: () => [catalogModel],
-        getAvailable: () => [],
-        hasConfiguredAuth: () => false,
-        find: (candidateProvider, candidateId) =>
-          candidateProvider === catalogModel.provider && candidateId === catalogModel.id
-            ? catalogModel
-            : undefined,
-      },
-      runtimeHooks: resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
-      authProfileMode: "api_key",
-    });
+    return resolveCatalogModel(provider, catalogModel, cfg);
   }
 
   it("finds the alias owner before runtime loading and resolves the canonical catalog model", async () => {
@@ -187,22 +194,7 @@ describe("StepFun manifest provider aliases", () => {
     if (!catalogModel) {
       throw new Error(`Missing StepFun catalog model for ${params.catalogProvider}`);
     }
-    return resolveModelWithRegistry({
-      provider: params.provider,
-      modelId,
-      cfg: params.cfg,
-      modelRegistry: {
-        getAll: () => [catalogModel],
-        getAvailable: () => [],
-        hasConfiguredAuth: () => false,
-        find: (candidateProvider, candidateId) =>
-          candidateProvider === catalogModel.provider && candidateId === catalogModel.id
-            ? catalogModel
-            : undefined,
-      },
-      runtimeHooks: resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
-      authProfileMode: "api_key",
-    });
+    return resolveCatalogModel(params.provider, catalogModel, params.cfg);
   }
 
   it("finds models.dev alias owners before runtime loading and resolves canonical catalog models", async () => {
@@ -339,22 +331,46 @@ describe("Together manifest provider alias", () => {
       api: "openai-completions",
       baseUrl: "https://api.together.xyz/v1",
     });
-    const resolve = (provider: string) =>
-      resolveModelWithRegistry({
-        provider,
-        modelId,
-        modelRegistry: {
-          getAll: () => [catalogModel!],
-          getAvailable: () => [],
-          hasConfiguredAuth: () => false,
-          find: (candidateProvider, candidateId) =>
-            candidateProvider === catalogModel!.provider && candidateId === catalogModel!.id
-              ? catalogModel
-              : undefined,
-        },
-        runtimeHooks: resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
-        authProfileMode: "api_key",
-      });
+    const resolve = (provider: string) => resolveCatalogModel(provider, catalogModel!);
     expect(await resolve("togetherai")).toEqual(await resolve("together"));
+  });
+});
+
+describe("Kilocode manifest provider alias", () => {
+  const modelId = "kilo-auto/balanced";
+
+  beforeEach(() => {
+    const rootDir = path.dirname(
+      resolveBundledPluginPublicModulePath({
+        pluginId: "kilocode",
+        artifactBasename: "openclaw.plugin.json",
+      }),
+    );
+    const loaded = loadPluginManifest(rootDir);
+    if (!loaded.ok) {
+      throw new Error(loaded.error);
+    }
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ ...loaded.manifest, origin: "bundled", rootDir }],
+    });
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
+  });
+
+  it("owns kilo before runtime load and resolves the canonical catalog model", async () => {
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "kilo" })).toEqual(["kilocode"]);
+    const catalogModel = resolveBundledStaticCatalogModel({
+      provider: "kilocode",
+      modelId,
+      includeRuntimeDiscovery: true,
+    });
+    expect(catalogModel).toMatchObject({
+      provider: "kilocode",
+      id: modelId,
+      api: "openai-completions",
+      baseUrl: "https://api.kilo.ai/api/gateway/",
+    });
+    const resolve = (provider: string) => resolveCatalogModel(provider, catalogModel!);
+    expect(await resolve("kilo")).toEqual(await resolve("kilocode"));
   });
 });

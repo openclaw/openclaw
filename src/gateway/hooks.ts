@@ -639,6 +639,9 @@ export function normalizeAgentPayload(
   );
   const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKey = normalizeOptionalString(payload.sessionKey);
+  if (payload.sessionKey !== undefined && !sessionKey) {
+    return { ok: false, error: "sessionKey must be a non-empty string" };
+  }
   const sessionModeRaw = payload.sessionMode;
   if (
     sessionModeRaw !== undefined &&

@@ -73,6 +73,19 @@ type FollowupDeliveryDecision =
       resolved: { provider: string; model: string };
     };
 
+function resolveFollowupPayloadContext(turn: AdmittedFollowupTurn) {
+  return {
+    cfg: turn.config,
+    messageProvider: turn.queued.run.messageProvider,
+    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
+    originatingChannel: turn.queued.originatingChannel,
+    originatingChatType: turn.queued.originatingChatType,
+    originatingReplyToMode: turn.queued.originatingReplyToMode,
+    originatingTo: turn.queued.originatingTo,
+    originatingThreadId: turn.queued.originatingThreadId,
+  };
+}
+
 /** Resolves one final queued delivery action without performing transport I/O. */
 export async function resolveFollowupDeliveryDecision(params: {
   turn: AdmittedFollowupTurn;
@@ -124,16 +137,7 @@ export async function resolveFollowupDeliveryDecision(params: {
         opts?.onBlockReply ||
         turn.queued.queuedFollowupReplyDisposition?.kind === "deliver",
       ));
-  const deliveryContext = {
-    cfg: turn.config,
-    messageProvider: turn.queued.run.messageProvider,
-    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-    originatingChannel: turn.queued.originatingChannel,
-    originatingChatType: turn.queued.originatingChatType,
-    originatingReplyToMode: turn.queued.originatingReplyToMode,
-    originatingTo: turn.queued.originatingTo,
-    originatingThreadId: turn.queued.originatingThreadId,
-  };
+  const deliveryContext = resolveFollowupPayloadContext(turn);
   const preparePayloads = (
     payloads: ReplyPayload[],
     options: Omit<
@@ -576,15 +580,8 @@ export async function deliverFollowupDecision(params: {
       return { kind: "source-retry" };
     }
     payloads = resolveFollowupDeliveryPayloads({
-      cfg: turn.config,
+      ...resolveFollowupPayloadContext(turn),
       payloads: [buildStrandedReplyDeliveryFailurePayload()],
-      messageProvider: turn.queued.run.messageProvider,
-      originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-      originatingChannel: turn.queued.originatingChannel,
-      originatingChatType: turn.queued.originatingChatType,
-      originatingReplyToMode: turn.queued.originatingReplyToMode,
-      originatingTo: turn.queued.originatingTo,
-      originatingThreadId: turn.queued.originatingThreadId,
     });
   } else {
     payloads = decision.payloads;

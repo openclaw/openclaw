@@ -207,6 +207,75 @@ describe("config model validation", () => {
     ]);
   });
 
+  it("leaves ACP harness primaries to the harness and validates their native fallbacks", async () => {
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          entries: {
+            main: {},
+            qursor: {
+              runtime: { type: "acp", acp: { agent: "qursor", backend: "acpx" } },
+              model: { primary: "composer-2.5", fallbacks: ["openai/gpt-5.4-mini"] },
+            },
+            opencode: { runtime: { type: "acp" }, model: "opencode/muse-spark-1.3" },
+          },
+        },
+      },
+      touchedPaths: [
+        ["agents", "entries", "qursor", "model"],
+        ["agents", "entries", "opencode", "model"],
+      ],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref)).toEqual([
+      {
+        path: "agents.entries.qursor.model.fallbacks.0",
+        value: "openai/gpt-5.4-mini",
+        agentId: "qursor",
+        fallback: true,
+      },
+    ]);
+  });
+
+  it("validates a harness primary as native when its agent leaves the ACP runtime", async () => {
+    const qursor = { model: { primary: "composer-2.5" } };
+    const result = await checkTouchedTextModelRefs({
+      previousConfig: {
+        agents: { entries: { main: {}, qursor: { ...qursor, runtime: { type: "acp" } } } },
+      },
+      config: { agents: { entries: { main: {}, qursor } } },
+      touchedPaths: [["agents", "entries", "qursor", "runtime"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref)).toEqual([
+      expect.objectContaining({
+        path: "agents.entries.qursor.model.primary",
+        value: "composer-2.5",
+        agentId: "qursor",
+      }),
+    ]);
+  });
+
+  it("validates a changed default primary for ACP agents that inherit it natively", async () => {
+    const entries = {
+      main: { model: "openai/gpt-5.4" },
+      qursor: { runtime: { type: "acp" }, model: "composer-2.5" },
+    };
+    const result = await checkTouchedTextModelRefs({
+      previousConfig: { agents: { defaults: { model: "anthropic/claude-sonnet-4-6" }, entries } },
+      config: { agents: { defaults: { model: "openai/gpt-5.4-mini" }, entries } },
+      touchedPaths: [["agents", "defaults", "model"]],
+      resolveModelRef,
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref.agentId)).toEqual(["qursor"]);
+  });
+
   it("uses list index paths for list-shaped agent model refs", async () => {
     const config: OpenClawConfigWithLegacyRoster = {
       agents: {

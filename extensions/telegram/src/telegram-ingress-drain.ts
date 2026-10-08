@@ -104,6 +104,10 @@ function isBoundedTelegramCallbackData(value: unknown): value is string {
   return isNonemptyTelegramCallbackValue(value) && fitsTelegramCallbackData(value);
 }
 
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
 function canReconcileTelegramLegacyLane(params: {
   record: ChannelIngressQueueRecord<TelegramSpooledUpdatePayload>;
   storedLaneKey: string;
@@ -164,9 +168,7 @@ function canReconcileTelegramLegacyLane(params: {
       !isBoundedTelegramCallbackData(callback.data) ||
       !isNonemptyTelegramCallbackValue(callback.chat_instance) ||
       callback.inline_message_id !== undefined ||
-      typeof senderId !== "number" ||
-      !Number.isSafeInteger(senderId) ||
-      senderId <= 0 ||
+      !isPositiveSafeInteger(senderId) ||
       callback.from?.is_bot !== false ||
       !params.botInfo ||
       callbackMessage?.from?.id !== params.botInfo.id ||
@@ -175,12 +177,8 @@ function canReconcileTelegramLegacyLane(params: {
       callbackMessage.guest_query_id !== undefined ||
       callbackMessage.sender_chat !== undefined ||
       callbackMessage.direct_messages_topic !== undefined ||
-      typeof callbackMessage.date !== "number" ||
-      !Number.isSafeInteger(callbackMessage.date) ||
-      callbackMessage.date <= 0 ||
-      typeof callbackMessage.message_id !== "number" ||
-      !Number.isSafeInteger(callbackMessage.message_id) ||
-      callbackMessage.message_id <= 0
+      !isPositiveSafeInteger(callbackMessage.date) ||
+      !isPositiveSafeInteger(callbackMessage.message_id)
     ) {
       return false;
     }
@@ -202,8 +200,7 @@ function canReconcileTelegramLegacyLane(params: {
   const isPrivateChat = chatType === "private" && typeof chatId === "number" && chatId > 0;
   const isGroupChat =
     (chatType === "group" || chatType === "supergroup") && typeof chatId === "number" && chatId < 0;
-  const hasValidThreadId =
-    typeof threadId === "number" && Number.isSafeInteger(threadId) && threadId > 0;
+  const hasValidThreadId = isPositiveSafeInteger(threadId);
   const chatTypeHint =
     chatType === "channel" ||
     chatType === "group" ||
@@ -320,12 +317,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
   >({
     queue: params.queue,
     inspect: (update, context) => {
-      if (
-        context.phase === "admission" &&
-        typeof update === "object" &&
-        update !== null &&
-        isEligibleTelegramPollAnswerUpdate(update)
-      ) {
+      if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
         prepareTelegramPollAnswerContext({ update, accountId: params.accountId });
       }
       return inspectTelegramSpooledUpdate(
@@ -335,12 +327,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       );
     },
     inspectAsync: async (update, context) => {
-      if (
-        context.phase === "admission" &&
-        typeof update === "object" &&
-        update !== null &&
-        isEligibleTelegramPollAnswerUpdate(update)
-      ) {
+      if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
         await prepareTelegramPollAnswerContextAsync({ update, accountId: params.accountId });
       }
       return inspectTelegramSpooledUpdate(

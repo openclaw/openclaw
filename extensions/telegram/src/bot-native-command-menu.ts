@@ -146,7 +146,6 @@ export function buildPluginTelegramMenuCommands<TSpec extends TelegramPluginComm
   issues: string[];
 } {
   const { specs, existingCommands } = params;
-  const commands: TelegramMenuCommand[] = [];
   const selectedCommands: TelegramSelectedPluginMenuCommand<TSpec>[] = [];
   const issues: string[] = [];
   const pluginCommandNames = new Set<string>();
@@ -206,11 +205,10 @@ export function buildPluginTelegramMenuCommands<TSpec extends TelegramPluginComm
     if (spec.descriptionLocalizations) {
       menuCommand.descriptionLocalizations = spec.descriptionLocalizations;
     }
-    const { spec: _spec, ...displayCommand } = menuCommand;
-    commands.push(displayCommand);
     selectedCommands.push(menuCommand);
   }
 
+  const commands = selectedCommands.map(({ spec: _spec, ...command }) => command);
   return { commands, selectedCommands, issues };
 }
 
@@ -221,11 +219,7 @@ export function buildCappedTelegramMenuCommands(params: {
 }): ReturnType<typeof buildUncachedCappedTelegramMenuCommands> {
   const maxCommands = params.maxCommands ?? TELEGRAM_MAX_COMMANDS;
   const maxTotalChars = params.maxTotalChars ?? TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET;
-  const cacheKey = buildTelegramMenuResultCacheKey({
-    allCommands: params.allCommands,
-    maxCommands,
-    maxTotalChars,
-  });
+  const cacheKey = hashCommandList(params.allCommands, { maxCommands, maxTotalChars });
   const cached = cappedTelegramMenuCache.get(cacheKey);
   if (cached) {
     return cached;
@@ -302,24 +296,6 @@ function buildUncachedCappedTelegramMenuCommands(params: {
   };
 }
 
-function buildTelegramMenuResultCacheKey(params: {
-  allCommands: TelegramMenuCommand[];
-  maxCommands: number;
-  maxTotalChars: number;
-}): string {
-  const digest = createHash("sha256");
-  updateTelegramCommandDigestField(digest, String(params.maxCommands));
-  updateTelegramCommandDigestField(digest, String(params.maxTotalChars));
-  for (const command of params.allCommands) {
-    updateTelegramCommandDigestField(digest, command.command);
-    updateTelegramCommandDigestField(digest, command.description);
-    updateTelegramCommandDigestField(digest, command.isAlias ? "1" : "0");
-    updateTelegramCommandDigestField(digest, command.isSkill ? "1" : "0");
-    updateTelegramCommandLocalizationDigest(digest, command.descriptionLocalizations);
-  }
-  return digest.digest("hex").slice(0, 16);
-}
-
 function updateTelegramCommandDigestField(
   digest: ReturnType<typeof createHash>,
   value: string,
@@ -341,12 +317,23 @@ function updateTelegramCommandLocalizationDigest(
   }
 }
 
-function hashCommandList(commands: TelegramMenuCommand[]): string {
+function hashCommandList(
+  commands: TelegramMenuCommand[],
+  budget?: { maxCommands: number; maxTotalChars: number },
+): string {
   const digest = createHash("sha256");
-  updateTelegramCommandDigestField(digest, String(commands.length));
+  const header = budget ? [budget.maxCommands, budget.maxTotalChars] : [commands.length];
+  for (const value of header) {
+    updateTelegramCommandDigestField(digest, String(value));
+  }
   for (const command of commands) {
     updateTelegramCommandDigestField(digest, command.command);
     updateTelegramCommandDigestField(digest, command.description);
+    // Capped-menu caches also distinguish flags that affect which commands survive.
+    if (budget) {
+      updateTelegramCommandDigestField(digest, command.isAlias ? "1" : "0");
+      updateTelegramCommandDigestField(digest, command.isSkill ? "1" : "0");
+    }
     updateTelegramCommandLocalizationDigest(digest, command.descriptionLocalizations);
   }
   return digest.digest("hex").slice(0, 16);
@@ -445,48 +432,41 @@ function buildTelegramCommandScopeOptions(
     : undefined;
 }
 
-async function clearTelegramMenuCommandsForScopes(params: {
+async function applyTelegramMenuCommandsForScopes(params: {
   bot: Bot;
   runtime: RuntimeEnv;
+  commands?: TelegramMenuCommand[];
   languageCode?: LanguageCode;
+  shouldLog?: (err: unknown) => boolean;
 }): Promise<boolean> {
-  const { bot, runtime, languageCode } = params;
-
+  const { bot, runtime, languageCode, shouldLog } = params;
+  const commands = params.commands?.map(({ command, description }) => ({ command, description }));
+  const operation = commands ? "setMyCommands" : "deleteMyCommands";
   let allCleared = true;
   for (const scope of TELEGRAM_COMMAND_MENU_SCOPES) {
     const options = buildTelegramCommandScopeOptions(scope, languageCode);
-    const cleared = await withTelegramApiErrorLogging({
-      operation: formatTelegramCommandScopeOperation("deleteMyCommands", scope, languageCode),
-      runtime,
-      fn: () => (options ? bot.api.deleteMyCommands(options) : bot.api.deleteMyCommands()),
-    })
-      .then(() => true)
-      .catch(() => false);
-    allCleared &&= cleared;
-  }
-  return allCleared;
-}
-
-async function setTelegramMenuCommandsForScopes(params: {
-  bot: Bot;
-  runtime: RuntimeEnv;
-  commands: TelegramMenuCommand[];
-  languageCode?: LanguageCode;
-  shouldLog?: (err: unknown) => boolean;
-}): Promise<void> {
-  const { bot, runtime, commands, languageCode, shouldLog } = params;
-  const botCommands = commands.map(({ command, description }) => ({ command, description }));
-  for (const scope of TELEGRAM_COMMAND_MENU_SCOPES) {
-    await withTelegramApiErrorLogging({
-      operation: formatTelegramCommandScopeOperation("setMyCommands", scope, languageCode),
+    const task = withTelegramApiErrorLogging({
+      operation: formatTelegramCommandScopeOperation(operation, scope, languageCode),
       runtime,
       shouldLog,
       fn: () => {
-        const opts = buildTelegramCommandScopeOptions(scope, languageCode);
-        return opts ? bot.api.setMyCommands(botCommands, opts) : bot.api.setMyCommands(botCommands);
+        if (commands) {
+          return options
+            ? bot.api.setMyCommands(commands, options)
+            : bot.api.setMyCommands(commands);
+        }
+        return options ? bot.api.deleteMyCommands(options) : bot.api.deleteMyCommands();
       },
     });
+    if (commands) {
+      await task;
+    } else {
+      // Cleanup attempts every scope; publication stops on the first failure.
+      const cleared = await task.then(() => true).catch(() => false);
+      allCleared &&= cleared;
+    }
   }
+  return allCleared;
 }
 
 export function syncTelegramMenuCommands(params: {
@@ -524,10 +504,10 @@ export function syncTelegramMenuCommands(params: {
     ]);
 
     // Keep every exact scope/language clear ahead of publication.
-    const neutralCleared = await clearTelegramMenuCommandsForScopes({ bot, runtime });
+    const neutralCleared = await applyTelegramMenuCommandsForScopes({ bot, runtime });
     const unclearedLocales = new Set<LanguageCode>();
     for (const languageCode of [...trackedLocales].toSorted()) {
-      const cleared = await clearTelegramMenuCommandsForScopes({
+      const cleared = await applyTelegramMenuCommandsForScopes({
         bot,
         runtime,
         languageCode,
@@ -585,7 +565,7 @@ export function syncTelegramMenuCommands(params: {
     const initialCommandCount = commandsToRegister.length;
     while (retryCommands.length > 0) {
       try {
-        await setTelegramMenuCommandsForScopes({
+        await applyTelegramMenuCommandsForScopes({
           bot,
           runtime,
           commands: retryCommands,
@@ -640,7 +620,7 @@ export function syncTelegramMenuCommands(params: {
     }
 
     for (const variant of variants) {
-      await setTelegramMenuCommandsForScopes({
+      await applyTelegramMenuCommandsForScopes({
         bot,
         runtime,
         commands: variant.commands,

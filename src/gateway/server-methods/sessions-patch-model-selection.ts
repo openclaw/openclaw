@@ -28,6 +28,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "../../auto-reply/reply/queue.js";
+import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -135,36 +136,32 @@ export function resolveSessionPatchModelSelection(params: {
     statusDefault !== undefined &&
     ref.provider === statusDefault.provider &&
     ref.model === statusDefault.model;
+  const policy = {
+    cfg: params.cfg,
+    agentId: params.agentId,
+    catalog: params.catalog,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.subagentModelHint ?? {
+      provider: params.defaultProvider,
+      model: params.defaultModel,
+    },
+  };
   if (params.preparedModelSelection) {
     const ref = params.preparedModelSelection;
     if (modelWithoutProfile !== `${ref.provider}/${ref.model}`) {
       return { ok: false, error: "Resolved spawn model does not match the requested model." };
     }
     const status = getModelRefStatus({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      catalog: params.catalog,
+      ...policy,
       ref,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.subagentModelHint ?? {
-        provider: params.defaultProvider,
-        model: params.defaultModel,
-      },
     });
     return status.allowed
       ? { ok: true, ...ref, ...(profile ? { profile } : {}), isDefault: isDefault(ref) }
       : { ok: false, error: `model not allowed: ${status.key}` };
   }
   const resolved = resolveAllowedModelRef({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    catalog: params.catalog,
+    ...policy,
     raw: modelWithoutProfile,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.subagentModelHint ?? {
-      provider: params.defaultProvider,
-      model: params.defaultModel,
-    },
   });
   if ("error" in resolved) {
     return { ok: false, error: resolved.error };
@@ -295,6 +292,11 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     ok: false as const,
     error: errorShape(ErrorCodes.INVALID_REQUEST, message),
   });
+  try {
+    assertRequiredWorkerSelection(params.cfg, params.patch);
+  } catch (error) {
+    return invalid(formatErrorMessage(error));
+  }
   let validateRuntime: (() => string | undefined) | undefined;
   let validateEnvironment: (() => ErrorShape | undefined) | undefined;
   const grantingConsent = typeof params.patch.nativeRuntimeConsent === "string";
@@ -371,6 +373,14 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     }
   }
   const validate = () => {
+    try {
+      assertRequiredWorkerSelection(params.cfg, {
+        agentRuntime: params.entry.agentRuntimeOverride,
+        execNode: params.entry.execNode,
+      });
+    } catch (error) {
+      return errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error));
+    }
     const selectionError = params.validateModelSelection?.();
     if (selectionError) {
       return selectionError;

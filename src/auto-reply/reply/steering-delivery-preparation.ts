@@ -12,6 +12,7 @@ import {
   isNativeSessionEntryRead,
 } from "../../config/sessions/session-entry-read-request.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -68,6 +69,29 @@ export function prepareSteeringDelivery(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
+  const binding = captureIncognitoSessionBinding(scope);
+  if (binding) {
+    const claim = binding.actor.sessions.captureCurrent(scope.sessionKey);
+    const assertActorCurrent = () => {
+      params.assertCurrent();
+      binding.admissionSignal?.throwIfAborted();
+      binding.actor.assertReadable();
+      claim.assertCurrent();
+      assertEntry(binding.actor.sessions.readSteering(scope.sessionKey));
+    };
+    return {
+      prepareCurrent: async () => {
+        assertActorCurrent();
+        if (isToolAuthorityReadCaptureActive()) {
+          recordPreparedToolAuthorityRead({
+            reads: [],
+            assertPrepared: assertActorCurrent,
+            assertLegacyCurrent: assertActorCurrent,
+          });
+        }
+      },
+    };
+  }
   if (isNativeSessionEntryRead(scope, agentId)) {
     const storePath = isIncognitoSessionKey(scope.sessionKey)
       ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: params.agentId, env: scope.env })
@@ -98,6 +122,13 @@ export function prepareSteeringDelivery(params: {
   const candidates = captureSessionStoreReadCandidates(scope.storePath!);
   const identities = captureSessionStoreCandidateIdentities(candidates);
   let selectedPath: string | undefined;
+  const bindSelectedPath = (path: string) => {
+    const physicalPath = assertSessionStoreReadCandidate(path, candidates);
+    if (selectedPath !== undefined && selectedPath !== physicalPath) {
+      throw new Error("Steering delivery selected store changed");
+    }
+    selectedPath = physicalPath;
+  };
   const assertSources = () => {
     params.assertCurrent();
     for (const candidate of candidates) {
@@ -139,11 +170,7 @@ export function prepareSteeringDelivery(params: {
       assertSources();
       const read = reads[0]!;
       read.assertCurrent();
-      const physicalPath = assertSessionStoreReadCandidate(read.database.path, candidates);
-      if (selectedPath !== undefined && selectedPath !== physicalPath) {
-        throw new Error("Steering delivery selected store changed");
-      }
-      selectedPath = physicalPath;
+      bindSelectedPath(read.database.path);
       assertEntry(
         resolveSessionEntryCandidates({
           entries: read.result.entries,
@@ -165,11 +192,7 @@ export function prepareSteeringDelivery(params: {
         await withSessionEntriesFromStoresInWorker(descriptor.reads, descriptor.assertPrepared, {
           prepareSource: (_input, database, identity) => {
             assertSources();
-            const physicalPath = assertSessionStoreReadCandidate(database.path, candidates);
-            if (selectedPath !== undefined && selectedPath !== physicalPath) {
-              throw new Error("Steering delivery selected store changed");
-            }
-            selectedPath = physicalPath;
+            bindSelectedPath(database.path);
             if (!identities.has(identity.canonicalPath)) {
               identities.set(identity.canonicalPath, identity);
             }

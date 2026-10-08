@@ -269,11 +269,19 @@ export function registerModelsCli(program: Command) {
     .option("--max-candidates <n>", "Max fallback candidates", "6")
     .option("--timeout <ms>", "Timeout per check in ms")
     .option("--concurrency <n>", "Check concurrency")
-    .option("--no-probe", "Skip live checks; list free candidates only")
+    .option("--no-probe", "Skip live checks; list free candidates only (writes no config)")
     .option("--yes", "Accept defaults without prompting", false)
     .option("--no-input", "Disable prompts (use defaults)")
-    .option("--set-default", "Set agents.defaults.model to the first selection", false)
-    .option("--set-image", "Set agents.defaults.imageModel to the first image selection", false)
+    .option(
+      "--set-default",
+      "Also set agents.defaults.model primary to the first selection (fallbacks are replaced either way)",
+      false,
+    )
+    .option(
+      "--set-image",
+      "Also set agents.defaults.imageModel primary to the first image selection",
+      false,
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts, command: Command) => {
       await withGlobalModelsRuntime(command, "scan", async ({ defaultRuntime }) => {

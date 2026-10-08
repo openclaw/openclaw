@@ -191,6 +191,12 @@ export const ChatMetadataParamsSchema = Object.assign(
           "Include model and account selection metadata (default true). Set false when reading models.list separately.",
       }),
     ),
+    ifRevision: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "For includeModels:false, omit unchanged commands.",
+      }),
+    ),
     authProfileId: Type.Optional(
       Type.String({
         minLength: 1,
@@ -432,6 +438,8 @@ export const ChatDeltaEventSchema = closedObject({
   state: Type.Literal("delta"),
   message: Type.Optional(Type.Unknown()),
   deltaText: Type.String(),
+  itemId: Type.Optional(Type.String()),
+  itemStartOffset: Type.Optional(Type.Integer({ minimum: 0 })),
   replace: Type.Optional(Type.Boolean()),
   usage: Type.Optional(Type.Unknown()),
 });

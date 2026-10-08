@@ -8,11 +8,7 @@ import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isCodexAppServerApprovalRequest } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
-import {
-  emitDynamicToolErrorDiagnostic,
-  emitDynamicToolStartedDiagnostic,
-  emitDynamicToolTerminalDiagnostic,
-} from "./dynamic-tool-diagnostics.js";
+import { createCodexDynamicToolDiagnostics } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
   hasPendingDynamicToolTerminalDiagnostic,
@@ -252,6 +248,7 @@ export function createCodexAttemptServerRequestController(
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
       };
+      const diagnostics = createCodexDynamicToolDiagnostics(diagnosticContext);
       let terminalDiagnosticObserved = false;
       const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent(
         (event) => {
@@ -272,7 +269,7 @@ export function createCodexAttemptServerRequestController(
           // Publish the execution claim before persistence yields, so a replay
           // cannot become another owner of this call's progress or result.
           await projector?.transcriptCheckpoint.flush();
-          emitDynamicToolStartedDiagnostic(diagnosticContext);
+          diagnostics.started();
           const response = await handleDynamicToolCallWithTimeout({
             call,
             toolBridge,
@@ -362,11 +359,7 @@ export function createCodexAttemptServerRequestController(
           !terminalDiagnosticObserved &&
           !hasPendingDynamicToolTerminalDiagnostic(diagnosticContext)
         ) {
-          emitDynamicToolTerminalDiagnostic({
-            ...diagnosticContext,
-            response,
-            durationMs: toolDurationMs,
-          });
+          diagnostics.terminal(response, toolDurationMs);
         }
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
         if (params.pluginRuntimeRefreshPending?.()) {
@@ -381,10 +374,7 @@ export function createCodexAttemptServerRequestController(
           !terminalDiagnosticObserved &&
           !hasPendingDynamicToolTerminalDiagnostic(diagnosticContext)
         ) {
-          emitDynamicToolErrorDiagnostic({
-            ...diagnosticContext,
-            durationMs: Math.max(0, Date.now() - toolStartedAt),
-          });
+          diagnostics.error(Math.max(0, Date.now() - toolStartedAt));
         }
         await settlePluginRuntimeRefresh(turnId);
         throw error;

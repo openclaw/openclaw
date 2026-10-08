@@ -109,14 +109,19 @@ export function removeTelegramRichNativeQuoteParam(
   };
 }
 
-function toRichMessage(
+function buildRichMessagePlan(
   blocks: InputRichBlock[],
   plainText: string,
   options?: TelegramRichMessageOptions,
-): TelegramInputRichMessage {
-  return shouldSkipTelegramRichEntityDetection(plainText, options)
-    ? { blocks, skip_entity_detection: true }
-    : { blocks };
+  degradationReasons: readonly TelegramRichBlocksDegradationReason[] = [],
+): TelegramRichMessagePlan {
+  return {
+    richMessage: shouldSkipTelegramRichEntityDetection(plainText, options)
+      ? { blocks, skip_entity_detection: true }
+      : { blocks },
+    plainText,
+    degradationReasons,
+  };
 }
 
 export function buildTelegramRichMarkdownPlan(
@@ -128,14 +133,12 @@ export function buildTelegramRichMarkdownPlan(
     tableMode: options?.tableMode,
     skipEntityDetection,
   });
-  return {
-    richMessage: toRichMessage(rendered.blocks, rendered.plainText, {
-      ...options,
-      skipEntityDetection,
-    }),
-    plainText: rendered.plainText,
-    degradationReasons: rendered.degradationReasons,
-  };
+  return buildRichMessagePlan(
+    rendered.blocks,
+    rendered.plainText,
+    { skipEntityDetection },
+    rendered.degradationReasons,
+  );
 }
 
 export function buildTelegramRichBlocksPlan(
@@ -144,11 +147,7 @@ export function buildTelegramRichBlocksPlan(
 ): TelegramRichMessagePlan {
   const normalized = normalizeInputRichBlocks(blocks);
   const plainText = inputRichBlocksToPlainText(normalized);
-  return {
-    richMessage: toRichMessage(normalized, plainText, options),
-    plainText,
-    degradationReasons: [],
-  };
+  return buildRichMessagePlan(normalized, plainText, options);
 }
 
 export function splitTelegramRichMessageTextChunks(params: {

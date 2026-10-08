@@ -9,6 +9,9 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionBranchSummary,
 } from "./session-accessor.types.js";
+import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
+
+export type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 
 export type SessionTitleFields = {
   firstUserMessage: string | null;
@@ -18,11 +21,6 @@ export type SessionTitleFields = {
 export type SessionPreviewItem = {
   role: "user" | "assistant" | "tool" | "system" | "other";
   text: string;
-};
-
-export type SessionTranscriptWatermark = {
-  generation: string | null;
-  maxSeq: number | null;
 };
 
 export type SessionBranchSummarySnapshot = SessionTranscriptWatermark & {
@@ -49,6 +47,7 @@ export type SessionTranscriptModelContext = {
 export type SessionTranscriptReadSnapshot = {
   events: TranscriptEvent[];
   eventJson?: string[];
+  eventSeqs?: number[];
   version: SessionTranscriptContextVersion;
 };
 

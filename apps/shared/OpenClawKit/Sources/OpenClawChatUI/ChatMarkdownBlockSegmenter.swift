@@ -92,14 +92,7 @@ enum ChatMarkdownBlockSyntax {
     }
 
     static func isEscaped(at index: String.Index, in source: String) -> Bool {
-        var cursor = index
-        var count = 0
-        while cursor > source.startIndex {
-            let previous = source.index(before: cursor)
-            guard source[previous] == "\\" else { break }
-            count += 1
-            cursor = previous
-        }
+        let count = source[..<index].reversed().prefix { $0 == "\\" }.count
         return count.isMultiple(of: 2) == false
     }
 
@@ -118,10 +111,7 @@ enum ChatMarkdownBlockSyntax {
                 cursor = source.index(after: cursor)
                 continue
             }
-            var end = cursor
-            while end < source.endIndex, source[end] == "`" {
-                end = source.index(after: end)
-            }
+            let end = source[cursor...].prefix { $0 == "`" }.endIndex
             runs.append(BacktickRun(
                 start: cursor,
                 end: end,
@@ -1106,16 +1096,11 @@ enum ChatMarkdownBlockSegmenter {
             let character = line[afterIndent]
             guard character == "`" || character == "~" else { return nil }
 
-            var cursor = afterIndent
-            var count = 0
-            while cursor < line.endIndex, line[cursor] == character {
-                count += 1
-                cursor = line.index(after: cursor)
-            }
-            guard count >= 3 else { return nil }
-            let info = line[cursor...].trimmingCharacters(in: .whitespaces)
+            let fence = line[afterIndent...].prefix { $0 == character }
+            guard fence.count >= 3 else { return nil }
+            let info = line[fence.endIndex...].trimmingCharacters(in: .whitespaces)
             if character == "`", info.contains("`") { return nil }
-            return FenceOpener(character: character, count: count)
+            return FenceOpener(character: character, count: fence.count)
         }
 
         func isClose(_ line: String) -> Bool {
@@ -1123,23 +1108,13 @@ enum ChatMarkdownBlockSegmenter {
             guard indent <= 3, afterIndent < line.endIndex, line[afterIndent] == self.character else {
                 return false
             }
-            var cursor = afterIndent
-            var count = 0
-            while cursor < line.endIndex, line[cursor] == self.character {
-                count += 1
-                cursor = line.index(after: cursor)
-            }
-            return count >= self.count && line[cursor...].allSatisfy(\.isWhitespace)
+            let fence = line[afterIndent...].prefix { $0 == self.character }
+            return fence.count >= self.count && line[fence.endIndex...].allSatisfy(\.isWhitespace)
         }
 
         fileprivate static func leadingSpaces(of line: String) -> (count: Int, end: String.Index) {
-            var count = 0
-            var cursor = line.startIndex
-            while cursor < line.endIndex, line[cursor] == " " {
-                count += 1
-                cursor = line.index(after: cursor)
-            }
-            return (count, cursor)
+            let spaces = line.prefix { $0 == " " }
+            return (spaces.count, spaces.endIndex)
         }
     }
 }

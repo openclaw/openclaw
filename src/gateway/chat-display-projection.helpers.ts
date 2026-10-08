@@ -59,7 +59,7 @@ export function stripAssistantMediaDirectivesForDisplay(
   text: string,
   managedMediaUrls: readonly string[],
 ): string {
-  if (managedMediaUrls.length === 0 || !/(?:^|\n)\s*MEDIA:/iu.test(text)) {
+  if (managedMediaUrls.length === 0 || !/(?:^|[\r\n])\s*MEDIA:/iu.test(text)) {
     return text;
   }
   const managed = new Set(managedMediaUrls.map((url) => url.trim()).filter(Boolean));

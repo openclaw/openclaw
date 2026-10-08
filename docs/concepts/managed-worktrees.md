@@ -555,6 +555,15 @@ source profiles and repository setup, and never redirects local paths to a
 configured remote Gateway. Creation binds the captured repository directory;
 every mutation binds the request to the current owner's incarnation.
 
+While a Gateway owns the local state, `worktrees list` inspects the registry through
+a read-only worker and leaves its rows unchanged. Missing checkouts appear as
+retirement candidates in the table and as IDs in `retirementCandidates` with
+`--json`; these observations do not authorize deletion. Offline listing retains
+exclusive state ownership because it can retire missing checkouts.
+Reconciliation waits for each checkout's mutation
+lease and rereads its registry record and path before recording retirement, so a
+checkout restored while the listing waits remains active.
+
 Each operation requires its own supported parameter and result contract. A Gateway
 that supports routed creation can still lack routed removal or recovery. A changed
 owner, missing capability, authentication failure, or uncertain reply never triggers

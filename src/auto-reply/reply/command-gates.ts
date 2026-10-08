@@ -165,12 +165,7 @@ export function buildDisabledCommandReply(params: {
 
 export function requireCommandFlagEnabled(
   cfg: { commands?: unknown } | undefined,
-  params: {
-    label: string;
-    configKey: CommandFlagKey;
-    disabledVerb?: "is" | "are";
-    docsUrl?: string;
-  },
+  params: Parameters<typeof buildDisabledCommandReply>[0],
 ): CommandHandlerResult | null {
   if (isCommandFlagEnabled(cfg, params.configKey)) {
     return null;

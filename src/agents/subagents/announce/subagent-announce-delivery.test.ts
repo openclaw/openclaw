@@ -2819,6 +2819,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       "retryable",
     ],
     [
+      "leaves a parent restart admission race retryable for the lifecycle owner",
+      new Error(
+        'Session "agent:main:main" changed while starting work. Retry. | SESSION_WORK_START_CHANGED',
+      ),
+      1,
+      "retryable",
+    ],
+    [
       "classifies wrapped permanent channel failures as permanent",
       new Error("outbound delivery failed", { cause: new Error("chat not found") }),
       1,

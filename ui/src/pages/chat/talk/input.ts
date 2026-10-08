@@ -68,12 +68,12 @@ function deviceDetailsHidden(devices: MediaDeviceInfo[], kind: RealtimeTalkDevic
   return inputs.length === 0 || inputs.some((device) => !device.deviceId || !device.label);
 }
 
-const deviceIssueByMediaErrorName: Record<string, RealtimeTalkDeviceIssue> = {
-  NotAllowedError: "permission-blocked",
-  NotFoundError: "none-found",
-  NotReadableError: "busy",
-  InvalidStateError: "page-inactive",
-};
+const deviceIssueByMediaErrorName = new Map<string, RealtimeTalkDeviceIssue>([
+  ["NotAllowedError", "permission-blocked"],
+  ["NotFoundError", "none-found"],
+  ["NotReadableError", "busy"],
+  ["InvalidStateError", "page-inactive"],
+]);
 
 function mediaDeviceErrorName(error: unknown): string | undefined {
   // WebKit shipped OverconstrainedError as Error instead of DOMException.
@@ -84,7 +84,7 @@ function mediaDeviceErrorName(error: unknown): string | undefined {
 }
 
 function deviceIssueFromError(error: unknown): RealtimeTalkDeviceIssue {
-  return deviceIssueByMediaErrorName[mediaDeviceErrorName(error) ?? ""] ?? "failed";
+  return deviceIssueByMediaErrorName.get(mediaDeviceErrorName(error) ?? "") ?? "failed";
 }
 
 export function realtimeTalkDeviceIssueMessage(
@@ -217,7 +217,7 @@ export class RealtimeTalkSelectedMicrophoneError extends Error {
 
 async function openRealtimeTalkInput(
   inputDeviceId: string | undefined,
-  options: { signal?: AbortSignal } = {},
+  signal: AbortSignal,
 ): Promise<MediaStream> {
   const devices = globalThis.navigator?.mediaDevices;
   if (!devices?.getUserMedia) {
@@ -232,7 +232,7 @@ async function openRealtimeTalkInput(
           devices.getUserMedia({
             audio: realtimeTalkAudioConstraints(inputDeviceId),
           }),
-        options.signal,
+        signal,
       ),
     };
   } catch (error) {
@@ -251,9 +251,9 @@ async function openRealtimeTalkInput(
     throw new Error(acquisition.failure);
   }
   const { stream: audio } = acquisition;
-  if (options.signal?.aborted) {
+  if (signal.aborted) {
     audio.getTracks().forEach((track) => track.stop());
-    throw realtimeTalkAbortReason(options.signal);
+    throw realtimeTalkAbortReason(signal);
   }
   return audio;
 }
@@ -292,7 +292,7 @@ export class RealtimeTalkInputController {
     this.controller = controller;
     try {
       this.onConnecting?.(t("chat.composer.microphoneAccessPending"));
-      const media = await openRealtimeTalkInput(inputDeviceId, { signal: controller.signal });
+      const media = await openRealtimeTalkInput(inputDeviceId, controller.signal);
       if (controller.signal.aborted) {
         media.getTracks().forEach((track) => track.stop());
         throw realtimeTalkAbortReason(controller.signal);

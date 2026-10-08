@@ -2474,6 +2474,27 @@ child.once("message", () => ${typeof exit === "string" ? `process.kill(process.p
           expect(stderr).toBe("descendant stderr drained\n");
           expect(child?.stdout?.closed).toBe(true);
           expect(child?.stderr?.closed).toBe(true);
+        } else if (output !== "ignore") {
+          // Open descendant output keeps the original command timeout active
+          // while the group drains; its cancellation must precede forced cleanup.
+          const timeout = {
+            code: "ETIMEDOUT",
+            message: "Managed command timed out after 1000ms",
+          };
+          expect
+            .soft(outcome)
+            .toMatchObject(
+              runner === "preparation"
+                ? { message: "lingering-prep timed out after 1000ms", cause: timeout }
+                : timeout,
+            );
+          expect(fs.readFileSync(receivedSignalPath, "utf8")).toBe("SIGTERM");
+          if (runner === "managed") {
+            expect(stdout).toBe("descendant stdout drained\n");
+            expect(stderr).toBe("descendant stderr drained\n");
+            expect(child?.stdout?.closed).toBe(true);
+            expect(child?.stderr?.closed).toBe(true);
+          }
         } else {
           expect.soft(outcome).toMatchObject({
             code: "EPROCESSGROUP_CLEANUP_FAILED",

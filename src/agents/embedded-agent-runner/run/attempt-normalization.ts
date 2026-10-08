@@ -47,6 +47,10 @@ type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 
 type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
+export type NormalizedEmbeddedRunAttempt = Extract<
+  Awaited<ReturnType<typeof normalizeEmbeddedRunAttempt>>,
+  { action: "proceed" }
+>;
 
 export async function normalizeEmbeddedRunAttempt(input: {
   runInput: PreparedEmbeddedRunInput;

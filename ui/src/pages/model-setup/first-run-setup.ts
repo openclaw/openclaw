@@ -120,13 +120,7 @@ export type ModelSetupRouteData = { firstRun: boolean };
 
 type SetupOutcome<T> = ModelSetupTaskResult<T> | undefined;
 
-type FirstRunOwner = {
-  generation: number;
-  connectionRevision: number;
-  recoveryScope: string | null;
-  firstRun: boolean;
-  connection: ModelSetupConnection;
-};
+type FirstRunOwner = ConnectionSnapshot & { generation: number };
 
 type FirstRunActivation = {
   owner: FirstRunOwner;
@@ -205,7 +199,7 @@ export class FirstRunSetup {
     if (
       this.pending &&
       (!this.pending.owner.recoveryScope ||
-        connection.agentId !== this.pending.owner.connection.agentId ||
+        connection.agentId !== this.pending.owner.agentId ||
         this.host.context().gateway.connectionRevision !== this.pending.owner.connectionRevision ||
         (this.host.context().gateway.snapshot.phase === "connected" &&
           (connection.hello?.auth?.recoveryScope ?? null) !== this.pending.owner.recoveryScope))
@@ -226,7 +220,7 @@ export class FirstRunSetup {
       !activation.owner.recoveryScope ||
       activation.owner.connectionRevision !== context.gateway.connectionRevision ||
       activation.owner.recoveryScope !== (connection.hello?.auth?.recoveryScope ?? null) ||
-      activation.owner.connection.agentId !== connection.agentId ||
+      activation.owner.agentId !== connection.agentId ||
       activation.owner.firstRun !== this.host.routeData()?.firstRun
     ) {
       return;
@@ -339,23 +333,20 @@ export class FirstRunSetup {
     // Detection is not consent. Only an existing, owner-bound activation receipt
     // may resume verification after reconnect; a fresh visit never tests or
     // activates even a configured or recommended model.
+    this.started = true;
     if (!this.pending) {
-      this.started = true;
       return;
     }
     const configured = this.configuredActivationModel(pageState.result);
     if (!this.pending.modelRef && receipt?.wizard) {
-      this.started = true;
       this.host.resumeWizard(receipt.wizard, this.observeActivation(this.pending));
       return;
     }
     if (!configured || !this.pending.modelRef) {
-      this.started = true;
       this.showUnresolved();
       return;
     }
     if (!this.host.canVerify(snapshot.client)) {
-      this.started = true;
       this.host.setVerifyState({
         phase: "failed",
         status: "unknown",
@@ -363,7 +354,6 @@ export class FirstRunSetup {
       });
       return;
     }
-    this.started = true;
     void this.run(this.owner(routeData.firstRun), pageState.result);
   }
 
@@ -493,13 +483,9 @@ export class FirstRunSetup {
   // Equivalent router data can be republished mid-activation. The mounted
   // lifecycle and mode/connection changes, not that object, own this generation.
   private owner(firstRun: boolean): FirstRunOwner {
-    const connection = captureModelSetupConnection(this.host.context(), firstRun);
     return {
+      ...captureModelSetupConnection(this.host.context(), firstRun),
       generation: this.generation,
-      firstRun,
-      connectionRevision: connection.connectionRevision,
-      recoveryScope: connection.recoveryScope,
-      connection,
     };
   }
 
@@ -601,10 +587,9 @@ export class FirstRunSetup {
       owner.recoveryScope === (snapshot.hello?.auth?.recoveryScope ?? null) &&
       owner.firstRun === this.host.routeData()?.firstRun &&
       snapshot.phase === "connected" &&
-      snapshot.client === owner.connection.client &&
-      snapshot.hello === owner.connection.hello &&
-      modelSetupAgentSelection(context, owner.firstRun).state.selectedId ===
-        owner.connection.agentId
+      snapshot.client === owner.client &&
+      snapshot.hello === owner.hello &&
+      modelSetupAgentSelection(context, owner.firstRun).state.selectedId === owner.agentId
     );
   }
 

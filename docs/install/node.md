@@ -163,8 +163,10 @@ fnm use 26
 ### Homebrew upgrades while the Gateway is running
 
 If Homebrew removes the running Gateway's Node executable, command relays and
-the spawn broker use the formula's available stable Homebrew path for new launches.
-They keep using the original executable while it exists. Restart the Gateway
+their process-group anchors use the formula's available stable Homebrew path for
+new launches. They keep using the original executable while it exists. Workers
+that share native modules or V8 messages, including the spawn broker, keep the
+exact runtime and report a restart action if it is gone. Restart the Gateway
 after upgrading Node to move the Gateway itself onto the new runtime.
 
 ### `openclaw: command not found`

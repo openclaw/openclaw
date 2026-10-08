@@ -4,6 +4,7 @@ import type { ConversationReadInvocationOrigin } from "../channels/plugins/conve
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
@@ -184,6 +185,7 @@ export type OpenClawToolsOptions = {
   requesterSenderId?: string | null;
   /** Prepared exec/process isolation key for this run. */
   processScopeKey?: string;
+  inputProvenance?: InputProvenance;
 } & OpenClawSharedToolsOptions &
   AgentRunClientContext &
   AgentRunMessageContext &

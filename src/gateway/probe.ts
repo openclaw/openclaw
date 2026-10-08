@@ -16,6 +16,7 @@ import {
   loadDeviceAuthTokenReadOnly,
   loadOriginDeviceTokenReadOnly,
 } from "../infra/device-auth-store.js";
+import { publicKeyRawBase64UrlFromEd25519Pem } from "../infra/ed25519-signature.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SystemPresence } from "../infra/system-presence.js";
@@ -284,8 +285,8 @@ export async function probeGateway(opts: {
       if (remote && loopback && !route.bound && !hasProbeAuth(opts.auth)) {
         return null;
       }
-      const identityModule = await import("../infra/device-identity.js");
-      const identity = identityModule.loadDeviceIdentityIfPresent({ env: opts.env });
+      const identityModule = await import("../infra/device-identity-async.js");
+      const identity = await identityModule.loadDeviceIdentityIfPresentAsync({ env: opts.env });
       if (!identity) {
         return null;
       }
@@ -313,8 +314,7 @@ export async function probeGateway(opts: {
           );
           const issuedToken = paired?.tokens?.operator;
           if (
-            paired?.publicKey !==
-              identityModule.publicKeyRawBase64UrlFromPem(identity.publicKeyPem) ||
+            paired?.publicKey !== publicKeyRawBase64UrlFromEd25519Pem(identity.publicKeyPem) ||
             !issuedToken ||
             issuedToken.revokedAtMs ||
             !verifyPairingToken(cachedOperatorToken.token.trim(), issuedToken.token)

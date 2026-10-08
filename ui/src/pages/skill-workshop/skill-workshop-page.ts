@@ -93,20 +93,16 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       () => this.context?.gateway,
       (gateway) => {
         const snapshot = gateway.snapshot;
-        const sourceChanged = this.gatewaySource !== undefined && this.gatewaySource !== gateway;
-        const clientChanged =
-          this.gatewaySource !== undefined && this.gatewayClient !== snapshot.client;
-        const connectionChanged =
-          this.gatewaySource !== undefined &&
-          this.gatewayConnected !== (snapshot.phase === "connected");
-        const helloChanged =
-          this.gatewaySource !== undefined && this.gatewayHello !== snapshot.hello;
         this.applyGatewaySnapshot(
           gateway,
           snapshot,
-          sourceChanged || clientChanged || connectionChanged || helloChanged,
+          this.gatewaySource !== undefined &&
+            (this.gatewaySource !== gateway ||
+              this.gatewayClient !== snapshot.client ||
+              this.gatewayConnected !== (snapshot.phase === "connected") ||
+              this.gatewayHello !== snapshot.hello),
         );
-        const cleanup = gateway.subscribe((nextSnapshot) => {
+        return gateway.subscribe((nextSnapshot) => {
           if (this.gatewaySource !== gateway || this.context?.gateway !== gateway) {
             return;
           }
@@ -116,7 +112,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
             nextSnapshot.hello !== this.gatewayHello;
           this.applyGatewaySnapshot(gateway, nextSnapshot, sourceEpochChanged);
         });
-        return cleanup;
       },
     )
     .watchStore(() => this.context?.config)

@@ -137,6 +137,7 @@ export function updateSessionGroupCategoriesInWorker(params: {
         } else if (
           targets.has(change.sessionKey) &&
           change.scope !== "automation" &&
+          change.scope !== "acp" &&
           (change.factsInvalidated ||
             (change.facts &&
               change.facts.kind !== "unchanged" &&

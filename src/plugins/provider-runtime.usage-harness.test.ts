@@ -67,32 +67,6 @@ describe("provider runtime harness usage", () => {
     vi.restoreAllMocks();
   });
 
-  it("cold-loads the selected default-disabled harness for usage", async () => {
-    const workspaceDir = makeTempDir();
-    const env = makeCodexManifestEnv();
-
-    await expect(
-      resolveProviderUsageSnapshotWithPlugin({
-        provider: "codex",
-        config: {},
-        env,
-        workspaceDir,
-        context: {
-          config: {},
-          env,
-          provider: "openai",
-          token: "test-token-placeholder",
-          timeoutMs: 5_000,
-          fetchFn: fetch,
-        },
-      }),
-    ).resolves.toEqual({
-      provider: "openai",
-      displayName: "OpenAI",
-      windows: [{ label: "5h", usedPercent: 9 }],
-    });
-  });
-
   it("does not reuse an unrelated Gateway registry for cold harness usage", async () => {
     const workspaceDir = makeTempDir();
     const env = makeCodexManifestEnv();
@@ -114,7 +88,11 @@ describe("provider runtime harness usage", () => {
           },
         }),
       ),
-    ).resolves.toMatchObject({ provider: "openai" });
+    ).resolves.toEqual({
+      provider: "openai",
+      displayName: "OpenAI",
+      windows: [{ label: "5h", usedPercent: 9 }],
+    });
   });
 
   it.each([

@@ -262,11 +262,7 @@ async function resolveFileRefs(params: {
   providerConfig: FileSecretProviderConfig;
   cache?: SecretRefResolveCache;
 }): Promise<ProviderResolutionOutput> {
-  const payload = await readFileProviderPayload({
-    providerName: params.providerName,
-    providerConfig: params.providerConfig,
-    cache: params.cache,
-  });
+  const payload = await readFileProviderPayload(params);
   const mode = params.providerConfig.mode ?? "json";
   const resolved = new Map<string, unknown>();
   if (mode === "singleValue") {

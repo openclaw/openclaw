@@ -124,7 +124,7 @@ export function createOperatorChatSendServerTiming({
   const connId = client?.connId?.trim();
   const recipients =
     connId && isOperatorUiClient(client?.connect?.client) ? new Set([connId]) : undefined;
-  let firstAssistantEventSent = false;
+  const assistantTiming = chatSendTiming ?? { firstAssistantEventSent: false };
   const emit = (
     phase: ChatSendServerTimingPhase,
     extra?: Record<string, string | number>,
@@ -156,13 +156,10 @@ export function createOperatorChatSendServerTiming({
     emit,
     dispatchStartedAtMs: startedAtMs,
     emitFirstAssistant: () => {
-      if (firstAssistantEventSent || chatSendTiming?.firstAssistantEventSent) {
+      if (assistantTiming.firstAssistantEventSent) {
         return;
       }
-      firstAssistantEventSent = true;
-      if (chatSendTiming) {
-        chatSendTiming.firstAssistantEventSent = true;
-      }
+      assistantTiming.firstAssistantEventSent = true;
       emit("first-assistant-event", undefined, startedAtMs);
     },
   };

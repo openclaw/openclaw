@@ -126,19 +126,20 @@ function resolveMessageOperationAuthorityScope(params: {
     : "";
 }
 
-function resolveGatewayInflightRequest(params: {
-  context: GatewayRequestContext;
-  prefix: MessageOperationPrefix;
-  idempotencyKey: string;
-  respond: RespondFn;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  operation?: string;
-  requestScope?: string;
-}) {
+function resolveGatewayInflightRequest(
+  params: {
+    context: GatewayRequestContext;
+    prefix: MessageOperationPrefix;
+    idempotencyKey: string;
+    respond: RespondFn;
+    conversationReadOrigin?: ConversationReadInvocationOrigin;
+    operation?: string;
+  },
+  requestScope: string,
+) {
   const idem = params.idempotencyKey;
   const authorityScope = resolveMessageOperationAuthorityScope(params);
-  const requestScope = params.requestScope ? `:${params.requestScope}` : "";
-  const dedupeKey = `${params.prefix}${authorityScope}${requestScope}:${idem}`;
+  const dedupeKey = `${params.prefix}${authorityScope}:${requestScope}:${idem}`;
   return resolveIdempotentGatewayRequest({
     context: params.context,
     dedupeKey,
@@ -329,15 +330,7 @@ export async function withMessageOperationRoute<
     // releases first because awaiting while locked would deadlock concurrent retries.
     binding = resolveMessageOperationRouteBinding(bindingParams);
     const reservedReplay = binding?.reservedRoute
-      ? resolveGatewayInflightRequest({
-          context: params.context,
-          prefix: params.prefix,
-          idempotencyKey: params.idempotencyKey,
-          respond: params.respond,
-          conversationReadOrigin: params.conversationReadOrigin,
-          operation: params.operation,
-          requestScope: binding.reservedRoute.requestScope,
-        })
+      ? resolveGatewayInflightRequest(params, binding.reservedRoute.requestScope)
       : undefined;
     if (reservedReplay?.kind === "handled") {
       releaseLock();
@@ -382,15 +375,7 @@ export async function withMessageOperationRoute<
       });
       return;
     }
-    const inflight = resolveGatewayInflightRequest({
-      context: params.context,
-      prefix: params.prefix,
-      idempotencyKey: params.idempotencyKey,
-      respond: params.respond,
-      conversationReadOrigin: params.conversationReadOrigin,
-      operation: params.operation,
-      requestScope: accountRoute.requestScope,
-    });
+    const inflight = resolveGatewayInflightRequest(params, accountRoute.requestScope);
     if (inflight.kind === "handled") {
       publishBinding();
       releaseLock();

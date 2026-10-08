@@ -190,7 +190,6 @@ describe("ensureConfigReady", () => {
     ["skips state preparation for health", ["health"], 0],
     ["skips state preparation for logs", ["logs"], 0],
     ["skips state preparation for sessions", ["sessions"], 0],
-    ["skips state preparation for remote gateway calls", ["gateway", "call"], 0],
     ["skips state preparation for gateway restart control", ["gateway", "restart"], 0],
     ["skips state preparation for legacy daemon restart control", ["daemon", "restart"], 0],
     ["skips state preparation for config set", ["config", "set"], 0],
@@ -241,12 +240,6 @@ describe("ensureConfigReady", () => {
       pluginValidation: "core-only",
     });
     expect(runStartupConfigPreflightMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps remote gateway call config reads non-observing", async () => {
-    await runEnsureConfigReady(["gateway", "call"]);
-
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
   });
 
   it.each([

@@ -434,6 +434,8 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 
     Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, checked results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
 
+    A probed scan replaces `agents.defaults.model.fallbacks` even without `--set-default`; the flag additionally sets the primary. Use `--no-probe` to inspect candidates without writing config.
+
   </Accordion>
 </AccordionGroup>
 
@@ -490,8 +492,10 @@ the rest. Hydration runs at publication time, not in the Gateway. Downloaded
 metadata follows the shared catalog generation publication described above.
 Its scheduled workflow checks OpenClaw's default-branch plugin manifests and
 public pricing sources every four hours. Every catalog content change is
-preserved as a public commit. Provider-owned policies select complete price
-schedules, including context tiers, without mixing rates from different sources.
+preserved as a public commit. Catalog v2 also lists each provider's matches from
+the [curated recommended models list](/concepts/recommended-models). Provider-owned
+policies select complete price schedules, including context tiers, without
+mixing rates from different sources.
 Declared native sources read the public Cerebras, Chutes, DeepInfra, OpenCode, and Venice
 catalogs, so connected installations can receive advertised price changes without
 a new OpenClaw release. When a valid native feed no longer supplies a model's
@@ -564,5 +568,6 @@ Marker persistence is source-authoritative. OpenClaw writes markers from the act
 - [Model providers](/concepts/model-providers) — provider routing and auth
 - [Models CLI reference](/cli/models) — full command and flag reference
 - [Music generation](/tools/music-generation) — music model configuration
+- [Recommended models](/concepts/recommended-models) — curated list rules and publication
 - [Video generation](/tools/video-generation) — video model configuration
 - [`openclaw infer`](/cli/infer) — infer-first CLI for provider-backed model, media, and embedding workflows

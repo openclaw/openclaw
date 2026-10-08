@@ -211,15 +211,50 @@ it.each([true, false])(
     expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
   },
 );
-it.each([true, false])(
-  "keeps valid recovery sets visible beside an unfinished capture (JSON: %s)",
-  async (json) => {
+it.each([
+  ["partial", false],
+  ["partial", true],
+  ["linked-manifest", true],
+  ["copied-manifest", true],
+  ["conflicting-manifest", true],
+  ["linked-payload", true],
+] as const)(
+  "keeps valid recovery sets visible beside an interrupted %s publication (JSON: %s)",
+  async (publication, json) => {
     const c = await capture();
     await terminal(c, "committed");
     const directory = path.join(path.dirname(c.directory), "22222222-2222-4222-8222-222222222222");
     await fs.mkdir(directory);
     const partialPath = path.join(directory, "manifest.json.partial");
-    await fs.writeFile(partialPath, '{"schemaVersion":2');
+    if (publication === "linked-payload") {
+      await fs.mkdir(path.join(directory, "database.databases"));
+      await fs.mkdir(path.join(directory, "payload"));
+      const snapshot = path.join(directory, "database.databases", "snapshot.sqlite");
+      await fs.writeFile(snapshot, "retained snapshot bytes");
+      await fs.link(snapshot, path.join(directory, "payload", "0"));
+    } else {
+      await fs.writeFile(
+        partialPath,
+        publication === "partial"
+          ? '{"schemaVersion":2'
+          : JSON.stringify({ ...c.manifest, runId: path.basename(directory) }),
+      );
+      const finalPath = path.join(directory, "manifest.json");
+      if (publication === "linked-manifest") {
+        await fs.link(partialPath, finalPath);
+      } else if (publication === "copied-manifest") {
+        await fs.copyFile(partialPath, finalPath);
+      } else if (publication === "conflicting-manifest") {
+        await fs.writeFile(finalPath, "different, unverified bytes");
+      }
+    }
+    const retained = new Map<string, Buffer>();
+    for (const name of await fs.readdir(directory, { recursive: true })) {
+      const pathname = path.join(directory, name);
+      if ((await fs.lstat(pathname)).isFile()) {
+        retained.set(name, await fs.readFile(pathname));
+      }
+    }
     await updateStatusCommand({ json });
     if (json) {
       expect(result()).not.toHaveProperty("recoverySetsError");
@@ -248,10 +283,52 @@ it.each([true, false])(
       expect(output).not.toContain("Update recovery sets unavailable");
     }
     expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
-    expect(await fs.readFile(partialPath, "utf8")).toBe('{"schemaVersion":2');
-    expect(await fs.readdir(directory)).toEqual(["manifest.json.partial"]);
+    for (const [name, bytes] of retained) {
+      expect(await fs.readFile(path.join(directory, name))).toEqual(bytes);
+    }
+    if (publication === "linked-manifest") {
+      const partial = await fs.lstat(partialPath, { bigint: true });
+      expect(await fs.lstat(path.join(directory, "manifest.json"), { bigint: true })).toMatchObject(
+        {
+          dev: partial.dev,
+          ino: partial.ino,
+          nlink: 2n,
+        },
+      );
+    }
   },
 );
+it.each(["linked", "copied"])(
+  "refuses baseline reuse after an interrupted %s seal",
+  async (kind) => {
+    const c = await capture();
+    const partial = `${c.manifestPath}.partial`;
+    if (kind === "linked") {
+      await fs.link(c.manifestPath, partial);
+    } else {
+      await fs.copyFile(c.manifestPath, partial);
+    }
+    const { readUpdateRecoveryBaselineIdentity } =
+      await import("../../infra/update-recovery-backup-reader.js");
+    await expect(
+      readUpdateRecoveryBaselineIdentity({
+        runId: c.manifest.runId,
+        env: process.env,
+        ref: {
+          directory: c.directory,
+          manifestPath: c.manifestPath,
+          manifestSha256: c.manifestSha256,
+        },
+        installRoot: c.manifest.installRoot,
+        readContinuation: () => undefined,
+        assertCurrent: () => {},
+      }),
+    ).rejects.toThrow("incomplete publication");
+    expect(await fs.readFile(partial, "utf8")).toBe(c.raw);
+    expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
+  },
+);
+
 it.each([
   "foreign-state",
   "wrong-run-directory",
@@ -472,6 +549,12 @@ it("validates forward resolution against retained generations without writing", 
   row.origin.updateRecoveryCapture!.forwardResolution.binding.candidateSha256 = digest(raw);
   await updateStatusCommand({ json: true });
   expect(result().recoverySets[0].status).toBe("forward-resolved");
+  const partial = path.join(c.directory, "candidate", "manifest.json.partial");
+  await fs.copyFile(path.join(c.directory, "candidate", "manifest.json"), partial);
+  await updateStatusCommand({ json: true });
+  expect(result().recoverySetsError).toContain("incomplete publication");
+  expect(await fs.readFile(partial, "utf8")).toBe(raw);
+  await fs.unlink(partial);
   await fs.writeFile(
     path.join(c.directory, "candidate", "manifest.json"),
     JSON.stringify({

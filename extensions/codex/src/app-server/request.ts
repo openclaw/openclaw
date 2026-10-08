@@ -35,27 +35,20 @@ type CodexAppServerClientRequestParams = {
   controlObservation?: CodexControlRequestObservation;
 };
 
-function observeControlPhase(
+function observeControl(
   observation: CodexControlRequestObservation | undefined,
   phase: CodexControlRequestPhase,
-): void {
-  try {
-    observation?.phase(phase);
-  } catch {
-    // Diagnostics must not replace the request's result or error.
-  }
-}
-
-function observeControlFailure(
-  observation: CodexControlRequestObservation | undefined,
-  phase: CodexControlRequestPhase,
-  error: unknown,
-  deadlineObserved = false,
+  failure?: { error: unknown; deadlineObserved?: boolean },
 ): void {
   if (!observation) {
     return;
   }
   try {
+    if (!failure) {
+      observation.phase(phase);
+      return;
+    }
+    const { error, deadlineObserved } = failure;
     const category: CodexControlRequestFailureCategory = deadlineObserved
       ? "deadline-observed"
       : error instanceof CodexAppServerScopedRequestRejectedError
@@ -76,16 +69,10 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
   params: CodexAppServerClientRequestParams,
 ): Promise<T> {
   let phase: CodexControlRequestPhase = "prepare";
-  observeControlPhase(params.controlObservation, phase);
+  observeControl(params.controlObservation, phase);
   try {
     const { resolveCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
-    const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
-      method: params.method,
-      requestParams: params.requestParams,
-      config: params.config,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-    });
+    const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock(params);
     if (sandboxBlock) {
       throw new Error(sandboxBlock);
     }
@@ -102,14 +89,14 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
       ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
     };
     phase = "client-request";
-    observeControlPhase(params.controlObservation, phase);
+    observeControl(params.controlObservation, phase);
     return await withTimeout(
       params.client.request<T>(method, requestParams, options),
       timeoutMs,
       `codex app-server ${params.method} timed out`,
     );
   } catch (error) {
-    observeControlFailure(params.controlObservation, phase, error);
+    observeControl(params.controlObservation, phase, { error });
     throw error;
   }
 }
@@ -151,15 +138,9 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(
   params: CodexAppServerJsonClientOptions & { method: string; requestParams?: unknown },
 ): Promise<T> {
   // Fail closed before spawning or leasing a client for a guard-blocked method.
-  observeControlPhase(params.controlObservation, "prepare");
+  observeControl(params.controlObservation, "prepare");
   const { resolveCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
-  const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
-    method: params.method,
-    requestParams: params.requestParams,
-    config: params.config,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-  });
+  const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock(params);
   if (sandboxBlock) {
     throw new Error(sandboxBlock);
   }
@@ -291,7 +272,7 @@ export async function withCodexAppServerJsonClient<T>(
   let errorPhase: CodexControlRequestPhase | undefined;
   const setPhase = (phase: CodexControlRequestPhase) => {
     activePhase = phase;
-    observeControlPhase(params.controlObservation, phase);
+    observeControl(params.controlObservation, phase);
   };
   setPhase("prepare");
   const timeoutController = new AbortController();
@@ -471,11 +452,10 @@ export async function withCodexAppServerJsonClient<T>(
     });
   } catch (error) {
     const deadlineObserved = isPastDeadline();
-    observeControlFailure(
+    observeControl(
       params.controlObservation,
       deadlineObserved ? activePhase : (errorPhase ?? activePhase),
-      error,
-      deadlineObserved,
+      { error, deadlineObserved },
     );
     if (deadlineObserved) {
       timeoutDiagnostics?.timeout();

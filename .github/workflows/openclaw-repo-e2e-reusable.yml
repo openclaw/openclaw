@@ -85,6 +85,7 @@ jobs:
           persist-credentials: false
           # The native artifact entrypoint imports the shared private-plugin policy.
           sparse-checkout: |
+            /.github/actions/setup-playwright-chromium/
             /package.json
             /scripts/
             /src/shared/non-packaged-plugin-dirs.ts
@@ -153,7 +154,9 @@ jobs:
           BUILD_PROFILE: ${{ inputs.build_profile }}
         run: node .release-harness/scripts/repo-e2e-artifacts.mts restore "$RUNNER_TEMP/repo-e2e-build" "$BUILD_PROFILE"
       - name: Install Playwright Chromium
-        run: pnpm --dir ui exec playwright install --with-deps chromium
+        uses: ./.release-harness/.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: restore
       - name: Build sandbox image
         run: scripts/sandbox-setup.sh
       - name: Download Bun test runtime

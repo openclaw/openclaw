@@ -15,7 +15,7 @@ import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
   createParams,
-  startOrResumeThread,
+  startOrResumeThreadWithoutSkills as startOrResumeThread,
   threadResumeResult,
   threadStartResult,
 } from "./thread-lifecycle.test-fixtures.js";

@@ -2,15 +2,33 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import {
+  deleteSession,
+  getSession,
+  waitForExecSession,
+  type ProcessSession,
+} from "../../agents/bash-process-registry.js";
+import { createLazyExecTool } from "../../agents/lazy-exec-tool.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withExecRequestTurn } from "../../infra/exec-request-context.js";
+import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import * as transcriptInject from "./chat-transcript-inject.js";
@@ -32,7 +50,9 @@ const writeSession = (sessionKey: string, sessionId: string) =>
   });
 
 describe("descendant cascade ownership", () => {
-  it("does not stop descendants after the original caller is revoked during parent cancellation", async () => {
+  it("does not stop descendants after the original caller is revoked during parent cancellation", async ({
+    signal,
+  }) => {
     const sessionKey = "agent:main:main";
     const childKey = "agent:main:subagent:retained-stop";
     await writeSession(sessionKey, "main-session");
@@ -67,44 +87,158 @@ describe("descendant cascade ownership", () => {
       agentId: "main",
       owner: { connId: "owner" },
     });
+    const turnAborted = createDeferred();
     parent.controller.signal.addEventListener("abort", () => {
       current = false;
+      turnAborted.resolve();
     });
     const context = createChatAbortContext({ chatAbortControllers: new Map([["parent", parent]]) });
     context.chatRunState.getOrCreate("parent").buffer = "cancelled parent partial";
     using persist = vi
       .spyOn(transcriptPersistence, "persistAbortedPartials")
       .mockResolvedValue(undefined);
-    const respond = await invokeChatAbortHandler({
-      handler: (options) =>
-        handleChatAbortRequestWithLifecycle({
-          ...options,
-          hasCurrentClientAuthority: () => current,
-        }),
-      context,
-      request: { sessionKey, runId: "parent" },
-      client: { connId: "owner", connect: { scopes: ["operator.write"] } },
+    const commandReady = createDeferred();
+    const cleanupEntered = createDeferred();
+    const releaseCleanup = createDeferred();
+    const supervisor = getProcessSupervisor();
+    const spawn = supervisor.spawn.bind(supervisor);
+    let rootExitObserved = false;
+    let managedCommand: Awaited<ReturnType<typeof supervisor.spawn>> | undefined;
+    const spawnFailure = vi.spyOn(supervisor, "spawn").mockImplementation(async (input) => {
+      const managed = await spawn(input);
+      managedCommand = managed;
+      return {
+        ...managed,
+        waitForExtinction: async () => {
+          await managed.wait();
+          await managed.waitForExtinction?.();
+          rootExitObserved = isPidDefinitelyDead(expectDefined(managed.pid, "command pid"));
+          cleanupEntered.resolve();
+          await releaseCleanup.promise;
+          throw new Error("Synthetic command finalization failure");
+        },
+      };
     });
-    expect(respond).toHaveBeenCalledExactlyOnceWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: expect.stringMatching(
-          /Parent run stopped, but descendant cancellation was incomplete: .*Gateway requester authority changed/,
-        ),
-      }),
+    let command: ProcessSession | undefined;
+    const execution = withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
+      withExecRequestTurn(
+        {
+          identity: {
+            runId: "parent",
+            sessionKey,
+            sessionId: "main-session",
+            agentId: "main",
+            ownerConnId: "owner",
+          },
+          abortSignal: parent.controller.signal,
+        },
+        async () => {
+          const tool = createLazyExecTool({
+            runId: "parent",
+            sessionKey,
+            sessionId: "main-session",
+            agentId: "main",
+            config: getRuntimeConfig(),
+            cwd: fixture.stateDir,
+            scopeKey: sessionKey,
+            host: "gateway",
+            mode: "full",
+            ask: "off",
+            allowBackground: true,
+            notifyOnExit: false,
+            preparedStoreEnvironment: {},
+          });
+          const result = await tool.execute(
+            "ordinary-command",
+            {
+              command: `node -e "require('fs').watch('.', () => {})"`,
+              yieldMs: 10,
+              timeoutSeconds: 60,
+            },
+            parent.controller.signal,
+          );
+          const details = asOptionalRecord(result.details);
+          expect(details?.status).toBe("running");
+          if (typeof details?.sessionId !== "string") {
+            throw new Error("Expected an ordinary command to yield its process handle");
+          }
+          command = expectDefined(getSession(details.sessionId), "ordinary command");
+          commandReady.resolve();
+          await turnAborted.promise;
+        },
+      ),
     );
-    expect(parent.controller.signal.aborted).toBe(true);
-    expect(persist).toHaveBeenCalledOnce();
-    expect(persist.mock.calls[0]?.[0].snapshots.map((snapshot) => snapshot.runId)).toEqual([
-      "parent",
-    ]);
-    expect((await getSubagentRunByChildSessionKey(childKey))?.execution.endedAt).toBeUndefined();
-    expect(start).not.toHaveBeenCalled();
-    releaseSwarmRun("held-capacity");
-    await started.promise;
-    expect(start).toHaveBeenCalledOnce();
+    void execution.catch((error: unknown) => commandReady.reject(error));
+    let stopping: ReturnType<typeof invokeChatAbortHandler> | undefined;
+    try {
+      await withinTest(commandReady.promise, signal);
+      const respond = vi.fn();
+      stopping = invokeChatAbortHandler({
+        handler: (options) =>
+          handleChatAbortRequestWithLifecycle({
+            ...options,
+            hasCurrentClientAuthority: () => current,
+          }),
+        context,
+        request: { sessionKey, runId: "parent" },
+        client: { connId: "owner", connect: { scopes: ["operator.write"] } },
+        respond,
+      });
+      await withinTest(
+        awaitGateBeforeSettlement(
+          cleanupEntered.promise,
+          stopping,
+          "Stop returned before accepted command cleanup",
+        ),
+        signal,
+      );
+      expect(rootExitObserved).toBe(true);
+      expect(respond).not.toHaveBeenCalled();
+      releaseCleanup.resolve();
+      await stopping;
+      await execution;
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringMatching(
+            /Parent run stopped, but descendant cancellation was incomplete: .*Gateway requester authority changed/,
+          ),
+        }),
+      );
+      expect(respond.mock.calls[0]?.[2]?.message).toContain(
+        "command cleanup could not be confirmed",
+      );
+      expect(command).toMatchObject({
+        exited: true,
+        exitReason: "manual-cancel",
+        finalizationFailed: true,
+      });
+      expect(parent.controller.signal.aborted).toBe(true);
+      expect(persist).toHaveBeenCalledOnce();
+      expect(persist.mock.calls[0]?.[0].snapshots.map((snapshot) => snapshot.runId)).toEqual([
+        "parent",
+      ]);
+      expect((await getSubagentRunByChildSessionKey(childKey))?.execution.endedAt).toBeUndefined();
+      expect(start).not.toHaveBeenCalled();
+      releaseSwarmRun("held-capacity");
+      await started.promise;
+      expect(start).toHaveBeenCalledOnce();
+    } finally {
+      releaseCleanup.resolve();
+      turnAborted.resolve();
+      managedCommand?.cancel("manual-cancel");
+      if (command) {
+        await waitForExecSession(command);
+        deleteSession(command.id);
+      }
+      await execution.catch(() => {});
+      await stopping?.catch(() => {});
+      await managedCommand?.wait();
+      spawnFailure.mockRestore();
+      releaseSwarmRun("held-capacity");
+    }
   });
 
   it.each([

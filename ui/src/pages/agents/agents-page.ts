@@ -142,12 +142,7 @@ class AgentsPage
   private routeDataInitialized = false;
   private applyingRouteSelection = false;
   private routeSelectionSuperseded = false;
-  private hasBoundAgents = false;
-  private agentsSource: ApplicationContext["agents"] | null = null;
-  private hasBoundAgentIdentity = false;
-  private agentIdentitySource: ApplicationContext["agentIdentity"] | null = null;
-  private hasBoundSessions = false;
-  private sessionsSource: ApplicationContext["sessions"] | null = null;
+  private readonly boundSources = new Set<"agents" | "agentIdentity" | "sessions">();
   private chatModelCatalogSubscription: {
     isCurrent: () => boolean;
     unsubscribe: () => void;
@@ -222,88 +217,74 @@ class AgentsPage
     )
     .effect(
       () => this.context?.agents,
-      (agents) => {
-        const resetForSourceBind = this.hasBoundAgents;
-        this.hasBoundAgents = true;
-        this.agentsSource = agents;
-        if (resetForSourceBind) {
-          this.resetForSourceChange();
-        }
-        this.syncAgentState(agents);
-        this.ensureInitialData();
-        const stop = agents.subscribe(() => {
-          if (this.agentsSource !== agents || this.context.agents !== agents) {
-            return;
+      this.observeSource(
+        "agents",
+        (agents, replacement) => {
+          if (replacement) {
+            this.resetForSourceChange();
           }
+          this.syncAgentState(agents);
+          this.ensureInitialData();
+        },
+        (agents) => {
           this.syncAgentState(agents);
           this.ensureAgentIdentities();
           this.loadActivePanelData();
-          this.requestUpdate();
-        });
-        return () => {
-          stop();
-          if (this.agentsSource === agents) {
-            this.agentsSource = null;
-          }
-        };
-      },
+        },
+      ),
     )
     .effect(
       () => this.context?.agentIdentity,
-      (agentIdentity) => {
-        const resetForSourceBind = this.hasBoundAgentIdentity;
-        this.hasBoundAgentIdentity = true;
-        this.agentIdentitySource = agentIdentity;
-        if (resetForSourceBind) {
+      this.observeSource("agentIdentity", (_agentIdentity, replacement) => {
+        if (replacement) {
           this.invalidateTransientRequests();
         }
         this.ensureAgentIdentities();
         this.ensureInitialData();
-        const stop = agentIdentity.subscribe(() => {
-          if (
-            this.agentIdentitySource === agentIdentity &&
-            this.context.agentIdentity === agentIdentity
-          ) {
-            this.requestUpdate();
-          }
-        });
-        return () => {
-          stop();
-          if (this.agentIdentitySource === agentIdentity) {
-            this.agentIdentitySource = null;
-          }
-        };
-      },
+      }),
     )
     .watchStore(() => this.context?.channels)
     .watchStore(() => this.context?.navigation)
     .watchStore(() => this.context?.runtimeConfig)
     .effect(
       () => this.context?.sessions,
-      (sessions) => {
-        const resetForSourceBind = this.hasBoundSessions;
-        this.hasBoundSessions = true;
-        this.sessionsSource = sessions;
-        if (resetForSourceBind) {
-          this.invalidateTransientRequests();
-          resetToolsEffectiveState(this);
-          this.loadActivePanelData();
-        }
-        const stop = sessions.subscribe(() => {
-          if (this.sessionsSource !== sessions || this.context.sessions !== sessions) {
-            return;
+      this.observeSource(
+        "sessions",
+        (_sessions, replacement) => {
+          if (replacement) {
+            this.invalidateTransientRequests();
+            resetToolsEffectiveState(this);
+            this.loadActivePanelData();
           }
+        },
+        () => {
           void refreshVisibleToolsEffectiveForCurrentSession(this);
-          this.requestUpdate();
-        });
-        return () => {
-          stop();
-          if (this.sessionsSource === sessions) {
-            this.sessionsSource = null;
-          }
-        };
-      },
+        },
+      ),
     );
+
+  private observeSource<Key extends "agents" | "agentIdentity" | "sessions">(
+    key: Key,
+    onBind: (source: ApplicationContext[Key], replacement: boolean) => void,
+    onChange?: (source: ApplicationContext[Key]) => void,
+  ) {
+    return (source: ApplicationContext[Key]) => {
+      const replacement = this.boundSources.has(key);
+      this.boundSources.add(key);
+      onBind(source, replacement);
+      let active = true;
+      const stop = source.subscribe(() => {
+        if (active && this.context[key] === source) {
+          onChange?.(source);
+          this.requestUpdate();
+        }
+      });
+      return () => {
+        stop();
+        active = false;
+      };
+    };
+  }
 
   get sessions() {
     return this.context.sessions;
