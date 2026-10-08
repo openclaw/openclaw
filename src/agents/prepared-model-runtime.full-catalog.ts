@@ -8,6 +8,10 @@ import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { discoverModels } from "./agent-model-discovery.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import { runtimeAuthMetadataState } from "./auth-profiles/runtime-snapshot-owner.js";
+import {
+  buildInlineProviderModels,
+  completeInlineProviderModel,
+} from "./embedded-agent-runner/model.inline-provider.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
@@ -16,6 +20,7 @@ import {
   modelCatalogRouteVariantKey,
   modelCatalogRowToEntry,
 } from "./model-catalog-entry.js";
+import { loadManifestModelProviderConfigs } from "./model-catalog-manifest.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -172,6 +177,24 @@ export async function prepareFullCatalogFacts(
             ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           })));
+    // Signed-in providers keep their known manifest rows when the account listing fails.
+    const credentialProviders = Object.keys(agentFacts.credentials).map(normalizeProviderId);
+    const scopedProviders =
+      options.providerIds && new Set(options.providerIds.map(normalizeProviderId));
+    const manifestStaticModels = Object.entries(
+      loadManifestModelProviderConfigs({
+        config: input.config,
+        metadataSnapshot: pluginMetadataSnapshot,
+        providerIds: credentialProviders.filter(
+          (provider) => scopedProviders?.has(provider) ?? true,
+        ),
+      }),
+    ).flatMap(([provider, providerConfig]) =>
+      buildInlineProviderModels(
+        { [provider]: providerConfig },
+        { providerMetadataOwners: pluginMetadataSnapshot.owners },
+      ).map((model) => completeInlineProviderModel(model, providerConfig)),
+    );
     const configuredRuntimeModels = completeConfiguredRuntimeModels(
       agentFacts,
       pluginGeneration,
@@ -183,9 +206,10 @@ export async function prepareFullCatalogFacts(
       staticEntries:
         input.config.models?.mode === "replace"
           ? []
-          : dedupeByKey(providerStaticModels, createModelCatalogIdentityKeyResolver()).map(
-              modelCatalogRowToEntry,
-            ),
+          : dedupeByKey(
+              [...providerStaticModels, ...manifestStaticModels],
+              createModelCatalogIdentityKeyResolver(),
+            ).map(modelCatalogRowToEntry),
       ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
     };
     if (catalogMode === "live") {

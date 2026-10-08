@@ -33,6 +33,7 @@ it(
     const catalogWork = observeCatalogWorkerTasks();
     const requests: string[] = [];
     let responseDelay = 7_000;
+    let listingStatus = 200;
     let heldCatalogResponse:
       | { start: (response: ServerResponse) => void; release: Promise<void> }
       | undefined;
@@ -65,7 +66,15 @@ it(
           responseReady = delay(responseDelay).then(() => releaseEarlyResponse.promise);
         }
         void responseReady.then(() =>
-          response.end(JSON.stringify([{ id: "account-exclusive", name: "Account exclusive" }])),
+          response
+            .writeHead(listingStatus)
+            .end(
+              JSON.stringify(
+                listingStatus === 200
+                  ? [{ id: "account-exclusive", name: "Account exclusive" }]
+                  : { error: "unavailable" },
+              ),
+            ),
         );
       } else {
         response.writeHead(401).end(JSON.stringify({ error: "unauthorized" }));
@@ -270,7 +279,9 @@ it(
         await staleRefreshSettled;
         expect(signedOut.ids).toEqual([]);
         expect((await list()).ids).toEqual([]);
-        // API-key sign-in also rewrites auth.profiles; its config reload must keep the known rows.
+        // API-key sign-in also rewrites auth.profiles; its config reload must keep the known rows,
+        // and a failed first listing must not take them away.
+        listingStatus = 500;
         const apiKeyListing = holdNextCatalogResponse();
         await client.request("models.authSetApiKey", {
           provider,
@@ -281,8 +292,17 @@ it(
         const apiKeyPending = await list();
         apiKeyListing.release.resolve();
         expect(apiKeyPending.ids).toEqual(["known-chat"]);
+        const apiKeyFailed = await waitForCatalogPublication({
+          signal,
+          read: list,
+          ready: ({ result }) =>
+            result.refreshFailed === true && !result.pendingProviders?.includes(provider),
+        });
+        expect(apiKeyFailed.ids).toEqual(["known-chat"]);
+        listingStatus = 200;
         await waitForCatalogPublication({
           signal,
+          start: () => list(true),
           read: list,
           ready: ({ ids }) => ids.includes("account-exclusive"),
         });
