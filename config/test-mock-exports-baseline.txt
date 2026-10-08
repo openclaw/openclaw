@@ -7665,7 +7665,6 @@
 ["src/gateway/server-methods/progress-card-refresh.queued.test.ts","./chat-send-source-finalization.js","d71463234b74c712093eded17094dd2b069869479a2cec6c07ac8e81697f0d68",1]
 ["src/gateway/server-methods/progress-card-refresh.test.ts","./chat-send-handler.js","0c9ffc5bfb41569fe27c91580039c05275ba2c5a86a60d349af096e561c05acb",1]
 ["src/gateway/server-methods/projects-observed.test.ts","../../projects/project-registry.js","75759e2cb748b29a9acfcef6f81fedd03bb710242888fe900a3fa45cf7f47c80",1]
-["src/gateway/server-methods/projects-observed.test.ts","../session-utils.js","e1cd58e918d5b9104533ad203b3c044665921aad5adfb9571424cebe287ef941",1]
 ["src/gateway/server-methods/push-authority-in-process.test.ts","../../infra/push-apns.js","da4c113395728662c0f9074c7cc4358ecdacca00e351ce31b0a37e09a59e5e68",1]
 ["src/gateway/server-methods/push-authority-in-process.test.ts","../../infra/push-web.js","62879f3399fe4fa0c2a41f84aca945aac781e01aee9ae2b3be8eb2310233701c",1]
 ["src/gateway/server-methods/push-authority-in-process.test.ts","../../state/user-preferences.js","6b1f240d291c6140d00bb4163f62149dbb1ecc1ce220455a27e7a9bb7792dea4",1]
