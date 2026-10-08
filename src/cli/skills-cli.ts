@@ -303,6 +303,14 @@ export function registerSkillsCli(program: Command) {
     .addHelpText("after", () => formatDocsHelp("/cli/skills"));
   const hasJsonOutput = (opts?: { json?: boolean }): boolean =>
     Boolean(opts?.json || skills.opts<{ json?: boolean }>().json);
+  const reportAction =
+    (format: typeof formatSkillsList) =>
+    (opts: Parameters<typeof formatSkillsList>[1], command: Command) =>
+      runSkillsAction(
+        (report) => format(report, { ...opts, json: hasJsonOutput(opts) }),
+        resolveOptionFromCommand<string>(command, "agent"),
+      );
+  const runSkillsList = reportAction(formatSkillsList);
   setCommandJsonMode(skills, "output", ({ argv, command }) => isSkillsMachineOutput(argv, command));
   registerSkillsLibraryCli(skills);
 
@@ -778,21 +786,7 @@ export function registerSkillsCli(program: Command) {
     .option("--eligible", "Show only eligible (ready to use) skills", false)
     .option("-v, --verbose", "Show more details including missing requirements", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
-    .action(
-      async (
-        opts: { json?: boolean; eligible?: boolean; verbose?: boolean; agent?: string },
-        command: Command,
-      ) => {
-        await runSkillsAction(
-          (report) =>
-            formatSkillsList(report, {
-              ...opts,
-              json: hasJsonOutput(opts),
-            }),
-          resolveOptionFromCommand<string>(command, "agent"),
-        );
-      },
-    );
+    .action(runSkillsList);
 
   skills
     .command("info")
@@ -822,22 +816,8 @@ export function registerSkillsCli(program: Command) {
     .description("Check which skills are ready, visible, or missing requirements")
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--json", "Output as JSON", false)
-    .action(async (opts: { json?: boolean; agent?: string }, command: Command) => {
-      await runSkillsAction(
-        (report) =>
-          formatSkillsCheck(report, {
-            ...opts,
-            json: hasJsonOutput(opts),
-          }),
-        resolveOptionFromCommand<string>(command, "agent"),
-      );
-    });
+    .action(reportAction(formatSkillsCheck));
 
-  skills.action(async (opts: { agent?: string; json?: boolean }, command: Command) => {
-    await runSkillsAction(
-      (report) => formatSkillsList(report, { json: hasJsonOutput(opts) }),
-      resolveOptionFromCommand<string>(command, "agent"),
-    );
-  });
+  skills.action(runSkillsList);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

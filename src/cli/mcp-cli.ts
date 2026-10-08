@@ -131,6 +131,18 @@ function parseCsvList(value: string | undefined): string[] | undefined {
   return entries.length > 0 ? entries : undefined;
 }
 
+function applyMcpToolFilter(server: Record<string, unknown>, opts: McpServerControlOptions): void {
+  const include = parseCsvList(opts.include);
+  const exclude = parseCsvList(opts.exclude);
+  if (include || exclude) {
+    server.toolFilter = {
+      ...asRecord(server.toolFilter),
+      ...(include ? { include } : {}),
+      ...(exclude ? { exclude } : {}),
+    };
+  }
+}
+
 function parseKeyValueEntries(values: readonly string[] | undefined, label: string) {
   const entries: Record<string, string> = {};
   for (const raw of values ?? []) {
@@ -1007,14 +1019,7 @@ export function registerMcpCli(program: Command) {
           server.codex = { defaultToolsApprovalMode: approvalMode };
         }
         applyMcpTimeoutOptions(server, opts);
-        const include = parseCsvList(opts.include);
-        const exclude = parseCsvList(opts.exclude);
-        if (include || exclude) {
-          server.toolFilter = {
-            ...(include ? { include } : {}),
-            ...(exclude ? { exclude } : {}),
-          };
-        }
+        applyMcpToolFilter(server, opts);
 
         const loaded = await loadMcpConfig();
         const targetName = name.trim();
@@ -1141,15 +1146,7 @@ export function registerMcpCli(program: Command) {
         if (opts.clearTools) {
           delete next.toolFilter;
         } else {
-          const include = parseCsvList(opts.include);
-          const exclude = parseCsvList(opts.exclude);
-          if (include || exclude) {
-            next.toolFilter = {
-              ...asRecord(next.toolFilter),
-              ...(include ? { include } : {}),
-              ...(exclude ? { exclude } : {}),
-            };
-          }
+          applyMcpToolFilter(next, opts);
         }
         if (opts.clearTimeouts) {
           delete next.requestTimeoutMs;
