@@ -134,7 +134,7 @@ it("reads cold and warm pinned resources through awaited host construction witho
 it("retains prepared resources after other selections evict their shared cache entry", async () => {
   await withLibraryHost(async ({ build, resourcePath }) => {
     const prepare = librarySelection.prepareSkillLibrarySelection;
-    using _competingSelections = vi
+    using _ = vi
       .spyOn(librarySelection, "prepareSkillLibrarySelection")
       .mockImplementationOnce(async (pins, options, assertCurrent) => {
         const entries = await prepare(pins, options, assertCurrent);
@@ -169,7 +169,7 @@ it.each(["host close", "abort", "snapshot edit"] as const)(
       const entered = createDeferred();
       const resume = createDeferred();
       const readDescriptions = selectionRead.readSkillLibrarySelectionDescriptions;
-      using _hold = vi
+      using _ = vi
         .spyOn(selectionRead, "readSkillLibrarySelectionDescriptions")
         .mockImplementationOnce(async (...args) => {
           const result = await readDescriptions(...args);
@@ -221,7 +221,7 @@ it.each(["admission close", "physical replacement"] as const)(
       const entered = createDeferred();
       const resume = createDeferred();
       const construct = agentTools.createOpenClawCodingToolsInternalAsync;
-      using _hold = vi
+      using _ = vi
         .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
         .mockImplementationOnce(async (...args) => {
           const tools = await construct(...args);
