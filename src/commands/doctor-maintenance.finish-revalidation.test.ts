@@ -33,8 +33,13 @@ import {
   finishUpdateRun,
 } from "../infra/update-run-ledger.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import {
+  snapshotSourceFamily,
+  writeUnreadableNewerStateSchema,
+} from "../state/openclaw-database-preflight.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -327,7 +332,10 @@ async function runDoctorFinishForStoppedUnit(
         const readArtifacts = () =>
           [pathname, `${pathname}-wal`, `${pathname}-shm`].map((file) =>
             fs.existsSync(file)
-              ? createHash("sha256").update(fs.readFileSync(file)).digest("hex")
+              ? {
+                  hash: createHash("sha256").update(fs.readFileSync(file)).digest("hex"),
+                  mtimeNs: fs.statSync(file, { bigint: true }).mtimeNs,
+                }
               : undefined,
           );
         const beforeArtifacts = readArtifacts();
@@ -742,6 +750,27 @@ it.each([
   },
 );
 
+it("refuses offline Doctor repair of a newer schema without recommending repair or changing files", async () => {
+  const stateDir = tempDirs.make("openclaw-doctor-newer-schema-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+  const databasePath = openOpenClawStateDatabase().path;
+  await closeOpenClawStateDatabaseAsync();
+  writeUnreadableNewerStateSchema(databasePath);
+  const before = snapshotSourceFamily(databasePath);
+
+  const admission = beginDoctorMaintenance({
+    root: null,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+  });
+  await expect(admission).rejects.toThrow("newer schema version");
+  await expect(admission).rejects.toThrow(/restore.*backup/);
+  await expect(admission).rejects.not.toThrow(/doctor --fix/);
+  expect(snapshotSourceFamily(databasePath)).toEqual(before);
+  expect(mocks.stops).toBe(0);
+});
+
 it.each<{
   scenario?: StoppedUnitState;
   catalog?: LegacyCatalog;
@@ -781,9 +810,12 @@ it.each<{
 ])(
   "refuses admission before stopping the service (%j)",
   async ({ scenario = "retained", catalog, continuation, message }) => {
-    await expect(runDoctorFinishForStoppedUnit(scenario, continuation, catalog)).rejects.toThrow(
-      message,
-    );
+    const admission = runDoctorFinishForStoppedUnit(scenario, continuation, catalog);
+    await expect(admission).rejects.toThrow(message);
+    if (catalog === "future-version" || catalog === "future-content") {
+      await expect(admission).rejects.toThrow(/restore.*backup/);
+      await expect(admission).rejects.not.toThrow(/doctor --fix/);
+    }
     expect(mocks.stops).toBe(0);
   },
 );
