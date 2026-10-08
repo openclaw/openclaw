@@ -156,11 +156,15 @@ export async function createFullModelCatalogAccess(
       provider,
       normalizeProvider,
     );
+  // Full acquisition also discovers providers outside eligibleProviders; only a full refresh
+  // reacquires them, so every provider whose own identity is unchanged keeps its rows.
   const providerSources = new Map(
-    eligibleProviders.map((provider) => [provider, providerSource(provider)]),
+    [...new Set([...eligibleProviders, ...(previousInventory?.providers.keys() ?? [])])].map(
+      (provider) => [provider, providerSource(provider)],
+    ),
   );
   const retainedProviders = new Set(
-    eligibleProviders.filter(
+    [...providerSources.keys()].filter(
       (provider) =>
         previousInventory?.pluginFingerprint === pluginFingerprint &&
         previousInventory.providers.get(provider)?.source === providerSources.get(provider) &&
