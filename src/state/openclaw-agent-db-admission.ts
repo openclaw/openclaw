@@ -35,6 +35,7 @@ import {
   assertAgentDeletionDatabaseCleanupAccess,
   getAgentDeletionDatabaseCleanup,
 } from "./agent-deletion-cleanup.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -119,6 +120,12 @@ function assertAgentDatabaseOperationCurrent(
   assertCurrent?.();
 }
 
+function assertAgentDatabaseWriteAllowed(pathname: string): void {
+  if (isArtifactPreservingStateRead("agent", pathname)) {
+    throw new Error("Programming error: writable agent database open during read-only inspection.");
+  }
+}
+
 /** Bind admission drivers to the canonical private database-open generator. */
 export function createOpenClawAgentDatabaseAdmissionOwner(
   openSteps: (
@@ -144,6 +151,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
     repairAdmission?: OpenClawAgentDatabaseRepairAdmission,
   ): OpenClawAgentDatabase {
+    assertAgentDatabaseWriteAllowed(resolveOpenClawAgentSqlitePath(options));
     const run = () => {
       const steps = openSteps(
         options,
@@ -264,6 +272,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     };
     const agentId = normalizeAgentId(options.agentId);
     const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+    assertAgentDatabaseWriteAllowed(pathname);
     options.env.OPENCLAW_STATE_DIR = resolveStateDir(options.env);
     options.path = pathname;
     const cached = cache.databases.get(pathname);
@@ -347,6 +356,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     };
     const agentId = normalizeAgentId(options.agentId);
     const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+    assertAgentDatabaseWriteAllowed(pathname);
     const existing = cache.pending.get(pathname);
     if (existing) {
       if (existing.agentId !== agentId) {

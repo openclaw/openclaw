@@ -179,9 +179,7 @@ export async function prepareAgentRequestRouting(params: {
           projection: "list",
         }).entry?.sessionId,
       );
-    } catch {
-      currentSessionId = undefined;
-    }
+    } catch {}
     if (
       isExecApprovalFollowupSessionRebound({
         expectedSessionId,

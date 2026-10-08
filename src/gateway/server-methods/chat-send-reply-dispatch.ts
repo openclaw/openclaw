@@ -136,21 +136,18 @@ export function createChatSendReplyDispatch(params: {
     const lifecycleRevision = transcriptStart?.lifecycleRevision;
     const isRunCurrent = () => {
       const currentAdmission = userTurnRecorder.getAdmissionReceipt();
-      if (
-        !admission ||
-        admission.agentId !== session.agentId ||
-        admission.sessionKey !== session.sessionKey ||
-        !isAgentRunStarted() ||
-        params.isRunCurrent?.() !== true ||
-        params.abortSignal?.aborted ||
-        agentRunId !== runId ||
-        assistantTranscriptRewriteState !== transcriptStart ||
-        currentAdmission?.logicalTurnId !== admission.logicalTurnId ||
-        currentAdmission?.entryId !== admission.entryId
-      ) {
-        return false;
-      }
-      return true;
+      return Boolean(
+        admission &&
+        admission.agentId === session.agentId &&
+        admission.sessionKey === session.sessionKey &&
+        isAgentRunStarted() &&
+        params.isRunCurrent?.() === true &&
+        !params.abortSignal?.aborted &&
+        agentRunId === runId &&
+        assistantTranscriptRewriteState === transcriptStart &&
+        currentAdmission?.logicalTurnId === admission.logicalTurnId &&
+        currentAdmission?.entryId === admission.entryId,
+      );
     };
     const isCurrent = async () => {
       if (!admission || !isRunCurrent()) {

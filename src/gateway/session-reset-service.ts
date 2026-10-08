@@ -108,7 +108,7 @@ import {
   settleGatewaySessionLifecycleCommit,
 } from "./session-lifecycle-preparation.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
-import { invalidSessionRequest } from "./session-request-error.js";
+import { invalidSessionRequest, unavailableSessionRequest } from "./session-request-error.js";
 import {
   buildPendingAcpMeta,
   closeAcpRuntimeForSession,
@@ -573,10 +573,12 @@ export async function performGatewaySessionReset(params: {
     }
     logVerbose(`session lifecycle resource cleanup failed: ${String(error)}`);
   };
-  const initialResetEntry = loadSessionEntry(
-    params.key,
-    resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
-  ).entry;
+  const loadResetSession = () =>
+    loadSessionEntry(
+      params.key,
+      resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
+    );
+  const initialResetEntry = loadResetSession().entry;
   const expectedSessionMatches = (entry: SessionEntry | undefined): boolean =>
     params.expectedSessionId === undefined || entry?.sessionId === params.expectedSessionId;
   const sessionChangedError = () =>
@@ -610,6 +612,14 @@ export async function performGatewaySessionReset(params: {
       ? missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] })
       : undefined;
   };
+  const resolveResetEntryAccessError = (entry: SessionEntry | undefined, canonicalKey: string) =>
+    resolveFastModeSelectionError(entry) ??
+    resolvePluginSessionOwnershipError({
+      action: "reset",
+      entry,
+      key: canonicalKey,
+      pluginOwnerId: params.authorizedPluginId,
+    });
   const initialFastModeSelectionError = resolveFastModeSelectionError(initialResetEntry);
   if (initialFastModeSelectionError) {
     return { ok: false, error: initialFastModeSelectionError };
@@ -680,13 +690,9 @@ export async function performGatewaySessionReset(params: {
     "compaction",
   );
   if (activeLifecycleMutation && !activeCompaction) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `Session ${params.key} has another lifecycle mutation in progress; try again.`,
-      ),
-    };
+    return unavailableSessionRequest(
+      `Session ${params.key} has another lifecycle mutation in progress; try again.`,
+    );
   }
   let admittedWorkReleased = true;
   let resetPreparationError: ReturnType<typeof errorShape> | undefined;
@@ -701,10 +707,7 @@ export async function performGatewaySessionReset(params: {
     prepare: async () => {
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
-      const { entry: currentEntry, canonicalKey: currentCanonicalKey } = loadSessionEntry(
-        params.key,
-        resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
-      );
+      const { entry: currentEntry, canonicalKey: currentCanonicalKey } = loadResetSession();
       if (!expectedSessionMatches(currentEntry)) {
         resetPreparationError = sessionChangedError();
         return;
@@ -715,18 +718,12 @@ export async function performGatewaySessionReset(params: {
           return;
         }
       }
-      resetPreparationError = resolveFastModeSelectionError(currentEntry);
-      if (resetPreparationError) {
-        return;
-      }
       // Check the locked generation before interrupting any work; a replaced
       // foreign row must not be reset or have its admitted run cancelled.
-      resetPreparationError = resolvePluginSessionOwnershipError({
-        action: "reset",
-        entry: currentEntry,
-        key: resetTarget.target.canonicalKey,
-        pluginOwnerId: params.authorizedPluginId,
-      });
+      resetPreparationError = resolveResetEntryAccessError(
+        currentEntry,
+        resetTarget.target.canonicalKey,
+      );
       if (resetPreparationError) {
         return;
       }
@@ -766,51 +763,28 @@ export async function performGatewaySessionReset(params: {
       }
     },
     run: async () => {
-      const { cfg, target, storePath, requestedAgentId } = resetTarget;
+      const { cfg, target, storePath } = resetTarget;
       if (resetPreparationError) {
         return { ok: false, error: resetPreparationError };
       }
       if (!admittedWorkReleased) {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `Session ${params.key} is still active; try again in a moment.`,
-          ),
-        };
+        return unavailableSessionRequest(
+          `Session ${params.key} is still active; try again in a moment.`,
+        );
       }
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
-      const { entry, legacyKey, canonicalKey } = loadSessionEntry(
-        params.key,
-        requestedAgentId ? { agentId: requestedAgentId } : undefined,
-      );
+      const { entry, legacyKey, canonicalKey } = loadResetSession();
       if (normalizeOptionalString(entry?.sessionId) !== preparedResetSessionId) {
-        return {
-          ok: false,
-          error:
-            params.expectedSessionId === undefined
-              ? errorShape(
-                  ErrorCodes.UNAVAILABLE,
-                  `Session ${params.key} changed before reset. Retry.`,
-                )
-              : sessionChangedError(),
-        };
+        return params.expectedSessionId === undefined
+          ? unavailableSessionRequest(`Session ${params.key} changed before reset. Retry.`)
+          : { ok: false, error: sessionChangedError() };
       }
       // Admitted directives can finish persisting while reset drains them.
       // Recheck their final selection before retiring placement or running cleanup.
-      const currentFastModeSelectionError = resolveFastModeSelectionError(entry);
-      if (currentFastModeSelectionError) {
-        return { ok: false, error: currentFastModeSelectionError };
-      }
-      const currentOwnershipError = resolvePluginSessionOwnershipError({
-        action: "reset",
-        entry,
-        key: canonicalKey,
-        pluginOwnerId: params.authorizedPluginId,
-      });
-      if (currentOwnershipError) {
-        return { ok: false, error: currentOwnershipError };
+      const currentAccessError = resolveResetEntryAccessError(entry, canonicalKey);
+      if (currentAccessError) {
+        return { ok: false, error: currentAccessError };
       }
       const entryStateError = resolveResetEntryStateError(entry, canonicalKey);
       if (entryStateError) {
@@ -1065,10 +1039,7 @@ export async function performGatewaySessionReset(params: {
 
       let createdNewEntry = false;
       assertCompletionAuthorized?.();
-      const boundaryEntry = loadSessionEntry(
-        params.key,
-        requestedAgentId ? { agentId: requestedAgentId } : undefined,
-      ).entry;
+      const boundaryEntry = loadResetSession().entry;
       if (boundaryEntry?.sessionId !== entry?.sessionId) {
         params.assertCurrent?.();
         throw new Error(`Session ${params.key} changed before reset boundary append.`);

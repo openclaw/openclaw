@@ -17,9 +17,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import {
-  getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import {
@@ -27,7 +25,6 @@ import {
   progressCardRefreshRunProjection,
 } from "../sessions/input-provenance.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   waitForChatAbortControllerRemoval,
   waitForChatAbortTerminalPersistence,
@@ -45,6 +42,7 @@ import {
   registerAuditSubscriptionTests,
   registerAssistantTailSubscriptionTests,
 } from "./server-runtime-subscriptions.test-support.js";
+import { registerTranscriptPublicationTests } from "./server-runtime-subscriptions.transcript.test-support.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
 function waitForFast<T>(
@@ -73,7 +71,8 @@ const agentEventHandlerMocks = vi.hoisted(() => ({
 }));
 const transcriptBroadcastMocks = vi.hoisted(() => ({
   useActualHandler: false,
-  readMessageById: vi.fn(),
+  readMessageById:
+    vi.fn<typeof import("./session-transcript-readers.js").readSessionMessageByIdAsync>(),
 }));
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as OpenClawConfig }));
 const observeActivitySummary = vi.hoisted(() =>
@@ -951,82 +950,14 @@ describe("startGatewayEventSubscriptions", () => {
     }
   });
 
-  it("logs real asynchronous transcript failures and recovers the broadcast queue", async () => {
-    transcriptBroadcastMocks.useActualHandler = true;
-    const failedRead = createDeferred();
-    const persistenceFailure = new Error("session transcript read failed");
-    const transcriptPosition = { source: "recovered-generation", rawSeq: 7 };
-    const storedMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "visible answer" }],
-      __openclaw: { transcriptPosition },
-    };
-    transcriptBroadcastMocks.readMessageById
-      .mockImplementationOnce(async () => {
-        await failedRead.promise;
-        throw persistenceFailure;
-      })
-      .mockResolvedValueOnce({ found: true, oversized: false, seq: 2, message: storedMessage });
-
-    const params = createParams();
-    params.sessionEventSubscribers.subscribe("conn-transcript");
-    unsubs = startGatewayEventSubscriptions(params);
-
-    const emitMessage = (messageId: string) =>
-      emitSessionTranscriptUpdate({
-        sessionFile: "/tmp/openclaw-transcript-dispatch.sqlite",
-        sessionKey: "agent:main:main",
-        message: { role: "assistant", content: [{ type: "text", text: "stale queued answer" }] },
-        messageId,
-        target: {
-          agentId: "main",
-          sessionId: "sess-transcript",
-          sessionKey: "agent:main:main",
-          storePath: "/tmp/openclaw-transcript-dispatch-sessions.json",
-        },
-      });
-
-    const admission = tryBeginGatewayRootWorkAdmission("test:transcript-publisher");
-    if (!admission) {
-      throw new Error("Transcript publisher admission was closed");
-    }
-    await admission.run(async () => emitMessage("failed-message"));
-    admission.release();
-    await waitForFast(() =>
-      expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledOnce(),
-    );
-    try {
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
-    } finally {
-      failedRead.resolve();
-    }
-    await waitForFast(() =>
-      expect(warn).toHaveBeenCalledWith("Transcript update dispatch failed", {
-        sessionKey: "agent:main:main",
-        error: persistenceFailure,
-      }),
-    );
-    expect(params.broadcastToConnIds).not.toHaveBeenCalled();
-
-    emitMessage("recovered-message");
-    await waitForFast(() => expect(params.broadcastToConnIds).toHaveBeenCalledOnce());
-    expect(params.broadcastToConnIds).toHaveBeenCalledWith(
-      "session.message",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        messageId: "recovered-message",
-        messageSeq: 2,
-        message: expect.objectContaining({
-          content: storedMessage.content,
-          __openclaw: expect.objectContaining({ transcriptPosition }),
-        }),
-      }),
-      new Set(["conn-transcript"]),
-      undefined,
-    );
-    expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledTimes(2);
-    expect(warn).toHaveBeenCalledOnce();
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  registerTranscriptPublicationTests({
+    createParams,
+    start: (params) => {
+      unsubs = startGatewayEventSubscriptions(params);
+      return unsubs;
+    },
+    transcriptBroadcastMocks,
+    warn,
   });
 
   registerAssistantTailSubscriptionTests({

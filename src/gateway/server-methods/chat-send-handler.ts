@@ -119,10 +119,8 @@ async function handleChatSendWithOptions(
   } = admission;
   const phase = diagnostics.scope("attachments");
   const preparedAttachments = await prepareChatSendAttachments({
+    ...setup,
     client,
-    request,
-    session,
-    admission,
     respond,
     context,
   });
@@ -245,10 +243,8 @@ async function handleChatSendWithOptions(
         })
       : undefined;
     const userTurn = createGatewayChatUserTurnController({
-      admission,
+      ...setup,
       client,
-      request,
-      session,
       transcript: options?.transcript,
       isDirectExternalUser,
       startedAt: admissionStartedAt,
@@ -272,9 +268,7 @@ async function handleChatSendWithOptions(
     bindPreparedMediaRecorder(userTurnRecorder);
     phase?.mark("preparation");
     const preparedUserTurn = prepareChatSendUserTurn({
-      request,
-      session,
-      admission,
+      ...setup,
       attachments: preparedAttachments.value,
       client,
       logGateway: context.logGateway,
@@ -603,10 +597,10 @@ async function handleChatSendWithOptions(
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     startChatDispatch({
+      ...setup,
       replyAdmissionTicket,
       diagnostics,
       admissionStartedAt,
-      admission,
       attachments: preparedAttachments.value,
       client,
       context,
@@ -637,8 +631,6 @@ async function handleChatSendWithOptions(
         preAckReplyContextPromise,
         replyContextFieldsPromise,
       },
-      request,
-      session,
       terminalizeRestartSafeAdmission,
       timing: {
         chatSendAckedAtMs,

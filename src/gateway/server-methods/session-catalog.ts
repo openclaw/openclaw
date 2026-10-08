@@ -295,37 +295,16 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     async (opts) => {
       const { params: request, respond, context } = opts;
       const config = context.getRuntimeConfig();
-      if (config.gateway?.cliAgents?.enabled === false) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "CLI agent terminal start is disabled; enable gateway.cliAgents.enabled and retry",
-          ),
-        );
-        return;
-      }
-      if (!context.isTerminalEnabled()) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "terminal is disabled; enable gateway.terminal.enabled and retry",
-          ),
-        );
-        return;
-      }
-      if (!context.terminalSessions) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "terminal is not available; restart the Gateway with terminal support and retry",
-          ),
-        );
+      const unavailable =
+        config.gateway?.cliAgents?.enabled === false
+          ? "CLI agent terminal start is disabled; enable gateway.cliAgents.enabled and retry"
+          : !context.isTerminalEnabled()
+            ? "terminal is disabled; enable gateway.terminal.enabled and retry"
+            : !context.terminalSessions
+              ? "terminal is not available; restart the Gateway with terminal support and retry"
+              : undefined;
+      if (unavailable) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, unavailable));
         return;
       }
       const provider = resolveSessionCatalogProvider(request.catalogId);
