@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 // Session network policy control and health channel. Buffered and streaming
 // commands each receive a fresh same-policy SRT sandbox under a host guardian.
 // Cleanup authority must remain outside the guest's signaling permissions.
@@ -105,6 +105,29 @@ function resolveSrtCliPath(): string {
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
+
+// Initialize an independent same-policy runtime, then tighten its existing
+// Seatbelt profile before any guest starts. No nested sandbox or shell parser
+// executes caller-controlled command bytes on the host.
+const MACOS_COMMAND_DRIVER = String.raw`
+const { readFileSync } = require("node:fs");
+const { spawn } = require("node:child_process");
+const { pathToFileURL } = require("node:url");
+(async () => {
+  const { SandboxManager } = await import(pathToFileURL(process.argv[1]).href);
+  const { restrictMacosSandboxArgv } = await import(process.argv[2]);
+  const config = JSON.parse(readFileSync(process.argv[3], "utf8"));
+  await SandboxManager.initialize(config);
+  const wrapped = await SandboxManager.wrapWithSandboxArgv(process.argv[4], process.argv[5], config);
+  const argv = restrictMacosSandboxArgv(wrapped.argv);
+  const child = spawn(argv[0], argv.slice(1), { env: wrapped.env, stdio: "inherit", shell: false });
+  child.on("error", (error) => { console.error(error.message); process.exit(127); });
+  child.on("exit", async (code, signal) => {
+    await SandboxManager.reset();
+    process.exit(code ?? (128 + (require("node:os").constants.signals[signal] ?? 1)));
+  });
+})().catch((error) => { console.error(error.message); process.exit(127); });
+`;
 
 export class SessionBroker {
   private readonly custody = new ExecCustody();
@@ -214,8 +237,25 @@ export class SessionBroker {
       }
       rmSync(dir, { recursive: true, force: true });
     };
+    let argv = [this.nodePath, this.srtCliPath, "--settings", settingsPath, "-c", script];
+    if (process.platform === "darwin") {
+      const helper = new URL("./macos-process-custody.js", import.meta.url);
+      if (!existsSync(helper)) {
+        helper.pathname = helper.pathname.replace(/\.js$/, ".ts");
+      }
+      argv = [
+        this.nodePath,
+        "-e",
+        MACOS_COMMAND_DRIVER,
+        path.join(path.dirname(this.srtCliPath), "index.js"),
+        helper.href,
+        settingsPath,
+        script,
+        this.deps.binShell,
+      ];
+    }
     return {
-      argv: [this.nodePath, this.srtCliPath, "--settings", settingsPath, "-c", script],
+      argv,
       env: { ...this.brokerEnv(), ...env },
       cwd: this.deps.cwd,
       cleanup,

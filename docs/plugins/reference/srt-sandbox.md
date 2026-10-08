@@ -39,6 +39,8 @@ Buffered commands use fresh SRT processes with the current session policy, just 
 
 Local host interpreters reject startup-hook and loader environment variables such as `BASH_ENV`, `NODE_OPTIONS`, `LD_*` and `DYLD_*` before launch. Other requested environment values remain available. Writable entries below readonly roots, and entries overlapping a hidden host workspace, are excluded before SRT constructs its platform policy.
 
+macOS command profiles reject `setsid`, `setpgid` and `posix_spawn` at the kernel syscall boundary, keeping descendants in their host-owned process group. Ordinary fork/exec children remain supported. Programs requiring `posix_spawn` (including some interpreter launch stubs), daemonization or job-control group changes are unsupported and fail closed. These restrictions cannot be disabled independently of custody.
+
 ## Native Windows qualification before enabling execution
 
 A future backend needs an exclusive native provisioning owner with cancel-and-join authority and receipts covering account, credential, WFP, helper-path ACL and writable-root ACL state. Re-enablement requires proof on disposable Windows VMs:

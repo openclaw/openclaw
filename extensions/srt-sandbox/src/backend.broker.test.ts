@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 // Backend wiring for the per-session network broker (Stage S4-P1).
 //
@@ -129,16 +131,29 @@ describe.skipIf(!isLive)("srt sandbox backend — per-session broker wiring (S4-
       env: cleanup.env,
       usePty: false,
     });
-    const innerArgv = JSON.parse(
-      Buffer.from(spec.env.SRT_CUSTODY_ARGV!, "base64").toString("utf8"),
-    ) as string[];
-    expect(innerArgv).toContain("--settings");
-    expect(innerArgv).toContain("printf brokered");
-    await handle.finalizeExec?.({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      token: spec.finalizeToken,
+    const child = spawn(spec.argv[0]!, spec.argv.slice(1), {
+      env: spec.env,
+      stdio: ["ignore", "pipe", "ignore"],
     });
+    const closed = once(child, "close");
+    let output = "";
+    child.stdout!.on("data", (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+    });
+    try {
+      expect((await closed)[0]).toBe(0);
+      expect(output).toBe("brokered");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await closed;
+      await handle.finalizeExec?.({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: spec.finalizeToken,
+      });
+    }
   });
 });

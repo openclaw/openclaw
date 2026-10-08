@@ -8,12 +8,10 @@
 // Seatbelt profile with the scope's writable allowlist. Reads stay open,
 // writes are confined to the scope dirs (see srt-runtime-config.ts).
 //
-// Stage S2 (worker-per-scope lifecycle / reaper, design v8 §S2): every
-// sandboxed command is spawned detached into its own process group and tracked
-// by a per-scope reaper (scope-reaper.ts); the macOS liveness-pipe launcher
-// covers parent death, scope teardown group-kills every tracked child, and
-// buffered commands sweep their own background descendants on completion —
-// no orphan sandbox process survives any of the four teardown scenarios.
+// Host custody owns all buffered and streaming commands. macOS command
+// profiles prohibit session/group changes and posix_spawn; Linux PID namespace
+// teardown contains descendants. The helper reaper owns only trusted pin and
+// health/control processes, which cannot execute guest command RPCs.
 //
 // Stage S3 (AC4 pinned-mutation fs bridge, design v8 §1–§3): the handle now
 // exposes createFsBridge (fs-bridge.ts). The bridge's per-scope pin owner — a
@@ -35,6 +33,7 @@ import type { ResolvedSrtPluginConfig } from "./config.js";
 import { assertSrtSandboxAvailable } from "./dependency-probe.js";
 import { ExecCustody } from "./exec-custody.js";
 import { createSrtFsBridge } from "./fs-bridge.js";
+import { restrictMacosSandboxArgv } from "./macos-process-custody.js";
 import { PinOwnerClient } from "./pin-owner-client.js";
 import { buildPinOwnerCommand } from "./pin-owner-source.js";
 import { ScopeChildReaper } from "./scope-reaper.js";
@@ -345,14 +344,15 @@ class SrtSandboxBackend {
   }
 
   /** Wrap a command string with the scope's Seatbelt profile. */
-  private wrap(command: string, signal?: AbortSignal) {
-    return SandboxManager.wrapWithSandboxArgv(
+  private async wrap(command: string, signal?: AbortSignal) {
+    const wrapped = await SandboxManager.wrapWithSandboxArgv(
       command,
       this.deps.pluginConfig.binShell,
       this.runtimeConfig,
       signal,
       this.params.workspaceDir,
     );
+    return { ...wrapped, argv: restrictMacosSandboxArgv(wrapped.argv) };
   }
 
   private async runShellCommand(
@@ -379,14 +379,14 @@ class SrtSandboxBackend {
       return { stdout: result.stdout, stderr: result.stderr, code: result.code };
     }
     const { argv, env } = await this.wrap(script, params.signal);
-    const result = await this.reaper.spawn({
-      argv,
-      env,
-      cwd: this.params.workspaceDir,
-      stdin: params.stdin,
-      timeoutMs: this.deps.pluginConfig.commandTimeoutMs,
-      signal: params.signal,
-    });
+    const result = await this.execCustody.run(
+      { argv, env, cwd: this.params.workspaceDir, stdinMode: "pipe-open" },
+      {
+        stdin: params.stdin,
+        timeoutMs: this.deps.pluginConfig.commandTimeoutMs,
+        signal: params.signal,
+      },
+    );
     if (!params.allowFailure && result.code !== 0) {
       throw new Error(
         `srt-sandbox command failed (exit ${result.code}): ${result.stderr.toString("utf8").trim()}`,

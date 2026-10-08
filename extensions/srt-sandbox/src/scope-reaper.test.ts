@@ -17,7 +17,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  LIVENESS_FD,
   ScopeChildReaper,
   ScopeReaperDisposedError,
   wrapWithLivenessLauncher,
@@ -52,19 +51,6 @@ async function expectDeadWithin(pid: number, timeoutMs = 4000): Promise<void> {
 }
 
 const bashArgv = (script: string) => ["/bin/bash", "-c", script];
-
-describe("wrapWithLivenessLauncher", () => {
-  it("adds a liveness watcher and preserves the command's exit status", () => {
-    const wrapped = wrapWithLivenessLauncher("do_work");
-    // Reads the inherited liveness fd and group-kills on EOF (parent death).
-    expect(wrapped).toContain(`read -r _ <&${LIVENESS_FD}`);
-    expect(wrapped).toContain(`kill -KILL -- "-$$"`);
-    // Original command runs, its status is captured and re-exited.
-    expect(wrapped).toContain("do_work");
-    expect(wrapped).toContain("__srt_ec=$?");
-    expect(wrapped).toContain('exit "$__srt_ec"');
-  });
-});
 
 describe.skipIf(!isPosix)("ScopeChildReaper", () => {
   const reapers: ScopeChildReaper[] = [];
