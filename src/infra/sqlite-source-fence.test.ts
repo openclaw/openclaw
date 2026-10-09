@@ -41,7 +41,7 @@ type Fixture = {
 };
 let forward: Fixture;
 let reverse: Fixture;
-let previousEnvironment: unknown;
+let previousEnvironment: ReturnType<typeof getEnvironmentData>;
 
 function initialize(filename: string): DatabaseSync {
   const db = openNodeSqliteDatabase(filename);
