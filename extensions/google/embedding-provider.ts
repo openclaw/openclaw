@@ -110,7 +110,7 @@ export function buildGeminiEmbeddingRequest(params: {
   modelPath?: string;
 }): GeminiEmbeddingRequest {
   const input = typeof params.input === "string" ? { text: params.input } : params.input;
-  const parts = input.parts?.map((part) =>
+  const parts: GeminiEmbeddingRequest["content"]["parts"] = input.parts?.map((part) =>
     part.type === "text"
       ? { text: part.text }
       : {
