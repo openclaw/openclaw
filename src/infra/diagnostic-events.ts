@@ -1449,12 +1449,13 @@ export function emitTrustedDiagnosticEventWithPrivateData(
   privateData?: DiagnosticEventPrivateData,
 ) {
   const coreModelRequestLifecycle = consumeCoreModelRequestLifecycleDiagnosticEvent(event);
+  let sanitized = privateData;
   if (privateData && Object.hasOwn(privateData, "hostPluginId")) {
     // Host attribution is reserved for object-identity provenance, not private content.
-    privateData = { ...privateData };
-    Reflect.deleteProperty(privateData, "hostPluginId");
+    sanitized = { ...privateData };
+    Reflect.deleteProperty(sanitized, "hostPluginId");
   }
-  emitDiagnosticEventWithTrust(event, true, { coreModelRequestLifecycle, privateData });
+  emitDiagnosticEventWithTrust(event, true, { coreModelRequestLifecycle, privateData: sanitized });
 }
 
 /** Emits a trusted canonical security event from core-owned enforcement boundaries. */

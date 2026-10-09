@@ -20,7 +20,11 @@ import type { Dispatcher } from "undici";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeHostname } from "./hostname.js";
-import { createHttp1RouteDispatcher } from "./http1-route-dispatcher.js";
+import {
+  createHttp1Agent,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+} from "./undici-runtime.js";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
@@ -606,6 +610,13 @@ export async function resolvePinnedHostname(
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
 
+function withPinnedLookup(
+  lookup: PinnedHostname["lookup"],
+  connect?: Record<string, unknown>,
+): Record<string, unknown> {
+  return { ...connect, lookup };
+}
+
 function resolvePinnedDispatcherLookup(
   pinned: PinnedHostname,
   override?: PinnedHostnameOverride,
@@ -643,7 +654,33 @@ export function createPinnedDispatcher(
   timeoutMs?: number,
 ): Dispatcher {
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
-  return createHttp1RouteDispatcher(policy, timeoutMs, { lookup });
+
+  if (!policy || policy.mode === "direct") {
+    return createHttp1Agent({ connect: withPinnedLookup(lookup, policy?.connect) }, timeoutMs);
+  }
+
+  if (policy.mode === "env-proxy") {
+    return createHttp1EnvHttpProxyAgent(
+      {
+        connect: withPinnedLookup(lookup, policy.connect),
+        ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
+      },
+      timeoutMs,
+    );
+  }
+
+  const proxyUrl = policy.proxyUrl.trim();
+  const requestTls = withPinnedLookup(lookup, policy.proxyTls);
+  return createHttp1ProxyAgent(
+    {
+      uri: proxyUrl,
+      // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
+      // transport hints for explicit proxies. Translate that to undici's
+      // `requestTls` so HTTPS proxy tunnels keep the pinned DNS lookup.
+      requestTls,
+    },
+    timeoutMs,
+  );
 }
 
 type ClosableDispatcher = {

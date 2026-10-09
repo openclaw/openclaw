@@ -85,7 +85,7 @@ function runtime(): GitWorkerRuntime {
     () => ({ pending: new Set() }),
     (state) => {
       state.closing ??= (async () => {
-        await Promise.all(POOL_OWNERS.map((owner) => state[owner]?.close()));
+        await Promise.all(POOL_OWNERS.map((owner) => state[owner]?.close() ?? Promise.resolve()));
         // Worker termination alone does not settle its parent-owned Git processes.
         await Promise.allSettled(state.pending);
         for (const owner of POOL_OWNERS) {

@@ -101,8 +101,12 @@ export function decodeNativeWorkerFailure(value: NativeWorkerFailure): unknown {
     seen.set(current, error);
     error.name = current.name;
     error.stack = current.stack;
-    const defineField = (key: string, value: unknown, enumerable = false) => {
-      const descriptor: PropertyDescriptor = { value, writable: true, configurable: true };
+    const defineField = (key: string, fieldValue: unknown, enumerable = false) => {
+      const descriptor: PropertyDescriptor = {
+        value: fieldValue,
+        writable: true,
+        configurable: true,
+      };
       if (enumerable) {
         descriptor.enumerable = true;
       }

@@ -17,7 +17,6 @@ import {
 } from "./configured-local-origin-bypass.js";
 import { captureGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
 import { responseWithAbortSignal } from "./guarded-body-stream.js";
-import { createHttp1RouteDispatcher } from "./http1-route-dispatcher.js";
 import { PinnedDispatcherPool, type PinnedDispatcherLease } from "./pinned-dispatcher-pool.js";
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
@@ -40,7 +39,11 @@ import {
 } from "./ssrf.js";
 import { globalUndiciStreamTimeoutMs } from "./undici-dispatcher-options.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
-import { createHttp1EnvHttpProxyAgent } from "./undici-runtime.js";
+import {
+  createHttp1Agent,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+} from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -198,7 +201,33 @@ function createPolicyDispatcherWithoutPinnedDns(
   dispatcherPolicy?: PinnedDispatcherPolicy,
   timeoutMs?: number,
 ): Dispatcher | null {
-  return dispatcherPolicy ? createHttp1RouteDispatcher(dispatcherPolicy, timeoutMs) : null;
+  if (!dispatcherPolicy) {
+    return null;
+  }
+
+  if (dispatcherPolicy.mode === "direct") {
+    return createHttp1Agent(
+      dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : undefined,
+      timeoutMs,
+    );
+  }
+
+  if (dispatcherPolicy.mode === "env-proxy") {
+    return createHttp1EnvHttpProxyAgent(
+      {
+        ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
+        ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
+      },
+      timeoutMs,
+    );
+  }
+
+  const proxyUrl = dispatcherPolicy.proxyUrl.trim();
+  const requestTls = dispatcherPolicy.proxyTls;
+  return createHttp1ProxyAgent(
+    { uri: proxyUrl, ...(requestTls ? { requestTls: { ...requestTls } } : {}) },
+    timeoutMs,
+  );
 }
 
 async function assertExplicitProxyAllowed(

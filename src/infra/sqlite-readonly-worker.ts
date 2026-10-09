@@ -445,14 +445,18 @@ async function runSqliteScopedReadWorker(
         value = await worker.run(pathname, options);
         options.signal?.throwIfAborted();
       } catch (error) {
+        let cleanupFailure: { error: unknown } | undefined;
         try {
           await worker.close();
           if (scope) {
             scope.readWorker = undefined;
           }
         } catch (cleanupError) {
+          cleanupFailure = { error: cleanupError };
+        }
+        if (cleanupFailure) {
           throw new AggregateError(
-            [error, cleanupError],
+            [error, cleanupFailure.error],
             options.mode === "auth-profile-rows"
               ? "Auth read and child cleanup failed"
               : "SQLite read and child cleanup failed",
