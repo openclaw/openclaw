@@ -276,7 +276,6 @@ src/agents/tools/cron-tool.test.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-tool.test.ts
 src/agents/tools/message-tool.test.ts
-src/agents/tools/music-generate-tool.test.ts
 src/agents/tools/sessions-spawn-tool.test.ts
 src/agents/tools/sessions.test.ts
 src/agents/tools/video-generate-tool.test.ts
