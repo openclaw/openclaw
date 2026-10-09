@@ -293,6 +293,9 @@ export function serializeConversation(messages: Message[]): string {
 
 const ENTRY_SEPARATOR = "\n\n";
 
+// A trimmed tool batch keeps every call's name and the start of each argument.
+const MAX_COMPACT_TOOL_ARGUMENT_CHARS = 300;
+
 function serializeConversationEntries(messages: Message[]): {
   entries: string[];
   /**
@@ -300,9 +303,12 @@ function serializeConversationEntries(messages: Message[]): {
    * the tool nor its call, and an omission note emitted just before one.
    */
   continuationEntries: Set<number>;
+  /** Tool-call entries with long arguments, rendered with each argument capped. */
+  compactEntries: Map<number, string>;
 } {
   const parts: string[] = [];
   const continuationEntries = new Set<number>();
+  const compactEntries = new Map<number, string>();
   let omissionMessages = 0;
 
   for (const msg of messages) {
@@ -338,15 +344,27 @@ function serializeConversationEntries(messages: Message[]): {
     } else if (msg.role === "assistant") {
       const textParts: string[] = [];
       const toolCalls: string[] = [];
+      const compactToolCalls: string[] = [];
+      let hasLongArgument = false;
 
       for (const block of msg.content) {
         if (block.type === "text") {
           textParts.push(block.text);
         } else if (block.type === "toolCall") {
-          const argsStr = Object.entries(block.arguments)
-            .map(([k, v]) => `${k}=${stringifyCompactionValue(v)}`)
-            .join(", ");
-          toolCalls.push(`${block.name}(${argsStr})`);
+          const args = Object.entries(block.arguments).map(([k, v]) => {
+            const value = stringifyCompactionValue(v);
+            if (value.length <= MAX_COMPACT_TOOL_ARGUMENT_CHARS) {
+              return { full: `${k}=${value}`, compact: `${k}=${value}` };
+            }
+            hasLongArgument = true;
+            const kept = truncateUtf16Safe(value, MAX_COMPACT_TOOL_ARGUMENT_CHARS);
+            return {
+              full: `${k}=${value}`,
+              compact: `${k}=${kept}[... ${value.length - kept.length} characters omitted]`,
+            };
+          });
+          toolCalls.push(`${block.name}(${args.map((arg) => arg.full).join(", ")})`);
+          compactToolCalls.push(`${block.name}(${args.map((arg) => arg.compact).join(", ")})`);
         }
       }
 
@@ -354,12 +372,18 @@ function serializeConversationEntries(messages: Message[]): {
         parts.push(`[Assistant]: ${textParts.join("\n")}`);
       }
       if (toolCalls.length > 0) {
+        if (hasLongArgument) {
+          compactEntries.set(
+            parts.length,
+            `[Assistant tool calls]: ${compactToolCalls.join("; ")}`,
+          );
+        }
         parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
       }
     }
   }
 
-  return { entries: parts, continuationEntries };
+  return { entries: parts, continuationEntries, compactEntries };
 }
 
 /**
@@ -439,7 +463,7 @@ export function serializeConversationWithinBudget(
   messages: Message[],
   maxChars: number,
 ): BoundedConversation {
-  const { entries, continuationEntries } = serializeConversationEntries(messages);
+  const { entries, continuationEntries, compactEntries } = serializeConversationEntries(messages);
   const weights = entries.map((entry) => estimateStringChars(entry));
   const separatorChars = ENTRY_SEPARATOR.length;
   const totalChars =
@@ -454,14 +478,20 @@ export function serializeConversationWithinBudget(
   let trimmedEntries = 0;
   let usedChars = 0;
 
-  // Returns the entry text that fits `limit`, eliding its middle when needed.
+  // Returns the entry text that fits `limit`. A tool batch first drops to its
+  // compact form, which keeps every call's name; other text loses its middle.
   const fit = (index: number, limit: number): { text: string; chars: number } | undefined => {
     const entry = entries[index] ?? "";
     const weight = weights[index] ?? 0;
     if (weight + separatorChars <= limit) {
       return { text: entry, chars: weight + separatorChars };
     }
-    const trimmed = elideMiddleWithinWeight(entry, limit - separatorChars);
+    const compact = compactEntries.get(index);
+    const compactChars = compact === undefined ? 0 : estimateStringChars(compact);
+    if (compact !== undefined && compactChars + separatorChars <= limit) {
+      return { text: compact, chars: compactChars + separatorChars };
+    }
+    const trimmed = elideMiddleWithinWeight(compact ?? entry, limit - separatorChars);
     return trimmed === undefined
       ? undefined
       : { text: trimmed, chars: estimateStringChars(trimmed) + separatorChars };
@@ -493,9 +523,24 @@ export function serializeConversationWithinBudget(
     newestGroupChars += (weights[index] ?? 0) + separatorChars;
   }
   if (newestGroupStart < newest && newestGroupChars > tailLimit) {
-    // The newest tool batch does not fit: keep its call, then an excerpt of the newest result.
-    take(newestGroupStart, tailLimit, MAX_SAMPLED_ENTRY_CHARS);
-    take(newest, tailLimit - usedChars);
+    // The newest tool batch does not fit: keep an excerpt of the newest result
+    // and its call, reserving the call's room first.
+    const call = compactEntries.get(newestGroupStart) ?? entries[newestGroupStart] ?? "";
+    const callReserve = Math.min(
+      estimateStringChars(call) + separatorChars,
+      MAX_SAMPLED_ENTRY_CHARS + separatorChars,
+      Math.floor(tailLimit / 2),
+    );
+    // At least half the tail share remains, enough for an excerpt of any entry.
+    take(newest, tailLimit - callReserve);
+    take(newestGroupStart, tailLimit - usedChars, MAX_SAMPLED_ENTRY_CHARS);
+    // Earlier results of the same batch fill what is left, newest first.
+    for (let index = newest - 1; index > newestGroupStart; index -= 1) {
+      if ((weights[index] ?? 0) + separatorChars > tailLimit - usedChars) {
+        break;
+      }
+      take(index, tailLimit - usedChars);
+    }
     tailStart = newestGroupStart;
   } else {
     for (let index = newest; index >= 0; index -= 1) {

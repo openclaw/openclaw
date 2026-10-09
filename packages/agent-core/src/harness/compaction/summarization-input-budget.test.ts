@@ -64,6 +64,42 @@ function createCapturingStream(): { streamFn: StreamFn; prompts: string[] } {
   return { streamFn, prompts };
 }
 
+function toolCallMessage(calls: Array<{ id: string; name: string; cmd: string }>): AgentMessage {
+  return {
+    role: "assistant",
+    content: calls.map(({ id, name, cmd }) => ({
+      type: "toolCall" as const,
+      id,
+      name,
+      arguments: { cmd },
+    })),
+    api: "test-api",
+    provider: "test-provider",
+    model: "summary-model",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: 1,
+  };
+}
+
+function toolResultMessage(toolCallId: string, toolName: string, text: string): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName,
+    content: [{ type: "text", text }],
+    isError: false,
+    timestamp: 1,
+  };
+}
+
 /** A tool-heavy session; 1,250 turns serialize to about 5.5M characters (over 1M tokens). */
 function createLongSession(turns: number): AgentMessage[] {
   const messages: AgentMessage[] = [];
@@ -269,30 +305,7 @@ describe("summary request input budget", () => {
   it("never shows a sampled tool result without its call, even after the image-omission note", () => {
     const messages: AgentMessage[] = [];
     for (let index = 0; index < 100; index += 1) {
-      messages.push({
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: `c-${index}`,
-            name: "exec",
-            arguments: { cmd: `command-${index}` },
-          },
-        ],
-        api: "test-api",
-        provider: "test-provider",
-        model: "summary-model",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "toolUse",
-        timestamp: index,
-      });
+      messages.push(toolCallMessage([{ id: `c-${index}`, name: "exec", cmd: `command-${index}` }]));
       // The ninth image omission adds a standalone note before its result.
       const image = index < 8 || index === 50;
       messages.push({
@@ -316,5 +329,43 @@ describe("summary request input budget", () => {
         expect(text.slice(call, result.index)).not.toContain("omitted from this summary input");
       }
     }
+  });
+
+  it.each([6_000, 9_000, 20_000])(
+    "keeps the newest result and its call when one argument fills a %i-character budget",
+    (budget) => {
+      const messages: AgentMessage[] = [
+        { role: "user", content: "Write the report.", timestamp: 1 },
+        toolCallMessage([{ id: "w-1", name: "write", cmd: "x".repeat(30_000) }]),
+        toolResultMessage("w-1", "write", "WRITE-FAILED: disk full"),
+      ];
+
+      const { text } = serializeConversationWithinBudget(convertToLlm(messages), budget);
+
+      expect(text.endsWith("[Tool result]: WRITE-FAILED: disk full")).toBe(true);
+      expect(text).toContain("[Assistant tool calls]: write(cmd=");
+      expect(estimateStringChars(text)).toBeLessThanOrEqual(budget);
+    },
+  );
+
+  it("names every call of a trimmed tool batch whose results are kept", () => {
+    const messages: AgentMessage[] = [
+      toolCallMessage(
+        ["alpha", "beta", "gamma"].map((name) => ({ id: name, name, cmd: "y".repeat(10_000) })),
+      ),
+      ...["alpha", "beta", "gamma"].map((name) => toolResultMessage(name, name, `R-${name}`)),
+      { role: "user", content: `NEWEST ${"z".repeat(200_000)}`, timestamp: 9 },
+    ];
+
+    const { text } = serializeConversationWithinBudget(
+      convertToLlm(messages),
+      MAX_SUMMARY_INPUT_CHARS,
+    );
+
+    for (const name of ["alpha", "beta", "gamma"]) {
+      expect(text).toContain(`R-${name}`);
+      expect(text.indexOf(`${name}(cmd=`)).toBeGreaterThanOrEqual(0);
+    }
+    expect(estimateStringChars(text)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
   });
 });
