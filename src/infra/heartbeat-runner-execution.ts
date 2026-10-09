@@ -643,6 +643,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
         : entry,
     delivery,
     visibility,
+    canRelayToUser,
     sender,
     replyPrefix,
     runSessionKey,

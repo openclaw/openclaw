@@ -37,6 +37,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { updateStatusCommand } from "./status.js";
+import { registerUpdateStatusWarningTests } from "./status.warnings.test-support.js";
 
 const runtime = vi.hoisted(() => ({
   log: vi.fn(),
@@ -457,6 +458,8 @@ afterEach(async () => {
 });
 
 describe("update status readiness outcome", () => {
+  registerUpdateStatusWarningTests(() => runtime.log.mock.calls.flat().join("\n"));
+
   it.each([false, true])(
     "prioritizes an active update over availability (finished=%s)",
     async (finished) => {

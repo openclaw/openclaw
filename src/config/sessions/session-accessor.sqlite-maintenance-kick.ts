@@ -31,6 +31,7 @@ import { resolveStateDir } from "../state-dir.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
+  isMonotoneSessionEntryMaintenanceAgeChange,
   observeSessionEntryMaintenanceAgeChanges,
   type SessionEntryMaintenanceAgeChange,
 } from "./session-accessor.sqlite-maintenance-age.js";
@@ -47,6 +48,7 @@ import { prepareSessionMaintenancePreservation } from "./store-maintenance-prese
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   normalizeResolvedMaintenanceConfigInput,
+  type ResolvedSessionMaintenanceConfig,
   type ResolvedSessionMaintenanceConfigInput,
 } from "./store-maintenance.js";
 
@@ -71,10 +73,13 @@ type SessionEntryMaintenanceOwner = SessionEntryMaintenanceRequest & {
   retirement?: Promise<void>;
   generation: number;
   running: boolean;
+  completedMaintenanceConfig?: ResolvedSessionMaintenanceConfig;
   rejections: number;
   retryDelayMs?: number;
   immediate?: ReturnType<typeof setImmediate>;
   timer?: ReturnType<typeof setTimeout>;
+  timerDeadlineMonotonicMs?: number;
+  timerKind?: "periodic" | "write-batch" | "retry";
   unregisterClose?: () => void;
 };
 
@@ -100,12 +105,27 @@ export function kickSessionEntryMaintenanceAfterWrite(
   if (owner && isMaintenanceOwnerCurrent(databasePath, owner)) {
     owner.activeSessionKeys.add(params.activeSessionKey);
     Object.assign(owner, params, { scope: owner.scope, generation: owner.generation + 1 });
+    const canBatch = () =>
+      owner.ageChanges.size > 0 &&
+      [...owner.ageChanges.values()].every(isMonotoneSessionEntryMaintenanceAgeChange) &&
+      isDeepStrictEqual(
+        owner.completedMaintenanceConfig,
+        owner.maintenanceConfig
+          ? normalizeResolvedMaintenanceConfigInput(owner.maintenanceConfig)
+          : resolveMaintenanceConfig(),
+      );
+    if (owner.timerKind === "write-batch" && !canBatch()) {
+      scheduleImmediateMaintenance(databasePath, owner);
+      return;
+    }
     if (!owner.running) {
       if (owner.retryDelayMs !== undefined) {
         if (owner.rejections >= MAX_MAINTENANCE_REJECTIONS) {
           owner.rejections = 0;
         }
         scheduleMaintenanceAfterWriteQuiet(databasePath, owner);
+      } else if (canBatch()) {
+        scheduleMaintenanceWriteBatch(databasePath, owner);
       } else {
         scheduleImmediateMaintenance(databasePath, owner);
       }
@@ -278,6 +298,8 @@ function scheduleImmediateMaintenance(
 ): void {
   clearTimeout(owner.timer);
   owner.timer = undefined;
+  owner.timerDeadlineMonotonicMs = undefined;
+  owner.timerKind = undefined;
   owner.running = true;
   // Database maintenance outlives the writer's turn and carries its own admission.
   owner.immediate = runInDetachedAsyncContext(() =>
@@ -288,12 +310,37 @@ function scheduleImmediateMaintenance(
   );
 }
 
+function scheduleMaintenanceWriteBatch(
+  databasePath: string,
+  owner: SessionEntryMaintenanceOwner,
+): void {
+  const now = performance.now();
+  const delayMs = Math.max(
+    1,
+    Math.min(
+      MAINTENANCE_WRITE_QUIET_MS,
+      Math.ceil((owner.timerDeadlineMonotonicMs ?? Infinity) - now),
+    ),
+  );
+  clearTimeout(owner.timer);
+  // Further kicks join this bounded batch; they cannot refresh or postpone its deadline.
+  owner.running = true;
+  owner.timerKind = "write-batch";
+  owner.timerDeadlineMonotonicMs = now + delayMs;
+  owner.timer = runInDetachedAsyncContext(() =>
+    setTimeout(() => startPendingMaintenance(databasePath, owner), delayMs),
+  );
+  owner.timer.unref();
+}
+
 function scheduleMaintenanceAfterWriteQuiet(
   databasePath: string,
   owner: SessionEntryMaintenanceOwner,
 ): void {
   owner.running = false;
   owner.retryDelayMs = MAINTENANCE_WRITE_QUIET_MS * 2 ** Math.max(0, owner.rejections - 1);
+  owner.timerDeadlineMonotonicMs = performance.now() + owner.retryDelayMs;
+  owner.timerKind = "retry";
   if (owner.timer) {
     // A write restarts this one-shot quiet window; no polling or competing retry owner.
     owner.timer.refresh();
@@ -311,6 +358,9 @@ function scheduleMaintenanceAfterWriteQuiet(
 }
 
 function startPendingMaintenance(databasePath: string, owner: SessionEntryMaintenanceOwner): void {
+  owner.timer = undefined;
+  owner.timerDeadlineMonotonicMs = undefined;
+  owner.timerKind = undefined;
   // Publish the join before a pass can synchronously retire itself.
   owner.active = Promise.resolve().then(async () => {
     if (!isMaintenanceOwnerCurrent(databasePath, owner)) {
@@ -427,12 +477,26 @@ async function runPendingMaintenance(
         );
       }
     };
+    const readOnlyPhase: { deadline?: { nextAt: number | undefined } } = {};
     const runPlanning = async () => {
+      delete readOnlyPhase.deadline;
       const pending = capturePendingAgeChanges(owner);
       operation.ageChanges = pending.changes;
       const result = await runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-plan" },
         assertCommitAllowed: assertInputsCurrent,
+        consumeReadOnlyMaintenancePlan(read, assertCurrent) {
+          assertInputsCurrent();
+          pending.acknowledge();
+          if (owner.ageChanges.size > 0) {
+            planningChanged = true;
+            throw new SqliteReclamationInputsChangedError(
+              "SQLite automatic maintenance activity changed before age consumption",
+            );
+          }
+          assertCurrent();
+          readOnlyPhase.deadline = { nextAt: read.nextAt };
+        },
         refreshMaintenanceProtection: () => {
           // Refresh only at writer admission; commit still checks this exact live capture.
           admitted = false;
@@ -484,6 +548,9 @@ async function runPendingMaintenance(
           maintenance,
           ageChanges: pending.changes,
           expected: verify ? result.ageSnapshot : undefined,
+          readOnly: result.readOnlyInput
+            ? { input: result.readOnlyInput, snapshot: result.ageSnapshot }
+            : undefined,
         },
       });
       if (age.kind === "maintenance-age" || age.kind === "maintenance-plan-stale") {
@@ -502,7 +569,11 @@ async function runPendingMaintenance(
     };
     const noChanges = plan.archived === 0 && plan.entryRemovals.length === 0;
     const noFinalization = noChanges && plan.stateDeletePlans.length === 0;
-    const verifiedNextAt = noChanges ? await readAge(true) : undefined;
+    const verifiedNextAt = noChanges
+      ? readOnlyPhase.deadline
+        ? readOnlyPhase.deadline.nextAt
+        : await readAge(true)
+      : undefined;
     if (!noFinalization) {
       await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(owner.scope, [plan], {
         isCurrent,
@@ -513,7 +584,7 @@ async function runPendingMaintenance(
     activeSessionKeys = [];
     if (isCurrent() && owner.generation === generation) {
       assertInputsCurrent();
-      // Empty finalization has no yield; the verified receipt also owns this deadline.
+      // Reuse only this pass's consumed decision; newer kicks and changes win after settlement.
       nextMaintenanceAt = noFinalization ? verifiedNextAt : await readAge(false);
       if (owner.ageChanges.size > 0) {
         planningChanged = true;
@@ -523,6 +594,7 @@ async function runPendingMaintenance(
       }
     }
     owner.rejections = 0;
+    owner.completedMaintenanceConfig = structuredClone(maintenance);
   } catch (error) {
     preservation?.dispose();
     if (planningChanged && isCurrent()) {
@@ -566,21 +638,24 @@ async function runPendingMaintenance(
     retireMaintenanceOwner(databasePath, owner);
     return;
   }
-  if (owner.generation === generation) {
+  if (owner.generation === generation && owner.ageChanges.size === 0) {
     if (nextMaintenanceAt === undefined) {
       retireMaintenanceOwner(databasePath, owner);
       return;
     }
     owner.running = false;
-    owner.timer = setTimeout(
-      () => {
-        owner.timer = undefined;
-        owner.running = true;
-        startPendingMaintenance(databasePath, owner);
-      },
-      // Bound relative delays too: Node clamps overflowed timeouts to 1 ms.
-      Math.max(1, Math.min(SESSION_ENTRY_MAINTENANCE_INTERVAL_MS, nextMaintenanceAt - Date.now())),
+    // Bound relative delays too: Node clamps overflowed timeouts to 1 ms.
+    const delayMs = Math.max(
+      1,
+      Math.min(SESSION_ENTRY_MAINTENANCE_INTERVAL_MS, nextMaintenanceAt - Date.now()),
     );
+    owner.timerDeadlineMonotonicMs = performance.now() + delayMs;
+    owner.timerKind = "periodic";
+    owner.timer = setTimeout(() => {
+      owner.timer = undefined;
+      owner.running = true;
+      startPendingMaintenance(databasePath, owner);
+    }, delayMs);
     owner.timer.unref();
     return;
   }

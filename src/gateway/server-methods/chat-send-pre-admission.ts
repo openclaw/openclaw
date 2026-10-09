@@ -249,7 +249,8 @@ export async function consumeChatSendCurrent<T>(
 
 async function respondPreparedChatSendRetry(params: ChatSendRetryParams): Promise<boolean> {
   try {
-    const comparison = await prepareChatSendRetryComparison(params);
+    const pending = prepareChatSendRetryComparison(params);
+    const comparison = pending ? await pending : undefined;
     return await consumeChatSendCurrent(params, () => respondChatSendRetry(params, comparison));
   } catch (error) {
     if (!isSessionTranscriptProjectionUnavailableError(error)) {
@@ -313,10 +314,6 @@ export function respondChatSendRetry(
 export async function runChatSendPreAdmission(
   params: ChatSendPreAdmissionParams,
 ): Promise<boolean> {
-  // Stop owns its current-authority checks and typed cancellation errors below.
-  if (!params.request.stopCommand) {
-    await consumeChatSendCurrent(params, () => {});
-  }
   const { request, session, respond, context, client } = params;
   const { stopCommand } = request;
   const {
@@ -333,19 +330,43 @@ export async function runChatSendPreAdmission(
     sessionRoutingChanged,
   } = session;
 
-  const sendPolicy = resolveSendPolicy({
-    cfg,
-    entry,
-    sessionKey,
-    channel: sessionDeliveryChannel(entry),
-    chatType: entry?.chatType,
-  });
-  if (sendPolicy === "deny") {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-    );
+  let retryChecked = false;
+  const consumeInitialDecision = () => {
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry,
+      sessionKey,
+      channel: sessionDeliveryChannel(entry),
+      chatType: entry?.chatType,
+    });
+    if (sendPolicy === "deny") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+      );
+      return false;
+    }
+    if (!stopCommand && !request.goalOperation) {
+      try {
+        const handled = respondChatSendRetry(params);
+        retryChecked = true;
+        return !handled;
+      } catch (error) {
+        if (!isSessionTranscriptProjectionUnavailableError(error)) {
+          throw error;
+        }
+        // Missing comparison facts are prepared below, then consumed with fresh authority.
+      }
+    }
+    return true;
+  };
+  // Stop owns its current-authority checks and typed cancellation errors below.
+  if (
+    !(stopCommand
+      ? consumeInitialDecision()
+      : await consumeChatSendCurrent(params, consumeInitialDecision))
+  ) {
     return false;
   }
 
@@ -494,7 +515,7 @@ export async function runChatSendPreAdmission(
     return false;
   }
 
-  if (await respondPreparedChatSendRetry(params)) {
+  if (!retryChecked && (await respondPreparedChatSendRetry(params))) {
     return false;
   }
 
@@ -574,7 +595,6 @@ export async function runChatSendPreAdmission(
   const durableClaim = await resolveClaim(durableEntry, (message) =>
     context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`),
   );
-  await consumeChatSendCurrent(params, () => {});
   const retrySession = {
     ...session,
     entry:
@@ -587,14 +607,32 @@ export async function runChatSendPreAdmission(
             cfg,
           ),
   };
-  if (await respondPreparedChatSendRetry({ ...params, session: retrySession })) {
+  const retryParams = { ...params, session: retrySession };
+  // Goal lookup can yield; its early replay keeps the existing ordering before that lookup.
+  if (request.goalOperation && (await respondPreparedChatSendRetry(retryParams))) {
     return false;
+  }
+  let comparison: ChatSendRetryComparison | undefined;
+  if (!request.goalOperation) {
+    try {
+      const pending = prepareChatSendRetryComparison(retryParams);
+      comparison = pending ? await pending : undefined;
+    } catch (error) {
+      if (!isSessionTranscriptProjectionUnavailableError(error)) {
+        throw error;
+      }
+      respondChatSendAdmissionError(error, respond);
+      return false;
+    }
   }
   const preparedGoalRetry =
     durableClaim.kind === "accepted" && request.goalOperation
       ? await prepareGoalChatSendRetry(params)
       : undefined;
   return consumeChatSendCurrent(params, () => {
+    if (!request.goalOperation && respondChatSendRetry(retryParams, comparison)) {
+      return false;
+    }
     if (durableClaim.kind === "pending" || durableClaim.kind === "rejected") {
       respond(
         false,

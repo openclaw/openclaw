@@ -104,7 +104,7 @@ function knownQuarantine(kind: "state" | "agent") {
   mock.read.mockImplementation((sql) =>
     sql === "PRAGMA user_version"
       ? { user_version: 2 }
-      : { kind, reason, quarantined_at: 1, verified_generation: null },
+      : { user_version: 2, kind, reason, quarantined_at: 1, verified_generation: null },
   );
   return reason;
 }

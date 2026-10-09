@@ -174,6 +174,15 @@ function createSharedStateWorkerBackend(
       },
       transactionOptions,
     );
+  const writeAdmitted: WorkerWriteOperationContext["writeAdmitted"] = (operation, options) => {
+    open();
+    return write((database) => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const result = operation(database);
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      return result;
+    }, options);
+  };
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (
@@ -238,6 +247,7 @@ function createSharedStateWorkerBackend(
         return commandRegistry.execute(command, {
           open,
           write,
+          writeAdmitted,
           stateOptions: () => ({
             path: context.databasePath,
             env: getSqliteWorkerStateContext().environment,
@@ -389,6 +399,7 @@ function createSharedStateWorkerBackend(
         context,
         open,
         write,
+        writeAdmitted,
         () =>
           (updateRunWriter ??= currentRuntime.openUpdateRunWriter({
             path: context.databasePath,

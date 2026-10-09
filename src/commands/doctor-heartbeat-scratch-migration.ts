@@ -393,10 +393,7 @@ export async function collectHeartbeatScratchMigrationFindings(
     );
     try {
       const source = await readHeartbeatSource(cfg, agent.agentId);
-      if (!source) {
-        continue;
-      }
-      if (disabledEntryKeys.has(source.entryKey)) {
+      if (!source || disabledEntryKeys.has(source.entryKey)) {
         continue;
       }
       findings.push({

@@ -17,6 +17,7 @@ import {
 import {
   createUpdateRun,
   finishUpdateRun,
+  finishInterruptedUpdatePreview,
   getUpdateRun,
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
@@ -32,6 +33,7 @@ import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "./update-run-recovery.js";
+import { captureCompletedUpdateRun } from "./update-run-terminal-record.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -266,6 +268,31 @@ describe("retained recovery read-only compatibility", () => {
       JSON.stringify(f.record),
     );
   });
+  it.each([false, true])(
+    "admits terminal legacy history without granting execution authority (rollback=%s)",
+    (rollback) => {
+      const f = setup();
+      const record = legacyRecord(retainedTerminalRecord(f.record, rollback));
+      const raw = JSON.stringify(record, null, 2);
+      openOpenClawStateDatabase(f.options)
+        .db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?")
+        .run(raw, "update.recovery." + record.runId);
+      closeOpenClawStateDatabaseForTest();
+      const before = snapshot(f.root);
+      expect(() => assertNoPendingUpdateRecovery(f.options)).not.toThrow();
+      expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow(/legacy.*readiness/i);
+      expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(raw);
+      expect(snapshot(f.root)).toEqual(before);
+      const preview = createUpdateRun({ trigger: "cli" }, f.options);
+      finishInterruptedUpdatePreview(preview, f.options);
+      expect(getUpdateRun(preview.runId, f.options)?.status).toBe("skipped");
+      const next = createUpdateRun({ trigger: "cli" }, f.options);
+      finishUpdateRun(next.runId, { status: "succeeded" }, f.options);
+      expect(loadUpdateRecovery(next.runId, f.options)).toBeUndefined();
+      expect(captureCompletedUpdateRun(next.runId, () => {}, f.options)?.runId).toBe(next.runId);
+      expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(raw);
+    },
+  );
   it("keeps missing-state reads non-creating", () => {
     const root = dirs.make("retained-empty-");
     const options = { env: { OPENCLAW_STATE_DIR: root } };
@@ -311,6 +338,60 @@ describe("retained recovery read-only compatibility", () => {
       expect(snapshot(f.root)).toEqual(before);
     },
   );
+  it.each([
+    "cleanup",
+    "untyped-retirement",
+    "restore-disguised-as-retirement",
+    "package-restore",
+    "checkpoint-restore",
+    "restore-progress",
+  ] as const)("distinguishes terminal cleanup from unfinished %s", (scenario) => {
+    const f = setup();
+    const record = retainedTerminalRecord(f.record);
+    const effectId = randomUUID();
+    if (scenario === "restore-progress") {
+      record.restore = {
+        restoreId: randomUUID(),
+        checkpointId: record.checkpoint!.ref.checkpointId,
+        planPath: path.join(f.root, "restore-plan.sqlite"),
+        planSha256: "d".repeat(64),
+        resourceCursor: 0,
+        phase: "intent",
+      };
+    } else {
+      record.effects.push({
+        effectId,
+        kind:
+          scenario === "package-restore" || scenario === "checkpoint-restore"
+            ? scenario
+            : "retirement",
+        resourceId: record.package!.descriptor.backupRoot,
+        runtime: "candidate",
+        state: "intent",
+        observedIdentity: null,
+        ...(scenario === "untyped-retirement"
+          ? {}
+          : {
+              package: {
+                intent: {
+                  effectId,
+                  action: scenario === "cleanup" ? "retire" : "restore",
+                  descriptor: record.package!.descriptor,
+                },
+              },
+            }),
+      });
+    }
+    storeRetainedUpdateRecovery(record, f.options);
+    closeOpenClawStateDatabaseForTest();
+    const before = snapshot(f.root);
+    if (scenario === "cleanup") {
+      expect(() => assertNoPendingUpdateRecovery(f.options)).not.toThrow();
+    } else {
+      expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(UpdateRecoveryRequiredError);
+    }
+    expect(snapshot(f.root)).toEqual(before);
+  });
   it.each(["version", "backup-path"] as const)(
     "rejects an invalid package descriptor %s without changing retained bytes",
     (mismatch) => {
@@ -666,10 +747,12 @@ it.each(["current", "legacy-serving"] as const)(
       records.forEach((record) =>
         expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record),
       );
-      expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(UpdateRecoveryRequiredError);
     } else {
-      expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(/legacy.*readiness/i);
+      records.forEach((record) =>
+        expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow(/legacy.*readiness/i),
+      );
     }
+    expect(() => assertNoPendingUpdateRecovery(f.options)).not.toThrow();
     expect(snapshot(f.root)).toEqual(before);
   },
 );

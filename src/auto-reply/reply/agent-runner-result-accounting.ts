@@ -18,6 +18,7 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -454,6 +455,7 @@ export async function accountFollowupTurn(params: {
         sessionKey,
         fallbackEntry: turn.session.current(),
         expectedGeneration: accounting.expectedSession,
+        reader: getReplyOperationSessionReader(turn.operation),
       }),
     );
   }

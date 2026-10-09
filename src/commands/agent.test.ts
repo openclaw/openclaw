@@ -762,11 +762,10 @@ describe("agentCommand", () => {
         runtime,
       );
       expect(prepared.workspaceDir).toBe(configuredWorkspace);
-      const implicitWorkspace = configuredWorkspace;
 
-      expect(fs.existsSync(implicitWorkspace)).toBe(true);
-      expect(fs.existsSync(path.join(implicitWorkspace, "AGENTS.md"))).toBe(false);
-      expect(fs.existsSync(path.join(implicitWorkspace, ".git"))).toBe(false);
+      expect(fs.existsSync(configuredWorkspace)).toBe(true);
+      expect(fs.existsSync(path.join(configuredWorkspace, "AGENTS.md"))).toBe(false);
+      expect(fs.existsSync(path.join(configuredWorkspace, ".git"))).toBe(false);
       expect(() => execFileSync("git", ["-C", repository, "add", "-A"])).not.toThrow();
     });
   });
@@ -792,6 +791,7 @@ describe("agentCommand", () => {
       mockConfig(home, store);
       const worktree = await managedWorktrees.create({
         repoRoot: canonicalWorkspace,
+        baseRef: "HEAD",
         name: "managed",
         ownerKind: "session",
         ownerId: sessionKey,

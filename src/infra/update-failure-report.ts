@@ -83,13 +83,7 @@ function resultFromExistingReceipt(
         .savedReportPath
     : prepared.savedReportPath,
 ): UpdateFailureReportSubmitResult {
-  if (
-    receipt &&
-    (receipt.status === "pending" ||
-      receipt.status === "preparing" ||
-      receipt.status === "prepared" ||
-      receipt.status === "retryable")
-  ) {
+  if (receipt && receipt.status !== "created" && receipt.status !== "fallback") {
     return {
       message: {
         pending: "This update attempt already has a report submission in progress.",
@@ -204,6 +198,15 @@ export async function submitUpdateFailureReport(
         context,
       ),
     );
+  };
+  const cleanPreparation = async (
+    receipt: UpdateFailureReportSweepReceipt,
+    beginCleanup = beginUpdateFailureReportReceiptCleanup,
+  ): Promise<boolean> => {
+    const cleanupRecorded = await retryUpdateReportStateWrite(() =>
+      beginCleanup(prepared.attemptId, receipt.reservationId, stateEnv, context),
+    );
+    return cleanupRecorded ? cleanOwnedArtifact(receipt) : false;
   };
   const recordCreatedIssue = async (url: string, reservationId: string) => {
     const receipt: UpdateFailureReportReceipt = {
@@ -323,33 +326,11 @@ export async function submitUpdateFailureReport(
     };
   }
   if (existingReceipt?.status === "preparing" || existingReceipt?.status === "prepared") {
-    const preparingReceipt = existingReceipt;
-    const cleanupRecorded = await retryUpdateReportStateWrite(() =>
-      beginStaleUpdateFailureReportReceiptCleanup(
-        prepared.attemptId,
-        preparingReceipt.reservationId,
-        stateEnv,
-        context,
-      ),
-    );
-    if (cleanupRecorded) {
-      await cleanOwnedArtifact(preparingReceipt);
-    }
+    await cleanPreparation(existingReceipt, beginStaleUpdateFailureReportReceiptCleanup);
     existingReceipt = await readReceipt(prepared.attemptId, stateEnv, context);
   }
   if (existingReceipt?.status === "retryable" && existingReceipt.replacementReady !== true) {
-    const retryableReceipt = existingReceipt;
-    const cleanupRecorded = await retryUpdateReportStateWrite(() =>
-      beginUpdateFailureReportReceiptCleanup(
-        prepared.attemptId,
-        retryableReceipt.reservationId,
-        stateEnv,
-        context,
-      ),
-    );
-    if (cleanupRecorded) {
-      await cleanOwnedArtifact(retryableReceipt);
-    }
+    await cleanPreparation(existingReceipt);
   }
   if (existingReceipt?.status === "retryable" && existingReceipt.replacementReady === true) {
     if (!(await cleanRetiredArtifacts(existingReceipt, false))) {
@@ -377,14 +358,8 @@ export async function submitUpdateFailureReport(
       prepared,
       ownedPrepared.savedReportPath,
     );
-  const cleanupOwnedPreparation = async (): Promise<boolean> => {
-    const cleanupRecorded = await retryUpdateReportStateWrite(() =>
-      beginUpdateFailureReportReceiptCleanup(prepared.attemptId, reservationId, stateEnv, context),
-    );
-    return cleanupRecorded
-      ? await cleanOwnedArtifact({ previewDigest: prepared.previewDigest, reservationId })
-      : false;
-  };
+  const cleanupOwnedPreparation = () =>
+    cleanPreparation({ previewDigest: prepared.previewDigest, reservationId });
   try {
     await savePreparedUpdateFailureReport(ownedPrepared, options.hasCurrentAuthority);
     if (options.validateCurrentAttempt && !(await options.validateCurrentAttempt())) {

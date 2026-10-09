@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 // Static method policy is shared by metadata discovery and runtime target resolution.
 // Keep it independent of session storage so scope/profile classification does not load the runtime.
 type SessionMutationTargetField = "key" | "parentSessionKey" | "sessionKey";
@@ -174,4 +176,14 @@ export function isAgentRunStartMethod(method: string, requestParams: unknown): b
       "action" in requestParams &&
       requestParams.action === "resume")
   );
+}
+
+export function isSessionArchiveMutation(method: string, requestParams: unknown): boolean {
+  const patch =
+    method === "sessions.patchMany" && isRecord(requestParams)
+      ? requestParams.patch
+      : method === "sessions.patch"
+        ? requestParams
+        : undefined;
+  return isRecord(patch) && typeof patch.archived === "boolean";
 }

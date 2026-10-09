@@ -87,28 +87,20 @@ function convertAuthProfileCredentialToAgent(
   cred: AuthProfileCredential,
   options?: ResolveAgentCredentialMapOptions,
 ): AgentCredential | null {
-  if (cred.type === "api_key") {
-    const key = normalizeOptionalString(cred.key) ?? "";
-    if (!key) {
-      // A configured secret ref proves the credential exists, but this converter
-      // must not resolve or leak the actual secret value.
-      return parseSecretRef(cred.keyRef) !== null ? secretRefPlaceholder(options) : null;
-    }
-    return { type: "api_key", key };
-  }
-
-  if (cred.type === "token") {
-    if (cred.expires !== undefined) {
+  if (cred.type === "api_key" || cred.type === "token") {
+    if (cred.type === "token" && cred.expires !== undefined) {
       const expires = asDateTimestampMs(cred.expires);
       if (expires === undefined || Date.now() >= expires) {
         return null;
       }
     }
-    const token = normalizeOptionalString(cred.token) ?? "";
-    if (!token) {
-      return parseSecretRef(cred.tokenRef) !== null ? secretRefPlaceholder(options) : null;
+    const key = normalizeOptionalString(cred.type === "api_key" ? cred.key : cred.token);
+    if (!key) {
+      // A configured ref proves existence, never authority to resolve its secret here.
+      const ref = cred.type === "api_key" ? cred.keyRef : cred.tokenRef;
+      return parseSecretRef(ref) !== null ? secretRefPlaceholder(options) : null;
     }
-    return { type: "api_key", key: token };
+    return { type: "api_key", key };
   }
 
   if (cred.type === "oauth") {

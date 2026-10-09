@@ -7,6 +7,7 @@ import type {
   LivePreviewDeliveryResult,
   OutboundPayloadPlan,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
@@ -623,6 +624,9 @@ export function handleReplyError(
   info: Parameters<ErrorCallback>[1],
 ): void {
   if (info.kind === "final") {
+    if (err instanceof PlatformMessageNotDispatchedError) {
+      turn.finalDeliveryNotDispatched = true;
+    }
     turn.previewLifecycle.observeFailure(
       isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
     );

@@ -6,12 +6,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as execRunner from "../../process/exec-runner.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { InvalidWorktreeBaseRefError } from "./base-ref.js";
+import { InvalidWorktreeBaseRefError, resolveWorktreeBase } from "./base-ref.js";
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
@@ -54,35 +55,107 @@ describe("ManagedWorktreeService branch discovery", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("fetches the default base without advancing an explicitly selectable local branch", async () => {
-    const localHead = await git(repo, "rev-parse", "HEAD");
-    const remoteHead = await git(
-      repo,
-      "commit-tree",
-      "HEAD^{tree}",
-      "-p",
-      "HEAD",
-      "-m",
-      "remote update",
-    );
-    const remote = path.join(root, "remote.git");
-    await git(root, "clone", "--bare", repo, remote);
-    await git(repo, "remote", "add", "origin", remote);
-    await git(repo, "fetch", "origin");
-    await git(repo, "remote", "set-head", "origin", "-a");
-    await git(remote, "update-ref", "refs/heads/main", remoteHead, localHead);
+  it.each([
+    { offline: false, dirty: false, switching: false },
+    { offline: true, dirty: false, switching: false },
+    { offline: false, dirty: true, switching: false },
+    { offline: true, dirty: true, switching: false },
+    { offline: false, dirty: false, switching: true },
+  ])(
+    "uses the remote default and only advances clean local main ($offline, $dirty, switching: $switching)",
+    async ({ offline, dirty, switching }) => {
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      await fs.writeFile(path.join(repo, "README.md"), "remote update\n");
+      await git(repo, "add", "README.md");
+      const remoteTree = await git(repo, "write-tree");
+      await fs.writeFile(path.join(repo, "README.md"), "base\n");
+      await git(repo, "add", "README.md");
+      const remoteHead = await git(
+        repo,
+        "commit-tree",
+        remoteTree,
+        "-p",
+        "HEAD",
+        "-m",
+        "remote update",
+      );
+      const remote = path.join(root, "remote.git");
+      await git(root, "clone", "--bare", repo, remote);
+      await git(repo, "remote", "add", "origin", remote);
+      await git(repo, "fetch", "origin");
+      await git(repo, "remote", "set-head", "origin", "-a");
+      await git(remote, "update-ref", "refs/heads/main", remoteHead, localHead);
 
-    const explicit = await service.create({ repoRoot: repo, name: "local-base", baseRef: "main" });
-    expect(await git(explicit.path, "rev-parse", "HEAD")).toBe(localHead);
-    expect(await git(repo, "rev-parse", "origin/main")).toBe(localHead);
+      const explicit = await service.create({
+        repoRoot: repo,
+        name: "local-base",
+        baseRef: "main",
+      });
+      expect(await git(explicit.path, "rev-parse", "HEAD")).toBe(localHead);
+      expect(await git(repo, "rev-parse", "origin/main")).toBe(localHead);
 
-    const defaultBase = await service.create({ repoRoot: repo, name: "remote-base" });
-    expect(defaultBase.baseRef).toBe("origin/main");
-    expect(await git(defaultBase.path, "rev-parse", "HEAD")).toBe(remoteHead);
-    expect(await git(repo, "rev-parse", "main")).toBe(localHead);
-  });
+      if (offline) {
+        // A project refresh has fetched new refs, but the worktree fetch cannot reach origin.
+        await git(repo, "fetch", "origin");
+        await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable.git"));
+      }
 
-  it("falls back from a pruned remote HEAD only when no explicit base was requested", async () => {
+      if (!offline && !dirty) {
+        // Background template prewarming selects the remote base without moving local main.
+        expect((await resolveWorktreeBase(repo)).commit).toBe(remoteHead);
+        expect(await git(repo, "rev-parse", "main")).toBe(localHead);
+      }
+      if (dirty) {
+        await fs.writeFile(path.join(repo, "README.md"), "local work\n");
+      }
+      let switched = false;
+      if (switching) {
+        await git(repo, "branch", "feature");
+        const readDirectory = fs.readdir;
+        vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+          const entries = await readDirectory(...args);
+          if (!switched && args[0] === path.join(repo, ".git", "worktrees")) {
+            switched = true;
+            await git(repo, "switch", "feature");
+          }
+          return entries;
+        });
+      }
+      const logs = createWarnLogCapture("worktree-base-fetch");
+      try {
+        const defaultBase = await service.create({ repoRoot: repo, name: "remote-base" });
+        expect(defaultBase.baseRef).toBe("origin/main");
+        expect(await git(defaultBase.path, "rev-parse", "HEAD")).toBe(remoteHead);
+        expect(await fs.readFile(path.join(defaultBase.path, "README.md"), "utf8")).toBe(
+          "remote update\n",
+        );
+        if (switching) {
+          expect(switched).toBe(true);
+          expect(
+            await git(repo, "rev-parse", "feature"),
+            "source branch must not be advanced",
+          ).toBe(localHead);
+        }
+        expect(await git(repo, "rev-parse", "main")).toBe(
+          dirty || switching ? localHead : remoteHead,
+        );
+        expect(await fs.readFile(path.join(repo, "README.md"), "utf8")).toBe(
+          dirty ? "local work\n" : switching ? "base\n" : "remote update\n",
+        );
+        if (offline) {
+          const warning = await logs.findText("worktree base origin/main");
+          expect(warning).toContain(remoteHead);
+          expect(warning).toContain("commit age");
+          expect(warning).toContain("fetch failed");
+          expect(warning).toContain("unavailable.git");
+        }
+      } finally {
+        logs.cleanup();
+      }
+    },
+  );
+
+  it("discovers a renamed remote default without substituting local HEAD", async () => {
     useInProcessWorktreeCapacityTransport();
     const disk = fsSync.statfsSync(root);
     vi.spyOn(fsSync, "statfsSync").mockReturnValue({
@@ -105,19 +178,146 @@ describe("ManagedWorktreeService branch discovery", () => {
     await git(repo, "config", "fetch.prune", "true");
     await git(repo, "config", "remote.origin.followRemoteHEAD", "never");
 
+    await expect(
+      service.create({ repoRoot: repo, name: "explicit-base", baseRef: "origin/missing" }),
+    ).rejects.toThrow(InvalidWorktreeBaseRefError);
     const created = await service.create({ repoRoot: repo, name: "default-base" });
 
-    expect(created.baseRef).toBe("HEAD");
+    expect(created.baseRef).toBe("origin/next");
     expect(await git(created.path, "rev-parse", "HEAD")).toBe(localHead);
     expect(await git(repo, "symbolic-ref", "refs/remotes/origin/HEAD")).toBe(
-      "refs/remotes/origin/main",
+      "refs/remotes/origin/next",
     );
-    await expect(
-      service.create({ repoRoot: repo, name: "explicit-base", baseRef: "origin/HEAD" }),
-    ).rejects.toThrow(InvalidWorktreeBaseRefError);
     expect(await git(repo, "branch", "--list", "openclaw/explicit-base")).toBe("");
     expect(await service.listRegistryRecords()).toEqual([created]);
   });
+
+  it("warns when the fetched default commit is more than seven days old", async () => {
+    const timestamp = Number(await git(repo, "show", "-s", "--format=%ct", "HEAD"));
+    const remote = path.join(root, "remote.git");
+    await git(root, "clone", "--bare", repo, remote);
+    await git(repo, "remote", "add", "origin", remote);
+    service = new ManagedWorktreeService({
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+      now: () => (timestamp + 8 * 86_400) * 1000,
+    });
+    const logs = createWarnLogCapture("worktree-base-age");
+    try {
+      await service.create({ repoRoot: repo, name: "old-default" });
+      const warning = await logs.findText("worktree base origin/main");
+      expect(warning).toContain("commit age 8.0 days; fetch succeeded");
+      expect(warning).toContain("base is older than 7 days");
+    } finally {
+      logs.cleanup();
+    }
+  });
+
+  it("preserves ignored local data when the remote starts tracking its path", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "local.txt\n");
+    await git(repo, "add", ".gitignore");
+    await git(repo, "commit", "-m", "ignore local data");
+    const localHead = await git(repo, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(repo, "local.txt"), "remote content\n");
+    await git(repo, "add", "-f", "local.txt");
+    const tree = await git(repo, "write-tree");
+    await git(repo, "rm", "--cached", "local.txt");
+    await fs.writeFile(path.join(repo, "local.txt"), "local data\n");
+    const remoteHead = await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "track local path");
+    const remote = path.join(root, "remote.git");
+    await git(root, "clone", "--bare", repo, remote);
+    await git(remote, "update-ref", "refs/heads/main", remoteHead);
+    await git(repo, "remote", "add", "origin", remote);
+    const logs = createWarnLogCapture("worktree-base-ignored");
+    try {
+      const created = await service.create({ repoRoot: repo, name: "remote-data" });
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteHead);
+      expect(await git(repo, "rev-parse", "HEAD")).toBe(localHead);
+      expect(await fs.readFile(path.join(repo, "local.txt"), "utf8")).toBe("local data\n");
+      expect(await logs.findText("git fast-forward local default")).toContain("local.txt");
+    } finally {
+      logs.cleanup();
+    }
+  });
+
+  it.each(["unavailable", "shared-dirty"])(
+    "preserves local main held by a %s checkout",
+    async (kind) => {
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      const remoteHead = await git(
+        repo,
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        "HEAD",
+        "-m",
+        "remote update",
+      );
+      const remote = path.join(root, "remote.git");
+      await git(root, "clone", "--bare", repo, remote);
+      await git(remote, "update-ref", "refs/heads/main", remoteHead);
+      await git(repo, "remote", "add", "origin", remote);
+      const linked = path.join(root, "linked");
+      if (kind === "unavailable") {
+        await git(repo, "switch", "-c", "feature");
+        await git(repo, "worktree", "add", linked, "main");
+        await git(repo, "worktree", "lock", linked);
+        await fs.rm(linked, { recursive: true, force: true });
+      } else {
+        await git(repo, "worktree", "add", "--force", linked, "main");
+        await fs.writeFile(path.join(linked, "README.md"), "local work\n");
+      }
+
+      const created = await service.create({ repoRoot: repo, name: "remote-default" });
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteHead);
+      expect(await git(repo, "rev-parse", "main")).toBe(localHead);
+      if (kind === "shared-dirty") {
+        expect(await git(linked, "rev-parse", "HEAD")).toBe(localHead);
+        expect(await fs.readFile(path.join(linked, "README.md"), "utf8")).toBe("local work\n");
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves the default branch while a checkout is rebasing (linked: %s)",
+    async (linked) => {
+      await git(repo, "switch", "-c", "onto");
+      await fs.writeFile(path.join(repo, "README.md"), "onto change\n");
+      await git(repo, "add", "README.md");
+      await git(repo, "commit", "-m", "onto change");
+      await git(repo, "switch", "main");
+      await fs.writeFile(path.join(repo, "README.md"), "local change\n");
+      await git(repo, "add", "README.md");
+      await git(repo, "commit", "-m", "local change");
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      const remoteHead = await git(
+        repo,
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        "HEAD",
+        "-m",
+        "remote update",
+      );
+      const remote = path.join(root, "remote.git");
+      await git(root, "clone", "--bare", repo, remote);
+      await git(remote, "update-ref", "refs/heads/main", remoteHead);
+      await git(repo, "remote", "add", "origin", remote);
+      const rebasing = linked ? path.join(root, "rebasing") : repo;
+      if (linked) {
+        await git(repo, "worktree", "add", "--force", rebasing, "main");
+      }
+      await expect(git(rebasing, "rebase", "onto")).rejects.toMatchObject({ code: 1 });
+      const pausedHead = await git(rebasing, "rev-parse", "HEAD");
+      const pausedStatus = await git(rebasing, "status", "--porcelain");
+      expect(pausedStatus).toContain("UU README.md");
+
+      const created = await service.create({ repoRoot: repo, name: "during-rebase" });
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteHead);
+      expect(await git(repo, "rev-parse", "main")).toBe(localHead);
+      expect(await git(rebasing, "rev-parse", "HEAD")).toBe(pausedHead);
+      expect(await git(rebasing, "status", "--porcelain")).toBe(pausedStatus);
+    },
+  );
 
   it("reports Git, plain-directory, and unavailable repository status", async () => {
     const nested = path.join(repo, "packages", "app");

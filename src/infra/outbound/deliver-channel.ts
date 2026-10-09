@@ -189,7 +189,33 @@ function createPluginHandler(
   if (!messageText && !outbound?.sendText) {
     return null;
   }
-  const baseCtx = createChannelOutboundContextBase(params);
+  const baseCtx = {
+    cfg: params.cfg,
+    to: params.to,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    replyToIdSource: undefined,
+    replyToMode: params.replyToMode,
+    formatting: params.formatting,
+    threadId: params.threadId,
+    identity: params.identity,
+    gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
+    deps: params.deps,
+    silent: params.silent,
+    signal: params.abortSignal,
+    abortSignal: params.abortSignal,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaAccess?.localRoots,
+    mediaReadFile: params.mediaAccess?.readFile,
+    gatewayClientScopes: params.gatewayClientScopes,
+    conversationReadOrigin: params.conversationReadOrigin,
+    deliveryQueueId: params.deliveryQueueId,
+    preparedMessageId: params.preparedMessageId,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    onDeliveryResult: params.onDeliveryResult,
+  };
   const sendText = outbound?.sendText;
   const sendMedia = outbound?.sendMedia;
   // Adapters may ignore the context callback; the core handoff must still fence
@@ -303,12 +329,6 @@ function createPluginHandler(
       overrides && "formatting" in overrides
         ? { ...baseCtx.formatting, ...overrides.formatting }
         : baseCtx.formatting,
-  });
-  const buildTargetRef = (overrides?: OutboundMessageSendOverrides): ChannelOutboundTargetRef => ({
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId ?? undefined,
-    threadId: overrides?.threadId ?? baseCtx.threadId,
   });
   return {
     chunker,
@@ -473,7 +493,12 @@ function createPluginHandler(
       }
       return dispatchToAdapter(textCtx, () => sendText!(textCtx));
     },
-    buildTargetRef,
+    buildTargetRef: (overrides?: OutboundMessageSendOverrides): ChannelOutboundTargetRef => ({
+      channel: params.channel,
+      to: params.to,
+      accountId: params.accountId ?? undefined,
+      threadId: overrides?.threadId ?? baseCtx.threadId,
+    }),
     sendMedia: async (caption, mediaUrl, overrides) => {
       const mediaCtx = {
         ...resolveCtx(overrides),
@@ -509,31 +534,3 @@ function normalizeChannelMessageSendResult(
     receipt: result.receipt,
   };
 }
-
-const createChannelOutboundContextBase = (params: ChannelHandlerParams) => ({
-  cfg: params.cfg,
-  to: params.to,
-  accountId: params.accountId,
-  replyToId: params.replyToId,
-  replyToIdSource: undefined,
-  replyToMode: params.replyToMode,
-  formatting: params.formatting,
-  threadId: params.threadId,
-  identity: params.identity,
-  gifPlayback: params.gifPlayback,
-  forceDocument: params.forceDocument,
-  deps: params.deps,
-  silent: params.silent,
-  signal: params.abortSignal,
-  abortSignal: params.abortSignal,
-  mediaAccess: params.mediaAccess,
-  mediaLocalRoots: params.mediaAccess?.localRoots,
-  mediaReadFile: params.mediaAccess?.readFile,
-  gatewayClientScopes: params.gatewayClientScopes,
-  conversationReadOrigin: params.conversationReadOrigin,
-  deliveryQueueId: params.deliveryQueueId,
-  preparedMessageId: params.preparedMessageId,
-  assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-  onPlatformSendDispatch: params.onPlatformSendDispatch,
-  onDeliveryResult: params.onDeliveryResult,
-});

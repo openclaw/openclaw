@@ -61,17 +61,17 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
       }
       return await original.ensureExecApprovalsSnapshot();
     },
-    readExecApprovalsSnapshot: () => {
+    readExecApprovalsSnapshotAsync: async () => {
       execApprovalsStoreMock.readCalls += 1;
       if (execApprovalsStoreMock.readError !== undefined) {
         throw execApprovalsStoreMock.readError;
       }
       if (execApprovalsStoreMock.hasReadResult) {
-        return execApprovalsStoreMock.readResult as ReturnType<
-          typeof original.readExecApprovalsSnapshot
+        return execApprovalsStoreMock.readResult as Awaited<
+          ReturnType<typeof original.readExecApprovalsSnapshotAsync>
         >;
       }
-      return original.readExecApprovalsSnapshot();
+      return await original.readExecApprovalsSnapshotAsync();
     },
     updateExecApprovals: async (...args: Parameters<typeof original.updateExecApprovals>) => {
       execApprovalsStoreMock.updateCalls += 1;
@@ -452,7 +452,9 @@ describe("node host invoke", () => {
     const result = await invokeExecApprovals("system.execApprovals.set", {
       file: { version: 1, agents: { main: {} } },
     });
-    const prepared = execApprovalsStoreMock.updateParams?.update(missingSnapshot.file);
+    const { applyExecApprovalsUpdate } = await import("../infra/exec-approvals-mutation.kernel.js");
+    const update = execApprovalsStoreMock.updateParams?.update;
+    const prepared = update && applyExecApprovalsUpdate(missingSnapshot.file, update);
 
     expect(execApprovalsStoreMock.ensureCalls).toBe(0);
     expect(execApprovalsStoreMock.readCalls).toBe(1);
