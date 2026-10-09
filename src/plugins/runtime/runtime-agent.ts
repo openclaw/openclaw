@@ -705,6 +705,12 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     getSessionEntry,
     getSessionEntryAsync,
     listSessionEntries,
+    createSessionEntryListReader: async (
+      params: Parameters<RuntimeSession["createSessionEntryListReader"]>[0],
+    ) =>
+      (
+        await import("../../config/sessions/session-entry-read-runtime.js")
+      ).createSessionEntryListReader(params),
     patchSessionEntry,
     upsertSessionEntry,
     runWithWorkAdmission: runWithSessionWorkAdmission,
