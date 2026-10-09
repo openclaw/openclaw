@@ -84,6 +84,18 @@ describe("managed embedding capacity defaults", () => {
     expect(preset).toContain("ubatch-size = 2048");
   });
 
+  it.each(["--kv-unified-per-slot", "--kv_unified_per_slot"])(
+    "preserves native per-slot sizing from the service's %s option",
+    (option) => {
+      const preset = refreshEmbedding(undefined, {
+        serviceSettings: { args: [option, "8192"] },
+      });
+      expect(preset).not.toContain("ctx-size");
+      expect(preset).toContain("parallel = 1");
+      expect(preset).toContain("ubatch-size = 2048");
+    },
+  );
+
   it.each([
     { platform: "win32", key: "llama_arg_n_parallel", expectedDefault: false },
     { platform: "win32", key: "Llama_Arg_N_Parallel", expectedDefault: false },

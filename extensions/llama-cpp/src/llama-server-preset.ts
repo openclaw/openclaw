@@ -106,7 +106,8 @@ function readServiceSettingKeys(service: LlamaServerPresetOptions["serviceSettin
       .filter((key) => key.startsWith("LLAMA_ARG_")),
     ...(service?.args ?? [])
       .filter((arg) => arg.startsWith("-"))
-      .map((arg) => arg.replace(/^-+/u, "")),
+      // Native CLI normalizes underscores only in double-dash options.
+      .map((arg) => (arg.startsWith("--") ? arg.slice(2).replaceAll("_", "-") : arg.slice(1))),
   ];
   return new Set(keys.map((key) => PRESET_KEY_ALIASES[key] ?? key));
 }
