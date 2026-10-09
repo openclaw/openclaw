@@ -13,14 +13,18 @@ const VLLM_BINARY_THINKING_PROFILE = {
 } satisfies ProviderThinkingProfile;
 
 export function resolveVllmEffortProfile(
-  compat: ProviderDefaultThinkingPolicyContext["compat"],
+  model: Pick<ProviderDefaultThinkingPolicyContext, "compat" | "thinkingLevelMap">,
 ): ProviderThinkingProfile | undefined {
-  const efforts = compat?.supportedReasoningEfforts?.map((effort) => effort.trim());
+  const { compat } = model;
+  const efforts = compat?.supportedReasoningEfforts?.map((effort) => effort.trim()).filter(Boolean);
   if (compat?.supportsReasoningEffort === false || !efforts?.length) {
     return undefined;
   }
-  const mappedLevels = Object.entries(compat?.reasoningEffortMap ?? {})
-    .filter(([, effort]) => efforts.includes(effort.trim()))
+  const mappedLevels = Object.entries({
+    ...model.thinkingLevelMap,
+    ...compat?.reasoningEffortMap,
+  })
+    .filter(([, effort]) => typeof effort === "string" && efforts.includes(effort.trim()))
     .map(([level]) => level.trim().toLowerCase());
   const profile = resolveEffortThinkingProfile([...efforts, ...mappedLevels]);
   return profile?.levels.some(({ id }) => id !== "off")
@@ -54,7 +58,7 @@ export function resolveThinkingProfile(
   }
   const qwenFormat = resolveVllmQwenThinkingFormatFromCompat(ctx.compat);
   if (qwenFormat) {
-    return resolveVllmEffortProfile(ctx.compat) ?? VLLM_BINARY_THINKING_PROFILE;
+    return resolveVllmEffortProfile(ctx) ?? VLLM_BINARY_THINKING_PROFILE;
   }
   if (ctx.reasoning === true && isVllmNemotronThinkingModel(ctx.modelId)) {
     return VLLM_BINARY_THINKING_PROFILE;

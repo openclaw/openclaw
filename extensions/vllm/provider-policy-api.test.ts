@@ -22,19 +22,24 @@ describe("vLLM provider thinking policy", () => {
     },
   );
 
-  it("exposes logical map keys while preserving case-sensitive wire labels", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "vllm",
-        modelId: "qwen3:8b",
-        compat: {
-          thinkingFormat: "qwen-chat-template",
-          supportedReasoningEfforts: [" LOW ", "HIGH"],
-          reasoningEffortMap: { low: "LOW", high: "HIGH", max: "UNSUPPORTED" },
-        },
-      }),
-    ).toEqual({ levels: [{ id: "off" }, { id: "low" }, { id: "high" }], defaultLevel: "off" });
-  });
+  it.each(["compat", "model"] as const)(
+    "exposes logical %s map keys with native wire labels",
+    (source) => {
+      const mapping = { low: "LOW", high: "HIGH", max: "UNSUPPORTED" };
+      expect(
+        resolveThinkingProfile({
+          provider: "vllm",
+          modelId: "qwen3:8b",
+          ...(source === "model" ? { thinkingLevelMap: mapping } : {}),
+          compat: {
+            thinkingFormat: "qwen-chat-template",
+            supportedReasoningEfforts: [" LOW ", "HIGH"],
+            ...(source === "compat" ? { reasoningEffortMap: mapping } : {}),
+          },
+        }),
+      ).toEqual({ levels: [{ id: "off" }, { id: "low" }, { id: "high" }], defaultLevel: "off" });
+    },
+  );
 
   it.each([
     { supportedReasoningEfforts: [] },

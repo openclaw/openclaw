@@ -152,30 +152,35 @@ describe("vLLM provider thinking composition", () => {
     },
   );
 
-  it("maps native labels through the shared resolver and honors explicit disablement", () => {
-    for (const supportsReasoningEffort of [true, false]) {
-      expect(
-        captureProviderPayload({
-          reasoning: "high",
-          model: {
-            id: "qwen3:8b",
-            compat: {
-              thinkingFormat: "qwen-chat-template",
-              supportsReasoningEffort,
-              supportedReasoningEfforts: ["LOW", "HIGH"],
-              reasoningEffortMap: { low: "LOW", high: "HIGH" },
+  it.each(["compat", "model"] as const)(
+    "resolves %s maps and honors explicit disablement",
+    (source) => {
+      const mapping = { low: "LOW", high: "HIGH" };
+      for (const supportsReasoningEffort of [true, false]) {
+        expect(
+          captureProviderPayload({
+            reasoning: "high",
+            model: {
+              id: "qwen3:8b",
+              ...(source === "model" ? { thinkingLevelMap: mapping } : {}),
+              compat: {
+                thinkingFormat: "qwen-chat-template",
+                supportsReasoningEffort,
+                supportedReasoningEfforts: ["LOW", "HIGH"],
+                ...(source === "compat" ? { reasoningEffortMap: mapping } : {}),
+              },
             },
+          }),
+        ).toEqual({
+          chat_template_kwargs: {
+            enable_thinking: true,
+            preserve_thinking: true,
+            ...(supportsReasoningEffort ? { reasoning_effort: "HIGH" } : {}),
           },
-        }),
-      ).toEqual({
-        chat_template_kwargs: {
-          enable_thinking: true,
-          preserve_thinking: true,
-          ...(supportsReasoningEffort ? { reasoning_effort: "HIGH" } : {}),
-        },
-      });
-    }
-  });
+        });
+      }
+    },
+  );
 
   it.each(["off", "high", "max"] as const)(
     "uses DeepSeek template kwargs for call-time %s and removes hosted fields",
@@ -183,6 +188,7 @@ describe("vLLM provider thinking composition", () => {
       expect(
         captureProviderPayload({
           thinkingLevel: "high",
+          contextModelId: "nemotron-3-super",
           reasoning,
           initialPayload: { thinking: { type: "enabled" }, reasoning_effort: "high" },
           model: {
@@ -199,6 +205,16 @@ describe("vLLM provider thinking composition", () => {
       });
     },
   );
+
+  it("does not apply a captured DeepSeek dialect to another model", () => {
+    expect(
+      captureProviderPayload({
+        contextModelId: "DeepSeek-V4-Flash",
+        model: { id: "ordinary-model" },
+        initialPayload: { reasoning_effort: "high" },
+      }),
+    ).toEqual({ reasoning_effort: "high" });
+  });
 
   it("preserves explicit DeepSeek template kwargs over generated defaults", () => {
     expect(
