@@ -21,6 +21,8 @@ export type PrometheusMetricStore = ReturnType<typeof createPrometheusMetricStor
 const DURATION_BUCKETS_SECONDS = [
   0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600,
 ];
+// Match diagnostics-otel's one-hour agent range without removing existing le series.
+export const AGENT_DURATION_BUCKETS_SECONDS = [...DURATION_BUCKETS_SECONDS, 900, 1800, 3600];
 const MAX_PROMETHEUS_SERIES = 2048;
 const DROPPED_SERIES_COUNTER_NAME = "openclaw_prometheus_series_dropped_total";
 

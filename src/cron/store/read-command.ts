@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type {
   OpenClawStateReadCommand,
@@ -12,7 +12,6 @@ import {
   readActiveCronRunReceiptOwnersInDatabase,
   readCronRunReceiptCurrentFactsInDatabase,
 } from "./run-receipt-read.js";
-import { observeCronRunRecoveryInDatabase } from "./run-recovery.read.js";
 
 type CronStateReadCommand = Extract<OpenClawStateReadCommand, { type: `cron.${string}` }>;
 
@@ -20,7 +19,6 @@ export function isCronStateReadCommand(
   command: OpenClawStateReadCommand,
 ): command is CronStateReadCommand {
   switch (command.type) {
-    case "cron.observeRunRecovery":
     case "cron.currentReceipt":
     case "cron.scratch":
     case "cron.jobNames":
@@ -34,15 +32,10 @@ export function isCronStateReadCommand(
 
 /** Runs Cron queries inside the shared reader's admitted native frame. */
 export function readCronStateCommandInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: CronStateReadCommand,
 ): Extract<OpenClawStateReadResult, { type: `cron.${string}` }> {
   switch (command.type) {
-    case "cron.observeRunRecovery":
-      return {
-        type: command.type,
-        observation: observeCronRunRecoveryInDatabase(db, command),
-      };
     case "cron.currentReceipt":
       return {
         type: command.type,

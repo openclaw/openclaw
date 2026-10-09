@@ -124,24 +124,14 @@ function scrubEnvRaw(
     return raw;
   }
   const lines = raw.split(/\r?\n/);
-  const nextLines: string[] = [];
-  for (const line of lines) {
+  const nextLines = lines.filter((line) => {
     const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!match) {
-      nextLines.push(line);
-      continue;
-    }
-    const envKey = match[1] ?? "";
-    if (!allowedEnvKeys.has(envKey)) {
-      nextLines.push(line);
-      continue;
-    }
-    const parsedValue = parseEnvAssignmentValue(match[2] ?? "");
-    if (migratedValues.has(parsedValue)) {
-      continue;
-    }
-    nextLines.push(line);
-  }
+    return (
+      !match ||
+      !allowedEnvKeys.has(match[1] ?? "") ||
+      !migratedValues.has(parseEnvAssignmentValue(match[2] ?? ""))
+    );
+  });
   if (nextLines.length === lines.length) {
     return raw;
   }
@@ -678,14 +668,18 @@ function captureFileSnapshot(pathname: string): FileSnapshot {
   };
 }
 
-function restoreFileSnapshot(pathname: string, snapshot: FileSnapshot): void {
+function restoreFileSnapshot(
+  pathname: string,
+  snapshot: FileSnapshot,
+  env: NodeJS.ProcessEnv,
+): void {
   if (!snapshot.existed) {
     if (fs.existsSync(pathname)) {
       fs.rmSync(pathname, { force: true });
     }
     return;
   }
-  writeTextFileAtomic(pathname, snapshot.content, snapshot.mode || 0o600);
+  writeTextFileAtomic(pathname, snapshot.content, snapshot.mode || 0o600, env);
 }
 
 /** Applies a normalized secrets plan, or reports file/auth-store changes in dry-run mode. */
@@ -757,7 +751,7 @@ export async function runSecretsApply(params: {
       afterWrite: { mode: "auto" },
     });
     for (const [pathname, raw] of projected.envRawByPath.entries()) {
-      writeTextFileAtomic(pathname, raw, 0o600);
+      writeTextFileAtomic(pathname, raw, 0o600, env);
     }
     for (const [pathname, { store: value, target }] of projected.authStores) {
       const store = coercePersistedAuthProfileStore(value);
@@ -785,7 +779,7 @@ export async function runSecretsApply(params: {
     // config/auth/env stores out of sync when a later write fails.
     for (const [pathname, snapshot] of snapshots.entries()) {
       try {
-        restoreFileSnapshot(pathname, snapshot);
+        restoreFileSnapshot(pathname, snapshot, env);
       } catch {
         // Best effort only; preserve original error.
       }

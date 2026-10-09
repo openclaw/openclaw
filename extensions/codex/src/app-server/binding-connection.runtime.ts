@@ -16,7 +16,8 @@ export async function resolveCodexBindingAppServerConnection(
   params: CodexBindingAppServerConnectionParams,
   discoverHomes: CodexCatalogHomeDiscovery | null,
 ): Promise<CodexBindingAppServerConnection> {
-  const { binding, authProfileId, assertCurrent, ...runtimeParams } = params;
+  const { binding, authProfileId, assertCurrent, assertCurrentAsync, ...runtimeParams } = params;
+  await assertCurrentAsync?.();
   assertCurrent?.();
   const usesSupervisionConnection = binding?.connectionScope === "supervision";
   if (

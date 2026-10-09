@@ -241,6 +241,8 @@ const SHELL_BUILTIN_DISPATCHERS = new Set(["builtin", "command"]);
 function prepareMutableFileBindingsForArgv(params: {
   commands: readonly string[][];
   cwd?: string;
+  shellCommand?: string | null;
+  allowCommandTextBinding?: boolean;
 }): SystemRunMutableFileBindingResult {
   const operands: SystemRunMutableFileBinding["operands"] = [];
   const commands: string[][] = [];
@@ -255,10 +257,11 @@ function prepareMutableFileBindingsForArgv(params: {
     const prepared = resolveMutableFileOperandSnapshotSync({
       argv,
       cwd: params.cwd,
-      shellCommand: extractShellCommandFromArgv(argv),
+      shellCommand: params.shellCommand ?? extractShellCommandFromArgv(argv),
     });
     if (!prepared.ok) {
       if (
+        params.allowCommandTextBinding !== false &&
         prepared.reason === "unsupported-command-shape" &&
         isSystemRunCommandTextBoundInterpreterInvocation(argv)
       ) {
@@ -454,23 +457,12 @@ export async function prepareSystemRunMutableFileBinding(params: {
   platform?: NodeJS.Platform;
 }): Promise<SystemRunMutableFileBindingResult> {
   if (params.command.kind === "argv") {
-    const prepared = resolveMutableFileOperandSnapshotSync({
-      argv: params.command.argv,
+    return prepareMutableFileBindingsForArgv({
+      commands: [params.command.argv],
       cwd: params.cwd,
-      shellCommand: params.command.shellCommand ?? extractShellCommandFromArgv(params.command.argv),
+      shellCommand: params.command.shellCommand,
+      allowCommandTextBinding: false,
     });
-    if (!prepared.ok) {
-      return prepared;
-    }
-    return {
-      ok: true,
-      binding: {
-        commands: [[...params.command.argv]],
-        operands: prepared.snapshot
-          ? [{ kind: "mutable", argv: [...params.command.argv], snapshot: prepared.snapshot }]
-          : [],
-      },
-    };
   }
   if (params.command.kind === "segments") {
     return prepareMutableFileBindingsForSegments({

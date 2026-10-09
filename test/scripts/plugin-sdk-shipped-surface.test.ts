@@ -51,6 +51,7 @@ describe("shipped Plugin SDK removal authorization", () => {
     ["future date", { removeAfter: "2026-10-03" }],
     ["final compatibility day", { removeAfter: now }],
     ["major gate alone", { removalGate: "next-plugin-sdk-major" }],
+    ["stable deprecation gate without a date", { removalGate: "stable-deprecation-period" }],
     ["invalid calendar date", { removeAfter: "2026-02-30" }],
     ["active record", { status: "active", removeAfter: "2026-10-01" }],
     ["bare name", { surfaces: ["send"], removeAfter: "2026-10-01" }],

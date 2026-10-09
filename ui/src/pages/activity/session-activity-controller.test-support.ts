@@ -29,7 +29,7 @@ export function useSessionActivityControllerFixture() {
   });
   afterEach(() => {
     for (const controller of controllers) {
-      controller.hostDisconnected();
+      controller.dispose();
     }
     controllers.clear();
     vi.restoreAllMocks();
@@ -42,13 +42,8 @@ export function useSessionActivityControllerFixture() {
       const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
       const request = vi.spyOn(client, "request").mockResolvedValue(listing([active]));
       const publications: Array<readonly GatewaySessionRow[] | undefined> = [];
-      const controller = new SessionActivityController({
-        addController() {},
-        removeController() {},
-        requestUpdate() {
-          publications.push(controller.result?.sessions);
-        },
-        updateComplete: Promise.resolve(true),
+      const controller = new SessionActivityController(() => {
+        publications.push(controller.result?.sessions);
       });
       controllers.add(controller);
       return { client, request, controller, publications };

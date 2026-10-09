@@ -264,6 +264,8 @@ it(
         const child = createSubagentRunRecord({
           runId: marker,
           childSessionKey: `agent:main:subagent:${marker}`,
+          childAgentId: "main",
+          childSessionIdentity: { sessionId: `session-${marker}` },
           requesterSessionKey: sessionKey,
           requesterAgentId: "main",
           requesterStorePath: resolvePhysicalSessionStorePath({

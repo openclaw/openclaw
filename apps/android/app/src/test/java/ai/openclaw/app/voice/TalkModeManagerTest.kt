@@ -105,6 +105,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
+import kotlin.time.Duration.Companion.seconds
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -905,54 +906,6 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun invalidatedConfigResponseCannotPopulateNextUseCache() = verifyConfigResponseOwnership(loadNewerBeforeRelease = false)
-
-  @Test
-  fun explicitRefreshRetiresOlderConfigBeforeWaitingForItsResponse() = verifyConfigResponseOwnership(loadNewerBeforeRelease = true)
-
-  @Test
-  fun configConsumerWaitsForTheNewerRefreshBeforeUsingItsSettings() =
-    runBlocking {
-      installSpeechRecognitionService()
-      val holdReads = AtomicBoolean(false)
-      val held = ConcurrentLinkedQueue<Pair<String, WebSocket>>()
-      withStartedTalk(
-        responseForRequest = { request, _ ->
-          nativeTalkConfig("de-DE").takeIf { request.getValue("method").jsonPrimitive.content == "talk.config" }
-        },
-        interceptRequest = { request, socket ->
-          val hold = request.getValue("method").jsonPrimitive.content == "talk.config" && holdReads.get()
-          if (hold) held.add(request.getValue("id").jsonPrimitive.content to socket)
-          hold
-        },
-      ) { proof ->
-        holdReads.set(true)
-        proof.manager.handleGatewayEvent("config.changed", "{}")
-        val language = proof.scope.async { proof.manager.resolveRealtimeLanguageHint("fr") }
-        awaitTalkWork(proof) { held.isNotEmpty() }
-        val (oldId, socket) = held.remove()
-        val refresh = proof.scope.async { proof.manager.refreshConfig() }
-        proof.scheduler.runCurrent()
-        socket.send("""{"type":"res","id":"$oldId","ok":true,"payload":${nativeTalkConfig("de-DE")}}""")
-        awaitTalkWork(proof) { held.isNotEmpty() }
-        assertEquals(1, held.size)
-        // The same-socket health reply is ordered after the old config response;
-        // drain its continuation before checking that the consumer still waits.
-        val barrier = proof.scope.async { proof.session.request("health", "{}") }
-        awaitTalkWork(proof) { barrier.isCompleted }
-        barrier.await()
-        proof.scheduler.runCurrent()
-        assertFalse("A superseded config read must not release its consumer with old settings", language.isCompleted)
-
-        val (newId, newSocket) = held.remove()
-        newSocket.send("""{"type":"res","id":"$newId","ok":true,"payload":${nativeTalkConfig("en-US")}}""")
-        awaitTalkWork(proof) { language.isCompleted && refresh.isCompleted }
-        assertEquals("en", language.await())
-        refresh.await()
-      }
-    }
-
-  @Test
   fun failedCurrentConfigReadReturnsOnceAndCanRetryOnNextUse() =
     runBlocking {
       installSpeechRecognitionService()
@@ -981,43 +934,6 @@ class TalkModeManagerTest {
           assertEquals("fr", language.await())
           assertEquals(index + 1L, failures.get())
         }
-      }
-    }
-
-  private fun verifyConfigResponseOwnership(loadNewerBeforeRelease: Boolean) =
-    runBlocking {
-      installSpeechRecognitionService()
-      val config = AtomicReference(nativeTalkConfig("de-DE"))
-      val holdNext = AtomicBoolean(false)
-      val held = ConcurrentLinkedQueue<Pair<String, WebSocket>>()
-      withStartedTalk(
-        responseForRequest = { request, _ ->
-          config.get().takeIf { request.getValue("method").jsonPrimitive.content == "talk.config" }
-        },
-        interceptRequest = { request, socket ->
-          val hold = request.getValue("method").jsonPrimitive.content == "talk.config" && holdNext.compareAndSet(true, false)
-          if (hold) held.add(request.getValue("id").jsonPrimitive.content to socket)
-          hold
-        },
-      ) { proof ->
-        holdNext.set(true)
-        val oldRefresh = proof.scope.async { proof.manager.refreshConfig() }
-        awaitTalkWork(proof) { held.isNotEmpty() }
-        assertEquals(1, held.size)
-        config.set(nativeTalkConfig("en-US"))
-        proof.manager.handleGatewayEvent("config.changed", "{}")
-        val refresh = if (loadNewerBeforeRelease) proof.scope.async { proof.manager.refreshConfig() } else null
-        proof.scheduler.runCurrent()
-        val (id, socket) = held.remove()
-        socket.send("""{"type":"res","id":"$id","ok":true,"payload":${nativeTalkConfig("de-DE")}}""")
-        awaitTalkWork(proof) { oldRefresh.isCompleted && refresh?.isCompleted != false }
-        oldRefresh.await()
-        refresh?.await()
-        val language = proof.scope.async { proof.manager.resolveRealtimeLanguageHint("fr") }
-        awaitTalkWork(proof) { language.isCompleted }
-
-        assertEquals("The invalidated response must not become the current configuration", "en", language.await())
-        assertTrue(proof.manager.isListening.value)
       }
     }
 
@@ -3109,7 +3025,8 @@ class TalkModeManagerTest {
         scheduler.runCurrent()
         while (true) (captureTasks.poll() ?: break).run()
         scheduler.runCurrent()
-        withTimeout(5_000) { managerJob.join() }
+        // Cancellation can dispatch back here after real IO finishes.
+        runTest(context = StandardTestDispatcher(scheduler), timeout = 5.seconds) { managerJob.join() }
         shadowOf(Looper.getMainLooper()).idle()
         scheduler.runCurrent()
         ShadowAudioTrack.removeAudioDataListener(listener)

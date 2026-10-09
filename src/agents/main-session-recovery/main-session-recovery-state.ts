@@ -153,6 +153,7 @@ export function hasCompletedMainSessionRecoveryOutcome(entry: SessionEntry): boo
     entry.status !== "interrupted" &&
     !isRetryableUnadoptedChatClaim(entry) &&
     !entry.pendingFinalDelivery &&
+    !entry.restartRecoveryHarnessCompletion &&
     (entry.restartRecoveryRuns ?? []).every((run) =>
       hasRestartRecoveryTerminalRun(entry, run.runId),
     )

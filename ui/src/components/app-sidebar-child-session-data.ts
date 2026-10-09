@@ -464,37 +464,16 @@ export function publishActiveSessionRow(
   inheritRow: SessionCapability["inheritRow"],
   isCurrent: () => boolean,
 ): GatewaySessionRow | null {
-  // Routed descriptors share the capability's freshness and placement owner;
-  // both lineage and child-list completions must publish its accepted row.
   const sessions = owner.context?.sessions;
   if (!isCurrent()) {
     return null;
   }
-  const rowIsCurrent =
-    reconcile(row, owner.sessionsResult?.defaults, { archivedFilter: "all" }) === true;
-  if (!isCurrent()) {
-    return null;
+  if (reconcile(row, owner.sessionsResult?.defaults, { archivedFilter: "all" }) !== true) {
+    return owner.activeSessionLineageSelectedRow;
   }
-  const currentRow = () =>
-    sessions?.state.result?.sessions.find((candidate) =>
-      areUiSessionKeysEquivalent(candidate.key, row.key),
-    );
-  if (!rowIsCurrent) {
-    // Primary can lag a newer managed row; use the owner's existing admission checks.
-    const current = [currentRow(), owner.activeSessionLineageSelectedRow].find(
-      (candidate) =>
-        candidate &&
-        isCurrent() &&
-        sessions?.reconcile(candidate, undefined, { archivedFilter: "all" }) === true,
-    );
-    if (!isCurrent()) {
-      return null;
-    }
-    if (!current) {
-      return owner.activeSessionLineageSelectedRow;
-    }
-  }
-  const accepted = currentRow();
+  const accepted = sessions?.state.result?.sessions.find((candidate) =>
+    areUiSessionKeysEquivalent(candidate.key, row.key),
+  );
   if (accepted) {
     // A current request can still contain a timestamp-rejected row.
     const previous = owner.activeSessionLineageSelectedRow ?? undefined;
@@ -508,7 +487,6 @@ export function publishActiveSessionLineage(
   owner: SessionLineageOwner,
   sessionKey: string,
   lineage: NonNullable<Awaited<ReturnType<typeof fetchSessionLineage>>>,
-  sourceCanonicalListRevision: number,
   inheritRow: SessionCapability["inheritRow"],
   isCurrent: () => boolean,
 ): void {
@@ -548,8 +526,6 @@ export function publishActiveSessionLineage(
     rowsByParent,
   );
   owner.activeSessionLineageRoot = topmostRow;
-  // Actual describes keep their issuance receipt; cached lineage still selects
-  // the newest held row before applying its primary-list fence.
   const selectedRow =
     lineage.selectedObservation?.row ??
     [
@@ -571,10 +547,7 @@ export function publishActiveSessionLineage(
     const reconcile: SessionCapability["reconcile"] =
       lineage.selectedObservation?.reconcile ??
       ((row, defaults, options) =>
-        owner.context?.sessions.reconcile(row, defaults, {
-          ...options,
-          sourceCanonicalListRevision,
-        }) ?? false);
+        owner.context?.sessions.reconcile(row, defaults, options) ?? false);
     publishActiveSessionRow(owner, selectedRow, reconcile, inheritRow, isCurrent);
   } else {
     owner.activeSessionLineageSelectedRow = lineage.lookupFailed ? previousSelectedRow : null;

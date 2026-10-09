@@ -162,7 +162,7 @@ describe("agent delivery target resolution", () => {
 
     mocks.resolveOutboundTarget.mockClear();
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "channel:final" });
-    resolveAgentOutboundTarget({
+    await resolveAgentOutboundTarget({
       cfg: {} as OpenClawConfig,
       plan,
       targetMode: "implicit",

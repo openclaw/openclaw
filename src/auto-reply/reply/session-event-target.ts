@@ -1,7 +1,6 @@
 /** Captured destination identity and live generation facts for ordinary session events. */
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { intersectSessionPermissionModes } from "../../agents/session-permission-exec-mode.js";
 import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
@@ -16,10 +15,7 @@ import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { SessionEntryReadSourcePreparation } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { isSessionStoreReadCandidateCurrent } from "../../config/sessions/session-store-read-candidates.js";
-import {
-  intersectSessionToolOverrides,
-  sessionToolOverridesEqual,
-} from "../../config/sessions/session-tool-overrides.js";
+import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -36,6 +32,7 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
+import { narrowSessionEventSettings } from "./session-event-policy.js";
 
 type CapturedEventSource = {
   database: Parameters<SessionEntryReadSourcePreparation>[0];
@@ -43,14 +40,25 @@ type CapturedEventSource = {
   selectedStore: { path: string; physicalPath: string };
 };
 
-function assertCapturedEventSource(source: CapturedEventSource) {
+function assertCapturedEventSource(source: CapturedEventSource | undefined) {
+  if (!source) {
+    return;
+  }
   const identity = readDatabasePathIdentitySync(source.database.path);
   if (
     identity.key !== source.identity.key ||
     identity.birthtime !== source.identity.birthtime ||
     !isSessionStoreReadCandidateCurrent(source.selectedStore)
   ) {
-    throw new Error("Session event destination storage changed after capture");
+    throw new Error(
+      `Session event destination storage changed after capture (${JSON.stringify({
+        capturedFile: source.identity.key.startsWith("file:"),
+        currentFile: identity.key.startsWith("file:"),
+        sameIdentity: identity.key === source.identity.key,
+        sameBirthtime: identity.birthtime === source.identity.birthtime,
+        sameCandidate: isSessionStoreReadCandidateCurrent(source.selectedStore),
+      })})`,
+    );
   }
 }
 
@@ -178,9 +186,7 @@ export async function captureSessionEventTargetForHost(
         };
       },
     );
-    if (source) {
-      assertCapturedEventSource(source);
-    }
+    assertCapturedEventSource(source);
     let toolsAllow: string[] | undefined;
     if (caller && callerAgentMatches) {
       assertCaptureCurrent();
@@ -191,7 +197,7 @@ export async function captureSessionEventTargetForHost(
         ) {
           throw new Error("Session event producer tool surface exceeds the supported bound");
         }
-        toolsAllow = [...caller.sessionEventToolsAllow];
+        toolsAllow = intersectSessionEventToolsAllow(caller.sessionEventToolsAllow);
       }
     }
     toolsAllow = intersectSessionEventToolsAllow(toolsAllow, options.producerPolicy?.toolsAllow);
@@ -267,13 +273,8 @@ export async function prepareSessionEventTargetForHost(
     options.assertAcceptanceCurrent?.();
     assertSessionEventTargetCurrent(target);
   };
-  const assertSource = () => {
-    if (source) {
-      assertCapturedEventSource(source);
-    }
-  };
   assertAcceptance();
-  assertSource();
+  assertCapturedEventSource(source);
   let preparation:
     | ReturnType<
         typeof import("../../config/sessions/session-accessor.entry-mutation.js").prepareSessionEntryMutationDatabases
@@ -310,7 +311,7 @@ export async function prepareSessionEventTargetForHost(
       assertAcceptance();
       prepared?.assertCurrent();
       if (!prepared) {
-        assertSource();
+        assertCapturedEventSource(source);
       } else if (source?.identity.key.startsWith("path:")) {
         const accepted = prepared.execution?.fileIdentity;
         if (!accepted || typeof accepted.birthtime !== "string") {
@@ -335,16 +336,12 @@ export async function prepareSessionEventTargetForHost(
       });
       prepared?.assertCurrent();
       assertAcceptance();
-      if (preparedSource) {
-        assertCapturedEventSource(preparedSource);
-      }
+      assertCapturedEventSource(preparedSource);
     } finally {
       await preparation?.[Symbol.asyncDispose]();
     }
     assertAcceptance();
-    if (preparedSource) {
-      assertCapturedEventSource(preparedSource);
-    }
+    assertCapturedEventSource(preparedSource);
     lease.assertCurrent();
     // Only canonical native preparation can advance captured physical absence.
     if (preparedSource !== source) {
@@ -354,22 +351,15 @@ export async function prepareSessionEventTargetForHost(
       }
       targetScopes.set(target, { ...captured, source: preparedSource });
     }
-  } catch (error) {
-    lease?.release();
-    throw error;
-  }
-  const retained = lease;
-  const assertTargetCurrent = () => {
-    assertSessionEventTargetCurrent(target);
-    if (preparedSource) {
+    const retained = lease;
+    const assertTargetCurrent = () => {
+      assertSessionEventTargetCurrent(target);
       assertCapturedEventSource(preparedSource);
-    }
-  };
-  const assertCurrent = () => {
-    assertTargetCurrent();
-    retained.assertCurrent();
-  };
-  try {
+    };
+    const assertCurrent = () => {
+      assertTargetCurrent();
+      retained.assertCurrent();
+    };
     assertCurrent();
     return {
       ...retained,
@@ -388,7 +378,7 @@ export async function prepareSessionEventTargetForHost(
       },
     };
   } catch (error) {
-    retained.release();
+    lease?.release();
     throw error;
   }
 }
@@ -426,10 +416,7 @@ export function combineSessionEventTargetsForHost(
   const assertCurrent = () => {
     for (const target of retained) {
       assertSessionEventTargetCurrent(target);
-      const source = targetScopes.get(target)?.source;
-      if (source) {
-        assertCapturedEventSource(source);
-      }
+      assertCapturedEventSource(targetScopes.get(target)?.source);
     }
   };
   assertCurrent();
@@ -464,20 +451,6 @@ export function intersectSessionEventToolsAllow(
     restrictions.every((restriction) => isRuntimeToolAllowed(name, restriction)),
   );
   return attachToolAllowlistIntersection(candidates, restrictions);
-}
-
-/** A delayed producer can retain restrictions, never replace current session authority. */
-export function narrowSessionEventSettings(
-  retained: SessionEventTarget["settings"],
-  current: SessionEventTarget["settings"],
-): NonNullable<SessionEventTarget["settings"]> {
-  return {
-    permissionMode: intersectSessionPermissionModes(
-      retained?.permissionMode,
-      current?.permissionMode,
-    ),
-    toolOverrides: intersectSessionToolOverrides(retained?.toolOverrides, current?.toolOverrides),
-  };
 }
 
 /** Frozen tools may continue only while the current session still covers their admitted policy. */

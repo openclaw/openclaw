@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
@@ -76,14 +77,14 @@ describe("realtime relay finalization", () => {
     {
       providerAsync: true,
       fails: false,
-      changeState: false,
+      changeState: true,
       createRecord: true,
       permitFails: true,
     },
     {
       providerAsync: true,
       fails: false,
-      changeState: false,
+      changeState: true,
       createRecord: false,
       cold: true,
       sourceFails: true,
@@ -112,6 +113,7 @@ describe("realtime relay finalization", () => {
       finalization = completion;
       const storePath = state.statePath("finalize-sessions.sqlite");
       const cfg: OpenClawConfig = { session: { store: storePath } };
+      setRuntimeConfigSnapshot(cfg);
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "agent:main:main", storePath },
         { sessionId: "relay-finalize", updatedAt: Date.now() },
@@ -158,7 +160,7 @@ describe("realtime relay finalization", () => {
         connId: "conn-finalize",
         cfg,
         controlSource: "transcript",
-        sessionTarget: prepareTalkSessionTarget(cfg, "agent:main:main"),
+        sessionTarget: await prepareTalkSessionTarget(cfg, "agent:main:main"),
         provider: {
           id: "relay-test",
           label: "Relay Test",
@@ -177,7 +179,7 @@ describe("realtime relay finalization", () => {
       const target = { relaySessionId: session.relaySessionId, connId: "conn-finalize" };
       active = target;
       if (createRecord) {
-        ensureTalkRealtimeRelayVoiceSession({ ...target, sessionKey: "agent:main:main" });
+        await ensureTalkRealtimeRelayVoiceSession({ ...target, sessionKey: "agent:main:main" });
       }
       if (cold) {
         expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).toBe(false);
@@ -226,9 +228,12 @@ describe("realtime relay finalization", () => {
           env.restore();
         }
       }
-      if (!sourceFails) {
+      if (!sourceFails && !silent) {
+        if (!permitFails) {
+          await owned.voiceSessionCreation;
+        }
         expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)?.status).toBe(
-          silent ? undefined : "open",
+          "open",
         );
       }
       const emitted = () => broadcastToConnIds.mock.calls.map(([, payload]) => payload);

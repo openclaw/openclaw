@@ -59,6 +59,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // Hash-only change notice after a persisted config write; content stays
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],
+  "agent.identity.changed": [READ_SCOPE],
   "users.prefs.changed": [SESSION_READ_SCOPE],
   "mentions.changed": [READ_SCOPE],
   "skills.changed": [READ_SCOPE],

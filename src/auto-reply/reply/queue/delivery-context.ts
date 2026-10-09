@@ -1,6 +1,7 @@
-import { stableStringify } from "@openclaw/normalization-core";
+import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withSandboxRuntimeStatusesInWorker } from "../../../agents/sandbox/runtime-status.js";
+import { withPreparedSessionCapabilityRead } from "../../../agents/subagents/spawn/subagent-session-store.js";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { combineChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
@@ -182,52 +183,21 @@ export async function prepareNextDeliveryGroup(
   assertDrainCurrent: () => void,
 ): Promise<{ items: FollowupRun[]; assertCurrent: () => void }> {
   const items = readItems().slice();
-  const sourceKey = (item: FollowupRun) =>
-    JSON.stringify([
-      resolveFollowupDeliveryStorageKey(item),
-      item.run.agentId,
-      item.run.sessionKey,
-      item.run.sessionId,
-      item.run.sessionFile,
-      item.admissionSessionId,
-      item.run.gatewayUiCommandTarget,
-    ]);
-  const sources = items.map((item) => ({
-    item,
-    run: item.run,
-    config: item.run.config,
-    lifecycle: item.turnAdoptionLifecycle,
-    operator: item.operatorAuthority,
-    key: sourceKey(item),
-  }));
   const assertCurrent = () => {
     assertDrainCurrent();
-    for (const source of sources) {
-      source.item.operatorAuthority?.assertCurrent();
-    }
-    const current = readItems();
-    for (const [index, source] of sources.entries()) {
-      const { item } = source;
-      if (
-        current[index] !== item ||
-        isFollowupRunAborted(item) ||
-        item.run !== source.run ||
-        item.run.config !== source.config ||
-        item.turnAdoptionLifecycle !== source.lifecycle ||
-        item.operatorAuthority !== source.operator ||
-        sourceKey(item) !== source.key
-      ) {
+    for (const item of items) {
+      item.operatorAuthority?.assertCurrent();
+      if (isFollowupRunAborted(item)) {
         throw new FollowupRunDeferredError("Queued delivery source changed during preparation");
       }
     }
-    assertDrainCurrent();
   };
   assertCurrent();
   if (items.length <= 1) {
     return { items, assertCurrent };
   }
   const policyItems = items.filter((item) => item.run.gatewayUiCommandTarget && !item.disableTools);
-  return withSandboxRuntimeStatusesInWorker(
+  const statuses = await withSandboxRuntimeStatusesInWorker(
     policyItems.map(({ run }) => ({
       cfg: run.config,
       agentId: run.agentId,
@@ -235,34 +205,37 @@ export async function prepareNextDeliveryGroup(
       classificationSessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     })),
     { env: { ...process.env }, cwd: process.cwd(), assertCurrent },
-    (statuses) => {
-      const group: FollowupRun[] = [];
-      let firstKey: string | undefined;
-      for (const item of items) {
-        const index = policyItems.indexOf(item);
-        const profile =
-          index < 0
-            ? undefined
-            : resolveReplyToolAuthorityContext(item, undefined, statuses[index]).capabilityProfile;
-        const storageKey = resolveFollowupDeliveryStorageKey(item);
-        const personalTargets = profile
-          ? resolveReplyPersonalToolTargets(item, profile)
-          : undefined;
-        const key = JSON.stringify([
-          storageKey,
-          personalTargets ? stableStringify(personalTargets.screenTarget ?? null) : "null",
-          personalTargets?.themeProfileId ?? "",
-        ]);
-        if (firstKey !== undefined && key !== firstKey) {
-          break;
-        }
-        firstKey = key;
-        group.push(item);
-      }
-      assertCurrent();
-      return { items: group, assertCurrent };
-    },
+    (prepared) => prepared,
   );
+  return withPreparedSessionCapabilityRead(() => {
+    const group: FollowupRun[] = [];
+    let firstKey: string | undefined;
+    for (const item of items) {
+      const index = policyItems.indexOf(item);
+      const profile =
+        index < 0
+          ? undefined
+          : resolveReplyToolAuthorityContext(
+              item,
+              undefined,
+              expectDefined(statuses[index], "prepared sandbox status"),
+            ).capabilityProfile;
+      const storageKey = resolveFollowupDeliveryStorageKey(item);
+      const personalTargets = profile ? resolveReplyPersonalToolTargets(item, profile) : undefined;
+      const key = JSON.stringify([
+        storageKey,
+        personalTargets ? stableStringify(personalTargets.screenTarget ?? null) : "null",
+        personalTargets?.themeProfileId ?? "",
+      ]);
+      if (firstKey !== undefined && key !== firstKey) {
+        break;
+      }
+      firstKey = key;
+      group.push(item);
+    }
+    assertCurrent();
+    return { items: group, assertCurrent };
+  });
 }
 
 export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {

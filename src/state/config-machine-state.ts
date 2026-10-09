@@ -1,22 +1,32 @@
 // Machine-owned values retired from openclaw.json live in the shared state database.
-import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { readConfigMachineStateRowInDatabase } from "./config-machine-state-row.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
+
+export {
+  getTtsMachinePathAdmission,
+  readConfigMachineStateRowInDatabase,
+  type ConfigMachineStateDatabase,
+} from "./config-machine-state-row.js";
 
 type ConfigMachineStateReadCommand = Extract<
   OpenClawStateReadCommand,
-  { type: "nodeHost.config" | "operator.channelPolicy" | "tts.prefsPath" }
+  {
+    type:
+      | "nodeHost.config"
+      | "cron.store"
+      | "hooks.internal.installs"
+      | "operator.channelPolicy"
+      | "tts.prefsPath"
+      | "voicewake.triggers"
+      | "voicewake.routing";
+  }
 >;
 
 export function isConfigMachineStateReadCommand(
@@ -24,15 +34,19 @@ export function isConfigMachineStateReadCommand(
 ): command is ConfigMachineStateReadCommand {
   return (
     command.type === "nodeHost.config" ||
+    command.type === "cron.store" ||
+    command.type === "hooks.internal.installs" ||
     command.type === "operator.channelPolicy" ||
-    command.type === "tts.prefsPath"
+    command.type === "tts.prefsPath" ||
+    command.type === "voicewake.triggers" ||
+    command.type === "voicewake.routing"
   );
 }
 
 export function readConfigMachineStateCommandInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   command: ConfigMachineStateReadCommand,
-): Extract<OpenClawStateReadResult, { type: ConfigMachineStateReadCommand["type"] }> {
+) {
   return {
     type: command.type,
     // Activation may precede deferred publication; never issue authority before v19.
@@ -44,52 +58,18 @@ export function readConfigMachineStateCommandInDatabase(
   };
 }
 
-export type ConfigMachineStateDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
-
-export function normalizeConfigMachineStateKey(key: string): string {
-  const normalized = key.trim();
-  if (!normalized) {
-    throw new Error("config machine state key must not be empty");
-  }
-  return normalized;
-}
-
-export function readConfigMachineStateRowInDatabase(database: DatabaseSync, key: string) {
-  if (!tableExists(database, "config_machine_state")) {
-    return undefined;
-  }
-  const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database);
-  return executeSqliteQueryTakeFirstSync(
-    database,
-    db
-      .selectFrom("config_machine_state")
-      .select(["value_json", "updated_at_ms"])
-      .where("state_key", "=", normalizeConfigMachineStateKey(key)),
-  );
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Callers own the JSON shape for open-ended state keys.
-export function readConfigMachineStateWithMetadata<T>(
-  key: string,
-  options: OpenClawStateDatabaseOptions = {},
-  behavior: { artifactPreservingReadOnly?: boolean } = {},
-): { value: T; updatedAtMs: number } | undefined {
-  const read = ({ db: database }: { db: DatabaseSync }) => {
-    const row = readConfigMachineStateRowInDatabase(database, key);
-    return row
-      ? { value: JSON.parse(row.value_json) as T, updatedAtMs: row.updated_at_ms }
-      : undefined;
-  };
-  return behavior.artifactPreservingReadOnly
-    ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, options)
-    : withExistingOpenClawStateDatabaseReadOnly(read, options);
-}
-
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Callers own the JSON shape for open-ended state keys.
 export function readConfigMachineState<T>(
   key: string,
   options: OpenClawStateDatabaseOptions = {},
   behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): T | undefined {
-  return readConfigMachineStateWithMetadata<T>(key, options, behavior)?.value;
+  const read = ({ db: database }: { db: EngineConnection }) => {
+    const row = readConfigMachineStateRowInDatabase(database, key);
+    // SAFETY: Each key's owner defines its persisted JSON shape.
+    return row ? (JSON.parse(row.value_json) as T) : undefined;
+  };
+  return behavior.artifactPreservingReadOnly
+    ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, options)
+    : withExistingOpenClawStateDatabaseReadOnly(read, options);
 }

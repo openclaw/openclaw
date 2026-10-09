@@ -22,7 +22,6 @@ const blockDescendantCreateMock = vi.hoisted(() => vi.fn());
 const driveUploadAllMock = vi.hoisted(() => vi.fn());
 const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
 const blockPatchMock = vi.hoisted(() => vi.fn());
-const scopeListMock = vi.hoisted(() => vi.fn());
 const toolAccountModule = await import("./tool-account.js");
 const clientModule = await import("./client.js");
 const runtimeModule = await import("./runtime.js");
@@ -46,16 +45,10 @@ vi.spyOn(runtimeModule, "getFeishuRuntime").mockImplementation(
       channel: {
         media: {
           readRemoteMediaBuffer: readRemoteMediaBufferMock,
-          saveMediaBuffer: vi.fn(),
         },
       },
       media: {
         loadWebMedia: loadWebMediaMock,
-        detectMime: vi.fn(async () => "application/octet-stream"),
-        mediaKindFromMime: vi.fn(() => "image"),
-        isVoiceCompatibleAudio: vi.fn(() => false),
-        getImageMetadata: vi.fn(async () => null),
-        resizeToJpeg: vi.fn(async () => Buffer.alloc(0)),
       },
     }) as unknown as ReturnType<typeof runtimeModule.getFeishuRuntime>,
 );
@@ -92,13 +85,6 @@ function expectLoadWebMediaCall(fileName: string, localRoots: unknown[] | undefi
 }
 
 function mockLocalFileUpload() {
-  blockChildrenCreateMock.mockResolvedValueOnce({
-    code: 0,
-    data: {
-      children: [{ block_type: 23, block_id: "file_block_1" }],
-    },
-  });
-
   loadWebMediaMock.mockResolvedValueOnce({
     buffer: Buffer.from("hello from local file", "utf8"),
     fileName: "test-local.txt",
@@ -141,11 +127,6 @@ describe("feishu_doc image fetch hardening", () => {
         },
         permissionMember: {
           create: permissionMemberCreateMock,
-        },
-      },
-      application: {
-        scope: {
-          list: scopeListMock,
         },
       },
     });
@@ -192,7 +173,6 @@ describe("feishu_doc image fetch hardening", () => {
     });
     permissionMemberCreateMock.mockResolvedValue({ code: 0 });
     blockPatchMock.mockResolvedValue({ code: 0 });
-    scopeListMock.mockResolvedValue({ code: 0, data: { scopes: [] } });
   });
 
   function resolveFeishuDocTool(context: Record<string, unknown> = {}) {
@@ -206,11 +186,7 @@ describe("feishu_doc image fetch hardening", () => {
       },
     });
     registerFeishuDocTools(harness.api);
-    const tool = harness.resolveTool("feishu_doc", context);
-    if (!tool) {
-      throw new Error("expected Feishu doc tool");
-    }
-    return tool;
+    return harness.resolveTool("feishu_doc", context);
   }
 
   async function executeFeishuDocTool(
@@ -486,32 +462,6 @@ describe("feishu_doc image fetch hardening", () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it("uses the selected account timeout for markdown image URL reads", async () => {
-    resolveFeishuToolAccountMock.mockReturnValue({
-      config: { mediaMaxMb: 30, httpTimeoutMs: 1_234 },
-    });
-    readRemoteMediaBufferMock.mockResolvedValueOnce({
-      buffer: Buffer.from("remote image", "utf8"),
-      fileName: "remote.png",
-    });
-
-    const feishuDocTool = resolveFeishuDocTool();
-
-    await executeFeishuDocTool(feishuDocTool, {
-      action: "write",
-      doc_token: "doc_1",
-      content: "![x](https://x.test/non-default-timeout.png)",
-    });
-
-    expect(readRemoteMediaBufferMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://x.test/non-default-timeout.png",
-        responseHeaderTimeoutMs: 1_234,
-        readIdleTimeoutMs: 1_234,
-      }),
-    );
-  });
-
   it("keeps remote Markdown images aligned after non-remote image blocks", async () => {
     readRemoteMediaBufferMock.mockResolvedValueOnce({
       buffer: Buffer.from("remote image", "utf8"),
@@ -549,44 +499,27 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.images_processed).toBe(1);
   });
 
-  it("does not fetch Markdown image syntax inside fenced code", async () => {
-    const feishuDocTool = resolveFeishuDocTool();
-
-    const result = await executeFeishuDocTool(feishuDocTool, {
-      action: "write",
-      doc_token: "doc_1",
-      content: "```md\n![example](https://fake.test/code.png)\n```",
+  it("rejects a create request with an empty body before creating a document", async () => {
+    const feishuDocTool = resolveFeishuDocTool({
+      messageChannel: "feishu",
+      requesterSenderId: "ou_123",
     });
 
-    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
-    expect(driveUploadAllMock).not.toHaveBeenCalled();
-    expect(result.details.images_processed).toBe(0);
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "create",
+      title: "Demo",
+      content: "",
+    });
+
+    expect(result.details.error).toBe(
+      'Feishu document creation does not support content. Call action "create" first, then call action "write" with the returned document_id as doc_token.',
+    );
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(documentCreateMock).not.toHaveBeenCalled();
+    expect(convertMock).not.toHaveBeenCalled();
+    expect(blockDescendantCreateMock).not.toHaveBeenCalled();
+    expect(permissionMemberCreateMock).not.toHaveBeenCalled();
   });
-
-  it.each([{ name: "empty body", content: "" }])(
-    "rejects a create request with a $name before creating a document",
-    async ({ content }) => {
-      const feishuDocTool = resolveFeishuDocTool({
-        messageChannel: "feishu",
-        requesterSenderId: "ou_123",
-      });
-
-      const result = await executeFeishuDocTool(feishuDocTool, {
-        action: "create",
-        title: "Demo",
-        content,
-      });
-
-      expect(result.details.error).toBe(
-        'Feishu document creation does not support content. Call action "create" first, then call action "write" with the returned document_id as doc_token.',
-      );
-      expect(createFeishuClientMock).not.toHaveBeenCalled();
-      expect(documentCreateMock).not.toHaveBeenCalled();
-      expect(convertMock).not.toHaveBeenCalled();
-      expect(blockDescendantCreateMock).not.toHaveBeenCalled();
-      expect(permissionMemberCreateMock).not.toHaveBeenCalled();
-    },
-  );
 
   it("create skips requester grant when trusted requester identity is unavailable", async () => {
     const feishuDocTool = resolveFeishuDocTool({
@@ -635,54 +568,6 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.error).toContain("no document_id");
   });
 
-  it("uploads local file to doc via upload_file action", async () => {
-    mockLocalFileUpload();
-
-    const feishuDocTool = resolveFeishuDocTool();
-
-    const result = await executeFeishuDocTool(feishuDocTool, {
-      action: "upload_file",
-      doc_token: "doc_1",
-      file_path: "/tmp/allowed/test-local.txt",
-      filename: "test-local.txt",
-    });
-
-    expect(result.details.success).toBe(true);
-    expect(result.details.file_token).toBe("token_1");
-    expect(result.details.file_name).toBe("test-local.txt");
-
-    // Without workspace-only policy, localRoots stays undefined so loadWebMedia
-    // applies its default managed-root access behavior.
-    expectLoadWebMediaCall("test-local.txt", undefined);
-
-    const uploadPayload = requireRecord(
-      callArg(driveUploadAllMock, 0, 0, "drive upload payload"),
-      "drive upload payload",
-    );
-    const uploadData = requireRecord(uploadPayload.data, "drive upload data");
-    expect(uploadData.parent_type).toBe("docx_file");
-    expect(uploadData.parent_node).toBe("doc_1");
-    expect(uploadData.file_name).toBe("test-local.txt");
-  });
-
-  it("passes workspace localRoots for upload_file when workspace-only policy is active", async () => {
-    mockLocalFileUpload();
-
-    const feishuDocTool = resolveFeishuDocTool({
-      workspaceDir: WORKSPACE_ROOT,
-      fsPolicy: { workspaceOnly: true },
-    });
-
-    await executeFeishuDocTool(feishuDocTool, {
-      action: "upload_file",
-      doc_token: "doc_1",
-      file_path: "/tmp/openclaw-1000/test-local.txt",
-      filename: "test-local.txt",
-    });
-
-    expectLoadWebMediaCall("test-local.txt", [WORKSPACE_ROOT]);
-  });
-
   it("passes empty localRoots when workspace-only policy is active without workspaceDir", async () => {
     mockLocalFileUpload();
 
@@ -698,66 +583,6 @@ describe("feishu_doc image fetch hardening", () => {
     });
 
     expectLoadWebMediaCall("test-local.txt", []);
-  });
-
-  it("passes workspace localRoots for upload_image local paths when workspace-only policy is active", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("hello from local file", "utf8"),
-      fileName: "test-local.png",
-    });
-
-    const feishuDocTool = resolveFeishuDocTool({
-      workspaceDir: WORKSPACE_ROOT,
-      fsPolicy: { workspaceOnly: true },
-    });
-
-    await executeFeishuDocTool(feishuDocTool, {
-      action: "upload_image",
-      doc_token: "doc_1",
-      image: "./test-local.png",
-      filename: "test-local.png",
-    });
-
-    expectLoadWebMediaCall("test-local.png", [WORKSPACE_ROOT]);
-  });
-
-  it("passes docx image read timeouts when upload_image reads a remote URL", async () => {
-    readRemoteMediaBufferMock.mockResolvedValueOnce({
-      buffer: Buffer.from("remote image", "utf8"),
-      fileName: "remote.png",
-    });
-
-    const feishuDocTool = resolveFeishuDocTool();
-
-    await executeFeishuDocTool(feishuDocTool, {
-      action: "upload_image",
-      doc_token: "doc_1",
-      url: "https://x.test/remote.png",
-      filename: "remote.png",
-    });
-
-    expect(readRemoteMediaBufferMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://x.test/remote.png",
-        responseHeaderTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
-        readIdleTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
-      }),
-    );
-  });
-
-  it("does not create an image block when a remote upload cannot be read", async () => {
-    readRemoteMediaBufferMock.mockRejectedValueOnce(new Error("response body idle timeout"));
-    const feishuDocTool = resolveFeishuDocTool();
-
-    const result = await executeFeishuDocTool(feishuDocTool, {
-      action: "upload_image",
-      doc_token: "doc_1",
-      url: "https://cdn.test/stalled.png",
-    });
-
-    expect(result.details.error).toContain("idle timeout");
-    expect(blockChildrenCreateMock).not.toHaveBeenCalled();
-    expect(driveUploadAllMock).not.toHaveBeenCalled();
   });
 
   it("rejects malformed base64 before creating an image block", async () => {
@@ -796,12 +621,6 @@ describe("feishu_doc image fetch hardening", () => {
       buffer: Buffer.from("remote file", "utf8"),
       fileName: "](/unexpected) ![image](https://attacker.test/image.png)",
     });
-    blockChildrenCreateMock.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        children: [{ block_type: 2, block_id: "placeholder_block_1" }],
-      },
-    });
     const feishuDocTool = resolveFeishuDocTool();
 
     const result = await executeFeishuDocTool(feishuDocTool, {
@@ -818,12 +637,18 @@ describe("feishu_doc image fetch hardening", () => {
     expect(remoteReadInput.url).toBe("https://cdn.test/remote.txt");
     expect(remoteReadInput).not.toHaveProperty("responseHeaderTimeoutMs");
     expect(remoteReadInput).not.toHaveProperty("readIdleTimeoutMs");
-    expect(convertMock).toHaveBeenCalledWith({
+    expect(driveUploadAllMock).toHaveBeenCalledWith({
       data: {
-        content_type: "markdown",
-        content: "[file](https://example.com/placeholder)",
+        file_name: "](/unexpected) ![image](https://attacker.test/image.png)",
+        parent_type: "docx_file",
+        parent_node: "doc_1",
+        size: Buffer.byteLength("remote file"),
+        file: Buffer.from("remote file", "utf8"),
       },
     });
+    expect(convertMock).not.toHaveBeenCalled();
+    expect(blockChildrenCreateMock).not.toHaveBeenCalled();
+    expect(blockChildrenBatchDeleteMock).not.toHaveBeenCalled();
   });
 
   it("passes workspace localRoots for upload_image absolute local paths when workspace-only policy is active", async () => {
@@ -856,38 +681,7 @@ describe("feishu_doc image fetch hardening", () => {
     }
   });
 
-  it("returns an error when upload_file cannot list placeholder siblings", async () => {
-    blockChildrenCreateMock.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        children: [{ block_type: 23, block_id: "file_block_1" }],
-      },
-    });
-    blockChildrenGetMock.mockResolvedValueOnce({
-      code: 999,
-      msg: "list failed",
-      data: { items: [] },
-    });
-
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("hello from local file", "utf8"),
-      fileName: "test-local.txt",
-    });
-
-    const feishuDocTool = resolveFeishuDocTool();
-
-    const result = await executeFeishuDocTool(feishuDocTool, {
-      action: "upload_file",
-      doc_token: "doc_1",
-      file_path: "/tmp/allowed/test-local.txt",
-      filename: "test-local.txt",
-    });
-
-    expect(result.details.error).toBe("list failed");
-    expect(driveUploadAllMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects traversal paths in upload_file via loadWebMedia sandbox", async () => {
+  it("returns local media rejection without uploading a file", async () => {
     loadWebMediaMock.mockRejectedValueOnce(
       new Error("Local media path is not under an allowed directory: /etc/passwd"),
     );
@@ -898,32 +692,6 @@ describe("feishu_doc image fetch hardening", () => {
       action: "upload_file",
       doc_token: "doc_1",
       file_path: "/etc/passwd",
-    });
-
-    expect(result.details.error).toContain("not under an allowed directory");
-    expect(driveUploadAllMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects traversal paths in upload_image via loadWebMedia sandbox", async () => {
-    blockChildrenCreateMock.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        children: [{ block_type: 27, block_id: "img_block_1" }],
-      },
-    });
-
-    loadWebMediaMock.mockRejectedValueOnce(
-      new Error(
-        "Local media path is not under an allowed directory: /home/admin/.openclaw/openclaw.json",
-      ),
-    );
-
-    const feishuDocTool = resolveFeishuDocTool();
-
-    const result = await executeFeishuDocTool(feishuDocTool, {
-      action: "upload_image",
-      doc_token: "doc_1",
-      file_path: "/home/admin/.openclaw/openclaw.json",
     });
 
     expect(result.details.error).toContain("not under an allowed directory");

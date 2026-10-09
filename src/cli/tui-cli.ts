@@ -69,18 +69,10 @@ export async function runTuiCliAction(
       })
     : undefined;
   const { runTui } = await import("../tui/tui.js");
+  const { url, token, password, tlsFingerprint } = resolved?.gateway ?? {};
   await runTui({
     local: isLocal,
-    ...(resolved?.gateway.url
-      ? {
-          boundGateway: {
-            url: resolved.gateway.url,
-            token: resolved.gateway.token,
-            password: resolved.gateway.password,
-            tlsFingerprint: resolved.gateway.tlsFingerprint,
-          },
-        }
-      : gateway),
+    ...(url ? { boundGateway: { url, token, password, tlsFingerprint } } : gateway),
     session: resolved?.sessionKey ?? opts.session,
     ...(resolved ? { agentId: resolved.agentId } : {}),
     deliver: Boolean(opts.deliver),
@@ -88,7 +80,6 @@ export async function runTuiCliAction(
     message: opts.message,
     timeoutMs,
     historyLimit,
-    forceProcessExitOnReturn: true,
   });
 }
 

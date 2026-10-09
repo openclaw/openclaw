@@ -27,11 +27,13 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { prepareEmbeddedRunPermissionChange } from "./run-permissions.js";
+import { EMBEDDED_RUN_WAITERS } from "./run-state.js";
 import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
 import { prepareEmbeddedAgentRunAbort } from "./runs.abort-target.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
+  captureEmbeddedRunDrainTarget,
   clearActiveEmbeddedRun,
   clearEmbeddedAgentRunAbortabilityForRunId,
   isEmbeddedAgentRunAbortableForRunId,
@@ -297,6 +299,44 @@ describe("embedded run ownership", () => {
     expect(firstAbort).not.toHaveBeenCalled();
     expect(secondAbort).not.toHaveBeenCalled();
   });
+
+  it.each(["completed", "released"] as const)(
+    "retains a captured drain through replacement until its original handle is %s",
+    async (ending) => {
+      const original = createRunHandle();
+      const replacementAbort = vi.fn();
+      const replacement = createRunHandle({ abort: replacementAbort });
+      setActiveEmbeddedRun(sessionId, original, sessionKey);
+      expect(captureEmbeddedRunDrainTarget(sessionId, { agentId: "other" })).toBeUndefined();
+      expect(EMBEDDED_RUN_WAITERS.has(sessionId)).toBe(false);
+      const target = captureEmbeddedRunDrainTarget(sessionId, { agentId: "main" })!;
+      try {
+        setActiveEmbeddedRun(sessionId, replacement, "agent:other:replacement");
+        expect(target.abort()).toBe(false);
+        const drained = target.waitForEnd(null);
+        let result: boolean | undefined;
+        void drained.then((value) => {
+          result = value;
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(result).toBeUndefined();
+        if (ending === "completed") {
+          clearActiveEmbeddedRun(sessionId, original);
+        } else {
+          target.release();
+        }
+        await expect(drained).resolves.toBe(ending === "completed");
+        expect(EMBEDDED_RUN_WAITERS.has(sessionId)).toBe(false);
+        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
+        expect(replacementAbort).not.toHaveBeenCalled();
+      } finally {
+        target.release();
+        clearActiveEmbeddedRun(sessionId, original);
+        clearActiveEmbeddedRun(sessionId, replacement);
+      }
+    },
+  );
 
   it("stops captured manual compaction without a run ID", () => {
     const abort = vi.fn();

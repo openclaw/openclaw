@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import { transformConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatDeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
@@ -25,9 +26,15 @@ const mocks = vi.hoisted(() => ({
   updateCommand: vi.fn<typeof import("../cli/update-cli/update-command.js").updateCommand>(),
   triageCommand: vi.fn(async () => undefined),
   outro: vi.fn(),
+  confirmCustody: vi.fn<() => Promise<boolean>>(),
   config: vi.fn<() => OpenClawConfig>(),
+  disposeConfig: vi.fn<() => Promise<void>>(async () => undefined),
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   packageRoot: vi.fn<() => string | undefined>(),
+  pendingPluginMigrations:
+    vi.fn<
+      typeof import("../infra/deferred-plugin-migrations.js").readDeferredPluginMigrationsAsync
+    >(),
   stateMigrationReceipts: [] as LegacyStateMigrationStepReceipt[],
 }));
 
@@ -45,6 +52,7 @@ vi.mock("../commands/doctor-prompter.js", async (importOriginal) => {
     createDoctorPrompter: (params: Parameters<typeof actual.createDoctorPrompter>[0]) => ({
       ...actual.createDoctorPrompter(params),
       confirm: async () => true,
+      confirmRuntimeRepair: mocks.confirmCustody,
     }),
   };
 });
@@ -52,6 +60,12 @@ vi.mock("../commands/doctor-prompter.js", async (importOriginal) => {
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRoot: async () => mocks.packageRoot(),
+}));
+
+// The shared-state ledger needs the host broker, which this worker-thread lane lacks.
+vi.mock("../infra/deferred-plugin-migrations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/deferred-plugin-migrations.js")>()),
+  readDeferredPluginMigrationsAsync: mocks.pendingPluginMigrations,
 }));
 
 vi.mock("../cli/update-cli/update-command.js", () => ({
@@ -82,8 +96,10 @@ vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteStartupOptimizationHints: () => undefined,
 }));
 
+// mock-isolation: Exercise Doctor flow outcomes without config preparation or plugin resources.
 vi.mock("../commands/doctor-config-flow.js", () => ({
   loadAndMaybeMigrateDoctorConfig: async () => ({
+    [Symbol.asyncDispose]: mocks.disposeConfig,
     cfg: mocks.config(),
     shouldWriteConfig: true,
     stateMigrationStepReceipts: mocks.stateMigrationReceipts,
@@ -116,12 +132,15 @@ describe("runDoctorHealthFlow update outcomes", () => {
     vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", undefined);
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
     mocks.offerUpdate.mockReset().mockResolvedValue({ updated: false });
+    mocks.confirmCustody.mockReset().mockResolvedValue(true);
     mocks.updateCommand.mockReset();
     mocks.triageCommand.mockReset().mockResolvedValue(undefined);
     mocks.config.mockReset().mockReturnValue({});
+    mocks.disposeConfig.mockClear();
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.outro.mockClear();
     mocks.runContributions.mockReset().mockResolvedValue(undefined);
+    mocks.pendingPluginMigrations.mockReset().mockResolvedValue([]);
     mocks.stateMigrationReceipts = [];
   });
 
@@ -220,6 +239,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
         const inspectionWarning =
           "core/doctor/auth-profiles [update-inspection-deferred]: Run openclaw doctor after activation.";
         mocks.runContributions.mockImplementation(async (ctx) => {
+          expect(mocks.disposeConfig).not.toHaveBeenCalled();
           ctx.updateWarnings = [inspectionWarning];
           ctx.updateBudget = {
             agentCount: 480,
@@ -260,6 +280,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
           } else {
             await runDoctorHealthFlow(runtime, { nonInteractive: true });
           }
+          expect(mocks.disposeConfig).toHaveBeenCalledOnce();
           const result = await consumeUpdatePostInstallDoctorResult(resultPath);
           expect(result?.status).toBe(refused ? "error" : "ok");
           expect(result?.warnings).toHaveLength(refused ? 2 : noisy ? 32 : 4);
@@ -289,6 +310,63 @@ describe("runDoctorHealthFlow update outcomes", () => {
     },
   );
 
+  it.each(["partial", "all", "unreadable"] as const)(
+    "publishes current plugin migration warnings after Doctor (%s)",
+    async (settlement) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const resultPath = createUpdatePostInstallDoctorResultPath();
+        vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
+        const pending = (pluginId: string) => ({
+          pluginId,
+          reason: "The installed plugin has not confirmed its saved data and settings.",
+          command: "openclaw doctor --fix",
+        });
+        const [settled, stillPending] = [pending("acpx"), pending("codex")];
+        // Config preflight reported both before post-session repair settled acpx.
+        for (const plugin of [settled, stillPending]) {
+          mocks.stateMigrationReceipts.push({
+            id: `plugin:${plugin.pluginId}`,
+            phase: "final",
+            source: [{ kind: "owner", id: plugin.pluginId }],
+            target: [{ kind: "owner", id: plugin.pluginId }],
+            requiredness: "conditional",
+            reversibility: "checkpoint-required",
+            outcome: "deferred",
+            changes: [],
+            warnings: [formatDeferredPluginMigration(plugin)],
+          });
+        }
+        if (settlement === "unreadable") {
+          mocks.pendingPluginMigrations.mockRejectedValue(
+            new Error("migration ledger unavailable"),
+          );
+        } else {
+          mocks.pendingPluginMigrations.mockResolvedValue(
+            settlement === "all" ? [] : [stillPending],
+          );
+        }
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+        try {
+          await runDoctorHealthFlow(runtime, { nonInteractive: true });
+          const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+          const expected =
+            settlement === "unreadable"
+              ? [settled, stillPending]
+              : settlement === "all"
+                ? []
+                : [stillPending];
+          expect(result).toMatchObject({ status: "ok" });
+          expect(result?.warnings ?? []).toEqual(
+            expected.map((plugin) => formatDeferredPluginMigration(plugin)),
+          );
+        } finally {
+          await consumeUpdatePostInstallDoctorResult(resultPath);
+        }
+      });
+    },
+  );
+
   it.each(["ok", "pending"] as const)(
     "preserves the canonical %s update outcome before further Doctor checks",
     async (outcome) => {
@@ -296,6 +374,12 @@ describe("runDoctorHealthFlow update outcomes", () => {
         typeof import("../commands/doctor-update.js")
       >("../commands/doctor-update.js");
       mocks.offerUpdate.mockImplementation(maybeOfferUpdateBeforeDoctor);
+      // Custody and real SQLite settlement are covered by the managed flow fixture.
+      // This owner exercises update handoff and consent ordering without another repair boot.
+      const maintenance = await import("../commands/doctor-maintenance.js");
+      const beginMaintenance = vi
+        .spyOn(maintenance, "beginDoctorMaintenance")
+        .mockResolvedValue(undefined);
       const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
       Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
       try {
@@ -329,6 +413,9 @@ describe("runDoctorHealthFlow update outcomes", () => {
             await doctor;
           }
           expect(mocks.updateCommand).toHaveBeenCalledOnce();
+          expect(mocks.offerUpdate).toHaveBeenCalledOnce();
+          expect(mocks.confirmCustody).not.toHaveBeenCalled();
+          expect(beginMaintenance).not.toHaveBeenCalled();
           expect(mocks.config).not.toHaveBeenCalled();
           expect(mocks.runContributions).not.toHaveBeenCalled();
           expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");

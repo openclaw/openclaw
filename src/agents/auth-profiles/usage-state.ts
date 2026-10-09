@@ -36,12 +36,24 @@ const clearedWindows = Object.fromEntries(
 export function resetAuthProfileFailureState(
   existing: ProfileUsageStats,
   overrides?: Partial<ProfileUsageStats>,
+  successfulModel?: string,
 ): ProfileUsageStats {
   return {
     ...existing,
     errorCount: 0,
     ...clearedWindows,
     failureCounts: undefined,
+    // A sibling model succeeding does not replenish this model's quota.
+    ...(successfulModel && existing.cooldownModel && existing.cooldownModel !== successfulModel
+      ? {
+          cooldownUntil: existing.cooldownUntil,
+          cooldownReason: existing.cooldownReason,
+          cooldownClassification: existing.cooldownClassification,
+          cooldownModel: existing.cooldownModel,
+          errorCount: existing.errorCount,
+          failureCounts: existing.failureCounts,
+        }
+      : {}),
     ...overrides,
   };
 }

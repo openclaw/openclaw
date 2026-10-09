@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   pauseVirtualClock,
@@ -221,6 +222,35 @@ suite.define(() => {
         }
         const childToggle = page.locator(`[data-child-session-toggle="${parentKey}"]`);
         await childToggle.waitFor({ state: "visible" });
+        if (width === 390) {
+          const parent = page.locator(`[data-session-key="${parentKey}"]`);
+          const menu = parent.locator("[data-sidebar-session-menu]");
+          if (captureUiProofEnabled) {
+            const frame = await takeControlUiScreenshotFrame(page, parent, [childToggle, menu], {
+              animations: "disabled",
+              elements: [parent],
+            });
+            await writeFile(
+              path.join(suite.artifactDir, `child-controls-${colorScheme}-${pointer}.png`),
+              frame.elements[0]!.png,
+            );
+          }
+          const toggleBox = (await childToggle.boundingBox())!;
+          const menuBox = (await menu.boundingBox())!;
+          expect(menuBox.width).toBe(44);
+          expect(menuBox.height).toBe(44);
+          expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(toggleBox.x);
+          for (const control of [childToggle, menu]) {
+            expect(
+              await control.evaluate((element) => {
+                const box = element.getBoundingClientRect();
+                return element.contains(
+                  document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+                );
+              }),
+            ).toBe(true);
+          }
+        }
         await gateway.deferNext("sessions.list", { spawnedBy: parentKey });
         await childToggle.click();
         await gateway.waitForRequest("sessions.list", { match: { spawnedBy: parentKey } });

@@ -9,13 +9,14 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   formatErrorMessage,
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";
 import {
+  asRecord,
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -43,12 +44,16 @@ const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
 
 type BrowserExternalJsonKind = keyof typeof BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS;
 
+export function wrapBrowserExternalContent(value: string, includeWarning: boolean): string {
+  return wrapExternalContent(neutralizeMediaDirectives(value), {
+    source: "browser",
+    includeWarning,
+  });
+}
+
 function truncateBrowserToolText(value: string, marker: string, maxChars: number) {
   const bounded = truncateSanitizedExternalContent(value, maxChars);
-  if (!bounded.truncated) {
-    return bounded;
-  }
-  if (marker.length > maxChars) {
+  if (!bounded.truncated || marker.length > maxChars) {
     return bounded;
   }
   const marked = truncateSanitizedExternalContent(value, Math.max(0, maxChars - marker.length));
@@ -116,6 +121,7 @@ export function wrapBrowserExternalJson(params: {
     truncated: wrapped.truncated,
     safeDetails: {
       ok: true,
+      text: wrapped.text,
       externalContent: {
         untrusted: true,
         source: "browser",
@@ -292,17 +298,18 @@ export async function executeSnapshotAction(params: {
     text: string,
     details: Record<string, unknown>,
   ): Promise<AgentToolResult<unknown>> => {
+    const resultDetails = { ...details, text };
     if (labels && snapshot.format === "ai" && snapshot.imagePath) {
       return await imageResultFromFile({
         label: "browser:snapshot",
         path: snapshot.imagePath,
         extraText: text,
         // Keep model-only screenshots out of automatic channel delivery.
-        details: { ...details, media: { outbound: false } },
+        details: { ...resultDetails, media: { outbound: false } },
         imageSanitization: resolveRuntimeImageSanitization(),
       });
     }
-    return textResult(text, details);
+    return textResult(text, resultDetails);
   };
   const query = normalizeOptionalString(input.query);
   if (query && !snapshot.blockedByDialog) {
@@ -355,21 +362,7 @@ export async function executeSnapshotAction(params: {
       externalContent,
     });
   }
-  if (snapshot.format === "ai") {
-    if (snapshot.blockedByDialog) {
-      const wrapped = wrapBrowserExternalJson({
-        kind: "snapshot",
-        payload: {
-          ...identity,
-          ...dialogState,
-        },
-      });
-      return textResult(wrapped.wrappedText, {
-        ...wrapped.safeDetails,
-        ...identity,
-        ...dialogState,
-      });
-    }
+  if (snapshot.format === "ai" && !snapshot.blockedByDialog) {
     const boundedSnapshot = wrapBrowserExternalText({
       value: snapshot.snapshot ?? "",
       marker: BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS.snapshot,
@@ -387,19 +380,17 @@ export async function executeSnapshotAction(params: {
       externalContent,
     });
   }
-  {
-    const wrapped = wrapBrowserExternalJson({
-      kind: "snapshot",
-      payload: snapshot,
-    });
-    return textResult(wrapped.wrappedText, {
-      ...wrapped.safeDetails,
-      ...identity,
-      nodeCount: snapshot.nodes.length,
-      ...dialogState,
-      externalContent,
-    });
-  }
+  const wrapped = wrapBrowserExternalJson({
+    kind: "snapshot",
+    payload: snapshot.format === "ai" ? { ...identity, ...dialogState } : snapshot,
+  });
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    ...identity,
+    ...(snapshot.format === "ai"
+      ? dialogState
+      : { nodeCount: snapshot.nodes.length, ...dialogState, externalContent }),
+  });
 }
 
 /**
@@ -433,10 +424,7 @@ export async function appendNavigatedPageState(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw err;
     }
-    const reason = wrapExternalContent(neutralizeMediaDirectives(formatErrorMessage(err)), {
-      source: "browser",
-      includeWarning: false,
-    });
+    const reason = wrapBrowserExternalContent(formatErrorMessage(err), false);
     return {
       ...params.result,
       content: [
@@ -448,12 +436,8 @@ export async function appendNavigatedPageState(params: {
       ],
     };
   }
-  const baseDetails =
-    params.result.details && typeof params.result.details === "object"
-      ? (params.result.details as Record<string, unknown>)
-      : {};
   return {
     content: [...params.result.content, ...snapshot.content],
-    details: { ...baseDetails, pageState: snapshot.details },
+    details: { ...asRecord(params.result.details), pageState: snapshot.details },
   };
 }

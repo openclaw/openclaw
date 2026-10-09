@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { admitFollowupTurn } from "./followup-turn-admission.js";
@@ -54,7 +55,7 @@ const key = "followup-turn-callback-ownership";
 function createObservers() {
   return {
     onDeliberateSilentTerminalReply: vi.fn(),
-    onAgentRunStart: vi.fn<NonNullable<FollowupRunObservers["onAgentRunStart"]>>(),
+    onPreparedAgentRunStart: vi.fn<NonNullable<FollowupRunObservers["onPreparedAgentRunStart"]>>(),
     onAgentRunTerminalOutcome:
       vi.fn<NonNullable<FollowupRunObservers["onAgentRunTerminalOutcome"]>>(),
     onModelSelected: vi.fn<NonNullable<FollowupRunObservers["onModelSelected"]>>(),
@@ -86,6 +87,17 @@ describe("queued turn callback ownership", () => {
       const finished = [createDeferred(), createDeferred()];
       const executed: string[] = [];
       const message = makeAssistantMessageFixture();
+      const originalRecorder = createUserTurnTranscriptRecorder({
+        target: {
+          agentId: "agent",
+          sessionId: "session",
+          sessionKey: "main",
+          storePath: "/tmp/store",
+          sessionEntry: undefined,
+        },
+        message: { role: "user", content: "original request", timestamp: 1 },
+        updateMode: "none",
+      });
       let attempts = 0;
       state.execute.mockImplementation(async (params: AgentTurnParams) => {
         if (++attempts === 1) {
@@ -101,6 +113,9 @@ describe("queued turn callback ownership", () => {
           throw new Error("Followup execution did not bind its run ID");
         }
         executed.push(item);
+        expect(params.opts?.userTurnTranscriptRecorder).toBe(
+          params.followupRun.userTurnTranscriptRecorder,
+        );
         expect(params.opts?.internalEventExecution).toBe(
           params.followupRun.run.internalEventExecution,
         );
@@ -110,7 +125,7 @@ describe("queued turn callback ownership", () => {
         params.opts?.internalEventExecution?.onStarted(runId);
         await params.opts?.internalEventExecution?.onTerminal(runId, "completed");
         params.opts?.onDeliberateSilentTerminalReply?.();
-        params.opts?.onAgentRunStart?.(runId);
+        params.opts?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
         params.opts?.onModelSelected?.({ provider: "test", model: item, thinkLevel: undefined });
         params.opts?.prepareAssistantTranscriptMessage?.(message, item);
         await params.opts?.resolveReplyDelivery?.(1);
@@ -135,6 +150,7 @@ describe("queued turn callback ownership", () => {
           defaultModel: "gpt-test",
           opts: {
             ...opts,
+            userTurnTranscriptRecorder: originalRecorder,
             internalEventExecution: decoyEvent,
             sourceReplyDeliveryMode: "message_tool_only",
           },
@@ -180,7 +196,10 @@ describe("queued turn callback ownership", () => {
         for (const [index, item] of ["B", "C"].entries()) {
           const own = observers[index]!;
           expect(own.onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
-          expect(own.onAgentRunStart).toHaveBeenCalledExactlyOnceWith(`execution-${item}`);
+          expect(own.onPreparedAgentRunStart).toHaveBeenCalledExactlyOnceWith({
+            runId: `execution-${item}`,
+            transcriptStart: null,
+          });
           expect(own.onModelSelected).toHaveBeenCalledExactlyOnceWith({
             provider: "test",
             model: item,

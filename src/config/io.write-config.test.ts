@@ -44,6 +44,7 @@ import {
   defaultedDemoPluginRegistry,
 } from "./io.write-config.test-support.js";
 import { registerConfigWritePreflightTests } from "./io.write-preflight.test-support.js";
+import { registerConfigWriteWarningTests } from "./io.write-warnings.test-support.js";
 import { replaceConfigFile, transformConfigFile, transformConfigFileWithRetry } from "./mutate.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
@@ -553,46 +554,7 @@ describe("config io write", () => {
     );
   }
 
-  itWithHome(
-    "dedupes validation warnings across writes and reloads until config becomes clean",
-    async (home) => {
-      const warn = vi.fn();
-      const io = createFastConfigIO(home, {
-        logger: { warn, error: vi.fn() },
-      });
-      const staleConfig = {
-        plugins: { entries: { demo: { enabled: true } } },
-      };
-      // An existing file keeps first-write catalog opt-outs out of these literal rewrites.
-      await writeConfigFixture(home, {});
-
-      await io.writeConfigFile(staleConfig);
-      await io.writeConfigFile(staleConfig);
-      io.loadConfig();
-      expect(warn).toHaveBeenCalledTimes(1);
-
-      await expect(
-        io.writeConfigFile(
-          {},
-          {
-            preCommitRuntimePreflight: async () => {
-              throw new Error("blocked");
-            },
-          },
-        ),
-      ).rejects.toThrow("blocked");
-      io.loadConfig();
-      expect(warn).toHaveBeenCalledTimes(1);
-
-      await io.writeConfigFile(staleConfig, { skipPluginValidation: true });
-      io.loadConfig();
-      expect(warn).toHaveBeenCalledTimes(1);
-
-      await io.writeConfigFile({}, { allowConfigSizeDrop: true });
-      await io.writeConfigFile(staleConfig);
-      expect(warn).toHaveBeenCalledTimes(2);
-    },
-  );
+  registerConfigWriteWarningTests({ itWithHome, createFastConfigIO, writeConfigFixture });
 
   itWithHome(
     "keeps writes inside an OPENCLAW_STATE_DIR override even when the real home config exists",
@@ -812,6 +774,21 @@ describe("config io write", () => {
     });
   }
 
+  itWithHome("preserves a shared state root when publishing private config", async (home) => {
+    const { configPath } = await writeConfigFixture(home, { gateway: { mode: "local" } });
+    const stateDir = path.dirname(configPath);
+    await fs.chmod(stateDir, 0o770);
+    const io = createHomeConfigIO(home);
+
+    await io.writeConfigFile({ gateway: { mode: "local", port: 19001 } });
+
+    if (process.platform !== "win32") {
+      expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o770);
+      expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(`${configPath}.bak`)).mode & 0o777).toBe(0o600);
+    }
+  });
+
   itWithHome("prefix recovery publishes private config without pathname chmod", async (home) => {
     const configPath = configPathForHome(home);
     const cleanConfig = {
@@ -824,6 +801,7 @@ describe("config io write", () => {
     } satisfies ConfigFileSnapshot["config"];
     const cleanRaw = formatConfig(cleanConfig);
     await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.chmod(path.dirname(configPath), 0o770);
     await fs.writeFile(configPath, `Found and updated: False\n${cleanRaw}`, "utf-8");
     await fs.chmod(configPath, 0o644);
     const chmodError = Object.assign(new Error("EPERM: chmod denied"), { code: "EPERM" });
@@ -853,6 +831,7 @@ describe("config io write", () => {
     await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(cleanRaw);
     if (process.platform !== "win32") {
       expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(path.dirname(configPath))).mode & 0o777).toBe(0o770);
     }
     expect(warnMessages(warn).join("\n")).not.toContain("permission hardening failed");
     expectWarnContaining(warn, `Config auto-stripped non-JSON prefix: ${configPath}`);

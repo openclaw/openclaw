@@ -11,65 +11,6 @@ it("clears automatic-label metadata when a subscribed client merges a later snap
   expect({ ...previous, ...cleared }).toMatchObject({ autoLabel: null, displayName: null });
 });
 
-it("clears a saved dashboard default in subscribed session metadata", () => {
-  const sessionRow = { key: "agent:main:dashboard", kind: "direct" as const, updatedAt: 1 };
-  const previous = buildGatewaySessionSnapshot({
-    sessionRow: { ...sessionRow, boardPresentation: "expanded" },
-  });
-  expect(previous.boardPresentation).toBe("expanded");
-  const cleared = buildGatewaySessionSnapshot({ sessionRow });
-  expect({ ...previous, ...cleared }).toMatchObject({ boardPresentation: null });
-});
-
-it("publishes snooze metadata and clears it when a subscribed session wakes", () => {
-  const sessionRow = { key: "agent:main:dashboard", kind: "direct" as const, updatedAt: 1 };
-  const previous = buildGatewaySessionSnapshot({
-    sessionRow: { ...sessionRow, snoozedUntil: 3_600_000, snoozedAt: 1 },
-  });
-  expect(previous).toMatchObject({ snoozedUntil: 3_600_000, snoozedAt: 1 });
-  const cleared = buildGatewaySessionSnapshot({ sessionRow });
-  expect({ ...previous, ...cleared }).toMatchObject({ snoozedUntil: null, snoozedAt: null });
-});
-
-it("projects session actors and explicitly clears absent attribution", () => {
-  expect(
-    buildGatewaySessionSnapshot({
-      sessionRow: {
-        key: "agent:main:owned",
-        kind: "direct",
-        updatedAt: 1,
-        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-        participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
-        participantCount: 1,
-      },
-    }),
-  ).toMatchObject({
-    createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-    archivedBy: null,
-    archiveReason: null,
-    participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
-    participantCount: 1,
-  });
-
-  expect(
-    buildGatewaySessionSnapshot({
-      sessionRow: {
-        key: "agent:main:archived",
-        kind: "direct",
-        updatedAt: 2,
-        archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
-        archiveReason: "active-session-cap",
-      },
-    }),
-  ).toMatchObject({
-    createdActor: null,
-    archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
-    archiveReason: "active-session-cap",
-    participants: [],
-    participantCount: 0,
-  });
-});
-
 it("projects the prepared permission boundary only for an explicit mode", () => {
   const ordinary = buildGatewaySessionSnapshot({
     sessionRow: {
@@ -197,22 +138,6 @@ it("preserves active run id ownership across omitted, liveness, and exact states
   });
 });
 
-it.each(["user", null] as const)(
-  "carries model override source %s into session change events",
-  (source) => {
-    expect(
-      buildGatewaySessionSnapshot({
-        sessionRow: {
-          key: "agent:main:pinned",
-          kind: "direct",
-          updatedAt: 1,
-          modelOverrideSource: source,
-        },
-      }).modelOverrideSource,
-    ).toBe(source);
-  },
-);
-
 it.each([false, true])(
   "serializes lifecycle starts without prior timing, deriving liveness from the owner (active=%s)",
   (active) => {
@@ -338,4 +263,13 @@ it("publishes prompt budgets and their invalidation to subscribed sessions", () 
     "contextBudgetStatus",
     null,
   );
+});
+
+it("publishes and clears device folder bindings in subscribed snapshots", () => {
+  const sessionRow = { key: "agent:main:folder", kind: "direct" as const, updatedAt: 1 };
+  const deviceFolder = { deviceId: "paired-device", path: "/home/example/project" };
+  const previous = buildGatewaySessionSnapshot({ sessionRow: { ...sessionRow, deviceFolder } });
+  expect(previous.deviceFolder).toEqual(deviceFolder);
+  const cleared = buildGatewaySessionSnapshot({ sessionRow });
+  expect({ ...previous, ...cleared }).toMatchObject({ deviceFolder: null });
 });

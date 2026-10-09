@@ -1179,9 +1179,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   it.each([
     {
       name: "non-auth",
-      provider: undefined,
       error: "fixture provider failed",
-      expected: "run error: fixture provider failed",
     },
     {
       name: "auth",
@@ -1196,6 +1194,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       provider: "xai",
       error:
         '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
+      expected:
+        "run error: HTTP 403: Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit.",
     },
   ])(
     "renders local $name errors without losing the backend diagnostic",
@@ -1551,7 +1551,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(loadHistory).toHaveBeenCalledTimes(1);
     });
 
-    it("refreshes after a local final when terminal persistence arrives first", () => {
+    it("reconciles terminal persistence before a late chat final", async () => {
       const {
         chatLog,
         loadHistory,
@@ -1561,10 +1561,15 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       } = createHandlersHarness({ activeChatRunId: "run-active" });
       handleSessionMessageEvent();
       handleSessionsChangedEvent({ runId: "run-active", phase: "end" });
-      expect(loadHistory).not.toHaveBeenCalled();
-      handleChatEvent(textEvent("run-active", "keep this visible", "final"));
-      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("keep this visible", "run-active", []);
       expect(loadHistory).toHaveBeenCalledTimes(1);
+      handleChatEvent(textEvent("run-active", "keep this visible", "final"));
+      await settleHistory();
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+        "keep this visible",
+        "run-active",
+        [],
+      );
     });
 
     it("does not reload until an optimistic submit is resolved", () => {

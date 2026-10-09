@@ -11,6 +11,7 @@ import type {
   OpenClawPluginService,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { registerBrowserCliMetadata } from "./cli-metadata.js";
 import { bindBrowserDashboardEvents } from "./src/browser-dashboard-events.js";
@@ -60,16 +61,8 @@ function deriveChatTypeFromSessionKey(
   sessionKey: string | undefined,
 ): "direct" | "group" | "channel" | undefined {
   const tokens = new Set(sessionKey?.toLowerCase().split(":") ?? []);
-  if (tokens.has("group")) {
-    return "group";
-  }
-  if (tokens.has("channel")) {
-    return "channel";
-  }
-  if (tokens.has("direct") || tokens.has("dm")) {
-    return "direct";
-  }
-  return undefined;
+  const chatType = (["group", "channel", "direct"] as const).find((kind) => tokens.has(kind));
+  return chatType ?? (tokens.has("dm") ? "direct" : undefined);
 }
 
 type BrowserToolOptions = NonNullable<
@@ -316,7 +309,7 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
       return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
     },
-    { name: "browser" },
+    { name: "browser", workspaceAccess: false },
   );
   registerBrowserCliMetadata(api);
   api.registerGatewayMethod(
@@ -367,9 +360,10 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       handleUpgrade: async (req, socket, head) => {
         // Direct socket activity prepares teardown consumed by lazy service shutdown.
         await loadBrowserRegistrationRuntimeModule();
-        return await (
-          await loadUpgrade()
-        )(req, socket, head);
+        await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
+        const upgrade = await loadUpgrade();
+        await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
+        return await upgrade(req, socket, head);
       },
     });
   }

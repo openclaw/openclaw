@@ -37,11 +37,14 @@ export function cronPage(id?: string): CompactCronPage {
 export function createStore(
   gateway: ApplicationContext["gateway"],
   connectionBootstrap?: ApplicationContext["connectionBootstrap"],
+  selection?: ApplicationContext["agentSelection"],
 ) {
-  const agentSelection = {
-    state: { selectedId: "main", scopeId: null },
-    subscribe: () => () => undefined,
-  } as unknown as ApplicationContext["agentSelection"];
+  const agentSelection =
+    selection ??
+    ({
+      state: { selectedId: "main", scopeId: null },
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationContext["agentSelection"]);
   return createSidebarAttentionStore({
     gateway,
     agentSelection,

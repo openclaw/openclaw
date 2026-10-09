@@ -11,16 +11,13 @@ import type {
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
+  CliToolInputDelta,
   CliToolResultDelta,
   CliToolUseStartDelta,
 } from "../cli-output-contracts.js";
 import { isClaudeForegroundAgentToolName } from "../cli-output-records.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
-import {
-  extractToolErrorMessage,
-  sanitizeToolArgs,
-  prepareToolResult,
-} from "../embedded-agent-tool-results.js";
+import { extractToolErrorMessage, prepareToolResult } from "../embedded-agent-tool-results.js";
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
@@ -148,7 +145,7 @@ export function createCliEventHandlers(params: {
         phase: "start",
         name: event.name,
         toolCallId: event.toolCallId,
-        args: sanitizeToolArgs(event.args),
+        args: event.args,
       });
     }
   };
@@ -222,7 +219,7 @@ export function createCliEventHandlers(params: {
           toolCallId: event.toolCallId,
           isError: event.isError,
           result: readResult(),
-          ...(tracked && startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
+          ...(tracked && startedArgs ? { args: startedArgs } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
         // An ambiguous MCP loopback has no authoritative executed args; native tools do.
@@ -435,8 +432,14 @@ export function createCliEventHandlers(params: {
     emitLiveEvent("thinking", () => ({ progressTokens }));
   };
 
+  const emitCliToolInputDelta = (progress: CliToolInputDelta) => {
+    observedCliActivity = true;
+    emitLiveEvent("tool", () => ({ phase: "input_delta", ...progress }));
+  };
+
   return {
     emitLiveEvents,
+    emitCliToolInputDelta,
     // Display-only native events never enter host-tool correlation or delivery accounting.
     emitCliDisplayToolUseStart: (event: CliToolUseStartDelta) => emitToolUseStart(event, false),
     emitCliDisplayToolResult: (event: CliToolResultDelta) => emitToolResult(event, false),

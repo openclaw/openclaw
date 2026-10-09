@@ -84,7 +84,7 @@ Commands: /goal edit <objective>, /goal pause, /goal complete, /goal clear
 | `/goal <objective>`                                 | Also creates a new goal (any text that is not a recognized action word). |
 | `/goal edit <objective>`                            | Reword the current objective; status and token accounting stay put.      |
 | `/goal pause [note]`                                | Pause an active goal.                                                    |
-| `/goal resume [note]`                               | Resume a paused, blocked, usage-limited, or budget-limited goal.         |
+| `/goal resume [note]`                               | Resume a paused, blocked, limited, or completed goal.                    |
 | `/goal complete [note]`                             | Mark the goal achieved.                                                  |
 | `/goal done [note]`                                 | Alias for `complete`.                                                    |
 | `/goal block [note]`                                | Mark the goal blocked.                                                   |
@@ -110,9 +110,13 @@ with `Goal error: goal already exists` until the current one is cleared.
   restarts pursuit from the same objective with a fresh budget window.
 - `usage_limited`: reserved for a future usage-limit stop state. `/goal
 resume` restarts pursuit the same way.
-- `complete`: the goal was achieved. Complete goals are terminal. Use `/goal
-clear` before starting another goal. Repeating completion preserves the original
-  completion time, including when you add a status note.
+- `complete`: the goal was achieved. It stays complete until you explicitly use
+  `/goal resume` or **Resume** in the Control UI to pursue the same objective again.
+  Resuming preserves its identity, creation time, and conversation history. Token
+  accounting continues unless the budget was reached, in which case resume starts
+  a fresh budget window. A later completion records a new completion time; repeating
+  completion without resuming preserves the original time, including when you add
+  a status note. Use `/goal clear` before starting a different goal.
 
 `/new` and `/reset` clear the current session goal, since they intentionally
 start fresh session context.
@@ -244,24 +248,28 @@ The pill carries inline controls:
 
 - **Pencil** opens an Edit Goal composer with the current objective. Saving
   changes only the objective. Cancelling restores the previous chat draft.
-- **Pause / resume** updates the current Goal. Resume also starts a continuation
+- **Pause / resume** updates the current Goal, including resuming an achieved
+  Goal when more work is warranted. Resume also starts a continuation
   through normal chat admission. Its internal input stays in model history
   without appearing as a human chat message. The assistant reply remains visible.
 - **Trash** clears the current Goal.
 - **Chevron** expands the pill to show the full objective, the latest status
   note, token usage, and elapsed time.
 
-On narrow mobile screens, expand the pill to reveal compact labeled controls
-above the full objective. Collapsing it hides these controls again; token usage
-and elapsed time remain below the objective and status note.
+Resume stays visible in the collapsed pill, including on narrow mobile screens.
+Expand the pill to reveal the other compact labeled controls above the full
+objective. Token usage and elapsed time remain below the objective and status note.
 
 Edit, Pause, and Clear do not send slash commands or add chat turns. Controls
 target the displayed Goal ID, so a stale button cannot change a replacement
 Goal. If a request is interrupted or its acknowledgment does not arrive within
-30 seconds, the UI reports an unconfirmed outcome. Use **Check outcome** in the
-recovery notice, even if the goal changed or was cleared. This retries the saved action
+30 seconds, the UI reports an unconfirmed outcome. Resume keeps **Resuming goal…**
+in the pill while waiting and retries once after a timeout or unavailable response,
+using the same saved request. If it remains unconfirmed, use **Retry resume** in
+the pill. Other actions, or requests whose goal changed or was cleared, use
+**Check outcome** in the recovery notice. These controls retry the saved action
 unchanged to reconcile it with the Gateway receipt. The original request stays
-in this browser tab across reconnects and reloads; it is never retried
+in this browser tab across reconnects and reloads; restoring it never sends it
 automatically. The UI does not send goal controls if the connection has no
 account-scoped recovery identity or the recovery request cannot be saved; it
 immediately shows an error explaining why the action was not sent.
@@ -344,7 +352,7 @@ a cron schedule or bypass an existing continuation owner.
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Goal error: goal already exists`      | The session already has a goal. Use `/goal` to inspect it, `/goal complete` if done, or `/goal clear` before starting a different objective. |
 | `Goal error: goal not found`           | The session has no goal yet. Start one with `/goal start <objective>`.                                                                       |
-| `Goal error: goal is already complete` | The goal is terminal. Clear it before starting or resuming another objective.                                                                |
+| `Goal error: goal is already complete` | The goal must be explicitly resumed before editing, pausing, or blocking it. Clear it to start a different objective.                        |
 
 If token usage shows `0` or looks stale, the active session may not have a
 fresh token snapshot yet. Usage refreshes as OpenClaw records session usage

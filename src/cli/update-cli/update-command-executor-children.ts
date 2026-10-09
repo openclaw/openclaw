@@ -148,7 +148,6 @@ export function createChildOwner(params: {
       let candidateParent = parent;
       let acquiredParent = false;
       let children: ManagedHandoffLease[] = [];
-      let bindingAttempted = false;
       let bound = false;
       delegating = true;
       const assertOwners = () => {
@@ -170,7 +169,6 @@ export function createChildOwner(params: {
       const running = async () => {
         let outcome: { result: T } | { error: unknown };
         try {
-          params.assertBase();
           if (retainedParent && candidateRoot === retainedParent.key) {
             throw new UpdateCommandRecoveryPendingError(
               "Retained service root is not a candidate executor.",
@@ -275,12 +273,11 @@ export function createChildOwner(params: {
           const result = await withCommandProcessScope(() =>
             operation(grant, (pid, argv) => {
               assertOwners();
-              if (bindingAttempted || pid === process.pid) {
+              if (pid === process.pid) {
                 throw new UpdateCommandRecoveryPendingError(
                   "Update process can be bound only once.",
                 );
               }
-              bindingAttempted = true;
               const assigned = store.bindUpdateChildren(children, pid, argv);
               if (!assigned) {
                 throw new UpdateCommandRecoveryPendingError("Update process binding failed.");
@@ -294,7 +291,6 @@ export function createChildOwner(params: {
               "The update worker did not confirm startup.",
             );
           }
-          assertOwners();
           outcome = { result };
         } catch (error) {
           outcome = { error };
@@ -345,9 +341,7 @@ export function createChildOwner(params: {
           failure = cause instanceof Error ? cause : new Error("Update failed", { cause });
         })
         .finally(() => {
-          if (pending === work) {
-            pending = undefined;
-          }
+          pending = undefined;
         });
       return work;
     },

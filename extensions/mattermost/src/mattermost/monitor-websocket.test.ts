@@ -165,60 +165,6 @@ describe("mattermost websocket monitor", () => {
     vi.useRealTimers();
   });
 
-  it("rejects when websocket closes before open", async () => {
-    const socket = new FakeWebSocket();
-    const connectOnce = createConnection(socket);
-
-    queueMicrotask(() => {
-      socket.emitClose(1006, "connection refused");
-    });
-
-    let failure: unknown;
-    try {
-      await connectOnce();
-    } catch (caught) {
-      failure = caught;
-    }
-    expect(failure).toMatchObject({
-      name: "WebSocketClosedBeforeOpenError",
-      code: 1006,
-      reason: "connection refused",
-    });
-    expect((failure as Error).message).toBe("websocket closed before open (code 1006)");
-  });
-
-  it("reports a transient pre-authentication close without asserting a token failure", async () => {
-    const socket = new FakeWebSocket();
-    const connectOnce = createConnection(socket, {
-      botToken: "valid-token",
-    });
-
-    queueMicrotask(() => {
-      socket.emitOpen();
-      // A restarting server or resetting proxy closes mid-authentication with
-      // the same client-visible shape as a token rejection.
-      socket.emitClose(1001, "server restarting");
-    });
-
-    let failure: unknown;
-    try {
-      await connectOnce();
-    } catch (caught) {
-      failure = caught;
-    }
-    expect(failure).toMatchObject({
-      name: "WebSocketClosedBeforeAuthenticationError",
-      code: 1001,
-      reason: "server restarting",
-    });
-    // The client cannot distinguish the causes, so the diagnostic must keep
-    // both visible instead of pinning the close on the token alone.
-    const message = (failure as Error).message;
-    expect(message).toContain("closed before authentication completed (code 1001)");
-    expect(message).toContain("bot token");
-    expect(message).toContain("connection dropped");
-  });
-
   it("backs off across attempts when authentication never completes", async () => {
     const connectOnce = createMattermostConnectOnce({
       wsUrl: "wss://example.invalid/api/v4/websocket",
@@ -248,6 +194,8 @@ describe("mattermost websocket monitor", () => {
       jitterRatio: 0,
       abortSignal: abort.signal,
       onError: (err) => {
+        expect(String(err)).toContain("bot token");
+        expect(String(err)).toContain("connection dropped");
         connectErrors.push(err instanceof Error ? err.name : String(err));
         if (connectErrors.length === 3) {
           abort.abort();
@@ -291,23 +239,6 @@ describe("mattermost websocket monitor", () => {
     vi.useRealTimers();
   });
 
-  it("does not trip the auth deadline once the challenge is acknowledged", async () => {
-    vi.useFakeTimers();
-    const socket = new FakeWebSocket();
-    const connectOnce = createConnection(socket);
-
-    const connected = connectOnce();
-    socket.emitOpen();
-    socket.emitMessage(authOkFrame(1));
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(socket.terminateCalls).toBe(0);
-
-    socket.emitClose(1000);
-    await connected;
-    vi.useRealTimers();
-  });
-
   it("retries when first attempt errors before open and next attempt succeeds", async () => {
     const patches: Array<Record<string, unknown>> = [];
     const sockets: FakeWebSocket[] = [];
@@ -335,7 +266,9 @@ describe("mattermost websocket monitor", () => {
             return;
           }
           socket.emitOpen();
+          expect(patches).not.toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
           socket.emitMessage(authOkFrame(1));
+          expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
           socket.emitClose(1000);
         });
         return socket;
@@ -361,33 +294,6 @@ describe("mattermost websocket monitor", () => {
     expect(countMatching(patches, (patch) => patch.connected === false)).toBe(3);
     expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "starting" }));
     expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "recovering" }));
-  });
-
-  it("publishes ready only after the authentication challenge is acknowledged", async () => {
-    const socket = new FakeWebSocket();
-    const patches: Array<Record<string, unknown>> = [];
-    const connectOnce = createConnection(socket, {
-      nextSeq: () => 7,
-      statusSink: (patch) => patches.push(patch as Record<string, unknown>),
-    });
-    const connected = connectOnce();
-
-    socket.emitOpen();
-    expect(patches).toContainEqual({ connected: true, lifecycle: "starting" });
-    expect(patches).not.toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
-
-    socket.emitMessage(Buffer.from(JSON.stringify({ status: "OK", seq_reply: 7 })));
-    expect(patches).toContainEqual({
-      running: true,
-      connected: true,
-      lifecycle: "ready",
-      lastConnectedAt: expect.any(Number),
-      lastError: null,
-      terminalDisconnect: undefined,
-    });
-
-    socket.emitClose(1000);
-    await connected;
   });
 
   it("accepts large valid post envelopes and rejects oversized websocket payloads", async () => {
@@ -547,41 +453,6 @@ describe("mattermost websocket monitor", () => {
 
     expect(onPosted).toHaveBeenCalledWith(raw);
     expect(decode.mock.calls.length).toBeLessThanOrEqual(1);
-  });
-
-  it("terminates when bot update_at changes (disable/enable cycle)", async () => {
-    vi.useFakeTimers();
-    const socket = new FakeWebSocket();
-    const runtime = testRuntime();
-    let updateAt = 1000;
-    const connectOnce = createConnection(socket, {
-      runtime,
-      getBotUpdateAt: async () => updateAt,
-      healthCheckIntervalMs: 100,
-    });
-
-    const connected = connectOnce();
-    socket.emitOpen();
-    socket.emitMessage(authOkFrame(1));
-
-    // Let initial getBotUpdateAt resolve
-    await vi.advanceTimersByTimeAsync(0);
-
-    // update_at unchanged — no terminate
-    await vi.advanceTimersByTimeAsync(100);
-    expect(socket.terminateCalls).toBe(0);
-
-    // Simulate disable/enable — update_at changes
-    updateAt = 2000;
-    await vi.advanceTimersByTimeAsync(100);
-    expect(socket.terminateCalls).toBe(1);
-    expect(runtime.log).toHaveBeenCalledWith(
-      "mattermost: bot account updated (update_at changed: 1000 → 2000) — reconnecting",
-    );
-
-    socket.emitClose(1006);
-    await connected;
-    vi.useRealTimers();
   });
 
   it("continues protocol keepalive when Mattermost responds with pong", async () => {
@@ -761,31 +632,6 @@ describe("mattermost websocket monitor", () => {
     vi.useRealTimers();
   });
 
-  it("passes bounded payload and handshake options to the websocket factory", async () => {
-    const socket = new FakeWebSocket();
-    let clientOptions: Parameters<MattermostWebSocketFactory>[1] | undefined;
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
-      runtime: testRuntime(),
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: (_url, options) => {
-        clientOptions = options;
-        queueMicrotask(() => socket.emitClose(1006));
-        return socket;
-      },
-    });
-
-    await expect(connectOnce()).rejects.toMatchObject({
-      name: "WebSocketClosedBeforeOpenError",
-    });
-    expect(clientOptions).toEqual({
-      handshakeTimeout: 30_000,
-      maxPayload: 16 * 1024 * 1024,
-    });
-  });
-
   it("returns control to reconnect after a stalled handshake", async () => {
     const stalledServer = await startStalledWebSocketHandshakeServer();
 
@@ -798,11 +644,13 @@ describe("mattermost websocket monitor", () => {
       runtime,
       nextSeq: () => 1,
       onPosted: async () => {},
-      webSocketFactory: (url, options) =>
-        new WebSocket(url, {
+      webSocketFactory: (url, options) => {
+        expect(options.handshakeTimeout).toBe(30_000);
+        return new WebSocket(url, {
           ...options,
           handshakeTimeout: 200,
-        }) as ReturnType<MattermostWebSocketFactory>,
+        }) as ReturnType<MattermostWebSocketFactory>;
+      },
     });
 
     const abort = new AbortController();

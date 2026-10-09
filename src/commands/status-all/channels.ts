@@ -9,6 +9,7 @@ import {
   resolveInspectedChannelAccount,
   type ChannelAccountInspectionResult,
 } from "../../channels/account-inspection.js";
+import { resolveChannelAllowFrom } from "../../channels/account-resolution.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import { formatChannelAllowFrom } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
@@ -40,18 +41,6 @@ type ChannelAccountRow = ChannelAccountInspectionResult & {
   accountId: string;
 };
 
-function existsSyncMaybe(p: string | undefined): boolean | null {
-  const path = normalizeOptionalString(p) ?? "";
-  if (!path) {
-    return null;
-  }
-  try {
-    return fs.existsSync(path);
-  } catch {
-    return null;
-  }
-}
-
 const formatAccountLabel = (params: { accountId: string; name?: string }) => {
   const base = params.accountId || "default";
   if (params.name?.trim()) {
@@ -60,7 +49,7 @@ const formatAccountLabel = (params: { accountId: string; name?: string }) => {
   return base;
 };
 
-const buildAccountNotes = (params: {
+const buildAccountNotes = async (params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
   entry: ChannelAccountRow;
@@ -109,7 +98,7 @@ const buildAccountNotes = (params: {
     entry.kind === "unavailable" || hasConfiguredUnavailableCredentialStatus(entry.account);
   const allowFrom = unavailable
     ? snapshot.allowFrom
-    : (plugin.config.resolveAllowFrom?.({ cfg, accountId: snapshot.accountId }) ??
+    : ((await resolveChannelAllowFrom({ plugin, cfg, accountId: snapshot.accountId })) ??
       snapshot.allowFrom);
   if (allowFrom?.length) {
     // Cap allow-list output so large channel policies do not dominate the status table.
@@ -161,11 +150,17 @@ function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
       "authDir",
     ]) {
       // Account config and snapshots can each expose file-backed credential paths.
-      const raw =
-        (accountRec[key] as string | undefined) ?? (snapshotRec[key] as string | undefined);
-      const ok = existsSyncMaybe(raw);
-      if (ok === false) {
-        missing.push(String(raw));
+      const raw = accountRec[key] ?? snapshotRec[key];
+      const path = normalizeOptionalString(raw);
+      if (!path) {
+        continue;
+      }
+      try {
+        if (!fs.existsSync(path)) {
+          missing.push(String(raw));
+        }
+      } catch {
+        // An inspection failure does not establish that the path is missing.
       }
     }
   }
@@ -365,36 +360,48 @@ export async function buildChannelsTable(
       details.push({
         title: `${label} accounts`,
         columns: ["Account", "Status", "Notes"],
-        rows: configuredAccounts.map((entry) => {
-          const liveCredentialAvailable = hasRuntimeCredentialAvailable({
-            liveAccounts,
-            accountId: entry.accountId,
-          });
-          const notes = buildAccountNotes({
-            plugin,
-            cfg,
-            entry,
-            liveCredentialAvailable,
-          });
-          return {
-            Account: formatAccountLabel({
+        rows: await Promise.all(
+          configuredAccounts.map(async (entry) => {
+            const liveCredentialAvailable = hasRuntimeCredentialAvailable({
+              liveAccounts,
               accountId: entry.accountId,
-              name: entry.snapshot.name,
-            }),
-            Status:
-              entry.enabled &&
-              entry.kind !== "unavailable" &&
-              (!hasConfiguredUnavailableCredentialStatus(entry.account) || liveCredentialAvailable)
-                ? "OK"
-                : "WARN",
-            Notes: notes.join(" · "),
-          };
-        }),
+            });
+            const notes = await buildAccountNotes({
+              plugin,
+              cfg,
+              entry,
+              liveCredentialAvailable,
+            });
+            return {
+              Account: formatAccountLabel({
+                accountId: entry.accountId,
+                name: entry.snapshot.name,
+              }),
+              Status:
+                entry.enabled &&
+                entry.kind !== "unavailable" &&
+                (!hasConfiguredUnavailableCredentialStatus(entry.account) ||
+                  liveCredentialAvailable)
+                  ? "OK"
+                  : "WARN",
+              Notes: notes.join(" · "),
+            };
+          }),
+        ),
       });
     }
   }
 
   const visibleChannelIds = new Set(rows.map((row) => row.id));
+  const addFallbackRow = (
+    id: ChannelId,
+    state: ChannelRow["state"],
+    detail: string,
+    label = id,
+  ) => {
+    rows.push({ id, label, enabled: true, state, detail });
+    visibleChannelIds.add(id);
+  };
   const loadFailuresByChannel = new Map(
     readOnlyPlugins.loadFailures.map((failure) => [failure.channelId, failure] as const),
   );
@@ -409,14 +416,7 @@ export async function buildChannelsTable(
     if (!failure) {
       continue;
     }
-    rows.push({
-      id: channelId,
-      label: channelId,
-      enabled: true,
-      state: "warn",
-      detail: formatLoadFailureDetail(failure.message),
-    });
-    visibleChannelIds.add(channelId);
+    addFallbackRow(channelId, "warn", formatLoadFailureDetail(failure.message));
   }
 
   const explicitConfiguredChannelIds = new Set([
@@ -435,14 +435,12 @@ export async function buildChannelsTable(
     }).map((hint) => [hint.channelId, hint]),
   );
   const addFastModeRow = (channelId: string) => {
-    rows.push({
-      id: channelId,
-      label: sanitizeForLog(channelId).trim() || "configured-channel",
-      enabled: true,
-      state: "setup",
-      detail: "configured; status unavailable in fast mode",
-    });
-    visibleChannelIds.add(channelId);
+    addFallbackRow(
+      channelId,
+      "setup",
+      "configured; status unavailable in fast mode",
+      sanitizeForLog(channelId).trim() || "configured-channel",
+    );
   };
   for (const channelId of missingCandidateChannelIds) {
     if (visibleChannelIds.has(channelId)) {
@@ -456,14 +454,12 @@ export async function buildChannelsTable(
       }
       continue;
     }
-    rows.push({
-      id: channelId,
-      label: hint.label,
-      enabled: true,
-      state: "warn",
-      detail: `plugin not installed - run ${hint.installCommand} or ${hint.doctorFixCommand}`,
-    });
-    visibleChannelIds.add(channelId);
+    addFallbackRow(
+      channelId,
+      "warn",
+      `plugin not installed - run ${hint.installCommand} or ${hint.doctorFixCommand}`,
+      hint.label,
+    );
   }
 
   if (!includeSetupFallbackPlugins) {

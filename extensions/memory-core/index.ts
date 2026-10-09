@@ -170,6 +170,10 @@ function resolveMemoryToolOptions(
 
 function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRuntime {
   return {
+    async searchForCli(params) {
+      const { createMemoryRuntime } = await loadRuntimeProviderModule();
+      return await createMemoryRuntime(host).searchForCli(params);
+    },
     supportsWorkspaceMemoryReadSources: true,
     prepareReload: prepareMemoryManagerReload,
     async getMemorySearchManager(params) {
@@ -213,31 +217,81 @@ export default definePluginEntry({
     } satisfies MemoryCoreRuntimeHost;
     configureMemoryCoreDreamingState(openKeyedStore);
     const memoryRuntime = createLazyMemoryRuntime(host);
+    let indexStartup: Promise<void> | undefined;
+    const stopIndex = async (close: () => Promise<void> | undefined) => {
+      const errors: unknown[] = [];
+      for (const settle of [() => indexStartup, close]) {
+        try {
+          await settle();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Memory index shutdown failed");
+      }
+    };
     api.lifecycle.onDispose?.(async () => {
-      const result = await prepareMemoryManagerReload({
+      const retirement = prepareMemoryManagerReload({
         retireRuntime: true,
         retiringEmbeddingProviders: [],
-      }).drain();
-      if (result?.errors.length) {
-        throw new AggregateError(result.errors, "Memory manager disposal failed");
-      }
+      });
+      await stopIndex(async () => {
+        const result = await retirement.drain();
+        if (result?.errors.length) {
+          throw new AggregateError(result.errors, "Memory manager disposal failed");
+        }
+      });
     });
     if (normalizePluginsConfig(api.config.plugins).slots.memory === api.id) {
       api.registerService({
         id: "memory-core-index",
-        reload: { configPrefixes: ["memory.search", "agents"] },
-        async start({ config, logger }) {
-          for (const agentId of listAgentIds(config)) {
-            const { error } = await memoryRuntime.getMemorySearchManager({ cfg: config, agentId });
-            if (error) {
-              logger.warn(`memory-core: index startup failed for ${agentId}: ${error}`);
-            }
-          }
+        reload: { configPrefixes: ["memory.search", "agents", "models.providers"] },
+        start({ config, logger }) {
+          const activate = async () => {
+            await Promise.all(
+              listAgentIds(config).map(async (agentId) => {
+                const { error } = await memoryRuntime
+                  .getMemorySearchManager({ cfg: config, agentId })
+                  .catch((cause: unknown) => ({ error: String(cause) }));
+                if (error) {
+                  logger.warn(`memory-core: index startup failed for ${agentId}: ${error}`);
+                }
+              }),
+            );
+          };
+          // Database preparation starts after services return; joining here deadlocks startup.
+          indexStartup = api.lifecycle.runInBackgroundContext
+            ? api.lifecycle.runInBackgroundContext(activate)
+            : activate();
+          // Forced retirement may reject before the cleanup owner reaches this task.
+          void indexStartup.catch(() => {});
         },
-        stop: () => memoryRuntime.closeAllMemorySearchManagers?.(),
+        stop: () => stopIndex(() => memoryRuntime.closeAllMemorySearchManagers?.()),
       });
     }
     registerShortTermPromotionDreaming(api);
+    let stopIntentMaintenance: (() => void) | undefined;
+    api.registerService({
+      apiVersion: 2,
+      id: "memory-core-standing-intents",
+      reload: { configPrefixes: ["agents"] },
+      async start({ config, scheduler, logger }) {
+        const module = await loadStandingIntentsModule();
+        stopIntentMaintenance = module.startStandingIntentMaintenance({
+          agentIds: listAgentIds(config),
+          scheduler,
+          warn: (message) => logger.warn(message),
+        });
+      },
+      stop() {
+        stopIntentMaintenance?.();
+        stopIntentMaintenance = undefined;
+      },
+    });
     registerSessionBackfillGatewayMethods(api);
     api.registerMemoryCapability({
       recallToolNames: ["memory_search", "memory_get"],
@@ -281,7 +335,7 @@ export default definePluginEntry({
                 ? module.createMemorySearchTool(options)
                 : module.createMemoryGetTool(options),
           }),
-        { names: [contract.name] },
+        { names: [contract.name], workspaceAccess: "execute" },
       );
     }
 
@@ -293,7 +347,7 @@ export default definePluginEntry({
             api.logger.warn(`memory-core: intent tool unavailable: ${reason}`);
           }),
       },
-      { names: ["intent"] },
+      { names: ["intent"], workspaceAccess: "execute" },
     );
 
     api.on("before_prompt_build", async (event, ctx) => {
@@ -338,31 +392,6 @@ export default definePluginEntry({
         return undefined;
       }
     });
-
-    api.on(
-      "before_agent_reply",
-      async (_event, ctx) => {
-        if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
-          return undefined;
-        }
-        try {
-          const module = await loadStandingIntentsModule();
-          const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-          const agentId = resolveSessionAgentIdStrict({
-            sessionKey: ctx.sessionKey,
-            config,
-            agentId: ctx.agentId,
-          });
-          await module.sweepStandingIntents({ agentId });
-        } catch (error) {
-          api.logger.warn?.(
-            `memory-core: standing intent maintenance failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        return undefined;
-      },
-      { eligibleTriggers: ["heartbeat", "cron"] },
-    );
 
     api.registerCommand({
       name: "dreaming",

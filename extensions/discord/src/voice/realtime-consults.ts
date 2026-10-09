@@ -236,8 +236,6 @@ export class DiscordRealtimeConsults {
           return;
         }
       }
-    }
-    if (!context) {
       context = this.params.turns.consumePendingSpeakerContext();
       if (context) {
         recent = this.params.harness.forcedConsults.prepare(consultMessage, {
@@ -323,7 +321,6 @@ export class DiscordRealtimeConsults {
       logger.warn(
         `discord voice: realtime active-run control failed; falling back to normal transcript handling: ${formatErrorMessage(error)}`,
       );
-      control = undefined;
     }
     if (this.params.stopped() || providerEpoch !== this.params.providerEpoch()) {
       return;

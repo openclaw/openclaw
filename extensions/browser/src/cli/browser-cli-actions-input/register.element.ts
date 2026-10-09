@@ -22,6 +22,11 @@ function parseBrowserMouseButtonOption(value: string): "left" | "right" | "middl
   });
 }
 
+function clickSuccessMessage(message: string) {
+  return ({ url }: { url?: string }) =>
+    `${message}${typeof url === "string" && url ? ` on ${url}` : ""}`;
+}
+
 export function registerBrowserElementCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -81,11 +86,7 @@ export function registerBrowserElementCommands(
           button: normalizeOptionalString(opts.button),
           modifiers,
         },
-        successMessage: (result) => {
-          const url = result.url;
-          const suffix = typeof url === "string" && url ? ` on ${url}` : "";
-          return `clicked ref ${refValue}${suffix}`;
-        },
+        successMessage: clickSuccessMessage(`clicked ref ${refValue}`),
       });
     });
 
@@ -117,11 +118,7 @@ export function registerBrowserElementCommands(
           button: normalizeOptionalString(opts.button),
           delayMs: opts.delayMs,
         },
-        successMessage: (result) => {
-          const url = result.url;
-          const suffix = typeof url === "string" && url ? ` on ${url}` : "";
-          return `clicked ${x},${y}${suffix}`;
-        },
+        successMessage: clickSuccessMessage(`clicked ${x},${y}`),
       });
     });
 

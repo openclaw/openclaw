@@ -18,11 +18,7 @@ type PreferenceContext = {
 export class SidebarEmptyGroupsController {
   mode: SidebarEmptyGroupsMode = "filtering";
   private storageKey: string | null = null;
-  private owner: {
-    gateway: PreferenceContext["gateway"];
-    revision: number;
-    origin: string;
-  } | null = null;
+  private connectionKey: string | null = null;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -30,7 +26,6 @@ export class SidebarEmptyGroupsController {
   ) {}
 
   set(mode: SidebarEmptyGroupsMode): void {
-    // A menu rendered for a retired account must not write into its replacement.
     if (this.reconcile()) {
       this.host.requestUpdate();
       return;
@@ -50,21 +45,16 @@ export class SidebarEmptyGroupsController {
   reconcile(): boolean {
     const gateway = this.getContext()?.gateway;
     const origin = gateway ? gatewayOriginScope(gateway.connection.gatewayUrl) : "";
-    const retired =
-      !gateway ||
-      gateway.snapshot.phase === "stopped" ||
-      this.owner?.gateway !== gateway ||
-      this.owner.revision !== gateway.connectionRevision ||
-      this.owner.origin !== origin;
+    const connectionKey =
+      gateway && gateway.snapshot.phase !== "stopped"
+        ? `${origin}:${gateway.connectionRevision}`
+        : null;
     let changed = false;
-    if (retired) {
+    if (connectionKey !== this.connectionKey) {
       changed = this.storageKey !== null;
       this.storageKey = null;
       this.mode = "filtering";
-      this.owner =
-        gateway && gateway.snapshot.phase !== "stopped"
-          ? { gateway, revision: gateway.connectionRevision, origin }
-          : null;
+      this.connectionKey = connectionKey;
     }
     // Transport retries clear selfUser but keep the same connection revision.
     // Preserve that viewer until a new hello resolves identity; stop/credential

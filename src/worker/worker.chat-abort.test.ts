@@ -1,11 +1,10 @@
-import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerInferenceTerminalOutcome } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
-  withTestTimeout,
+  withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveActiveEmbeddedRunOwner } from "../agents/embedded-agent-runner/runs.js";
@@ -34,7 +33,6 @@ import {
   getActiveAgentRunDelegatedAuthority,
   getAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
   ComposedGatewayHarness,
   ENVIRONMENT_ID,
@@ -43,15 +41,19 @@ import {
   SESSION_KEY,
   doneOutcome,
 } from "./worker-fault-injection.test-support.js";
+import { createWorkerProcessTestHarness } from "./worker-process.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const workers = createWorkerProcessTestHarness((prefix) => tempDirs.make(prefix));
 
 describe("worker chat.abort settlement", () => {
   let harness: ComposedGatewayHarness;
+  let activeTestSignal: AbortSignal;
   let previousConfig: ReturnType<typeof getRuntimeConfigSnapshot>;
   let previousSourceConfig: ReturnType<typeof getRuntimeConfigSourceSnapshot>;
 
-  beforeEach(async () => {
+  beforeEach(async ({ signal }) => {
+    activeTestSignal = signal;
     // Harness storage work pins the ambient config as the runtime snapshot. Capture
     // first: a later case's executors would watch that inherited store locator and
     // retire when the case publishes harness.cfg.
@@ -61,8 +63,9 @@ describe("worker chat.abort settlement", () => {
     await harness.start();
   });
 
-  afterEach(async () => {
+  afterEach(async ({ signal }) => {
     try {
+      await workers.close(signal);
       await harness.close();
     } finally {
       if (previousConfig) {
@@ -85,6 +88,7 @@ describe("worker chat.abort settlement", () => {
   ] as const)(
     "settles managed chat.abort with queued preview $queuedPreview and $fence fence",
     async ({ queuedPreview, fence }) => {
+      const signal = activeTestSignal;
       const descriptor = await harness.createDescriptor();
       descriptor.assignment.toolAuthority.exec = {
         host: "gateway",
@@ -132,6 +136,7 @@ describe("worker chat.abort settlement", () => {
       registration.markExecutionStarted();
       const ownerInput = {
         placements: harness.placementStore,
+        isReplyDelivered: () => false,
         claim: claim!,
         sessionKey: SESSION_KEY,
         turn: {
@@ -183,20 +188,7 @@ describe("worker chat.abort settlement", () => {
           outerCancelled.resolve();
         }
       });
-      const input = new PassThrough();
-      const output = new PassThrough();
       let stdout = "";
-      output.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString("utf8");
-      });
-      const lifetimeController = new AbortController();
-      const cancelWorker = () => {
-        input.write(
-          `${JSON.stringify({ type: "cancel", turnId: descriptor.assignment.turnId })}\n`,
-        );
-      };
-      owner.signal.addEventListener("abort", cancelWorker, { once: true });
-      setRuntimeConfigSnapshot(harness.cfg);
       const startedAt = performance.now();
       let phase = "command-start";
       let commandOutcome = "pending";
@@ -217,46 +209,43 @@ describe("worker chat.abort settlement", () => {
       onTestFailed(() => {
         console.error("worker chat.abort phase", failureTrace ?? captureTrace());
       });
-      const command = runWorkerCommand({
-        input,
-        output,
-        managed: true,
-        lifetime: {
-          signal: lifetimeController.signal,
-          started: Promise.resolve(true),
-          dispose: vi.fn(),
-          reportConnectionFailure: vi.fn(),
-          terminateOwnedTree: vi.fn(),
-        },
-      });
-      void command.then(
-        () => {
-          commandOutcome = "completed";
-        },
-        () => {
-          commandOutcome = "rejected";
-        },
-      );
-      input.write(
-        `${JSON.stringify({ type: "turn", turnId: descriptor.assignment.turnId, descriptor })}\n`,
-      );
+      let cancelWorker: (() => void) | undefined;
+      let command: Promise<void> | undefined;
       try {
+        const worker = await workers.launch({ descriptor, signal });
+        cancelWorker = () => worker.cancel();
+        owner.signal.addEventListener("abort", cancelWorker, { once: true });
+        command = worker.finish().then((exit) => {
+          stdout = exit.stdout;
+          if (exit.code !== 0) {
+            throw new Error(exit.stderr || `Worker exited with code ${exit.code}`);
+          }
+        });
+        void command.then(
+          () => {
+            commandOutcome = "completed";
+          },
+          () => {
+            commandOutcome = "rejected";
+          },
+        );
         phase = "waiting-live-start";
-        await withTestTimeout(
-          Promise.race([
+        await withinTest(
+          awaitGateBeforeSettlement(
             liveStarted.promise,
-            command.then(() => {
-              throw new Error("worker command completed before live start");
-            }),
-          ]),
-          10_000,
-          "worker live start was not published",
+            command,
+            "worker command completed before live start",
+          ),
+          signal,
         );
         phase = "waiting-cancellation-boundary";
-        await withTestTimeout(
-          previewGate?.entered.promise ?? providerStarted.promise,
-          10_000,
-          "worker did not reach the cancellation boundary",
+        await withinTest(
+          awaitGateBeforeSettlement(
+            previewGate?.entered.promise ?? providerStarted.promise,
+            command,
+            "worker command completed before cancellation boundary",
+          ),
+          signal,
         );
         expect(getAgentRunContext(RUN_ID)?.sessionId).toBe(SESSION_ID);
         const respond = await invokeChatAbortHandler({
@@ -267,24 +256,27 @@ describe("worker chat.abort settlement", () => {
         });
         expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: true, runIds: [RUN_ID] });
         phase = "waiting-outer-cancellation";
-        await outerCancelled.promise;
+        await withinTest(
+          awaitGateBeforeSettlement(
+            outerCancelled.promise,
+            command,
+            "worker command completed before outer cancellation",
+          ),
+          signal,
+        );
         expect(owner.signal.aborted).toBe(true);
         expect(getAgentRunContext(RUN_ID)).toBeUndefined();
         expect(harness.placementStore.validateTurnClaim(claim!)).toBe(true);
         const publishedAtAbort = events.length;
         previewGate?.release.resolve();
         phase = "waiting-worker-finishing";
-        await withTestTimeout(
-          Promise.race([
+        await withinTest(
+          awaitGateBeforeSettlement(
             finishingGate.entered.promise,
-            command.then(() => {
-              throw new Error(
-                `worker command completed before cancellation finishing: ${stdout || "no result"}`,
-              );
-            }),
-          ]),
-          10_000,
-          "worker did not finish cancellation",
+            command,
+            "worker command completed before cancellation finishing",
+          ),
+          signal,
         );
         const cursorAtAbort = harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor;
         if (fence === "claim") {
@@ -325,10 +317,13 @@ describe("worker chat.abort settlement", () => {
         }
         finishingGate.release.resolve();
         if (replaceDuringAck) {
-          await awaitGateBeforeSettlement(
-            ackEntered.promise,
-            command,
-            "worker command settled before durable ACK boundary",
+          await withinTest(
+            awaitGateBeforeSettlement(
+              ackEntered.promise,
+              command,
+              "worker command settled before durable ACK boundary",
+            ),
+            signal,
           );
           replacement = await createWorkerTurnRunOwner({
             ...ownerInput,
@@ -413,14 +408,20 @@ describe("worker chat.abort settlement", () => {
         ackRelease.resolve();
         previewRelease.resolve();
         providerRelease.resolve(doneOutcome("fixture teardown"));
-        lifetimeController.abort(new Error("fixture teardown"));
-        input.end();
-        await Promise.allSettled([command]);
-        owner.signal.removeEventListener("abort", cancelWorker);
-        owner.dispose();
-        replacement?.dispose();
-        registration.cleanup();
-        unsubscribe();
+        try {
+          await workers.close(signal);
+          if (command) {
+            await Promise.allSettled([command]);
+          }
+        } finally {
+          if (cancelWorker) {
+            owner.signal.removeEventListener("abort", cancelWorker);
+          }
+          owner.dispose();
+          replacement?.dispose();
+          registration.cleanup();
+          unsubscribe();
+        }
       }
     },
   );

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assistantVisibleTextFilters,
   minimaxToolCallTextFilter,
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
@@ -7,6 +8,31 @@ import {
   stripAssistantInternalScaffolding,
   stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
+import { createTextProjection } from "./text-projection.js";
+
+it("keeps an invisible stream pending until visible text arrives and honors replacements", () => {
+  const stream = createTextProjection(assistantVisibleTextFilters("delivery"));
+  expect(stream.append("\u200b")).toEqual({ text: "", delta: "" });
+  expect(stream.append("👩‍💻")).toEqual({ text: "\u200b👩‍💻", delta: "\u200b👩‍💻" });
+  expect(stream.replace("\u2060")).toEqual({ text: "", delta: null });
+});
+
+it.each([
+  " \t\n",
+  "\u0085",
+  "\u200b",
+  " \u200c\u200d\u2060\ufeff ",
+  "\u200e\u2066\u2069",
+  "\ufe0f",
+])("does not present invisible-only assistant output %j as an answer", (text) => {
+  expect(sanitizeAssistantVisibleText(text)).toBe("");
+  expect(sanitizeAssistantFinalAnswerText(text)).toBe("");
+});
+
+it.each(["word\u200bbreak", "👩‍💻", "می‌روم"])(
+  "preserves Unicode formatting within visible answers %j",
+  (text) => expect(sanitizeAssistantVisibleText(text)).toBe(text),
+);
 
 describe("stripAssistantInternalScaffolding", () => {
   function expectVisibleText(input: string, expected = input) {

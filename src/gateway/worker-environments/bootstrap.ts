@@ -48,13 +48,19 @@ const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 
 const NODE_RUNTIME_CHECK_JS = String.raw`const parse = (value) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number); const atLeast = (version, floor) => version[0] > floor[0] || (version[0] === floor[0] && (version[1] > floor[1] || (version[1] === floor[1] && version[2] >= floor[2])));
-const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};
-if (!nodeSafe) process.exit(1);
-try { const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:");
-  const sqlite = parse(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? ""));
-  db.close(); if (!sqlite) process.exit(1);
-  const sqliteSafe = atLeast(sqlite, [3, 51, 3]) || (sqlite[0] === 3 && ((sqlite[1] === 50 && sqlite[2] >= 7) || (sqlite[1] === 44 && sqlite[2] >= 6)));
-  process.exit(sqliteSafe ? 0 : 1); } catch { process.exit(1); }`;
+function checkRuntime() {
+  const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};
+  if (!nodeSafe) return 1;
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(":memory:");
+  try {
+    const sqlite = parse(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? ""));
+    if (!sqlite) return 1;
+    const sqliteSafe = atLeast(sqlite, [3, 51, 3]) || (sqlite[0] === 3 && ((sqlite[1] === 50 && sqlite[2] >= 7) || (sqlite[1] === 44 && sqlite[2] >= 6)));
+    return sqliteSafe ? 0 : 1;
+  } finally { db.close(); }
+}
+try { process.exitCode = checkRuntime(); } catch { process.exitCode = 1; }`;
 
 const RECEIPT_MATCH_JS = String.raw`const fs = require("node:fs");
 try {
@@ -67,16 +73,15 @@ try {
     Array.isArray(expected.protocolFeatures) &&
     actual.protocolFeatures.length === expected.protocolFeatures.length &&
     actual.protocolFeatures.every((feature, index) => feature === expected.protocolFeatures[index]);
-  process.exit(
+  process.exitCode =
     shapeMatches &&
       actual.bundleHash === expected.bundleHash &&
       actual.openclawVersion === expected.openclawVersion &&
       featuresMatch
       ? 0
-      : 1,
-  );
+      : 1;
 } catch {
-  process.exit(1);
+  process.exitCode = 1;
 }`;
 
 const VERIFY_ARCHIVE_JS = String.raw`const crypto = require("node:crypto");
@@ -84,9 +89,9 @@ const fs = require("node:fs");
 try {
   const npm = process.argv[3] === "npm";
   const actual = (npm ? "sha512-" : "") + crypto.createHash(npm ? "sha512" : "sha256").update(fs.readFileSync(process.argv[1])).digest(npm ? "base64" : "hex");
-  process.exit(actual === process.argv[2] ? 0 : 1);
+  process.exitCode = actual === process.argv[2] ? 0 : 1;
 } catch {
-  process.exit(1);
+  process.exitCode = 1;
 }`;
 
 const READ_NPM_PACK_FILENAME_JS = String.raw`const fs = require("node:fs");
@@ -95,11 +100,11 @@ try {
   const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   const filename = Array.isArray(value) && value.length === 1 ? value[0]?.filename : undefined;
   if (typeof filename !== "string" || !filename || path.basename(filename) !== filename) {
-    process.exit(1);
+    throw new Error("invalid npm pack filename");
   }
   process.stdout.write(filename);
 } catch {
-  process.exit(1);
+  process.exitCode = 1;
 }`;
 
 const WORKER_ARTIFACT_PATHS_JS = `const artifactPaths = ${JSON.stringify(WORKER_BUNDLE_ARTIFACT_PATHS)};
@@ -168,10 +173,10 @@ try {
   for (const entry of entries) {
     hash.update(entry.path + separator + entry.mode.toString(8) + separator + entry.size + separator + entry.sha256 + separator);
   }
-  process.exit(hash.digest("hex") === expected ? 0 : 1);
+  process.exitCode = hash.digest("hex") === expected ? 0 : 1;
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+  process.exitCode = 1;
 }`;
 
 const ENSURE_PRIVATE_DIRECTORY_SH = String.raw`ensure_private_directory() {

@@ -38,8 +38,9 @@ describe("ClickClack inbound mention gating", () => {
   it("records attachment persistence failures before dropping inbound delivery", async () => {
     const mainSessionKey = "agent:research:main";
     const bindingStore = getClickClackDiscussionBindingStore(runtime);
-    bindingStore.set(
+    await bindingStore.setIfCurrent(
       mainSessionKey,
+      undefined,
       createInboundDiscussionBinding({ sessionId: "old-session-id" }),
     );
     const persisted = runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>({
@@ -517,8 +518,9 @@ describe("ClickClack inbound mention gating", () => {
   );
 
   it("rechecks discussion access after the thread root lookup", async () => {
-    getClickClackDiscussionBindingStore(runtime).set(
+    await getClickClackDiscussionBindingStore(runtime).setIfCurrent(
       "agent:research:main",
+      undefined,
       createInboundDiscussionBinding(),
     );
     const discussionConfig = createInboundDiscussionConfig();
@@ -569,8 +571,9 @@ describe("ClickClack inbound mention gating", () => {
   });
 
   it("evaluates mentions against the managed discussion agent before dispatch", async () => {
-    getClickClackDiscussionBindingStore(runtime).set(
+    await getClickClackDiscussionBindingStore(runtime).setIfCurrent(
       "agent:research:main",
+      undefined,
       createInboundDiscussionBinding({
         externalRef: "openclaw:test:research-mentions",
         label: "Research mentions",

@@ -18,7 +18,7 @@ import { VERSION } from "../version.js";
 export function recordDoctorMigrationBackups(
   env: NodeJS.ProcessEnv,
   backupId: string,
-  inventory: readonly { path: string; identity: fs.BigIntStats }[],
+  inventory: readonly { path: string; identity: fs.BigIntStats; archivePath: string }[],
 ): void {
   const runId = `startup-migration-${backupId}`;
   const manifestPath = path.join(resolveSessionSqliteMigrationRunsDir(env), `${runId}.json`);
@@ -32,8 +32,7 @@ export function recordDoctorMigrationBackups(
     return;
   }
   const targets: SessionSqliteMigrationTargetManifest[] = inventory.map(
-    ({ path: source, identity }) => {
-      const archivePath = `${source}.pre-startup-migration-${backupId}.bak`;
+    ({ path: source, identity, archivePath }) => {
       const move = {
         kind: "database-backup" as const,
         sourcePath: source,

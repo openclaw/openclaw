@@ -11,6 +11,7 @@ import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import {
   readCommittedTranscriptMessageSequence,
+  rememberCommittedTranscriptMessageSequences,
   rememberCommittedTranscriptMessageSequencesInTransaction,
 } from "./session-accessor.sqlite-transcript-sequences.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
@@ -197,6 +198,48 @@ it.each([false, true])(
   },
 );
 
+it.each([false, true])(
+  "publishes only ready final turn cursors through the history worker: branch changed %s",
+  async (replaceBranch) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = createSessionCompoundWorkerFixture();
+      const resolved = resolveSqliteTranscriptScope(f.scope);
+      const { first: firstMessage, second: secondMessage } = runOpenClawAgentWriteTransaction(
+        (database) => {
+          const first = appendTranscriptMessageInTransaction(database, resolved, {
+            eventId: "first",
+            message: { role: "assistant", content: "first branch" },
+          });
+          const second = appendTranscriptMessageInTransaction(database, resolved, {
+            eventId: "second",
+            ...(replaceBranch ? { parentId: null } : {}),
+            message: { role: "assistant", content: "final branch" },
+          });
+          if (!first || !second) {
+            throw new Error("Missing committed messages");
+          }
+          return { first: first.result, second: second.result };
+        },
+        f.scope,
+      );
+      const reads = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        await rememberCommittedTranscriptMessageSequences(f.scope, [firstMessage, secondMessage]);
+        expect(readCommittedTranscriptMessageSequence(firstMessage)).toBe(
+          replaceBranch ? undefined : 1,
+        );
+        // An explicit branch change invalidates the projection until its owner rebuilds it.
+        expect(readCommittedTranscriptMessageSequence(secondMessage)).toBe(
+          replaceBranch ? undefined : 2,
+        );
+        expect(reads.queries).toEqual([]);
+      } finally {
+        reads.restore();
+      }
+    });
+  },
+);
+
 it("preserves caller callback results without interpreting postimage-shaped fields", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = createSessionCompoundWorkerFixture();
@@ -230,5 +273,38 @@ it("keeps snapshot versions scoped to the requested session when a callback appe
     expect(result.value.after).toEqual(
       readTranscriptContextVersionInTransaction(f.database, f.scope.sessionId),
     );
+  });
+});
+
+it("reuses the write's context postimage and retires it after a raw write or rollback", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = createSessionCompoundWorkerFixture();
+    runOpenClawAgentWriteTransaction((database) => {
+      appendTranscriptMessageInTransaction(database, resolveSqliteTranscriptScope(f.scope), {
+        eventId: "saved",
+        message: { role: "assistant", content: "durable bytes" },
+      });
+      const reads = observeSqliteReadSql(StatementSync.prototype);
+      const saved = readTranscriptContextVersionInTransaction(database, f.scope.sessionId);
+      const changedCopy = readTranscriptContextVersionInTransaction(database, f.scope.sessionId);
+      reads.restore();
+      expect(reads.queries).toEqual([]);
+      expect(saved.rawSeq).toBe(1);
+      changedCopy.updatedAt = -1;
+      expect(readTranscriptContextVersionInTransaction(database, f.scope.sessionId)).toEqual(saved);
+
+      expect(() =>
+        runOpenClawAgentWriteTransaction((nested) => {
+          nested.db
+            .prepare("UPDATE session_windows SET transcript_updated_at = ? WHERE session_id = ?")
+            .run(42, f.scope.sessionId);
+          expect(
+            readTranscriptContextVersionInTransaction(nested, f.scope.sessionId).updatedAt,
+          ).toBe(42);
+          throw new Error("rollback nested context");
+        }, f.scope),
+      ).toThrow("rollback nested context");
+      expect(readTranscriptContextVersionInTransaction(database, f.scope.sessionId)).toEqual(saved);
+    }, f.scope);
   });
 });

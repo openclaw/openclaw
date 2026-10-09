@@ -40,9 +40,6 @@ function calculateConsolidationComponent(recallDays: string[]): number {
   if (recallDays.length === 0) {
     return 0;
   }
-  if (recallDays.length === 1) {
-    return 0.2;
-  }
   const parsed = recallDays
     .map((recallDay) => Date.parse(recallDay + "T00:00:00.000Z"))
     .filter((value) => Number.isFinite(value))
@@ -194,15 +191,9 @@ export async function rankShortTermPromotionCandidates(
     });
   }
 
-  const sorted = candidates.toSorted((a, b) => {
-    if (b.score !== a.score) {
-      return b.score - a.score;
-    }
-    if (b.recallCount !== a.recallCount) {
-      return b.recallCount - a.recallCount;
-    }
-    return a.path.localeCompare(b.path);
-  });
+  const sorted = candidates.toSorted(
+    (a, b) => b.score - a.score || b.recallCount - a.recallCount || a.path.localeCompare(b.path),
+  );
 
   const limit = resolveNonNegativeIntegerOption(options.limit, sorted.length);
   return sorted.slice(0, limit);

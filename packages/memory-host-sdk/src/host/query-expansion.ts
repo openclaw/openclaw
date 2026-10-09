@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-const STOP_WORDS_EN = new Set([
+const STOP_WORDS_GENERAL = new Set([
+  // English
   // Articles and determiners
   "a",
   "an",
@@ -107,9 +108,7 @@ const STOP_WORDS_EN = new Set([
   "get",
   "tell",
   "give",
-]);
-
-const STOP_WORDS_ES = new Set([
+  // Spanish
   // Articles and determiners
   "el",
   "la",
@@ -181,9 +180,7 @@ const STOP_WORDS_ES = new Set([
   "porqué",
   "favor",
   "ayuda",
-]);
-
-const STOP_WORDS_PT = new Set([
+  // Portuguese
   // Articles and determiners
   "o",
   "a",
@@ -251,9 +248,7 @@ const STOP_WORDS_PT = new Set([
   "porquê",
   "favor",
   "ajuda",
-]);
-
-const STOP_WORDS_AR = new Set([
+  // Arabic
   // Articles and connectors
   "ال",
   "و",
@@ -470,7 +465,8 @@ function isUsefulKoreanStem(stem: string): boolean {
   return /^[a-z0-9_]+$/i.test(stem);
 }
 
-const STOP_WORDS_JA = new Set([
+const STOP_WORDS_JA_ZH = new Set([
+  // Japanese
   // Pronouns and references
   "これ",
   "それ",
@@ -521,9 +517,7 @@ const STOP_WORDS_JA = new Set([
   "さっき",
   "前",
   "後",
-]);
-
-const STOP_WORDS_ZH = new Set([
+  // Chinese
   // Pronouns
   "我",
   "我们",
@@ -623,15 +617,7 @@ const STOP_WORDS_ZH = new Set([
 
 /** Returns true for low-value conversational tokens that should not drive FTS matching. */
 export function isQueryStopWordToken(token: string): boolean {
-  return (
-    STOP_WORDS_EN.has(token) ||
-    STOP_WORDS_ES.has(token) ||
-    STOP_WORDS_PT.has(token) ||
-    STOP_WORDS_AR.has(token) ||
-    STOP_WORDS_ZH.has(token) ||
-    STOP_WORDS_KO.has(token) ||
-    STOP_WORDS_JA.has(token)
-  );
+  return STOP_WORDS_GENERAL.has(token) || STOP_WORDS_JA_ZH.has(token) || STOP_WORDS_KO.has(token);
 }
 
 function isValidKeyword(token: string): boolean {

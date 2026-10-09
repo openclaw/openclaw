@@ -1,8 +1,6 @@
 /** Detects system-domain launchd ownership before mutating a user LaunchAgent. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isMissingPathError } from "../infra/errors.js";
@@ -18,6 +16,7 @@ import {
   ServiceOwnershipRefusalError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
+import { formatServiceInspectionDetail } from "./service-runtime.js";
 
 const SYSTEM_LAUNCH_DAEMON_DIR = "/Library/LaunchDaemons";
 
@@ -34,11 +33,6 @@ type SystemLaunchDaemonOwnership =
     };
 
 type SystemLaunchDaemonConflict = Exclude<SystemLaunchDaemonOwnership, { status: "absent" }>;
-
-function formatUnknownError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return truncateUtf16Safe(sanitizeForLog(raw), 500);
-}
 
 /**
  * Renders the package-independent ownership probe used by detached restart helpers.
@@ -166,9 +160,6 @@ close(STDOUT) or exit 74;
     fi
   fi
 fi
-if [ -z "$openclaw_system_launchd_conflict" ]; then
-  openclaw_query_system_launchd
-fi
 `;
 }
 
@@ -187,7 +178,7 @@ async function findInstalledSystemLaunchDaemon(
     if (isMissingPathError(error)) {
       return { status: "absent" };
     }
-    return { status: "unverifiable", detail: formatUnknownError(error) };
+    return { status: "unverifiable", detail: formatServiceInspectionDetail(error) };
   }
 
   for (const entry of entries.filter((candidate) => candidate.endsWith(".plist")).toSorted()) {
@@ -213,7 +204,10 @@ async function findInstalledSystemLaunchDaemon(
         return { status: "installed", plistPath };
       }
     } catch (error) {
-      return { status: "unverifiable", detail: `${plistPath}: ${formatUnknownError(error)}` };
+      return {
+        status: "unverifiable",
+        detail: `${plistPath}: ${formatServiceInspectionDetail(error)}`,
+      };
     }
   }
   return { status: "absent" };
@@ -269,13 +263,8 @@ export async function inspectSystemLaunchDaemonOwnership(
       detail: installed.detail,
     };
   }
-  // Close the query-to-directory-snapshot race at the last responsible moment.
-  // Arbitrary root installers cannot share a lock with this unprivileged process;
-  // activation paths therefore repeat this complete probe immediately before use.
-  return classifySystemLaunchDaemonQuery(
-    serviceTarget,
-    await execLaunchctl(["print", serviceTarget], options.timeoutMs),
-  );
+  // Concurrent root installers are best effort; activation performs its own check.
+  return { status: "absent", serviceTarget };
 }
 
 export function formatSystemLaunchDaemonOwnershipSummary(

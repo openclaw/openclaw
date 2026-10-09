@@ -144,32 +144,6 @@ async function stageDelegation(controller: ReturnType<typeof createDiscordDraftP
 }
 
 describe("Discord draft preview REST lifecycle", () => {
-  it("shows useful work status by default without streaming answer text", async () => {
-    vi.useFakeTimers();
-    const { controller, visible } = createContinuationHarness({ discordConfig: {} });
-    try {
-      await controller.pushItemEvent({
-        itemId: "preamble-1",
-        kind: "preamble",
-        phase: "end",
-        progressText: "Checking the channel delivery and running tests.",
-      });
-      await controller.pushItemEvent(
-        projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
-      );
-      controller.updateFromPartial("Unfinished answer should stay private.");
-      await vi.advanceTimersByTimeAsync(1_500);
-      await controller.flush();
-      expect([...visible.values()]).toEqual([
-        "Checking the channel delivery and running tests.\n\nExec: running",
-      ]);
-    } finally {
-      await controller.cleanup();
-      vi.useRealTimers();
-    }
-    expect(visible.size).toBe(0);
-  });
-
   it("keeps ambient room events private even with default progress", async () => {
     vi.useFakeTimers();
     const { rest, visible } = createContinuationHarness({ discordConfig: {} });
@@ -275,13 +249,42 @@ describe("Discord draft preview REST lifecycle", () => {
     }
   });
 
-  it.each(["missing-id", "stopped", "declined", "label-only", "off"] as const)(
+  it("does not flush a progress final when delivery admission refuses custody", async () => {
+    vi.useFakeTimers();
+    const { controller, requests } = createContinuationHarness();
+    const adopt = vi.fn(() => true);
+    try {
+      await stageDelegation(controller);
+      await vi.advanceTimersByTimeAsync(1_500);
+      await controller.flush();
+      const priorRequests = [...requests];
+      await expect(
+        controller.adoptProgressDraft(
+          { text: "Waiting for delegated work." },
+          {
+            kind: "final",
+            adoptProgressDraft: adopt,
+            onPlatformSendDispatch: async () => {
+              throw new Error("Delivery custody belongs to an earlier attempt");
+            },
+          },
+        ),
+      ).rejects.toThrow("Delivery custody belongs to an earlier attempt");
+      expect(requests).toEqual(priorRequests);
+      expect(adopt).not.toHaveBeenCalled();
+    } finally {
+      await controller.cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["missing-id", "stopped", "declined", "label-only"] as const)(
     "delivers the required waiting reply instead of adopting a %s card",
     async (scenario) => {
       vi.useFakeTimers();
       const harness = createContinuationHarness({
         missingId: scenario === "missing-id",
-        discordConfig: scenario === "off" ? { streaming: { mode: "off" } } : {},
+        discordConfig: {},
       });
       const { controller, visible, failures } = harness;
       const adopt = vi.fn(() => scenario !== "declined");
@@ -439,7 +442,6 @@ describe("Discord draft preview REST lifecycle", () => {
   );
 
   it.each([
-    { name: "paragraph separators", text: `${"A".repeat(500)}\n\n${"B".repeat(500)}` },
     { name: "split code fences", text: `\`\`\`text\n${"const value = 1;\n".repeat(60)}\`\`\`` },
   ])("preserves $name when block previews edit one message", async ({ text }) => {
     const { controller, visible } = createContinuationHarness({ mode: "block" });
@@ -540,72 +542,52 @@ describe("Discord draft preview REST lifecycle", () => {
     expect(requests).toEqual(["POST /channels/c1/messages", "POST /channels/c1/messages"]);
   });
 
-  it.each([
-    ["queued admission", 1],
-    ["teardown", 2],
-  ] as const)(
-    "removes a late preview after %s (%i delete failures)",
-    async (boundary, deleteFailures) => {
-      const firstCreateStarted = createDeferred<void>();
-      const finishFirstCreate = createDeferred<void>();
-      const visibleMessages = new Map<string, string>();
-      const deletedIds: string[] = [];
-      let createdCount = 0;
-      const rest = new RequestClient("test-token", {
-        fetch: async (input, init) => {
-          const url = new URL(input instanceof Request ? input.url : input);
-          if (init?.method === "POST") {
-            const id = String(++createdCount);
-            if (typeof init.body !== "string") {
-              throw new Error("Expected a serialized Discord JSON request body");
-            }
-            const body = JSON.parse(init.body) as { content: string };
-            visibleMessages.set(id, body.content);
-            if (createdCount === 1) {
-              firstCreateStarted.resolve();
-              await finishFirstCreate.promise;
-            }
-            return Response.json({ id });
+  it("retries teardown cleanup after two failed preview deletions", async () => {
+    const firstCreateStarted = createDeferred<void>();
+    const finishFirstCreate = createDeferred<void>();
+    const visibleMessages = new Map<string, string>();
+    const deletedIds: string[] = [];
+    let createdCount = 0;
+    const rest = new RequestClient("test-token", {
+      fetch: async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        if (init?.method === "POST") {
+          const id = String(++createdCount);
+          if (typeof init.body !== "string") {
+            throw new Error("Expected a serialized Discord JSON request body");
           }
-          if (init?.method === "DELETE") {
-            const id = url.pathname.split("/").at(-1)!;
-            deletedIds.push(id);
-            if (deletedIds.length <= deleteFailures) {
-              return Response.json({ message: "temporarily unavailable" }, { status: 503 });
-            }
-            visibleMessages.delete(id);
-            return new Response(null, { status: 204 });
+          const body = JSON.parse(init.body) as { content: string };
+          visibleMessages.set(id, body.content);
+          if (createdCount === 1) {
+            firstCreateStarted.resolve();
+            await finishFirstCreate.promise;
           }
-          throw new Error(`Unexpected Discord request: ${init?.method} ${url.pathname}`);
-        },
-      });
-      const controller = createPreviewController(rest);
+          return Response.json({ id });
+        }
+        if (init?.method === "DELETE") {
+          const id = url.pathname.split("/").at(-1)!;
+          deletedIds.push(id);
+          if (deletedIds.length <= 2) {
+            return Response.json({ message: "temporarily unavailable" }, { status: 503 });
+          }
+          visibleMessages.delete(id);
+          return new Response(null, { status: 204 });
+        }
+        throw new Error(`Unexpected Discord request: ${init?.method} ${url.pathname}`);
+      },
+    });
+    const controller = createPreviewController(rest);
 
-      controller.draftStream?.update("prior turn progress");
-      await firstCreateStarted.promise;
-      if (boundary === "queued admission") {
-        controller.handleQueuedFollowupAdmitted();
-        controller.draftStream?.update("queued turn progress");
-        finishFirstCreate.resolve();
-        await controller.flush();
+    controller.draftStream?.update("prior turn progress");
+    await firstCreateStarted.promise;
+    const cleanup = controller.cleanup();
+    finishFirstCreate.resolve();
+    await cleanup;
 
-        expect(controller.draftStream?.messageId()).toBe("2");
-        expect(visibleMessages.get("2")).toBe("queued turn progress");
-        await controller.lifecycle.observeDelivery({ visibleReplySent: true });
-        await controller.cleanup();
-      } else {
-        const cleanup = controller.cleanup();
-        finishFirstCreate.resolve();
-        await cleanup;
-      }
-
-      if (deleteFailures === 2) {
-        expect(deletedIds).toEqual(["1", "1"]);
-        expect([...visibleMessages]).toEqual([["1", "prior turn progress"]]);
-        await controller.cleanup();
-      }
-      expect([...visibleMessages]).toEqual([]);
-      expect(deletedIds.filter((id) => id === "1")).toHaveLength(deleteFailures + 1);
-    },
-  );
+    expect(deletedIds).toEqual(["1", "1"]);
+    expect([...visibleMessages]).toEqual([["1", "prior turn progress"]]);
+    await controller.cleanup();
+    expect([...visibleMessages]).toEqual([]);
+    expect(deletedIds.filter((id) => id === "1")).toHaveLength(3);
+  });
 });

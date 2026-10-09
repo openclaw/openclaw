@@ -13,7 +13,7 @@ import { buildConfiguredAgentSystemPrompt } from "../../../src/agents/system-pro
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
 import { createStubTool } from "../../../src/agents/test-helpers/agent-tool-stubs.js";
 import {
-  buildDirectChatContext,
+  buildSourceConversationContext,
   buildGroupChatContext,
   buildGroupIntro,
 } from "../../../src/auto-reply/reply/groups.js";
@@ -69,8 +69,6 @@ function buildCommonSystemParams(workspaceDir: string) {
       defaultModel: "anthropic/claude-sonnet-4-6",
       shell: "zsh",
     },
-    userTimezone: "America/Los_Angeles",
-    userDate: "2026-03-16",
     toolNames,
   };
 }
@@ -84,15 +82,11 @@ function buildSystemPrompt(params: {
   bootstrapTruncationNotice?: string;
   silentReplyPromptMode?: "generic" | "none";
 }) {
-  const { runtimeInfo, userTimezone, userDate, toolNames } = buildCommonSystemParams(
-    params.workspaceDir,
-  );
+  const { runtimeInfo, toolNames } = buildCommonSystemParams(params.workspaceDir);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     extraSystemPrompt: params.extraSystemPrompt,
     runtimeInfo,
-    userTimezone,
-    userDate,
     toolNames,
     modelAliasLines: [],
     promptMode: "full",
@@ -147,7 +141,7 @@ function buildAutoReplySystemPrompt(params: {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx, {}),
     params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
-      ? buildDirectChatContext({
+      ? buildSourceConversationContext({
           sessionCtx: params.sessionCtx,
         })
       : "",
@@ -182,7 +176,7 @@ function buildToolRichSystemPrompt(params: {
   skillsPrompt: string;
   contextFiles: Array<{ path: string; content: string }>;
 }) {
-  const { runtimeInfo, userTimezone, userDate } = buildCommonSystemParams(params.workspaceDir);
+  const { runtimeInfo } = buildCommonSystemParams(params.workspaceDir);
   const tools = [
     "bash",
     "read",
@@ -202,8 +196,6 @@ function buildToolRichSystemPrompt(params: {
     runtimeInfo,
     tools,
     modelAliasLines: [],
-    userTimezone,
-    userDate,
     acpEnabled: true,
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: { level: "extensive", channel: "Telegram" },

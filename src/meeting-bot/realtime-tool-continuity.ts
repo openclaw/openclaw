@@ -23,13 +23,11 @@ export function readMeetingRealtimeToolAbortSignal(
 export function createMeetingRealtimeToolContinuity<
   TCall extends MeetingRealtimeToolContinuityCall,
 >(handleToolCall: (call: TCall) => Promise<void>) {
-  let epoch = 0;
   const activeControllers = new Set<AbortController>();
 
   // Reset invalidates provider submissions and Talk events together so late
   // async completions cannot leak into the replacement provider generation.
   const reset = (reason: string) => {
-    epoch += 1;
     for (const controller of activeControllers) {
       controller.abort(reason);
     }
@@ -60,10 +58,9 @@ export function createMeetingRealtimeToolContinuity<
     call: Omit<TCall, "session" | "onTalkEvent">;
     harness: Pick<RealtimeVoiceSessionHarness, "emit" | "ensureTurn">;
   }): Promise<void> => {
-    const callEpoch = epoch;
     const controller = new AbortController();
     activeControllers.add(controller);
-    const isActive = () => !controller.signal.aborted && callEpoch === epoch;
+    const isActive = () => !controller.signal.aborted;
     const turnId = params.harness.ensureTurn();
     params.harness.emit({
       type: "tool.call",

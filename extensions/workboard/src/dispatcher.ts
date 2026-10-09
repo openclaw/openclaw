@@ -282,7 +282,6 @@ async function runWorkboardDispatch(
   const startedOwners = new Set<string>();
   // Allow one fallback per worker slot without draining the queue during an outage.
   const maxAttempts = maxStarts * 2;
-  let acceptedStarts = 0;
   let attemptedStarts = 0;
 
   const selection = selectStartableCards(
@@ -298,7 +297,7 @@ async function runWorkboardDispatch(
   }
   for (const card of selection.cards) {
     const ownerId = ownerOverride || workboardCardSlotOwner(card, now);
-    if (acceptedStarts >= maxStarts || attemptedStarts >= maxAttempts) {
+    if (started.length >= maxStarts || attemptedStarts >= maxAttempts) {
       break;
     }
     if (startedOwners.has(ownerId)) {
@@ -499,7 +498,6 @@ async function runWorkboardDispatch(
             execution: acceptedExecution,
           })
           .catch(() => undefined)) ?? acceptedCard;
-      acceptedStarts += 1;
       startedOwners.add(ownerId);
       started.push({
         cardId: updated.id,

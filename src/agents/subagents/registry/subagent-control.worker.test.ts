@@ -2,13 +2,13 @@
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { existsSync } from "node:fs";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
 } from "../../../../test/helpers/sqlite-parent-observer.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadExactSessionEntryReadOnly,
@@ -29,19 +29,30 @@ import { withEnvAsync } from "../../../test-utils/env.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
-import { createOpenClawTools } from "../../openclaw-tools.js";
+import { createOpenClawToolsAsync } from "../../openclaw-tools.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
-import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createSubagentRunRecord,
+  isSubagentRegistryWriteCommand,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import { holdQueuedSwarmRun, releaseSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import * as registryState from "./subagent-registry-state.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 
 const fixture = useSubagentControlFixture();
+
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 
 it.each(["caller admission", "session generation"] as const)(
   "releases an acknowledged native claim when %s retires before publication",
@@ -56,6 +67,8 @@ it.each(["caller admission", "session generation"] as const)(
     await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
       requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -96,12 +109,14 @@ it.each(["caller admission", "session generation"] as const)(
         options,
       ),
     );
-    const tool = createOpenClawTools({
-      config: getRuntimeConfig(),
-      agentSessionKey: "agent:main:main",
-      workspaceDir: fixture.stateDir,
-      disableMessageTool: true,
-    }).find((candidate) => candidate.name === "subagents");
+    const tool = (
+      await createOpenClawToolsAsync({
+        config: getRuntimeConfig(),
+        agentSessionKey: "agent:main:main",
+        workspaceDir: fixture.stateDir,
+        disableMessageTool: true,
+      })
+    ).find((candidate) => candidate.name === "subagents");
     if (!tool) {
       throw new Error("Missing registered subagents tool");
     }
@@ -162,6 +177,8 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
       const registration = {
         runId,
         childSessionKey: sessionKey,
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
         requesterSessionKey: "agent:main:main",
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -174,12 +191,14 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
       if (kind === "cold hydration") {
         subagentRuns.clear();
       }
-      const tool = createOpenClawTools({
-        config: getRuntimeConfig(),
-        agentSessionKey: "agent:main:main",
-        workspaceDir: fixture.stateDir,
-        disableMessageTool: true,
-      }).find((candidate) => candidate.name === "subagents");
+      const tool = (
+        await createOpenClawToolsAsync({
+          config: getRuntimeConfig(),
+          agentSessionKey: "agent:main:main",
+          workspaceDir: fixture.stateDir,
+          disableMessageTool: true,
+        })
+      ).find((candidate) => candidate.name === "subagents");
       if (!tool) {
         throw new Error("Missing registered subagents tool");
       }
@@ -319,7 +338,9 @@ it.each([
         );
       }
       expect(
-        resolveStoredSubagentCapabilities(requester, { cfg: config, agentId: "main" }),
+        await withPreparedSessionCapabilityRead(() =>
+          resolveStoredSubagentCapabilities(requester, { cfg: config, agentId: "main" }),
+        ),
       ).toMatchObject({ controlScope: "children" });
     }
     const terminalEntered = createDeferred();
@@ -364,23 +385,42 @@ it.each([
       ).toBe(true);
     }
     for (const id of [runId, siblingId]) {
-      // Fixture seeding ends before the observed Stop, without scheduling maintenance tails.
-      if (!missingStore || id !== runId) {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: key(id) },
-          {
-            sessionId: `${id}-session`,
-            updatedAt: Date.now(),
-            lifecycleRevision: `${id}-revision`,
-            inputTokens: 11,
-            outputTokens: 7,
-            totalTokens: 18,
-          },
-        );
+      if (missingStore && id === runId) {
+        const retained = createSubagentRunRecord({
+          runId: id,
+          childSessionKey: key(id),
+          childAgentId: "missing",
+          childSessionIdentity: undefined,
+          requesterSessionKey: requester,
+          requesterAgentId: "main",
+          execution: { status: "queued" },
+          collect: true,
+          expectsCompletionMessage: false,
+        });
+        await mutateSubagentRuns([id], () => ({
+          value: undefined,
+          postimages: new Map([[id, retained]]),
+        }));
+        continue;
       }
+      // Fixture seeding ends before the observed Stop, without scheduling maintenance tails.
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key(id) },
+        {
+          sessionId: `${id}-session`,
+          updatedAt: Date.now(),
+          lifecycleRevision: `${id}-revision`,
+          inputTokens: 11,
+          outputTokens: 7,
+          totalTokens: 18,
+        },
+      );
       await registerSubagentRun({
         runId: id,
         childSessionKey: key(id),
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(id) })
+          ?.entry,
         requesterSessionKey: requester,
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -403,12 +443,14 @@ it.each([
         setActiveEmbeddedRun(sessionId, handle, key(id));
         return { id, sessionId, handle, abort };
       });
-    const tool = createOpenClawTools({
-      config,
-      agentSessionKey: requester,
-      workspaceDir: fixture.stateDir,
-      disableMessageTool: true,
-    }).find((candidate) => candidate.name === "subagents");
+    const tool = (
+      await createOpenClawToolsAsync({
+        config,
+        agentSessionKey: requester,
+        workspaceDir: fixture.stateDir,
+        disableMessageTool: true,
+      })
+    ).find((candidate) => candidate.name === "subagents");
     expect(tool, "core must register the native subagents tool").toBeDefined();
     if (!tool) {
       throw new Error("Missing registered subagents tool");
@@ -497,6 +539,12 @@ it.each([
     }
     try {
       const persisted = loadSubagentRegistryFromSqlite();
+      if (missingStore) {
+        expect(persisted.get(runId)?.childSessionIdentity).toBeUndefined();
+        expect(persisted.get(runId)).toMatchObject({
+          execution: { suppressSessionEffects: true },
+        });
+      }
       expect(persisted.get(runId)).toMatchObject({
         execution: {
           status: "terminal",

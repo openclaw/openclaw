@@ -11,10 +11,10 @@ import {
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
-import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
+import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 
@@ -64,12 +64,17 @@ export async function prepareEmbeddedAttemptHistory(
     });
     const prior = await sanitizeSessionHistory({
       ...replayContext(),
-      messages: activeSession.messages,
+      messages: bindToolResultPromptProjectionKeys(
+        activeSession.messages,
+        input.prepared.sessionRuntime.toolResultPromptProjectionState,
+      ),
       allowedToolNames: replayAllowedToolNames,
       sessionManager,
     });
+    input.setup.prepStages.mark("history-sanitize");
     cacheTrace?.recordStage("session:sanitized", { messages: prior });
     const validated = await validateReplayTurns({ ...replayContext(), messages: prior });
+    input.setup.prepStages.mark("history-validation");
 
     if (
       attempt.sessionKey &&
@@ -136,7 +141,7 @@ export async function prepareEmbeddedAttemptHistory(
         heartbeatSummary?.ackMaxChars,
         heartbeatSummary?.prompt,
       );
-      const truncated = preserveCompactionReplayWindow(
+      limited = preserveCompactionReplayWindow(
         heartbeatFiltered,
         limitHistoryTurns(
           heartbeatFiltered,
@@ -153,12 +158,8 @@ export async function prepareEmbeddedAttemptHistory(
           enabled: compactionReplayEnabled,
         },
       );
-      // Truncation can orphan tool_result blocks by removing the assistant message
-      // that contained the matching tool_use, so repair the pairs once more.
-      limited = transcriptPolicy.repairToolUseResultPairing
-        ? sanitizeToolUseResultPairingForModel(truncated, isOpenAIResponsesApi)
-        : truncated;
     }
+    input.setup.prepStages.mark("history-window");
     cacheTrace?.recordStage("session:limited", { messages: limited });
     if (limited.length > 0 || prior.length > 0) {
       activeSession.agent.state.messages = limited;
@@ -190,6 +191,7 @@ export async function prepareEmbeddedAttemptHistory(
     isOpenAIResponsesApi,
     warn: (message) => log.warn(message),
   });
+  input.setup.prepStages.mark("context-engine");
   activeSession.agent.state.messages = messages;
   if (systemPrompt !== systemPromptText) {
     setSystemPrompt(systemPrompt);

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import type { Mock } from "vitest";
 import { ensureCodexAppServerClientRuntime } from "./app-server/client-runtime.js";
@@ -22,11 +23,14 @@ export function wrapCodexNativeThreadToolRequest(
   client: CodexAppServerClient,
 ): typeof codexControlRequest {
   return async (...args: Parameters<typeof codexControlRequest>) => {
-    const response = await request(...args);
     const options = args[3];
+    await options?.assertCurrentAsync?.();
+    options?.assertCurrent?.();
+    const response = await request(...args);
     if (options?.onResponse) {
       await options.onResponse(response, client, {
         assertCurrent: options.assertCurrent ?? (() => undefined),
+        assertCurrentAsync: options.assertCurrentAsync,
       });
     } else {
       options?.assertCurrent?.();
@@ -60,6 +64,7 @@ export async function withCodexNativeThreadToolFixture(
       await run({ root, sessionFile, client });
     } finally {
       client.close();
+      await closeOpenClawAgentDatabasesAsync();
     }
   });
 }

@@ -24,7 +24,8 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-restart-auth",
     label: "package/update restart auth",
-    timeout_minutes: 55,
+    // 62-minute lane plus runner setup and artifact upload, matching targeted jobs.
+    timeout_minutes: 75,
     profiles: "beta minimum stable full",
   },
   {
@@ -93,8 +94,8 @@ const LIVE_MODEL_PROVIDERS = [
     // The release workspace does not enable Global regions, so the default high-signal
     // selection includes DeepSeek routes that reject every request. Keep this list aligned
     // with models proven reachable from the release workspace.
-    models: "opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3",
-    max_models: "3",
+    models: "opencode-go/glm-5.2,opencode-go/glm-5.3",
+    max_models: "2",
     profiles: "full",
   },
   {

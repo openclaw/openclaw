@@ -2,11 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
-import type {
-  AgentDefaultsConfig,
-  AgentEntryConfig,
-  OpenClawConfig,
-} from "../../../config/types.js";
+import type { OpenClawConfig } from "../../../config/types.js";
 import { resolveHeartbeatAgents } from "../../../infra/heartbeat-config.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
@@ -66,27 +62,19 @@ describe("ambient owner migration", () => {
     expect(raw.agents?.defaults).toBeUndefined();
   });
 
-  it.each<{ entries: LegacyAgentEntries; owner: string; materialized: boolean }>([
-    { entries: { ops: {} }, owner: "ops", materialized: false },
-    { entries: { main: {}, ops: { default: true } }, owner: "ops", materialized: true },
-  ])(
-    "preserves resolved owners while retiring markers: $entries",
-    ({ entries, owner, materialized }) => {
-      const raw: OpenClawConfigWithLegacyRoster = { agents: { entries } };
-      expect(resolveAmbientOwnerAgentId(raw)).toBe(owner);
-      expect(findLegacySystemAgentOwnerIssue(raw)).toBeUndefined();
-      const migrated: OpenClawConfig = migrate(raw).next ?? raw;
-      expect(migrated.agents?.defaults?.systemAgent).toEqual(
-        materialized ? { agentId: owner } : undefined,
-      );
-      expect(migrated.agents?.defaults?.heartbeat).toEqual(
-        materialized ? { agentId: owner } : undefined,
-      );
-      expect(migrated.agents?.entries?.ops).not.toHaveProperty("default");
-      expect(resolveAmbientOwnerAgentId(migrated)).toBe(owner);
-      expect(migrate(migrated)).toEqual({ next: null, changes: [] });
-    },
-  );
+  it("preserves the resolved owner while retiring its default marker", () => {
+    const raw: OpenClawConfigWithLegacyRoster = {
+      agents: { entries: { main: {}, ops: { default: true } } },
+    };
+    expect(resolveAmbientOwnerAgentId(raw)).toBe("ops");
+    expect(findLegacySystemAgentOwnerIssue(raw)).toBeUndefined();
+    const migrated: OpenClawConfig = migrate(raw).next ?? raw;
+    expect(migrated.agents?.defaults?.systemAgent).toEqual({ agentId: "ops" });
+    expect(migrated.agents?.defaults?.heartbeat).toEqual({ agentId: "ops" });
+    expect(migrated.agents?.entries?.ops).not.toHaveProperty("default");
+    expect(resolveAmbientOwnerAgentId(migrated)).toBe("ops");
+    expect(migrate(migrated)).toEqual({ next: null, changes: [] });
+  });
 
   it("seeds a marked default ignored by explicit ownership", () => {
     const raw: OpenClawConfigWithLegacyRoster = {
@@ -96,35 +84,19 @@ describe("ambient owner migration", () => {
     expect(migrate(raw).next).toHaveProperty("agents.defaults.systemAgent.agentId", "ops");
   });
 
-  it.each<{
-    defaults: AgentDefaultsConfig;
-    entries: Record<string, AgentEntryConfig>;
-    owners: string[];
-  }>([
-    {
-      defaults: { heartbeat: { agentId: "ops" } },
-      entries: { main: {}, ops: {} },
-      owners: ["ops"],
-    },
-    {
-      defaults: { heartbeat: { every: "1h" } },
-      entries: { main: {}, ops: {} },
-      owners: ["main", "ops"],
-    },
-    { defaults: {}, entries: { main: {}, ops: { heartbeat: { every: "1h" } } }, owners: ["ops"] },
-  ])("preserves heartbeat enrollment: $defaults $entries", ({ defaults, entries, owners }) => {
-    const raw: OpenClawConfig = { agents: { defaults, entries } };
-    expect(resolveHeartbeatAgents(raw).map(({ agentId }) => agentId)).toEqual(owners);
+  it("preserves per-agent heartbeat enrollment", () => {
+    const raw: OpenClawConfig = {
+      agents: { defaults: {}, entries: { main: {}, ops: { heartbeat: { every: "1h" } } } },
+    };
+    expect(resolveHeartbeatAgents(raw).map(({ agentId }) => agentId)).toEqual(["ops"]);
     const migrated: OpenClawConfig = migrate(raw).next ?? {};
     expect(migrated.agents?.defaults?.systemAgent?.agentId).toBe("main");
-    expect(migrated.agents?.defaults?.heartbeat).toEqual(defaults.heartbeat);
-    expect(resolveHeartbeatAgents(migrated).map(({ agentId }) => agentId)).toEqual(owners);
+    expect(migrated.agents?.defaults?.heartbeat).toEqual(undefined);
+    expect(resolveHeartbeatAgents(migrated).map(({ agentId }) => agentId)).toEqual(["ops"]);
   });
 
-  it.each([
-    { agents: { entries: { ops: {}, worker: {} } } },
-    { agents: { entries: { main: {}, ops: {} }, defaults: { systemAgent: { agentId: "ops" } } } },
-  ])("stamps ownership without changing ambient owners: %j", (raw) => {
+  it("stamps ownership without selecting an ambient owner", () => {
+    const raw = { agents: { entries: { ops: {}, worker: {} } } };
     const result = migrate(raw);
     expect(result).toEqual({
       next: { agents: { ...raw.agents, ownership: "explicit" } },
@@ -133,11 +105,10 @@ describe("ambient owner migration", () => {
     expect(migrate(result.next)).toEqual({ next: null, changes: [] });
   });
 
-  it.each([
-    {},
-    { agents: { entries: { main: { default: true }, ops: { default: true } } } },
-    { agents: { entries: { main: {} }, defaults: { systemAgent: null } } },
-  ])("leaves absent, ambiguous and explicit owners alone: %j", (raw) => {
-    expect(migrate(raw)).toEqual({ next: null, changes: [] });
-  });
+  it.each([{}, { agents: { entries: { main: {} }, defaults: { systemAgent: null } } }])(
+    "leaves absent and explicit owners alone: %j",
+    (raw) => {
+      expect(migrate(raw)).toEqual({ next: null, changes: [] });
+    },
+  );
 });

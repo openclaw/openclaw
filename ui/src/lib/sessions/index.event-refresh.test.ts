@@ -103,7 +103,9 @@ function heldReads() {
   return { ...fixture, firstList, secondList, secondListStarted };
 }
 function installPageLifecycle() {
-  const documentEvents = new EventTarget();
+  const documentEvents = Object.assign(new EventTarget(), {
+    documentElement: { getAttribute: () => null },
+  });
   const pageEvents = new EventTarget();
   let visibilityState: DocumentVisibilityState = "visible";
   Object.defineProperty(documentEvents, "visibilityState", {
@@ -314,7 +316,7 @@ describe("event-driven session list refresh", () => {
     firstList.resolve(sessionsResult([], 1));
     await secondListStarted.promise;
     expect(request.mock.calls[1]?.[1]).toEqual({
-      rowMode: "compact",
+      rowMode: "sidebar",
       source: "sidebar",
       excludeDock: true,
       includeGlobal: true,

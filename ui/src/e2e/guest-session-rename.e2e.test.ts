@@ -75,7 +75,9 @@ suite.define(() => {
     const ownRow = page.locator(`.sidebar-recent-session[data-session-key="${own.key}"]`);
     const foreignRow = page.locator(`.sidebar-recent-session[data-session-key="${foreign.key}"]`);
     const history = pane.getByText("The project outline is ready.", { exact: true });
-    const stream = pane.getByText("Reviewing the project notes.", { exact: true });
+    const stream = pane
+      .getByRole("paragraph")
+      .filter({ hasText: /^Reviewing the project notes\.$/ });
     const observe = () =>
       pane.evaluate((element) => {
         const state = (element as HTMLElement & { state: ChatPageHost }).state;

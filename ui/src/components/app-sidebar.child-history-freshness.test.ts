@@ -17,7 +17,7 @@ import "../test-helpers/app-sidebar-suite.ts";
 import { createGateway, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -617,6 +617,8 @@ describe("sidebar routed-lineage freshness", () => {
             initial.key,
           ]);
         });
+        // Finish the initial filter request before opening the held successor read.
+        await sidebar.sessionData.refreshSidebarSessions();
         holdFiltered = true;
         if (first === "filtered list") {
           refresh = sidebar.sessionData.refreshSidebarSessions();

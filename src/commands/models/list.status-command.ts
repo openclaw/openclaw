@@ -77,11 +77,12 @@ import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { listUnavailableAuthProfiles } from "./auth-unavailability.js";
+import { readModelCatalogWarnings } from "./catalog-warnings.js";
 import {
   formatProviderAuthProfileCounts,
   resolveProviderAuthOverview,
 } from "./list.auth-overview.js";
-import { isRich } from "./list.format.js";
+import { groupByProvider, isRich } from "./list.format.js";
 import type { AuthProbeSummary } from "./list.probe.js";
 import type { ProviderAuthOverview } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
@@ -92,11 +93,6 @@ import {
   formatMs,
   resolveModelsTargetAgent,
 } from "./shared.js";
-
-function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
-  return override ? resolveUserPath(override, env) : undefined;
-}
 
 const listProbeRuntimeLoader = createLazyImportLoader(() => import("./list.probe.js"));
 
@@ -250,9 +246,14 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
+  for (const warning of await readModelCatalogWarnings(cfg, opts.agent?.trim())) {
+    runtime.error(`${warning.message} ${warning.fixHint}`);
+  }
   const explicitAgentId = opts.agent?.trim();
+  const envAgentDir =
+    process.env.OPENCLAW_AGENT_DIR?.trim() || process.env.PI_CODING_AGENT_DIR?.trim();
   const { agentId: workspaceAgentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, {
-    agentDirOverride: explicitAgentId ? undefined : resolveEnvAgentDirOverride(),
+    agentDirOverride: !explicitAgentId && envAgentDir ? resolveUserPath(envAgentDir) : undefined,
     kind: "read",
   });
   // Only an explicit --agent narrows the reported model/fallback overrides; an inferred
@@ -794,8 +795,6 @@ export async function modelsStatusCommand(
       const authProfileHealthById = new Map(
         authHealth.profiles.map((profile) => [profile.profileId, profile]),
       );
-      const resolveProviderAuthHealthId = (provider: string): string =>
-        resolveProviderIdForAuth(provider, envLookupParams);
       const resolveRuntimeAuthRouteEffective = (
         provider: string,
         evaluation?: ModelAuthAvailabilityEvaluation,
@@ -814,13 +813,16 @@ export async function modelsStatusCommand(
           };
         }
         const candidates = Array.from(
-          new Set([normalizeProviderId(provider), resolveProviderAuthHealthId(provider)]),
+          new Set([
+            normalizeProviderId(provider),
+            resolveProviderIdForAuth(provider, envLookupParams),
+          ]),
         );
         const profileId = evaluation.selectedProfileId;
         if (profileId) {
           const credentialProvider = store.profiles[profileId]?.provider ?? provider;
           const source = providerAuthMap.get(
-            resolveProviderAuthHealthId(credentialProvider),
+            resolveProviderIdForAuth(credentialProvider, envLookupParams),
           )?.effective;
           return source && source.kind !== "missing"
             ? source
@@ -854,6 +856,10 @@ export async function modelsStatusCommand(
             candidate.model === usage.model &&
             candidate.allowCodexRuntimeFallback === usage.allowCodexRuntimeFallback,
         )?.runtime;
+      const evaluateProviderUseAuth = (usage: StatusProviderUse) => {
+        const runtimeProvider = resolveCliRuntimeAuthProvider(usage);
+        return runtimeProvider ? authResolver.evaluateModelAuth(runtimeProvider) : usage.evaluation;
+      };
       const hasUsableAuthForProviderInUse = (usage: (typeof providerUses)[number]): boolean => {
         const cliRuntimeAuthProvider = resolveCliRuntimeAuthProvider(usage);
         if (cliRuntimeAuthProvider) {
@@ -866,14 +872,8 @@ export async function modelsStatusCommand(
         // Unknown evidence is reported as indeterminate, not missing auth.
         return usage.evaluation.availability !== false;
       };
-      const codexRuntimeUsagesByProvider = new Map<string, StatusProviderUse[]>();
-      for (const usage of codexRuntimeAuthUsages) {
-        const usages = codexRuntimeUsagesByProvider.get(usage.provider) ?? [];
-        usages.push(usage);
-        codexRuntimeUsagesByProvider.set(usage.provider, usages);
-      }
       const runtimeAuthRouteEntries: Array<readonly [string, StatusRuntimeAuthRoute]> = [
-        ...Array.from(codexRuntimeUsagesByProvider.entries()).map(([provider, usages]) => {
+        ...Array.from(groupByProvider(codexRuntimeAuthUsages)).map(([provider, usages]) => {
           const representative =
             usages.find((usage) => usage.evaluation.availability === true) ?? usages[0];
           const effective = resolveRuntimeAuthRouteEffective(
@@ -887,27 +887,25 @@ export async function modelsStatusCommand(
               ? "missing"
               : "indeterminate";
           const runtimeAvailability = representative?.runtimeAvailability;
+          const base: StatusRuntimeAuthRoute = {
+            provider,
+            runtime: "codex",
+            authProvider: codexProvider,
+            status: authStatus,
+            effective,
+          };
           const route: StatusRuntimeAuthRoute =
             runtimeAvailability?.status === "unavailable"
               ? {
-                  provider,
-                  runtime: "codex",
-                  authProvider: codexProvider,
+                  ...base,
                   status: "unavailable",
-                  effective,
                   authStatus,
                   runtimeStatus: runtimeAvailability.status,
                   runtimeReason: runtimeAvailability.reason,
                   runtimeDetail: runtimeAvailability.detail,
                   runtimePluginIds: runtimeAvailability.ownerPluginIds,
                 }
-              : {
-                  provider,
-                  runtime: "codex",
-                  authProvider: codexProvider,
-                  status: authStatus,
-                  effective,
-                };
+              : base;
           return [`${provider}:codex:${codexProvider}`, route] as const;
         }),
         ...cliRuntimeAuthUsages.map((usage) => {
@@ -934,46 +932,37 @@ export async function modelsStatusCommand(
         new Map<string, StatusRuntimeAuthRoute>(runtimeAuthRouteEntries).values(),
       ).toSorted((a, b) => a.provider.localeCompare(b.provider));
       const modelRouteIssues = providerUses.flatMap<StatusModelRouteIssue>((usage) => {
-        const cliRuntimeAuthProvider = resolveCliRuntimeAuthProvider(usage);
-        const evaluation = cliRuntimeAuthProvider
-          ? authResolver.evaluateModelAuth(cliRuntimeAuthProvider)
-          : usage.evaluation;
+        const evaluation = evaluateProviderUseAuth(usage);
         const incompatibility = resolveStatusProviderUseIncompatibility(usage);
         if (incompatibility) {
-          return [
-            {
-              kind: "incompatible" as const,
-              provider: usage.provider,
-              model: usage.model,
-              code: incompatibility.code,
-              message: incompatibility.message,
-            },
-          ];
+          return {
+            kind: "incompatible" as const,
+            provider: usage.provider,
+            model: usage.model,
+            code: incompatibility.code,
+            message: incompatibility.message,
+          };
         }
         if (evaluation.availability === undefined) {
-          return [
-            {
-              kind: "indeterminate" as const,
-              provider: usage.provider,
-              model: usage.model,
-              ...(evaluation.evidence ? { evidence: evaluation.evidence } : {}),
-              message: `Auth readiness could not be confirmed for ${usage.provider}/${usage.model}.`,
-            },
-          ];
+          return {
+            kind: "indeterminate" as const,
+            provider: usage.provider,
+            model: usage.model,
+            ...(evaluation.evidence ? { evidence: evaluation.evidence } : {}),
+            message: `Auth readiness could not be confirmed for ${usage.provider}/${usage.model}.`,
+          };
         }
         if (!usage.evaluation.selectedRoute || evaluation.availability) {
           return [];
         }
         const authRequirement = usage.evaluation.selectedRoute.authRequirement;
-        return [
-          {
-            kind: "missing-auth" as const,
-            provider: usage.provider,
-            model: usage.model,
-            authRequirement,
-            message: `No usable ${authRequirement} authentication is available for ${usage.provider}/${usage.model}.`,
-          },
-        ];
+        return {
+          kind: "missing-auth" as const,
+          provider: usage.provider,
+          model: usage.model,
+          authRequirement,
+          message: `No usable ${authRequirement} authentication is available for ${usage.provider}/${usage.model}.`,
+        };
       });
       // Utility (or duplicate fallback) refs can repeat a configured model;
       // identical diagnostics collapse while genuinely different evaluations
@@ -1083,10 +1072,7 @@ export async function modelsStatusCommand(
           if (resolveStatusProviderUseIncompatibility(usage)) {
             return "missing";
           }
-          const cliRuntimeAuthProvider = resolveCliRuntimeAuthProvider(usage);
-          const evaluation = cliRuntimeAuthProvider
-            ? authResolver.evaluateModelAuth(cliRuntimeAuthProvider)
-            : usage.evaluation;
+          const evaluation = evaluateProviderUseAuth(usage);
           if (evaluation.availability === undefined) {
             return "indeterminate";
           }
@@ -1417,17 +1403,7 @@ export async function modelsStatusCommand(
           ["missing", colorize(rich, theme.warn, "unknown")],
         ]);
 
-        const profilesByProvider = new Map<string, typeof oauthProfiles>();
-        for (const profile of oauthProfiles) {
-          const current = profilesByProvider.get(profile.provider);
-          if (current) {
-            current.push(profile);
-          } else {
-            profilesByProvider.set(profile.provider, [profile]);
-          }
-        }
-
-        for (const [provider, profiles] of profilesByProvider) {
+        for (const [provider, profiles] of groupByProvider(oauthProfiles)) {
           const usageKey = resolveUsageProviderId(provider, {
             credentialType: profiles[0]?.type,
           });

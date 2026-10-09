@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-// Setup wizard tests cover end-to-end onboarding prompt flows.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
@@ -11,17 +10,20 @@ import {
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { committedConfigFiles } from "../commands/committed-config.test-support.js";
 import { createConfigIO as createRealConfigIO } from "../config/io.factory.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
+import {
+  expectSavedSetupCredential,
+  modelConfigWithApiKey,
+  openAiAuthProfile,
+} from "./setup.credentials.test-support.js";
 import { runSetupWizard } from "./setup.js";
 import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 
@@ -80,6 +82,9 @@ const runSetupMigrationImport = vi.hoisted(() =>
   vi.fn<RunSetupMigrationImport>(async () => ({ kind: "no-imported-inference" })),
 );
 const runSetupMemoryImportStep = vi.hoisted(() => vi.fn(async () => {}));
+const runMemorySetupFlow = vi.hoisted(() =>
+  vi.fn<typeof import("../flows/memory-setup.js").runMemorySetupFlow>(async (config) => config),
+);
 const verifySetupInferenceConfig = vi.hoisted(() => vi.fn<VerifySetupInferenceConfig>());
 
 const setupChannels = vi.hoisted(() =>
@@ -166,60 +171,6 @@ function modelConfig(primary: string): OpenClawConfig {
   return { agents: { defaults: { model: { primary } }, entries: { main: {} } } };
 }
 
-function modelConfigWithApiKey(apiKey: string, agentDir: string): OpenClawConfig {
-  return {
-    agents: {
-      defaults: { model: { primary: "openai/gpt-5.5" } },
-      entries: { main: { agentDir } },
-    },
-    auth: {
-      profiles: { "openai:default": { provider: "openai", mode: "api_key" } },
-      order: { openai: ["openai:default"] },
-    },
-    models: {
-      providers: {
-        openai: {
-          apiKey,
-          baseUrl: "https://api.openai.com/v1",
-          models: [],
-        },
-      },
-    },
-  };
-}
-
-function openAiAuthProfile(apiKey: string) {
-  return {
-    profileId: "openai:default",
-    credential: { type: "api_key" as const, provider: "openai", key: apiKey },
-  };
-}
-
-function expectSavedSetupCredential(config: OpenClawConfig, agentDir: string, key: string): string {
-  const primary = expectDefined(
-    resolveAgentModelPrimaryValue(config.agents?.defaults?.model),
-    "selected model",
-  );
-  const profileId = expectDefined(
-    splitTrailingAuthProfile(primary).profile,
-    "selected credential profile",
-  );
-  expect(profileId).toMatch(/^openai:setup-/);
-  const { setup, ...credential } = expectDefined(
-    readAuthProfileStoreForTest(agentDir).profiles[profileId],
-    "saved credential profile",
-  );
-  expect(credential).toEqual(openAiAuthProfile(key).credential);
-  if (setup) {
-    expect(setup).toMatchObject({
-      modelRef: "openai/gpt-5.5",
-      replacement: expect.any(Boolean),
-      configJson: expect.any(String),
-    });
-  }
-  return profileId;
-}
-
 function prepareMockAuthProfilesIn(agentDir: string): void {
   prepareAuthChoice.mockImplementation(async (args) => {
     const result = await applyAuthChoice(args);
@@ -273,6 +224,8 @@ vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
 }));
 
 vi.mock("../flows/search-setup.js", () => ({ runSearchSetupFlow }));
+// mock-isolation: Wizard orchestration must not probe real embedding providers or credentials.
+vi.mock("../flows/memory-setup.js", () => ({ runMemorySetupFlow }));
 
 vi.mock("../commands/onboard-remote.js", () => ({
   promptRemoteGatewayConfig,
@@ -539,6 +492,7 @@ describe("runSetupWizard", () => {
       latencyMs: 250,
     });
     runSetupMemoryImportStep.mockReset().mockResolvedValue(undefined);
+    runMemorySetupFlow.mockReset().mockImplementation(async (config) => config);
     ensureOnboardingConfig.mockClear();
   });
 
@@ -890,6 +844,22 @@ describe("runSetupWizard", () => {
 
     expect(runSearchSetupFlow).toHaveBeenCalledOnce();
     expect(finalizeSetupWizard).toHaveBeenCalledOnce();
+  });
+
+  it("persists the optional memory choice before classic setup finalization", async () => {
+    runMemorySetupFlow.mockImplementationOnce(async (config) => ({
+      ...config,
+      memory: { search: { provider: "openai", model: "embedding-model" } },
+    }));
+    await runWizard();
+    expect(runMemorySetupFlow).toHaveBeenCalledOnce();
+    expect(persistedWizardConfigs().at(-1)?.memory?.search).toEqual({
+      provider: "openai",
+      model: "embedding-model",
+    });
+    expect(runMemorySetupFlow.mock.invocationCallOrder[0]).toBeLessThan(
+      finalizeSetupWizard.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("persists classic channel setup before hooks and Gateway finalization", async () => {

@@ -10,6 +10,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
 import {
   getRegistryWorktreeProvisionedChunk,
@@ -278,7 +279,7 @@ describe("managed worktree registry", () => {
     );
     await insertRegistryWorktree(env, record, { provisionedPaths });
     const counter = trackSqliteStatementExecutions(
-      openOpenClawStateDatabase({ env }).db,
+      requireNativeSqliteDatabase(openOpenClawStateDatabase({ env }).db),
       ["records"],
       (sql) => (/\bfrom\s+"worktrees"/iu.test(sql) ? "records" : null),
     );
@@ -296,7 +297,10 @@ describe("managed worktree registry", () => {
 
   it("adds the provisioned-path ledger to an existing worktree registry", async () => {
     const databasePath = openOpenClawStateDatabase({ env }).path;
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    await fs.rename(databasePath, `${databasePath}.template`);
+    await fs.copyFile(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
     legacy.exec(`

@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -24,28 +23,10 @@ import {
 } from "./docx-markdown.js";
 import { cleanBlocksForDescendant, patchTable } from "./docx-table-ops.js";
 import type { FeishuDocxBlock, FeishuDocxBlockChild } from "./docx-types.js";
-import { resolveDocxUploadInput } from "./docx-upload-input.js";
+import { resolveDocToolLocalRoots, resolveDocxUploadInput } from "./docx-upload-input.js";
 import { createFeishuToolClient, resolveFeishuToolAccount } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as json } from "./tool-result.js";
-
-function resolveDocToolLocalRoots(ctx: {
-  workspaceDir?: string;
-  fsPolicy?: { workspaceOnly: boolean };
-}): string[] | undefined {
-  if (ctx.fsPolicy?.workspaceOnly !== true) {
-    return undefined;
-  }
-  const workspaceDir = ctx.workspaceDir?.trim();
-  // Fail closed: workspace-only with no resolved workspace must not fall back
-  // to default managed roots.
-  if (!workspaceDir) {
-    return [];
-  }
-  // Workspace paths are expected to be absolute; resolve() normalizes any
-  // accidental relative input before passing roots to loadWebMedia.
-  return [resolve(workspaceDir)];
-}
 
 const BLOCK_TYPE_NAMES: Record<number, string> = {
   1: "Page",
@@ -495,31 +476,9 @@ async function uploadImageBlock(
 
 async function uploadFileBlock(
   client: Lark.Client,
-  {
-    doc_token: docToken,
-    parent_block_id: parentBlockId,
-  }: Extract<FeishuDocParams, { action: "upload_file" }>,
+  { doc_token: docToken }: Extract<FeishuDocParams, { action: "upload_file" }>,
   upload: DocxUpload,
 ) {
-  const blockId = parentBlockId ?? docToken;
-
-  // Feishu cannot create empty file blocks, so allocate a temporary Markdown placeholder.
-  const placeholderMd = "[file](https://example.com/placeholder)";
-  const converted = await convertMarkdown(client, placeholderMd);
-  const { orderedBlocks } = normalizeConvertedBlockTree(
-    converted.blocks,
-    converted.firstLevelBlockIds,
-  );
-  const inserted = await insertBlocks(client, docToken, orderedBlocks, blockId);
-
-  const placeholderBlock = inserted[0];
-  if (!placeholderBlock?.block_id) {
-    throw new Error("Failed to create placeholder block for file upload");
-  }
-
-  const parentId = placeholderBlock.parent_id ?? blockId;
-  await deleteChildBlock(client, docToken, parentId, placeholderBlock.block_id);
-
   const fileToken = await uploadDocxMedia(client, "file", docToken, upload);
 
   return {
@@ -829,6 +788,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   registerFeishuTool(api, {
     family: "doc",
     name: "feishu_doc",
+    workspaceAccess: "execute",
     label: "Feishu Doc",
     description:
       "Feishu document operations. Actions: read, write, append, insert, create, list_blocks, get_block, update_block, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file, color_text",

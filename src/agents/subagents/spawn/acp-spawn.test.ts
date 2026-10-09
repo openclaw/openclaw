@@ -111,8 +111,10 @@ vi.mock("../../../channels/plugins/registry.js", () => ({
   normalizeChannelId: hoisted.normalizeChannelIdMock,
 }));
 
-vi.mock("../../../config/sessions/paths.js", () => ({
+vi.mock("../../../config/sessions/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/sessions/paths.js")>()),
   resolveSessionStorePathCore: hoisted.resolveStorePathMock,
+  resolveSessionStorePathWithContext: hoisted.resolveStorePathMock,
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", async () => {
@@ -1372,7 +1374,7 @@ describe("spawnAcpDirect", () => {
         {
           requesterSessionKey: "global",
           childSessionKey: expect.stringMatching(/^agent:research:acp:/),
-          agentId: "research",
+          childAgentId: "research",
           requesterAgentId: "research",
         },
         { assertCurrent: undefined },

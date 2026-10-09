@@ -24,6 +24,18 @@ async function parseIdentityFromContent(
 
 describe("parseIdentityMarkdown", () => {
   it.each([
+    "- Avatar: _portrait.png\n- Name: helper_",
+    "- **Avatar:** _portrait.png\n- **Name:** helper_",
+    "- Avatar: `_portrait.png`\n- Name: `helper_`",
+    "- Avatar: **_portrait.png**\n- Name: **helper_**",
+  ])("preserves literal identity punctuation: %s", async (content) => {
+    expect(await parseIdentityFromContent(content)).toEqual({
+      avatar: "_portrait.png",
+      name: "helper_",
+    });
+  });
+
+  it.each([
     {
       content: `
 # IDENTITY.md - Who Am I?

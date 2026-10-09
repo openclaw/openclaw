@@ -608,7 +608,6 @@ async function fetchWithSsrFGuardInternal(
           });
           dispatcherLease = params.dispatcherPool.acquire({
             key,
-            groupKey: parsedUrl.origin,
             createDispatcher: () =>
               createPinnedDispatcher(
                 pinned,

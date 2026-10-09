@@ -127,7 +127,7 @@ const ApprovalAllowedDecisionsSchema = Type.Array(ApprovalDecisionSchema, {
   uniqueItems: true,
   contains: Type.Literal("deny"),
   description:
-    "Available reviewer decisions. Deny is always available so malformed or unsafe input can fail closed.",
+    "Available reviewer decisions. Deny is always available so malformed or unsafe input can be rejected.",
 });
 
 const SystemAgentApprovalAllowedDecisionsSchema = Type.Tuple([

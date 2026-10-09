@@ -25,22 +25,26 @@ async function expectPackageVersion(packageRoot: string, version: string) {
   );
 }
 
-describe("FreeBSD package replacement ownership", () => {
-  it.each([
-    { kind: "directory", ownership: "artifact" },
-    { kind: "symlink", ownership: "artifact" },
-    { kind: "symlink", ownership: "target" },
-    { kind: "directory", ownership: "unavailable" },
-  ] as const)(
-    "preserves pkg ownership when retiring a historical $kind ($ownership)",
-    async ({ kind, ownership }) => {
+describe("system package replacement ownership", () => {
+  it.each(
+    (["freebsd", "linux"] as const).flatMap((platform) =>
+      [
+        { kind: "directory", ownership: "artifact" },
+        { kind: "symlink", ownership: "artifact" },
+        { kind: "symlink", ownership: "target" },
+        { kind: "directory", ownership: "unavailable" },
+      ].map(({ kind, ownership }) => ({ kind, ownership, platform })),
+    ),
+  )(
+    "retires a historical $kind with $platform ownership $ownership",
+    async ({ kind, ownership, platform }) => {
       const linkType = process.platform === "win32" ? "junction" : "dir";
       await withTestDir({ prefix: "openclaw-pkg-historical-backup-" }, async (base) => {
         const checkout = path.join(base, "checkout");
         await fs.mkdir(checkout);
         await fs.writeFile(path.join(checkout, "sentinel"), "operator checkout");
         const query = vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult());
-        await withMockedPlatform("freebsd", async () => {
+        await withMockedPlatform(platform, async () => {
           const { transaction, globalRoot, packageRoot } = await createRetainedPackageSwap(
             base,
             async ({ globalRoot: fixtureGlobalRoot }) => {
@@ -75,26 +79,22 @@ describe("FreeBSD package replacement ownership", () => {
 
           const completion = await transaction.complete({ activationVerified: true }, () => {});
 
-          if (ownership === "target") {
+          if (ownership === "target" || ownership === "unavailable") {
             expect(completion).toBeUndefined();
             await expect(fs.lstat(historical)).rejects.toMatchObject({ code: "ENOENT" });
           } else {
             expect(completion).toMatchObject({
               advisory: {
                 kind: "recoverable-maintenance",
-                message: expect.stringContaining("FreeBSD pkg"),
+                message: expect.stringContaining(platform === "freebsd" ? "FreeBSD pkg" : "pacman"),
               },
             });
             await expect(fs.lstat(historical)).resolves.toBeDefined();
           }
           if (ownership === "unavailable") {
-            expect(query).toHaveBeenCalledOnce();
-            expect(await fs.readFile(path.join(later, "sentinel"), "utf8")).toBe(
-              "second historical package",
-            );
-          } else {
-            await expect(fs.lstat(later)).rejects.toMatchObject({ code: "ENOENT" });
+            expect(query).toHaveBeenCalledTimes(2);
           }
+          await expect(fs.lstat(later)).rejects.toMatchObject({ code: "ENOENT" });
           expect(await fs.readFile(path.join(checkout, "sentinel"), "utf8")).toBe(
             "operator checkout",
           );

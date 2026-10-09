@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   encodeSqliteStringSet,
@@ -15,7 +16,13 @@ import {
   serializeStoredConversationRouteContext,
   type ConversationRouteContext,
 } from "./conversation-route-context.js";
+import {
+  conversationPublication,
+  type ConversationAssociationRow,
+  type ConversationPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionConversationRole = "participant" | "primary" | "related";
@@ -93,9 +100,31 @@ export function prepareSessionConversationForWrite(params: {
   database: OpenClawAgentDatabase;
   entry: SessionEntry;
   previousEntry?: SessionEntry | null;
+  canonicalPreviousEntry?: SessionEntry;
+  previousWindow?: SessionEntryWindowRow | null;
+  observeConversation?: boolean;
   routeContext?: ConversationRouteContext | null;
   sessionScope: string;
-}): PreparedSessionConversation | null {
+}): { conversation: PreparedSessionConversation | null; primaryConversationId: string | null } {
+  // Bookkeeping is not a new route observation. Its committed association owns
+  // the canonical peer and route context until a route or lifecycle changes.
+  if (
+    !params.observeConversation &&
+    params.routeContext === undefined &&
+    params.canonicalPreviousEntry?.sessionId === params.entry.sessionId &&
+    params.canonicalPreviousEntry.lifecycleRevision === params.entry.lifecycleRevision &&
+    params.previousWindow?.session_id === params.entry.sessionId &&
+    params.previousWindow.session_scope === params.sessionScope &&
+    isDeepStrictEqual(
+      conversationIdentityFromSessionEntry(params.entry),
+      conversationIdentityFromSessionEntry(params.canonicalPreviousEntry),
+    )
+  ) {
+    return {
+      conversation: null,
+      primaryConversationId: params.previousWindow.primary_conversation_id,
+    };
+  }
   const routeContext =
     params.routeContext === null
       ? null
@@ -107,9 +136,9 @@ export function prepareSessionConversationForWrite(params: {
   }
   const identity = conversationIdentityFromSessionEntry(params.entry, routeContext);
   if (!identity) {
-    return null;
+    return { conversation: null, primaryConversationId: null };
   }
-  return {
+  const conversation: PreparedSessionConversation = {
     identity:
       routeContext === undefined
         ? preserveSessionConversationIdentity({
@@ -126,6 +155,11 @@ export function prepareSessionConversationForWrite(params: {
         : "primary",
     ...(routeContext !== undefined ? { routeContext } : {}),
   };
+  return {
+    conversation,
+    primaryConversationId:
+      conversation.role === "primary" ? conversation.identity.conversationRef : null,
+  };
 }
 
 export function prepareConversationIdentities(
@@ -134,8 +168,10 @@ export function prepareConversationIdentities(
   if (!identities.length) {
     return undefined;
   }
+  // RETURNING order is unspecified; each address must have only its final postimage.
+  const current = new Map(identities.map((identity) => [identity.conversationRef, identity]));
   return encodeSqliteStringSet(
-    identities.flatMap((identity) => [
+    [...current.values()].flatMap((identity) => [
       identity.conversationRef,
       identity.channel,
       identity.accountId,
@@ -157,9 +193,9 @@ export function upsertConversationIdentities(
   database: OpenClawAgentDatabase,
   encoded: string | undefined,
   updatedAt: number,
-): void {
+): ConversationPublication | undefined {
   if (encoded === undefined) {
-    return;
+    return undefined;
   }
   const db = getSessionKysely(database.db);
   const columns = [
@@ -177,7 +213,7 @@ export function upsertConversationIdentities(
     "metadata_json",
   ] as const;
   const fields = sqliteStringSetEntries(encoded).as("field");
-  executeSqliteQuerySync(
+  const rows = executeSqliteQuerySync(
     database.db,
     db
       .insertInto("conversations")
@@ -219,8 +255,10 @@ export function upsertConversationIdentities(
           metadata_json: eb.ref("excluded.metadata_json"),
           updated_at: updatedAt,
         })),
-      ),
-  );
+      )
+      .returningAll(),
+  ).rows;
+  return conversationPublication.stageRows(database, { catalogues: rows });
 }
 
 /** Links one external address to its local context without conflating the two identities. */
@@ -245,10 +283,12 @@ export function linkSessionConversation(params: {
         .limit(1),
     ).rows[0];
   const existingAssociation =
-    readAssociation(sessionId) ??
-    (params.previousSessionId && params.previousSessionId !== sessionId
-      ? readAssociation(params.previousSessionId)
-      : undefined);
+    conversation.routeContext === undefined
+      ? (readAssociation(sessionId) ??
+        (params.previousSessionId && params.previousSessionId !== sessionId
+          ? readAssociation(params.previousSessionId)
+          : undefined))
+      : undefined;
   const routeContextJson =
     conversation.routeContext === undefined
       ? existingAssociation
@@ -259,18 +299,20 @@ export function linkSessionConversation(params: {
           )
         : null
       : serializeStoredConversationRouteContext(conversation.routeContext, updatedAt);
+  const associations: ConversationAssociationRow[] = [];
+  const removedAssociations: ConversationAssociationRow[] = [];
   if (conversation.role === "primary") {
     const stalePrimaryRows = executeSqliteQuerySync(
       database.db,
       db
-        .selectFrom("session_conversations")
-        .select(["conversation_id", "first_seen_at", "last_seen_at", "route_context_json"])
+        .deleteFrom("session_conversations")
         .where("session_id", "=", sessionId)
         .where("role", "=", "primary")
-        .where("conversation_id", "!=", conversation.identity.conversationRef),
+        .where("conversation_id", "!=", conversation.identity.conversationRef)
+        .returningAll(),
     ).rows;
     if (stalePrimaryRows.length > 0) {
-      executeSqliteQuerySync(
+      const related = executeSqliteQuerySync(
         database.db,
         db
           .insertInto("session_conversations")
@@ -293,30 +335,27 @@ export function linkSessionConversation(params: {
               route_context_json: eb.ref("excluded.route_context_json"),
               last_seen_at: updatedAt,
             })),
-          ),
-      );
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .deleteFrom("session_conversations")
-          .where("session_id", "=", sessionId)
-          .where("role", "=", "primary")
-          .where("conversation_id", "!=", conversation.identity.conversationRef),
-      );
+          )
+          .returningAll(),
+      ).rows;
+      associations.push(...related);
+      removedAssociations.push(...stalePrimaryRows);
     }
   }
 
   // A conversation has exactly one role within a session. Remove stale role rows
   // before inserting the current one because role participates in the table PK.
-  executeSqliteQuerySync(
+  const removed = executeSqliteQuerySync(
     database.db,
     db
       .deleteFrom("session_conversations")
       .where("session_id", "=", sessionId)
       .where("conversation_id", "=", conversation.identity.conversationRef)
-      .where("role", "!=", conversation.role),
-  );
-  executeSqliteQuerySync(
+      .where("role", "!=", conversation.role)
+      .returningAll(),
+  ).rows;
+  removedAssociations.push(...removed);
+  const linked = executeSqliteQuerySync(
     database.db,
     db
       .insertInto("session_conversations")
@@ -333,6 +372,9 @@ export function linkSessionConversation(params: {
           route_context_json: routeContextJson,
           last_seen_at: updatedAt,
         }),
-      ),
-  );
+      )
+      .returningAll(),
+  ).rows;
+  associations.push(...linked);
+  conversationPublication.stageRows(database, { associations, removedAssociations });
 }

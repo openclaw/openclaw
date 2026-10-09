@@ -15,6 +15,7 @@ type ProviderRuntimeProviderConfig = Partial<
   Pick<ModelProviderConfig, "baseUrl" | "api" | "auth" | "models">
 > & {
   headers?: unknown;
+  request?: ModelProviderConfig["request"];
 };
 
 /**
@@ -140,6 +141,7 @@ export type ProviderResolveUsageAuthContext = {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   provider: string;
+  /** @deprecated Await resolveApiKeyCandidatesFromConfigAndStore instead. Removed at the next Plugin SDK major. */
   resolveApiKeyFromConfigAndStore: (params?: {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;

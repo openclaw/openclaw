@@ -1,6 +1,6 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { withProgress } from "../cli/progress.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../daemon/systemd.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -31,38 +31,32 @@ export async function maybeInstallDaemon(params: {
     }
     loaded = false;
   }
-  let shouldInstall = true;
-  if (loaded) {
-    const action = await prompts.select({
-      message: "Gateway service already installed",
-      options: [
-        { value: "restart", label: "Restart" },
-        { value: "reinstall", label: "Reinstall" },
-        { value: "skip", label: "Skip" },
-      ],
-    });
-    if (action === "restart") {
-      await withProgress(
-        { label: "Gateway service", indeterminate: true, delayMs: 0 },
-        async (progress) => {
-          progress.setLabel("Restarting Gateway service…");
-          const restartResult = await service.restart({
-            env: process.env,
-            stdout: process.stdout,
-          });
-          progress.setLabel(
-            describeGatewayServiceRestart("Gateway", restartResult).progressMessage,
-          );
-        },
-      );
-      shouldInstall = false;
-    }
-    if (action === "skip") {
-      return "skipped";
-    }
+  const action = loaded
+    ? await prompts.select({
+        message: "Gateway service already installed",
+        options: [
+          { value: "restart", label: "Restart" },
+          { value: "reinstall", label: "Reinstall" },
+          { value: "skip", label: "Skip" },
+        ],
+      })
+    : "reinstall";
+  if (action === "skip") {
+    return "skipped";
   }
-
-  if (shouldInstall) {
+  if (action === "restart") {
+    await withProgress(
+      { label: "Gateway service", indeterminate: true, delayMs: 0 },
+      async (progress) => {
+        progress.setLabel("Restarting Gateway service…");
+        const restartResult = await service.restart({
+          env: process.env,
+          stdout: process.stdout,
+        });
+        progress.setLabel(describeGatewayServiceRestart("Gateway", restartResult).progressMessage);
+      },
+    );
+  } else {
     // Keep the old service until preparation succeeds; install owns replacement.
     let installError: string | null = null;
     const existingCommand = await service.readCommand(process.env);
@@ -86,7 +80,7 @@ export async function maybeInstallDaemon(params: {
       async (progress) => {
         progress.setLabel("Preparing Gateway service…");
 
-        const cfg = getRuntimeConfig();
+        const cfg = await captureRuntimeConfigAsyncReader()();
         const tokenResolution = await resolveGatewayInstallToken({
           config: cfg,
           env: process.env,

@@ -188,8 +188,10 @@ export function canApplySessionListSnapshot(
       existing.spawnedBy !== next.spawnedBy ||
       existing.controlOwnerSessionKey !== next.controlOwnerSessionKey ||
       existing.parentSessionKey !== next.parentSessionKey ||
+      existing.sidebarRoot !== next.sidebarRoot ||
       (countsOnly &&
         (existing.hasActiveRun !== next.hasActiveRun ||
+          existing.hasActiveSubagentRun !== next.hasActiveSubagentRun ||
           existing.status !== next.status ||
           existing.visibility !== next.visibility ||
           existing.sharingRole !== next.sharingRole ||
@@ -384,6 +386,7 @@ export function coalesceSessionRefresh(
 
 export type ManagedSessionListRefresh = {
   append: boolean;
+  immediate?: boolean;
   offset?: number;
   invalidated?: true;
   background?: true;
@@ -407,6 +410,7 @@ export type ManagedSessionList = ObservedSessionList & {
   startupRetryAttempt: number;
   /** Invalidation retires remaining pages without cancelling the correlated RPC. */
   readGeneration: number;
+  readRevision: number;
   coordinator: ReturnType<typeof createSessionEventRefreshCoordinator>;
   pending: Promise<void> | null;
   queued: ManagedSessionListRefresh | null;
@@ -485,6 +489,7 @@ export function prepareSessionRefreshOptions(
   // must inherit the UI default in both the request and its query identity.
   const prepared = {
     ...options,
+    rowMode: options.rowMode ?? "sidebar",
     source: options.source ?? "sidebar",
     excludeDock: options.excludeDock ?? true,
     includeDerivedTitles: options.includeDerivedTitles ?? true,

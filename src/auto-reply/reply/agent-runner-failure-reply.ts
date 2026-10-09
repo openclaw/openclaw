@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -17,6 +16,7 @@ import { classifyCompactionReason } from "../../agents/embedded-agent-runner/com
 import {
   findCliTerminalStopError,
   findCliTimeoutError,
+  hasLocalWorkerTaskTimeout,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
 } from "../../agents/failover-error.js";
@@ -46,10 +46,8 @@ import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recove
 import type { ReplyCompletion, ReplyExpectation } from "../../agents/reply-completion.js";
 import {
   collectErrorGraphCandidates,
-  extractErrorCode,
   formatErrorMessage,
   readErrorCauses,
-  readErrorName,
 } from "../../infra/errors.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
@@ -112,6 +110,7 @@ export function resolveReplyFailureSummary(params: {
             reason: params.reason,
             attempts,
             provider: failoverError?.provider,
+            rateLimitRetriesExhausted: failoverError?.rateLimitRetriesExhausted,
             cooldownExpiry: failoverError?.soonestCooldownExpiry,
             sanitizeText: (rawText) => sanitizeUserFacingText(rawText, { errorContext: true }),
           });
@@ -202,23 +201,6 @@ function formatForwardedExternalRunFailureText(message: string): string {
   return detail
     ? `⚠️ Agent failed before reply: ${detail}${/[.!?]$/u.test(detail) ? "" : "."} Please try again, or use /new to start a fresh session.`
     : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
-}
-
-function hasLocalWorkerTimeoutCause(error: unknown): boolean {
-  let localTimeout = false;
-  for (const candidate of collectErrorGraphCandidates(error, readErrorCauses)) {
-    // Failover wrappers may synthesize HTTP-like statuses; original HTTP facts still win.
-    if (isFailoverError(candidate)) {
-      continue;
-    }
-    const original = asOptionalObjectRecord(candidate);
-    if (original?.status !== undefined || original?.statusCode !== undefined) {
-      return false;
-    }
-    localTimeout ||=
-      readErrorName(candidate) === "WorkerTaskError" && extractErrorCode(candidate) === "timeout";
-  }
-  return localTimeout;
 }
 
 export function buildExternalRunFailureReply(
@@ -351,6 +333,17 @@ export function buildExternalRunFailureReply(
   if (cliBackendTimeoutFailure) {
     return { text: cliBackendTimeoutFailure, isGenericRunnerFailure: false };
   }
+  if (isFailoverError(error) && error.rateLimitRetriesExhausted !== undefined) {
+    const summary = resolveReplyFailureSummary({
+      error,
+      message,
+      reason: failoverFacts.reason,
+      attempts: error.attempts,
+    });
+    if (summary) {
+      return { text: summary.text, isGenericRunnerFailure: false };
+    }
+  }
   const providerRequestError = failoverFacts.providerRequestError;
   if (providerRequestError) {
     // Curated facet copy carries recovery guidance (quota/billing ambiguity,
@@ -375,14 +368,14 @@ export function buildExternalRunFailureReply(
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
-  if (failoverFacts.reason === "timeout" && hasLocalWorkerTimeoutCause(error)) {
+  if (failoverFacts.reason === "timeout" && hasLocalWorkerTaskTimeout(error)) {
     return {
       text: "A local worker task timed out. Please try again.",
       isGenericRunnerFailure: false,
     };
   }
   const classifiedFailure =
-    failoverFacts.formatFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
+    failoverFacts.requestFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
   if (classifiedFailure) {
     return { text: classifiedFailure, isGenericRunnerFailure: false };
   }

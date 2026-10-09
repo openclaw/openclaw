@@ -1,6 +1,7 @@
+import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
-  placementTurnOwner,
+  projectPlacementTurnClaim,
   type WorkerSessionPlacementIdentity,
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
@@ -33,6 +34,17 @@ export async function forceAbandonWorkerEnvironment(
 ): Promise<ReadonlyMap<string, WorkerSessionPlacementRecord>> {
   const { environmentId, placements } = params;
   const failedPlacements = new Map<string, WorkerSessionPlacementRecord>();
+  // Refuse before fencing or mutating any owner: there is no Gateway copy to recover.
+  for (const placement of await placements.listForReconcileAsync()) {
+    if (
+      placement.environmentId === environmentId &&
+      placement.workspaceBaseManifestRef === DEVICE_FOLDER_MANIFEST_REF
+    ) {
+      throw new Error(
+        "Device folders cannot be abandoned onto the Gateway; reconnect the device and stop its session instead.",
+      );
+    }
+  }
   const recoveryError = FORCED_WORKER_ABANDONMENT_ERROR;
   const journalOwners = (await params.placements.listWorkspaceReconciliationOwners()).filter(
     (owner) => owner.environmentId === environmentId,
@@ -87,15 +99,9 @@ export async function forceAbandonWorkerEnvironment(
           refs: [finalRef, preparedWorkerWorkspaceResultRef(finalRef)],
           repositoryWorkspaceId: pending.repositoryWorkspaceId,
         });
-        const claim = placement.turnClaim;
+        const claim = projectPlacementTurnClaim(placement);
         if (claim && claim.claimId === pending.claimId && claim.runId === pending.runId) {
-          await placements.closeWorkerTurnToolState({
-            sessionId: placement.sessionId,
-            claimId: claim.claimId,
-            runId: claim.runId,
-            placementGeneration: claim.generation,
-            owner: placementTurnOwner(placement),
-          });
+          await placements.closeWorkerTurnToolState(claim);
         }
         await placements.failWorkspaceResultAndReleaseTurn(pending, recoveryError);
       } else {
@@ -117,14 +123,9 @@ export async function forceAbandonWorkerEnvironment(
       });
     }
     if (current?.state === "draining") {
-      if (current.turnClaim) {
-        await placements.closeWorkerTurnToolState({
-          sessionId: current.sessionId,
-          claimId: current.turnClaim.claimId,
-          runId: current.turnClaim.runId,
-          placementGeneration: current.turnClaim.generation,
-          owner: placementTurnOwner(current),
-        });
+      const claim = projectPlacementTurnClaim(current);
+      if (claim) {
+        await placements.closeWorkerTurnToolState(claim);
       }
       current = await placements.startReconcile({
         sessionId: current.sessionId,
@@ -180,7 +181,7 @@ export async function forceAbandonWorkerEnvironment(
         continue;
       }
       const workspace = await params.resolveWorkspace(cleanup.placement);
-      if (workspace.kind === "repository") {
+      if (workspace.kind !== "local") {
         continue;
       }
       const root = workspace.path;

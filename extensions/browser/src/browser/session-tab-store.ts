@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { z } from "zod";
@@ -84,7 +85,10 @@ const browserSessionTabRecordSchema = z
         canonical.includes(record.profile) ||
         !canonical.every((entry, index) => entry === record.profileAliases?.[index])
       ) {
-        context.addIssue({ code: "custom", message: "profile aliases must be canonical" });
+        context.addIssue({
+          code: "custom",
+          message: "profile aliases must be sorted, unique, and exclude the primary profile",
+        });
       }
     }
     const cleanupFieldCount = [
@@ -254,7 +258,9 @@ export async function drainBrowserSessionTabStore(runtime: BrowserStateRuntime):
   }
 }
 
-export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority = {}) {
+export function getBrowserSessionTabStore(
+  authority: BrowserSessionTabAuthority = {},
+): PluginStateKeyedStore<unknown, 2> {
   const runtime = authority.runtime ?? getBrowserStateRuntime();
   const withCurrent = runtime.sessionTabs.withCurrent;
   if (!withCurrent) {
@@ -266,7 +272,9 @@ export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority 
   });
 }
 
-export function getOptionalBrowserSessionTabStore(authority: BrowserSessionTabAuthority = {}) {
+export function getOptionalBrowserSessionTabStore(
+  authority: BrowserSessionTabAuthority = {},
+): PluginStateKeyedStore<unknown, 2> | undefined {
   return authority.runtime || getOptionalBrowserStateRuntime()
     ? getBrowserSessionTabStore(authority)
     : undefined;
@@ -546,6 +554,9 @@ async function retireColdNativeActivityIfUnowned(
 }
 
 type BrowserSessionTabUpdate = (current: unknown) => BrowserSessionTabRecord | undefined;
+type BrowserSessionTabMutation =
+  | { operation: "update"; update: BrowserSessionTabUpdate }
+  | { operation: "delete"; predicate: (current: unknown) => boolean };
 type BrowserSessionTabWriteOptions = BrowserSessionTabAuthority & {
   onCommitted?: (record: BrowserSessionTabRecord) => void;
 };
@@ -565,32 +576,18 @@ export async function withBrowserSessionTabSelection<T>(
   select: (tab: BrowserSessionTabSelection) => Promise<T>,
 ): Promise<T> {
   const captured = { ...authority, runtime: authority.runtime ?? getBrowserStateRuntime() };
-  return await withBrowserSessionTabOperation(
-    key,
-    captured,
-    async (store) =>
-      await select({
-        lookup: () => store.lookup(key),
-        update: async (update, onCommitted) =>
-          (
-            await mutateBrowserSessionTabInOperation(
-              store,
-              key,
-              { operation: "update", update },
-              { ...captured, onCommitted },
-            )
-          ).next,
-        deleteIf: async (predicate) =>
-          (
-            await mutateBrowserSessionTabInOperation(
-              store,
-              key,
-              { operation: "delete", predicate },
-              captured,
-            )
-          ).deleted,
-      }),
-  );
+  return await withBrowserSessionTabOperation(key, captured, async (store) => {
+    const mutate = (
+      mutation: BrowserSessionTabMutation,
+      options: BrowserSessionTabWriteOptions = captured,
+    ) => mutateBrowserSessionTabInOperation(store, key, mutation, options);
+    return await select({
+      lookup: () => store.lookup(key),
+      update: async (update, onCommitted) =>
+        (await mutate({ operation: "update", update }, { ...captured, onCommitted })).next,
+      deleteIf: async (predicate) => (await mutate({ operation: "delete", predicate })).deleted,
+    });
+  });
 }
 
 export async function updateBrowserSessionTab(
@@ -650,9 +647,7 @@ async function withBrowserSessionTabNativeIdentities<T>(
 async function mutateBrowserSessionTabInOperation(
   store: ReturnType<typeof getBrowserSessionTabStore>,
   key: string,
-  mutation:
-    | { operation: "update"; update: BrowserSessionTabUpdate }
-    | { operation: "delete"; predicate: (current: unknown) => boolean },
+  mutation: BrowserSessionTabMutation,
   authority: BrowserSessionTabWriteOptions,
 ): Promise<{ next: BrowserSessionTabRecord | undefined; deleted: boolean }> {
   let observed = await store.observe(key);

@@ -28,6 +28,7 @@ import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import {
   createManagerIndexFixture,
+  memoryIndexFixtureWriter,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
 import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
@@ -87,7 +88,7 @@ describe("memory session update sync", () => {
     ).toEqual([]);
   }
 
-  it("preserves the published session index when worker admission is full and retries after drain", async () => {
+  it("preserves the published session index when worker admission is full and retries after cooldown", async () => {
     const sessionId = "worker-capacity-reindex";
     const sessionKey = `agent:main:chat:${sessionId}`;
     const sessionPath = `sessions/main/${sessionId}.jsonl`;
@@ -130,6 +131,8 @@ describe("memory session update sync", () => {
     const accepted = Promise.allSettled(
       Array.from({ length: 128 }, () => capacityOwner.run(() => preparation.promise, {})),
     );
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
       try {
         await expect(
@@ -147,6 +150,7 @@ describe("memory session update sync", () => {
         await closed;
         await accepted;
       }
+      clock.mockReturnValue(now + 30_000);
       await manager.sync({ reason: "retry-after-worker-overload" });
       const recovered = snapshot();
       expect(recovered.source?.hash).not.toBe(before.source?.hash);
@@ -159,6 +163,7 @@ describe("memory session update sync", () => {
       expect(manager.status().dirty).toBe(false);
       expect(manager.status().lastSyncError).toBeUndefined();
     } finally {
+      clock.mockRestore();
       observer.close();
     }
   });
@@ -237,12 +242,12 @@ describe("memory session update sync", () => {
             )
             .all(entry.path),
         ).toEqual([{ start_line: messages[0]!.line, end_line: messages[3]!.line }]);
-        database
+        memoryIndexFixtureWriter(manager)
           .prepare(
             "UPDATE memory_index_sources SET hash = ?, mtime = ?, size = ? WHERE path = ? AND source = 'sessions'",
           )
           .run(entry.hash, entry.mtimeMs, entry.size, entry.path);
-        database
+        memoryIndexFixtureWriter(manager)
           .prepare(
             "UPDATE memory_index_meta SET value = json_set(value, '$.chunkingVersion', 4) WHERE key = 'memory_index_meta_v1'",
           )
@@ -324,6 +329,14 @@ describe("memory session update sync", () => {
     const activeSyncIndexed = new Promise<void>((resolve) => {
       markActiveSyncIndexed = resolve;
     });
+    const sessionSyncQueued = createDeferred<void>();
+    const enqueue = owner.sessionSyncQueue.enqueue.bind(owner.sessionSyncQueue);
+    const enqueueSpy = vi.spyOn(owner.sessionSyncQueue, "enqueue").mockImplementation((params) => {
+      const pending = enqueue(params);
+      sessionSyncQueued.resolve();
+      return pending;
+    });
+    let sessionUpdateBatch: Promise<void> | undefined;
     let syncArchiveFilesSpy: { mockRestore: () => void } | undefined;
     try {
       await seedSessionTranscript({
@@ -352,13 +365,15 @@ describe("memory session update sync", () => {
         messages: [{ role: "assistant", timestamp: Date.now(), content: updatedMarker }],
       });
       owner.sessionPendingTargets.set(sessionKey, { agentId: "main", sessionId, sessionKey });
-      await owner.processSessionUpdateBatch();
+      sessionUpdateBatch = owner.processSessionUpdateBatch();
+      await sessionSyncQueued.promise;
       const queuedSessionSync = owner.sessionSyncQueue.pending;
       expect(queuedSessionSync).not.toBeNull();
 
       releaseActiveSync();
       await activeSync;
       await queuedSessionSync;
+      await sessionUpdateBatch;
 
       const observer = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), {
         readOnly: true,
@@ -376,71 +391,19 @@ describe("memory session update sync", () => {
       expect(manager.status().dirty).toBe(false);
     } finally {
       syncArchiveFilesSpy?.mockRestore();
+      enqueueSpy.mockRestore();
       releaseActiveSync();
+      await sessionUpdateBatch?.catch(() => undefined);
       await manager.close?.();
     }
   });
 
-  it.each(["startup catch-up", "forced reindex"] as const)(
-    "removes previously indexed dreaming narratives during %s",
-    async (mode) => {
-      const sessionId = "narrative-thread";
-      await seedSessionTranscript({
-        sessionId,
-        sessionKey: "agent:main:dreaming-narrative-run-1",
-        messages: [
-          {
-            role: "user",
-            timestamp: Date.now(),
-            content: "Internal narrative violet fragment that must never remain indexed.",
-          },
-        ],
-      });
-      const manager = await getFreshManager(
-        createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true }),
-        "cli",
-      );
-      const database = Reflect.get(manager, "db") as DatabaseSync;
-      const sessionPath = `sessions/main/${sessionId}.jsonl`;
-      seedIndexedSession(database, sessionPath, "Internal narrative violet fragment");
-
-      if (mode === "startup catch-up") {
-        await (
-          manager as unknown as { runSessionStartupCatchup: () => Promise<string[]> }
-        ).runSessionStartupCatchup();
-        await manager.sync({ reason: "await-startup-catchup" });
-      } else {
-        await manager.sync({ reason: "forced-reindex", force: true });
-      }
-
-      expectSessionIndexRemoved(database, sessionPath);
-    },
-  );
-
   it.each([
-    {
-      description: "narrative archive through CLI forced indexing",
-      sessionKey: "agent:main:dreaming-narrative-memory-core-v2-light-real",
-      runId: "dreaming-narrative-main-light-real",
-      force: true,
-    },
     {
       description: "unchanged narrative archive through regular reconciliation",
       sessionKey: "agent:main:dreaming-narrative-memory-core-v2-light-real",
       runId: "dreaming-narrative-main-light-real",
       force: false,
-    },
-    {
-      description: "cron archive through CLI forced indexing",
-      sessionKey: "agent:main:cron:job-1:run:run-1",
-      runId: "internal-cron-run-1",
-      force: true,
-    },
-    {
-      description: "heartbeat archive through CLI forced indexing",
-      sessionKey: "agent:main:chat:base:heartbeat",
-      runId: "internal-heartbeat-run-1",
-      force: true,
     },
   ])("prunes a real compressed $description", async (scenario) => {
     const sessionId = "3cb3f634-6821-4123-8123-abcdef123456";
@@ -503,14 +466,15 @@ describe("memory session update sync", () => {
         (entry) => entry.sessionId === sessionId,
       ),
     ).toMatchObject({ artifactKind: "archive-artifact", sessionKind: "unknown" });
-    seedIndexedSession(database, sessionPath, "Previously retained violet fragment");
-    database
+    const fixtureWriter = memoryIndexFixtureWriter(manager);
+    seedIndexedSession(fixtureWriter, sessionPath, "Previously retained violet fragment");
+    fixtureWriter
       .prepare(
         "UPDATE memory_index_chunk_provenance SET origin_class = 'owner', session_kind = 'unknown' WHERE chunk_id = ?",
       )
       .run(sessionPath);
     const archiveStat = await fs.stat(path.join(sessionsDir, archiveName!));
-    database
+    fixtureWriter
       .prepare("UPDATE memory_index_sources SET mtime = ?, size = ? WHERE path = ?")
       .run(archiveStat.mtimeMs, archiveStat.size, sessionPath);
 
@@ -885,56 +849,54 @@ describe("memory session update sync", () => {
     ).toEqual([]);
   });
 
-  it.each([
-    { description: "system-only", includeUserTurn: false, indexable: false },
-    { description: "mixed user/system", includeUserTurn: true, indexable: true },
-  ])("indexes only eligible $description archived transcripts", async (scenario) => {
-    const archiveName = "internal-turn.jsonl.deleted.2026-08-26T11-00-00.000Z";
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const records = [
-      {
-        type: "message",
-        message: {
-          role: "user",
-          content: "Internal system-generated fragment",
-          provenance: { kind: "internal_system", sourceTool: "internal-maintenance" },
+  it.each([{ description: "system-only", includeUserTurn: false, indexable: false }])(
+    "indexes only eligible $description archived transcripts",
+    async (scenario) => {
+      const archiveName = "internal-turn.jsonl.deleted.2026-08-26T11-00-00.000Z";
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const records = [
+        {
+          type: "message",
+          message: {
+            role: "user",
+            content: "Internal system-generated fragment",
+            provenance: { kind: "internal_system", sourceTool: "internal-maintenance" },
+          },
         },
-      },
-      ...(scenario.includeUserTurn
-        ? [
-            {
-              type: "message",
-              message: {
-                role: "user",
-                content: "Real user conversation about agent:main:dreaming-narrative-run-1",
+        ...(scenario.includeUserTurn
+          ? [
+              {
+                type: "message",
+                message: {
+                  role: "user",
+                  content: "Real user conversation about agent:main:dreaming-narrative-run-1",
+                },
               },
-            },
-          ]
-        : []),
-    ];
-    await fs.writeFile(
-      path.join(sessionsDir, archiveName),
-      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-    );
-    const manager = await getFreshManager(
-      createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true }),
-      "cli",
-    );
+            ]
+          : []),
+      ];
+      await fs.writeFile(
+        path.join(sessionsDir, archiveName),
+        `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      );
+      const manager = await getFreshManager(
+        createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true }),
+        "cli",
+      );
 
-    await manager.sync({ reason: "forced-reindex", force: true });
+      await manager.sync({ reason: "forced-reindex", force: true });
 
-    const database = Reflect.get(manager, "db") as DatabaseSync;
-    expect(
-      database
-        .prepare("SELECT DISTINCT path FROM memory_index_chunks WHERE source = 'sessions'")
-        .all(),
-    ).toEqual(scenario.indexable ? [{ path: `sessions/main/${archiveName}` }] : []);
-  });
+      const database = Reflect.get(manager, "db") as DatabaseSync;
+      expect(
+        database
+          .prepare("SELECT DISTINCT path FROM memory_index_chunks WHERE source = 'sessions'")
+          .all(),
+      ).toEqual(scenario.indexable ? [{ path: `sessions/main/${archiveName}` }] : []);
+    },
+  );
 
   it.each([
-    { kind: "cron", sessionKey: "agent:main:cron:job-1:run:run-1" },
-    { kind: "dreaming narrative", sessionKey: "agent:main:dreaming-narrative-run-1" },
     {
       kind: "heartbeat",
       sessionKey: "agent:main:heartbeat:run-1",

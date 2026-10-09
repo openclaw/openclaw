@@ -1,10 +1,32 @@
+import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
+import { readSessionRuntimeOwnershipAsync } from "../agents/harness/session-runtime-ownership.js";
+import {
+  getSubagentSessionListReadSnapshotIdentity,
+  prepareOptionalSubagentSessionListReadCache,
+} from "../agents/subagents/registry/subagent-registry-state.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withReadySessionRows } from "../gateway/session-row-prepared-read.js";
 import type * as records from "../gateway/session-row-projection-record.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
 import { listProjectedSessions } from "../gateway/session-utils-list.js";
+import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
+import { prepareGatewaySessionEntryReader } from "../gateway/session-utils-store-lineage.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../gateway/session-utils-store-worker.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { TuiBackend } from "./tui-backend.js";
+
+export async function readEmbeddedHistorySession(opts: Parameters<TuiBackend["loadHistory"]>[0]) {
+  if (!getSubagentSessionListReadSnapshotIdentity()) {
+    await prepareOptionalSubagentSessionListReadCache();
+  }
+  return loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: getRuntimeConfig(),
+    key: opts.sessionKey,
+    ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    includeStoreChildEntries: true,
+  });
+}
 
 export function readEmbeddedHistorySessionInfo(
   projection: SessionRowProjection,
@@ -23,6 +45,44 @@ export function readEmbeddedHistorySessionInfo(
         : undefined;
     },
   );
+}
+
+export async function readEmbeddedPrivateHistorySessionInfo(
+  selected: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
+  entry: SessionEntry,
+) {
+  const { cfg, agentId, canonicalKey, storePath, store, readSource } = selected;
+  const [acpMeta] = await readAcpSessionMetaForEntries({
+    cfg,
+    entries: [{ agentId, sessionKey: canonicalKey, entry }],
+  });
+  const runtimeOwnership = await readSessionRuntimeOwnershipAsync({
+    config: cfg,
+    agentId,
+    sessionKey: canonicalKey,
+    storePath: readSource?.path ?? storePath,
+    sessionEntry: entry,
+    readPreparedPreviousSessionId: () => entry.previousSessionId,
+  });
+  const readSourceEntry = runtimeOwnership?.modelRef
+    ? (key: string) => store[key]
+    : await prepareGatewaySessionEntryReader({
+        ...selected,
+        sessionKey: canonicalKey,
+        entry,
+      });
+  return buildGatewaySessionRow({
+    cfg,
+    storePath,
+    store,
+    key: canonicalKey,
+    entry,
+    preparedAcpMeta: acpMeta ?? null,
+    preparedRuntimeOwnership: runtimeOwnership ?? null,
+    agentId,
+    modelSource: { entry, readSourceEntry },
+    lightweightListRow: true,
+  });
 }
 
 export function createEmbeddedSessionReader(lifecycle: {

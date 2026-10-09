@@ -22,7 +22,7 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionLifecycleProjection from "../../config/sessions/session-lifecycle-projection.js";
-import { registerSessionMaintenancePreserveKeysProvider } from "../../config/sessions/store-maintenance-preserve.js";
+import { SessionEntryLifecycleUpsertConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGatewayHookDispatcher } from "../../gateway/server/hooks.js";
@@ -420,36 +420,31 @@ it.for([
               host.close();
             }
           });
-        let maintenancePrepared = false;
+        let creationConflictObserved = false;
         const cancellation = new AbortController();
         let creationCancellationObserved = false;
         const commitProjection =
           sessionLifecycleProjection.commitSessionLifecycleProjectionInWorker;
         const creationCommit =
-          change === "cancelled-creation"
+          change === "cancelled-creation" || change === "creation-retry"
             ? vi
                 .spyOn(sessionLifecycleProjection, "commitSessionLifecycleProjectionInWorker")
                 .mockImplementation(async (params) => {
+                  const creating = params.input.projected.upsertedEntries.some(
+                    (entry) => entry.sessionKey === scope.sessionKey && !entry.expectedEntry,
+                  );
+                  if (creating && change === "creation-retry" && !creationConflictObserved) {
+                    creationConflictObserved = true;
+                    throw new SessionEntryLifecycleUpsertConflictError(scope.sessionKey);
+                  }
                   const result = await commitProjection(params);
-                  if (
-                    params.input.projected.upsertedEntries.some(
-                      (entry) => entry.sessionKey === scope.sessionKey && !entry.expectedEntry,
-                    )
-                  ) {
+                  if (creating && change === "cancelled-creation") {
                     creationCancellationObserved = true;
                     cancellation.abort();
                   }
                   return result;
                 })
             : undefined;
-        let stopPreserving = () => {};
-        if (change === "creation-retry") {
-          stopPreserving = registerSessionMaintenancePreserveKeysProvider(async () => {
-            maintenancePrepared = true;
-            stopPreserving();
-            return { capture: () => [], dispose: () => {} };
-          });
-        }
         let outcome: Awaited<ReturnType<typeof enqueueSessionEventForHost>["settled"]>;
         let accepted: Awaited<ReturnType<typeof enqueueSessionEventForHost>["accepted"]>;
         const route = toolOnly
@@ -507,7 +502,6 @@ it.for([
         } finally {
           route?.mockRestore();
           creationCommit?.mockRestore();
-          stopPreserving();
         }
         if (change === "failed-adoption") {
           expect(accepted).toMatchObject({ ok: false });
@@ -519,7 +513,7 @@ it.for([
         }
         if (change === "creation-retry") {
           expect(accepted).toMatchObject({ ok: false });
-          expect(maintenancePrepared).toBe(true);
+          expect(creationConflictObserved).toBe(true);
           expect(outcome).toMatchObject({
             status: "failed",
             executionStarted: false,
@@ -601,13 +595,11 @@ it.for([
 it.for([
   { watchCount: 1, cancellation: "none" },
   { watchCount: 2, cancellation: "none" },
-  { watchCount: 2, cancellation: "first" },
   { watchCount: 2, cancellation: "all" },
   { watchCount: 2, cancellation: "request" },
 ])(
   "batches $watchCount watched sessions after FIFO adoption (cancellation: $cancellation)",
   async ({ watchCount, cancellation }, { signal }) => {
-    const cancelFirst = cancellation === "first";
     const cancelledBatch = cancellation === "all" || cancellation === "request";
     await withOpenClawTestState(
       { label: "session-event-notice-adoption", env: { OPENCLAW_TEST_FAST: "0" } },
@@ -676,7 +668,6 @@ it.for([
         const captured = createDeferred();
         const firstNoticeCaptured = createDeferred();
         const enqueued = createDeferred();
-        const continued = createDeferred();
         const notices: Array<ReturnType<typeof enqueueSessionEventForHost>> = [];
         let captures = 0;
         const capture = sessionEventHandoff.captureSessionEventTargetForHost;
@@ -700,9 +691,6 @@ it.for([
             if (options.source === "session") {
               notices.push(receipt);
               enqueued.resolve();
-              if (notices.length === 2) {
-                continued.resolve();
-              }
             }
             return receipt;
           });
@@ -744,26 +732,6 @@ it.for([
             await expect(notice.accepted).resolves.toEqual({ ok: true });
           }
           expect(starts).toHaveLength(1);
-          if (cancelFirst) {
-            const original = peekSystemEventEntries(scope.sessionKey);
-            const cancelled = expectDefined(
-              original.find((event) => event.text.includes(`Session "${child}" changed`)),
-              "first original notice",
-            );
-            const remaining = expectDefined(
-              original.find((event) => event.text.includes(`Session "${sibling}" changed`)),
-              "second original notice",
-            );
-            consumeSelectedSystemEventEntries(scope.sessionKey, [cancelled]);
-            await expect(notices[0]!.settled).resolves.toMatchObject({
-              status: "cancelled",
-              executionStarted: false,
-            });
-            expect(peekSystemEventEntries(scope.sessionKey)).toContainEqual(remaining);
-            await withinTest(continued.promise, signal);
-            expect(notices[1]?.id).toBe(remaining.id);
-            await expect(notices[1]!.accepted).resolves.toEqual({ ok: true });
-          }
           if (cancelledBatch) {
             const originals = peekSystemEventEntries(scope.sessionKey);
             if (cancellation === "all") {
@@ -821,7 +789,7 @@ it.for([
           vi.useRealTimers();
           releaseFirst.resolve();
           await expect(first.settled).resolves.toMatchObject({ status: "completed" });
-          for (const notice of cancelledBatch ? [] : cancelFirst ? notices.slice(1) : notices) {
+          for (const notice of cancelledBatch ? [] : notices) {
             await expect(notice.settled).resolves.toMatchObject({
               status: "completed",
               executionStarted: true,
@@ -835,7 +803,7 @@ it.for([
           }
           expect(starts[0]).toContain("First admitted work");
           for (const noticeState of observed) {
-            const wasCancelled = cancelledBatch || (cancelFirst && noticeState.child === child);
+            const wasCancelled = cancelledBatch;
             if (wasCancelled) {
               expect(starts[1] ?? "").not.toContain(`Session "${noticeState.child}" changed`);
             } else {

@@ -97,7 +97,6 @@ vi.mock("../../../state/openclaw-state-db-readonly.js", () => ({
     options?.onChunk?.(
       [...runs.values()].map((entry) => ({
         entry,
-        version: "fixture-version",
         createdAt: entry.createdAt,
       })),
     );
@@ -190,6 +189,7 @@ describe("announce loop guard (#18264)", () => {
       // Ended 10 minutes ago (well past ANNOUNCE_EXPIRY_MS of 5 min).
       runId: "test-expired-loop",
       childSessionKey: "agent:main:subagent:expired-child",
+      childSessionIdentity: { sessionId: "sess-expired" },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "agent:main:main",
       task: "expired test task",
@@ -239,6 +239,7 @@ describe("announce loop guard (#18264)", () => {
     const entry: SubagentRunRecord = {
       runId: "test-retry-budget",
       childSessionKey: "agent:main:subagent:retry-budget",
+      childSessionIdentity: { sessionId: "sess-retry" },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "agent:main:main",
       task: "retry window test",
@@ -303,6 +304,7 @@ describe("announce loop guard (#18264)", () => {
           {
             runId,
             childSessionKey: "agent:main:subagent:child-1",
+            childSessionIdentity: { sessionId: "sess-child-1" },
             requesterSessionKey: "agent:main:main",
             requesterDisplayKey: "agent:main:main",
             task: "rejection test",

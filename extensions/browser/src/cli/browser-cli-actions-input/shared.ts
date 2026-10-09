@@ -113,19 +113,23 @@ export async function readFields(opts: {
   const payload = opts.fieldsFile
     ? decodeJsonInput(await fs.readFile(opts.fieldsFile), "--fields-file")
     : (opts.fields ?? "");
+  return normalizeBrowserFormFields(parseBrowserInputArray(payload, "fields"));
+}
+
+export function parseBrowserInputArray(payload: string, kind: "fields" | "actions"): unknown[] {
   if (!payload.trim()) {
-    throw new Error("fields are required");
+    throw new Error(`${kind} are required`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
   } catch (cause) {
-    throw new Error("fields must be valid JSON.", { cause });
+    throw new Error(`${kind} must be valid JSON${kind === "fields" ? "." : ""}`, { cause });
   }
   if (!Array.isArray(parsed)) {
-    throw new Error("fields must be an array");
+    throw new Error(`${kind} must be ${kind === "fields" ? "an array" : "a JSON array"}`);
   }
-  return normalizeBrowserFormFields(parsed);
+  return parsed;
 }
 
 const ACTIONS_INPUT_MAX_BYTES = 1_000_000;

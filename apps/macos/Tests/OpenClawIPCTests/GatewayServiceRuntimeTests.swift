@@ -193,6 +193,12 @@ struct GatewayServiceRuntimeTests {
     @Test func `existing service CLI keeps its runtime package flags and SQLite selection`() throws {
         let fixtures: [([String], String?)] = [
             (["/old/bin/bun", "/old/lib/node_modules/openclaw/openclaw.mjs"], "/old/lib/libsqlite3.dylib"),
+            (
+                ["/old/bin/bun", "--no-install", "/old/lib/node_modules/openclaw/dist/index.js"],
+                "/old/lib/libsqlite3.dylib"),
+            (
+                ["/old/bin/bun", "--max-heap-size=8192", "--no-install", "/old/lib/node_modules/openclaw/openclaw.mjs"],
+                nil),
             (["/old/bin/node", "--max-old-space-size=8192", "/old/lib/node_modules/openclaw/dist/index.js"], nil),
         ]
         for (prefix, library) in fixtures {
@@ -201,6 +207,7 @@ struct GatewayServiceRuntimeTests {
                 environmentFile: URL(fileURLWithPath: "/profile/service-env/gateway.env"),
                 environmentWrapper: URL(fileURLWithPath: "/profile/service-env/gateway-env-wrapper.sh")))
             #expect(cli.prefix == prefix)
+            #expect(cli.sourcePrefix == prefix)
             let environment = GatewayLaunchAgentManager.daemonEnvironment(
                 runtime: nil,
                 installedCLI: cli,
@@ -215,7 +222,11 @@ struct GatewayServiceRuntimeTests {
     @Test func `installed service CLI unwraps only the canonical environment wrapper`() {
         let environment = URL(fileURLWithPath: "/profile/service-env/ai.openclaw.proof.env")
         let wrapper = URL(fileURLWithPath: "/profile/service-env/ai.openclaw.proof-env-wrapper.sh")
-        let prefix = ["/profile/runtime/build-one/bin/bun", "/profile/runtime/build-one/lib/openclaw.mjs"]
+        let prefix = [
+            "/profile/runtime/build-one/bin/bun",
+            "--no-install",
+            "/profile/runtime/build-one/lib/openclaw.mjs",
+        ]
         let command = prefix + ["gateway"]
         for arguments in [
             command,
@@ -233,6 +244,9 @@ struct GatewayServiceRuntimeTests {
             ["/bin/sh", "-c", "exec bun openclaw.mjs gateway"],
             ["/operator/custom-wrapper", "/operator/openclaw.mjs", "gateway"],
             ["/operator/node", "--require", "/operator/custom.js", "/operator/openclaw.mjs", "gateway"],
+            ["/operator/node", "--no-install", "/operator/openclaw.mjs", "gateway"],
+            ["/operator/bun", "--no-install=true", "/operator/openclaw.mjs", "gateway"],
+            ["/operator/bun", "--no-install", "--unknown", "/operator/openclaw.mjs", "gateway"],
         ] {
             #expect(GatewayLaunchAgentManager.installedServiceCLI(
                 snapshot: self.snapshot(arguments),

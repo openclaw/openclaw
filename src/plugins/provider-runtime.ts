@@ -5,7 +5,6 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { resolveGpt5SystemPromptContribution } from "../agents/gpt5-prompt-overlay.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import {
@@ -53,7 +52,6 @@ import {
 import {
   resolveCatalogHookProviderPluginIds,
   resolveOwningPluginIdsForProviderRef,
-  resolveProviderRefOwnership,
   resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
@@ -480,7 +478,13 @@ export function resolveProviderTransportTurnStateWithPlugin(
   };
 }
 
-export { prepareProviderRuntimeAuth } from "./provider-runtime-auth.js";
+export {
+  loginProviderOAuthWithPlugin,
+  prepareProviderRuntimeAuth,
+  refreshProviderOAuthCredentialWithPlugin,
+  resolveProviderOAuthCredentialWithPlugin,
+  resolveProviderOAuthRefreshCapabilityWithPlugin,
+} from "./provider-runtime-auth.js";
 
 const resolveUsageAuth = asyncRuntimeHook("resolveUsageAuth");
 export const resolveProviderUsageAuthWithPlugin = async (
@@ -569,71 +573,6 @@ export function listProviderUsagePluginDescriptors(params: {
 export { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
 
 export const formatProviderAuthProfileApiKeyWithPlugin = runtimeHook("formatApiKey");
-
-export async function loginProviderOAuthWithPlugin(
-  params: ProviderRuntimeLookup & {
-    context: Parameters<NonNullable<ProviderPlugin["loginOAuth"]>>[0];
-  },
-) {
-  const ownership = resolveProviderRefOwnership(params);
-  const loginOAuth = resolveProviderRuntimePlugin(params)?.loginOAuth;
-  if (!loginOAuth) {
-    return {
-      status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
-    } as const;
-  }
-  return {
-    status: "available" as const,
-    credentials: await loginOAuth(params.context),
-  };
-}
-
-export async function resolveProviderOAuthCredentialWithPlugin(
-  params: ProviderRuntimeLookup & {
-    credential: OAuthCredential;
-    refresh: boolean;
-  },
-) {
-  const ownership = resolveProviderRefOwnership(params);
-  const plugin = resolveProviderRuntimePlugin(params);
-  if (!plugin) {
-    return {
-      status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
-    } as const;
-  }
-  let credential = params.credential;
-  if (params.refresh) {
-    const refreshOAuth = plugin.refreshOAuth;
-    if (!refreshOAuth) {
-      return { status: "unhandled" } as const;
-    }
-    credential = await refreshOAuth(params.credential);
-  }
-  if (!credential) {
-    return { status: "unhandled" } as const;
-  }
-  const apiKey = plugin.formatApiKey?.(credential) ?? credential.access;
-  if (typeof apiKey !== "string" || !apiKey) {
-    return { status: "unhandled" } as const;
-  }
-  return { status: "available" as const, credential, apiKey };
-}
-
-/** Resolve whether the current provider plugin generation owns OAuth refresh. */
-export function resolveProviderOAuthRefreshCapabilityWithPlugin(params: ProviderRuntimeLookup) {
-  const ownership = resolveProviderRefOwnership(params);
-  const plugin = resolveProviderRuntimePlugin(params);
-  if (!plugin) {
-    return {
-      status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
-    } as const;
-  }
-  return plugin.refreshOAuth
-    ? ({ status: "available" } as const)
-    : ({ status: "unhandled" } as const);
-}
-
-export const refreshProviderOAuthCredentialWithPlugin = asyncRuntimeHook("refreshOAuth");
 
 export const buildProviderAuthDoctorHintWithPlugin = asyncRuntimeHook("buildAuthDoctorHint");
 

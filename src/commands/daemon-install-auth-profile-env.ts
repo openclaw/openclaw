@@ -28,19 +28,15 @@ export function collectAuthProfileSecretRefs(authStore: AuthProfileStore | undef
   if (!authStore) {
     return [];
   }
-  const refs: SecretRef[] = [];
-  for (const credential of Object.values(authStore.profiles)) {
+  return Object.values(authStore.profiles).flatMap((credential) => {
     const ref =
       credential.type === "api_key"
         ? credential.keyRef
         : credential.type === "token"
           ? credential.tokenRef
           : undefined;
-    if (ref) {
-      refs.push(ref);
-    }
-  }
-  return refs;
+    return ref ? [ref] : [];
+  });
 }
 
 export function collectAuthProfileServiceEnvVars(params: {

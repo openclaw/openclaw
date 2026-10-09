@@ -103,8 +103,9 @@ function classifyCanonicalRow(
   if (!isValidCreatedAtMs(row.updated_at_ms)) {
     return "invalid";
   }
+  let canonical: DeviceIdentity;
   try {
-    validateStoredDeviceIdentity(
+    canonical = validateStoredDeviceIdentity(
       {
         deviceId: row.device_id,
         publicKeyPem: row.public_key_pem,
@@ -120,14 +121,7 @@ function classifyCanonicalRow(
   // serialization metadata, not a reason to rotate an already-canonical key.
   return row.identity_key === IDENTITY_KEY &&
     row.device_id === identity.deviceId &&
-    deviceIdentityKeyMaterialMatches(
-      {
-        deviceId: row.device_id,
-        publicKeyPem: row.public_key_pem,
-        privateKeyPem: row.private_key_pem,
-      },
-      identity,
-    )
+    deviceIdentityKeyMaterialMatches(canonical, identity)
     ? "same"
     : "different";
 }

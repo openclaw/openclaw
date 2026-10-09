@@ -26,6 +26,8 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -51,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -58,6 +61,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -73,22 +78,31 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumnScope
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumnState
 import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.foundation.pager.HorizontalPager
 import androidx.wear.compose.foundation.pager.rememberPagerState
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.ButtonDefaults
+import androidx.wear.compose.material3.EdgeButton
+import androidx.wear.compose.material3.EdgeButtonSize
 import androidx.wear.compose.material3.HorizontalPagerScaffold
 import androidx.wear.compose.material3.LocalTextConfiguration
 import androidx.wear.compose.material3.ScreenScaffold
+import androidx.wear.compose.material3.SurfaceTransformation
 import androidx.wear.compose.material3.Text
+import androidx.wear.compose.material3.lazy.TransformationSpec
+import androidx.wear.compose.material3.lazy.rememberTransformationSpec
+import androidx.wear.compose.material3.lazy.transformedHeight
 import androidx.wear.compose.material3.minimumInteractiveComponentSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.ceil
+import kotlin.math.sqrt
 
 internal enum class WearHomePage {
   Chat,
@@ -1345,19 +1359,59 @@ private fun ConnectionStateScreen(
   failure: WearConversationFailure?,
   onRefresh: () -> Unit,
 ) {
-  WearPage(pageLabel = stringResource(R.string.chat)) {
-    item {
-      EmptyPanel(
-        title = stringResource(if (loading) R.string.checking_phone else (failure ?: WearConversationFailure.INTERNAL_ERROR).title),
-        detail = stringResource(if (loading) R.string.reading_conversation else (failure ?: WearConversationFailure.INTERNAL_ERROR).detail),
-      )
-    }
-    item {
-      SecondaryButton(
-        label = stringResource(R.string.retry),
-        enabled = !loading,
+  val colors = OpenClawWearTheme.colors
+  val canvasColors = OpenClawWearTheme.canvasColors
+  val listState = rememberTransformingLazyColumnState()
+  ScreenScaffold(
+    scrollState = listState,
+    contentPadding = PaddingValues(horizontal = 24.dp),
+    edgeButtonSpacing = 8.dp,
+    edgeButton = {
+      EdgeButton(
         onClick = onRefresh,
-      )
+        enabled = !loading,
+        buttonSize = EdgeButtonSize.ExtraSmall,
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = colors.surfaceRaised,
+            contentColor = colors.text,
+            disabledContainerColor = colors.surface,
+            disabledContentColor = colors.textMuted,
+          ),
+      ) {
+        Text(text = stringResource(R.string.retry))
+      }
+    },
+  ) { contentPadding ->
+    TransformingLazyColumn(
+      modifier = Modifier.fillMaxSize().padding(top = 32.dp).clipToBounds(),
+      state = listState,
+      contentPadding = contentPadding,
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      item {
+        // The recovery screen has one status, so leave room for its action on small watches.
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+          horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+          Text(
+            text = stringResource(if (loading) R.string.checking_phone else (failure ?: WearConversationFailure.INTERNAL_ERROR).title),
+            color = canvasColors.text,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+          )
+          Spacer(modifier = Modifier.height(3.dp))
+          Text(
+            text = stringResource(if (loading) R.string.reading_conversation else (failure ?: WearConversationFailure.INTERNAL_ERROR).detail),
+            color = canvasColors.textMuted,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            textAlign = TextAlign.Center,
+          )
+        }
+      }
     }
   }
 }
@@ -1366,26 +1420,72 @@ private fun ConnectionStateScreen(
 internal fun WearPage(
   pageLabel: String,
   modifier: Modifier = Modifier,
-  listState: androidx.wear.compose.foundation.lazy.TransformingLazyColumnState? = null,
-  content: androidx.wear.compose.foundation.lazy.TransformingLazyColumnScope.() -> Unit,
+  listState: TransformingLazyColumnState? = null,
+  content: WearPageScope.() -> Unit,
 ) {
   val colors = OpenClawWearTheme.colors
   val resolvedListState = listState ?: rememberTransformingLazyColumnState()
+  val transformationSpec = rememberTransformationSpec()
+  val configuration = LocalConfiguration.current
+  val verticalInset = 32.dp
+  val viewportHeight = (configuration.screenHeightDp - 64).coerceAtLeast(0).toFloat()
+  val width = configuration.screenWidthDp.toFloat()
+  // Shared surfaces have a 12dp side margin. Keep their visible rectangle inside the
+  // circular display even with reduced motion, without shortening the reading area further.
+  val horizontalInset =
+    if (configuration.isScreenRound) {
+      (ceil((width - sqrt((width * width - viewportHeight * viewportHeight).coerceAtLeast(0f))) / 2f) + 1f).dp - 12.dp
+    } else {
+      0.dp
+    }
+  val layoutDirection = LocalLayoutDirection.current
   ScreenScaffold(scrollState = resolvedListState) { contentPadding ->
     TransformingLazyColumn(
       modifier =
         modifier
           .fillMaxSize()
-          .background(colors.canvas),
+          .background(colors.canvas)
+          // Keep the viewport below the clock even when its first item scrolls away.
+          .padding(vertical = verticalInset)
+          .clipToBounds(),
       state = resolvedListState,
-      contentPadding = contentPadding,
+      contentPadding =
+        PaddingValues(
+          top = 8.dp,
+          bottom = 8.dp,
+          start = maxOf(contentPadding.calculateStartPadding(layoutDirection), horizontalInset),
+          end = maxOf(contentPadding.calculateEndPadding(layoutDirection), horizontalInset),
+        ),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      item {
-        OpenClawHeader(pageLabel = pageLabel)
+      with(WearPageScope(this, transformationSpec)) {
+        item { OpenClawHeader(pageLabel = pageLabel) }
+        content()
       }
-      content()
+    }
+  }
+}
+
+internal class WearPageScope(
+  private val list: TransformingLazyColumnScope,
+  private val transformationSpec: TransformationSpec,
+) {
+  fun item(
+    key: Any? = null,
+    content: @Composable () -> Unit,
+  ) {
+    list.item(key = key) {
+      val transformation = SurfaceTransformation(transformationSpec)
+      // Custom cards scale as one surface, including their borders and hit targets.
+      Column(
+        modifier =
+          Modifier
+            .transformedHeight(this, transformationSpec)
+            .graphicsLayer { with(transformation) { applyContainerTransformation() } },
+      ) {
+        content()
+      }
     }
   }
 }
@@ -1622,6 +1722,7 @@ private fun ContextPickerOverlay(
 private fun PickerQueryLabel(query: String) {
   Text(
     text = query,
+    modifier = Modifier.padding(horizontal = 12.dp),
     color = OpenClawWearTheme.canvasColors.textMuted,
     fontSize = 11.sp,
     maxLines = 1,
@@ -1633,6 +1734,7 @@ private fun PickerQueryLabel(query: String) {
 private fun PickerEmptyResult() {
   Text(
     text = stringResource(R.string.no_matches),
+    modifier = Modifier.padding(horizontal = 12.dp),
     color = OpenClawWearTheme.canvasColors.textMuted,
     fontSize = 12.sp,
     textAlign = TextAlign.Center,

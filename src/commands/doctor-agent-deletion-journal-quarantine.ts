@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../config/paths.js";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { writeTextAtomic } from "../infra/json-files.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
+import { invalidateSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { hasSqliteFileFamily } from "../state/agent-deletion-discovery.js";
 import {
@@ -14,6 +17,7 @@ import {
   recordAgentDeletionRecoveryHolds,
 } from "../state/agent-deletion-journal-recovery.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
+import { invalidateAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import {
   parseCleanupPaths,
   readAgentDeletionJournalInDatabase,
@@ -33,6 +37,11 @@ import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 type JournalDatabase = Pick<OpenClawStateDatabase, "db" | "path">;
 
 function readRecoverySource(database: JournalDatabase) {
+  if (isPostgresSqlConnection(database.db)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
+  // Recovery must inspect the damaged catalog instead of the runtime's admitted shape.
+  invalidateSqliteSchemaFacts(database.db);
   const held = tableExists(database.db, "migration_sources")
     ? readAgentDeletionRecoveryHolds(database)
     : [];
@@ -184,6 +193,7 @@ export async function quarantineAgentDeletionJournal(params: {
             database.db,
             query.deleteFrom("agent_deletion_journal").where("agent_id", "=", row.agent_id),
           );
+          invalidateAgentDeletionJournalStatus(database.db, row.agent_id);
           continue;
         }
         executeSqliteQuerySync(
@@ -209,6 +219,7 @@ export async function quarantineAgentDeletionJournal(params: {
             })
             .where("agent_id", "=", row.agent_id),
         );
+        invalidateAgentDeletionJournalStatus(database.db, row.agent_id);
       }
       return recordAgentDeletionRecoveryHolds(database, held, {
         description:

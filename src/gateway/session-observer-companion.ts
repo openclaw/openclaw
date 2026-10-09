@@ -1,12 +1,11 @@
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { flushSessionActivityAssistantNote } from "../agents/session-activity-notes.js";
+import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import type { SessionObserverDeps, SessionObserverState } from "./session-observer-model.js";
-import {
-  isSameSessionObserverLifecycle,
-  resolveSessionObserverDigestForLifecycle,
-} from "./session-observer-model.js";
+import { isSameSessionObserverLifecycle } from "./session-observer-model.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
@@ -58,6 +57,11 @@ export function createSessionObserverCompanionSnapshotReader(params: {
     resolve,
     read,
     readSync(this: void, sessionKey: string, selectedAgentId?: string) {
+      warnPluginSdkDeprecation({
+        family: "session-observer",
+        method: "sessionObserver.getCompanionSnapshot",
+        replacement: "await sessionObserver.getCompanionSnapshotAsync",
+      });
       const target = resolve(sessionKey, selectedAgentId);
       return read(target, params.readSession(target.canonicalSessionKey, target.agentId));
     },

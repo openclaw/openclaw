@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
@@ -16,6 +17,7 @@ import type { MSTeamsApp } from "./sdk.js";
 type RunFeedbackReflectionParams = {
   cfg: OpenClawConfig;
   app: MSTeamsApp;
+  accountId: string;
   conversationRef: StoredConversationReference;
   sessionKey: string;
   agentId: string;
@@ -31,9 +33,9 @@ type RunFeedbackReflectionParams = {
  */
 export async function runFeedbackReflection(params: RunFeedbackReflectionParams): Promise<void> {
   const { cfg, log, sessionKey } = params;
+  const msteamsCfg = resolveMSTeamsAccountConfig(cfg, params.accountId);
   const cooldownMs =
-    cfg.channels?.msteams?.feedbackReflectionCooldownMs ??
-    DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS;
+    msteamsCfg.feedbackReflectionCooldownMs ?? DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS;
   let reflection;
   try {
     reflection = await runChannelFeedbackReflection({
@@ -99,7 +101,10 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
       params.app,
       buildConversationReference(params.conversationRef),
       { type: "message", text: reflection.userMessage! },
-      { serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(cfg.channels?.msteams) },
+      {
+        accountId: params.accountId,
+        serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
+      },
     );
     log.info("sent reflection follow-up", { sessionKey });
   } catch (err) {

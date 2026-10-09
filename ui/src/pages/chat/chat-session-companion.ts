@@ -151,11 +151,11 @@ export class ChatSessionCompanionThreads {
   constructor(private readonly notify: () => void = () => {}) {}
 
   view(sessionKey: string, agentId?: string | null): ChatSessionCompanionThread {
-    return this.get(sessionKey, agentId);
+    return this.get(companionThreadKey(sessionKey, agentId));
   }
 
   setDraft(sessionKey: string, draft: string, agentId?: string | null): void {
-    const thread = this.get(sessionKey, agentId);
+    const thread = this.get(companionThreadKey(sessionKey, agentId));
     if (thread.draft === draft) {
       return;
     }
@@ -177,7 +177,7 @@ export class ChatSessionCompanionThreads {
       showToast({ message: t("chat.rail.selectionTooLong") });
       return false;
     }
-    const thread = this.get(sessionKey, agentId);
+    const thread = this.get(companionThreadKey(sessionKey, agentId));
     thread.attachments = attachments;
     this.notify();
     return true;
@@ -193,7 +193,7 @@ export class ChatSessionCompanionThreads {
       return;
     }
     const key = companionThreadKey(targetSessionKey, agentId);
-    const thread = this.get(targetSessionKey, agentId);
+    const thread = this.get(key);
     const token = Symbol(key);
     this.hydrationTokens.set(key, token);
     thread.loading = true;
@@ -247,7 +247,7 @@ export class ChatSessionCompanionThreads {
       return;
     }
     const key = companionThreadKey(targetSessionKey, agentId);
-    const thread = this.get(targetSessionKey, agentId);
+    const thread = this.get(key);
     if (
       thread.turns.some((turn) => turn.status === "pending") ||
       thread.attachmentReads?.pendingReads
@@ -330,7 +330,7 @@ export class ChatSessionCompanionThreads {
       return;
     }
     const key = companionThreadKey(targetSessionKey, agentId);
-    const thread = this.get(targetSessionKey, agentId);
+    const thread = this.get(key);
     const priorTurns = new Set([...thread.turns, ...thread.responses.keys()]);
     const draftRevision = thread.draftRevision;
     const reads = thread.attachmentReads;
@@ -403,8 +403,7 @@ export class ChatSessionCompanionThreads {
     this.notify();
   }
 
-  private get(sessionKey: string, agentId?: string | null): MutableCompanionThread {
-    const key = companionThreadKey(sessionKey, agentId);
+  private get(key: string): MutableCompanionThread {
     let thread = this.threads.get(key);
     if (!thread) {
       thread = {

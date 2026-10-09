@@ -451,7 +451,7 @@ describe("prepared model runtime scoped refresh", () => {
     },
   );
 
-  it("carries completed discovery across scoped hot reload without rediscovery", async () => {
+  it("retains compatible discovery and reacquires it after credentials change", async () => {
     mocks.configuredAgentIds = ["pro"];
     const credential = { type: "api_key" as const, key: "discovered-provider-key" };
     mocks.preparedAuthStore = {
@@ -530,11 +530,14 @@ describe("prepared model runtime scoped refresh", () => {
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 1);
     mocks.preparedAuthStore = { version: 1, profiles: {} };
     mocks.authStorage.getAll.mockReturnValue({});
+    serveCatalog(makeCatalog());
     mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+    await gatewayCatalog(currentConfig);
+    await getPreparedModelRuntimeSnapshot(input)!.loadFullModelCatalog!({ changedOnly: true });
     const afterAuth = await gatewayCatalog(currentConfig);
     expect(afterAuth.entries).not.toContainEqual(discovered);
     expect(afterAuth.authModes).not.toHaveProperty("discovered-provider");
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 1);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 2);
   });
 
   it("acquires full inventory at a cold start and keeps a retained reload scoped", async () => {

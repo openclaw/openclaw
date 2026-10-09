@@ -28,6 +28,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../types.js";
+import { commandReply } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
@@ -357,21 +358,18 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
   if (!prepared) {
     return null;
   }
-  if (prepared.status !== "ready") {
-    return { shouldContinue: false, reply: prepared.reply };
-  }
-  const reply = await runChannelProviderLogin(params, prepared.choice);
-  return { shouldContinue: false, reply };
-};
-
-const commandsLoginTestApi = {
-  clearActiveFlows() {
-    activeProviderLoginFlows.logins.clear();
-    activeProviderLoginFlows.modelAccess.clear();
-  },
+  return commandReply(
+    prepared.status === "ready"
+      ? await runChannelProviderLogin(params, prepared.choice)
+      : prepared.reply,
+  );
 };
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commandsLoginTestApi")] =
-    commandsLoginTestApi;
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commandsLoginTestApi")] = {
+    clearActiveFlows() {
+      activeProviderLoginFlows.logins.clear();
+      activeProviderLoginFlows.modelAccess.clear();
+    },
+  };
 }

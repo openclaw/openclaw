@@ -1,6 +1,8 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
@@ -113,10 +115,12 @@ function makeRecoveryInput(
           storePath: path.join(runParams.workspaceDir, "openclaw-agent.sqlite"),
         },
       },
-      assertActive: () => {
-        runParams.abortSignal?.throwIfAborted();
-        overrides.assertRecoveryActive?.();
-      },
+      assertActive: composeSessionSourceAssertion([
+        () => {
+          runParams.abortSignal?.throwIfAborted();
+          overrides.assertRecoveryActive?.();
+        },
+      ]),
       withTranscriptWrites: async <T>(signal: AbortSignal | undefined, run: () => Promise<T>) => {
         signal?.throwIfAborted();
         return await run();
@@ -124,7 +128,7 @@ function makeRecoveryInput(
     }),
     prepareRecoverySession: async () => ({
       sessionManager: SessionManager.inMemory(),
-      assertActive: vi.fn<() => void>(),
+      assertActive: composeSessionSourceAssertion([]),
       withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
         await operation(),
     }),
@@ -223,6 +227,7 @@ describe("compactEmbeddedRunForRecovery", () => {
       makeRecoveryInput({
         runParams: {
           ...baseRunParams,
+          trigger: "user",
           sandboxSessionKey: "global",
           sandboxAgentId: "main",
           modelSelectionLocked: true,
@@ -264,6 +269,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         sandboxSessionKey: "global",
         sandboxAgentId: "main",
         trigger: "overflow",
+        modelCallUrgency: "foreground",
         currentTokenCount: 277_403,
         provider: "openai",
         model: "gpt-5.5",
@@ -442,6 +448,9 @@ describe("compactEmbeddedRunForRecovery", () => {
 });
 
 describe("createEmbeddedRunCompactionRuntime", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
+
   async function createRuntime(
     params: {
       compactResult?: Awaited<ReturnType<ContextEngine["compact"]>>;

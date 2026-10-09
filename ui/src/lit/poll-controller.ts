@@ -4,9 +4,6 @@ export class PollController implements ReactiveController {
   private timer: ReturnType<typeof globalThis.setInterval> | null = null;
   private running = false;
   private readonly handleVisibilityChange = () => {
-    if (!this.running) {
-      return;
-    }
     if (!this.isVisible()) {
       this.clearTimer();
     } else if (this.startTimer()) {
@@ -62,11 +59,8 @@ export class PollController implements ReactiveController {
     if (this.timer !== null || !this.isVisible()) {
       return false;
     }
-    this.timer = globalThis.setInterval(() => {
-      if (this.isVisible()) {
-        this.tick();
-      }
-    }, this.intervalMs);
+    // Visibility events own suspension; a tick already queued at hide may finish.
+    this.timer = globalThis.setInterval(() => this.tick(), this.intervalMs);
     return true;
   }
 

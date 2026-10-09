@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type {
@@ -7,16 +6,19 @@ import type {
   WorkerOperations,
   WorkerWriteOperationContext,
 } from "../../state/worker-operation-registry.js";
+import type { EngineConnection } from "../sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-admission.js";
 import {
   bindCurrentConversationInDatabase,
   removeCurrentConversationBindingsInDatabase,
   readCurrentConversationBindingListInDatabase,
+  readCurrentConversationBindingListsInDatabase,
   pruneCurrentConversationBindingListInTransaction,
   readCurrentConversationBindingResolutionInDatabase,
   readCurrentConversationBindingSelectionInDatabase,
   updateCurrentConversationBindingRecordInDatabase,
 } from "./current-conversation-bindings.kernel.js";
+import { withCurrentConversationBindingWorkerReceipt } from "./current-conversation-bindings.publication.js";
 import type {
   CurrentConversationBindingBind,
   CurrentConversationBindingRemove,
@@ -26,13 +28,13 @@ import type { ConversationRef, SessionBindingRecord } from "./session-binding.ty
 
 function runBindingTransaction<T>(
   context: WorkerOperationContext,
-  update: (db: DatabaseSync) => T,
+  update: (db: EngineConnection) => T,
   database = context.open(),
 ): T {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const result = update(db);
+      const result = withCurrentConversationBindingWorkerReceipt(db, () => update(db));
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return result;
     },
@@ -42,7 +44,7 @@ function runBindingTransaction<T>(
 
 /** The caller holds the shared-state write transaction and current host admission. */
 function touchCurrentConversationBindingInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: CurrentConversationBindingTouch,
 ): SessionBindingRecord | null {
   const conversation = input.conversation;
@@ -85,8 +87,10 @@ function touchCurrentConversationBindingInDatabase(
 export const conversationBindingOperations = {
   "conversationBindings.bind": (input: CurrentConversationBindingBind, { write }) => {
     return write(({ db }) => {
-      const record = bindCurrentConversationInDatabase(db, input, (requiresAgentId) =>
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: requiresAgentId }),
+      const record = withCurrentConversationBindingWorkerReceipt(db, () =>
+        bindCurrentConversationInDatabase(db, input, (requiresAgentId) =>
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: requiresAgentId }),
+        ),
       );
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return record;
@@ -95,7 +99,9 @@ export const conversationBindingOperations = {
   "conversationBindings.remove": (input: CurrentConversationBindingRemove, { write }) => {
     return write(({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const records = removeCurrentConversationBindingsInDatabase(db, input);
+      const records = withCurrentConversationBindingWorkerReceipt(db, () =>
+        removeCurrentConversationBindingsInDatabase(db, input),
+      );
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return records;
     });
@@ -114,8 +120,10 @@ export const conversationBindingOperations = {
     context,
   ) => {
     const database = context.open();
-    const prepared = input.targetSessionKeys.map((key) =>
-      readCurrentConversationBindingListInDatabase(database.db, key, input.scope),
+    const prepared = readCurrentConversationBindingListsInDatabase(
+      database.db,
+      input.targetSessionKeys,
+      input.scope,
     );
     if (!prepared.some((list) => list.requiresPrune)) {
       return prepared.map((list) => list.records);

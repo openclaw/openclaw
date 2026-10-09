@@ -42,6 +42,11 @@ const activeStoreWriters = resolveGlobalSingleton(
   () => new AsyncLocalStorage<ActiveStoreWriter>(),
 );
 
+/** Detached follow-up retains caller authority, but cannot borrow its writer locks. */
+export function runOutsideStoreWriterContext<T>(run: () => T): T {
+  return activeStoreWriters.exit(run);
+}
+
 // Independently draining stores share one event loop, including separately bundled callers.
 const writerTurn = resolveGlobalSingleton(
   Symbol.for("openclaw.storeWriterTurn"),

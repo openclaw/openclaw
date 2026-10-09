@@ -359,11 +359,7 @@ function resolveReplyMessageInjectionFailure(
     return rejectUnavailable();
   }
   const authorityError = refusal ?? unsupported;
-  if (
-    authorityError instanceof MessageInjectionAuthorityError ||
-    authorityError instanceof QuestionDispatchRefusedError ||
-    authorityError instanceof SessionPendingInputCustodyError
-  ) {
+  if (authorityError instanceof Error) {
     // SQL and runtime wrappers retain the original cause. Never turn an owner
     // refusal into fallback, or downgrade an already reported acceptance.
     return {

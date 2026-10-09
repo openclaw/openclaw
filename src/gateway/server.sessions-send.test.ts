@@ -58,7 +58,17 @@ const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
 const SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS = 30_000;
 
 function getSessionsSendTool(options?: Parameters<typeof createOpenClawTools>[0]) {
-  const tool = createOpenClawTools(options).find((candidate) => candidate.name === "sessions_send");
+  const tool = createOpenClawTools(
+    options?.config
+      ? {
+          ...options,
+          config: {
+            ...options.config,
+            session: { ...options.config.session, store: testState.sessionStorePath },
+          },
+        }
+      : options,
+  ).find((candidate) => candidate.name === "sessions_send");
   if (!tool) {
     throw new Error("missing sessions_send tool");
   }
@@ -81,7 +91,11 @@ async function writeConfig(config: OpenClawConfig) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, `${JSON.stringify(config)}\n`, "utf-8");
+  const fixtureConfig = {
+    ...config,
+    session: { ...config.session, store: testState.sessionStorePath },
+  };
+  await fs.writeFile(configPath, `${JSON.stringify(fixtureConfig)}\n`, "utf-8");
 }
 
 async function emitLifecycleAssistantReply(params: {
@@ -186,8 +200,9 @@ beforeAll(async () => {
   } finally {
     captureKernel.mockRestore();
   }
-  // Prepare the real history handler before the RPC deadline starts.
+  // Prepare real handlers before RPC deadlines; cold module loading is fixture setup.
   await import("./server-methods/chat.js");
+  await import("./server-methods/sessions-create.js");
 });
 
 beforeEach(async () => {
@@ -272,11 +287,15 @@ describe("sessions_send gateway loopback", () => {
 
     const tool = getSessionsSendTool();
 
-    const result = await tool.execute("call-loopback", {
-      sessionKey: "main",
-      message: body,
-      timeoutSeconds: 5,
-    });
+    const result = await tool
+      .execute("call-loopback", {
+        sessionKey: "main",
+        message: body,
+        timeoutSeconds: 5,
+      })
+      .catch((error: unknown) => {
+        throw new Error(`sessions_send tool execution failed: ${String(error)}`, { cause: error });
+      });
     expectSessionsSendDetails(result, { reply: "pong", sessionKey: "main" });
 
     const firstCall = spy.mock.calls.at(0)?.[0];
@@ -293,6 +312,8 @@ describe("sessions_send gateway loopback", () => {
       method: "chat.history",
       params: { sessionKey: "main", limit: 10 },
       timeoutMs: 5_000,
+    }).catch((error: unknown) => {
+      throw new Error(`sessions_send history read failed: ${String(error)}`, { cause: error });
     });
     // Observe both receiving and persisted body failures before ending the case.
     expect.soft(firstCall?.message?.split("\n").slice(-2).join("\n")).toBe(body);

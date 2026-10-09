@@ -14,6 +14,7 @@ export function createModelSelectionMocks() {
   };
   const placementMocks = {
     getMany: vi.fn(),
+    prepareRuntimeRefresh: vi.fn(),
     resolveWorkerPlacementSessionRuntimeCapabilities: vi.fn(),
   };
   const factories = {
@@ -48,12 +49,19 @@ export function createModelSelectionMocks() {
         workerSessionPlacementService: {
           getMany: placementMocks.getMany,
           getManyAsync: async (sessionIds: readonly string[]) => placementMocks.getMany(sessionIds),
+          prepareRuntimeRefresh: placementMocks.prepareRuntimeRefresh,
         },
       }),
     }),
     placementRuntime: () => ({
-      resolveWorkerPlacementSessionRuntimeCapabilities:
-        placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities,
+      resolveWorkerPlacementCapabilities: (...args: unknown[]) =>
+        placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities(...args),
+    }),
+    placementRuntimePreparation: () => ({
+      prepareWorkerPlacementSessionRuntime: async () => ({
+        read: () => "fixture",
+        [Symbol.dispose]: () => {},
+      }),
     }),
   };
   const resetMocks = () => {
@@ -67,6 +75,20 @@ export function createModelSelectionMocks() {
     effects.refreshQueuedFollowupSession.mockReset();
     effects.triggerSessionPatchHook.mockReset();
     placementMocks.getMany.mockReset().mockReturnValue(new Map());
+    placementMocks.prepareRuntimeRefresh
+      .mockReset()
+      .mockImplementation(async (sessionId: string) => {
+        const placement = placementMocks.getMany([sessionId]).get(sessionId);
+        return {
+          placement,
+          assertCurrent: () => {
+            if (placementMocks.getMany([sessionId]).get(sessionId) !== placement) {
+              throw new Error("Session placement changed");
+            }
+          },
+          release: () => {},
+        };
+      });
     placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReset();
   };
   return { effects, placementMocks, factories, resetMocks };

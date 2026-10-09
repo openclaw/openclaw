@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { assertAppContainerSpawnSupported } from "./windows-appcontainer-spawn.js";
 
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
@@ -111,6 +112,7 @@ export function queryWindowsRegistryValue(
     if (timeoutMs <= 0) {
       return null;
     }
+    assertAppContainerSpawnSupported();
     try {
       const stdout = execFileSync(regExe, ["query", key, "/v", valueName, ...viewArgs], {
         env: resolveDiagnosticProcessEnv(),
@@ -135,20 +137,14 @@ export function queryWindowsRegistryValue(
 }
 
 function getRegistryProgramFilesRoots(): Partial<WindowsInstallRoots> {
+  const readRoot = (valueName: string) =>
+    normalizeWindowsInstallRoot(
+      queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, valueName) ?? undefined,
+    ) ?? undefined;
   return {
-    programFiles:
-      normalizeWindowsInstallRoot(
-        queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir") ?? undefined,
-      ) ?? undefined,
-    programFilesX86:
-      normalizeWindowsInstallRoot(
-        queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir (x86)") ??
-          undefined,
-      ) ?? undefined,
-    programW6432:
-      normalizeWindowsInstallRoot(
-        queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "ProgramW6432Dir") ?? undefined,
-      ) ?? undefined,
+    programFiles: readRoot("ProgramFilesDir"),
+    programFilesX86: readRoot("ProgramFilesDir (x86)"),
+    programW6432: readRoot("ProgramW6432Dir"),
   };
 }
 

@@ -9,7 +9,10 @@ import type {
   DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactOtelAttributes } from "./service-attributes.js";
-import { normalizeOtelErrorMessage } from "./service-content-normalization.js";
+import {
+  normalizeOtelContentValue,
+  normalizeOtelErrorMessage,
+} from "./service-content-normalization.js";
 import { assignOtelModelContentAttributes } from "./service-genai-content.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { HarnessRunDiagnosticEvent, ModelFailoverDiagnosticEvent } from "./service-types.js";
@@ -59,6 +62,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     recordHarnessRunStarted(
       evt: Extract<DiagnosticEventPayload, { type: "harness.run.started" }>,
       metadata: DiagnosticEventMetadata,
+      privateData: DiagnosticEventPrivateData,
     ) {
       if (!runtime.tracesEnabled || !metadata.trusted) {
         return;
@@ -67,6 +71,12 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
         ...harnessRunMetricAttrs(evt),
       };
       runtime.addRunAttrs(spanAttrs, evt);
+      const inputValue = runtime.captureContent
+        ? normalizeOtelContentValue(privateData.harnessContent?.userPrompt)
+        : undefined;
+      if (inputValue) {
+        spanAttrs["input.value"] = inputValue;
+      }
       runtime.trackTrustedSpan(
         evt,
         metadata,
@@ -121,6 +131,21 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       const redactedError = normalizeOtelErrorMessage(privateData.errorMessage);
       if (redactedError) {
         spanAttrs["openclaw.error"] = redactedError;
+      }
+      // CLI harnesses attach content at completion rather than startup, so the
+      // prompt must be consumable here as well; setSpanAttrs below preserves any
+      // input.value already recorded on the tracked span at startup.
+      const inputValue = runtime.captureContent
+        ? normalizeOtelContentValue(privateData.harnessContent?.userPrompt)
+        : undefined;
+      if (inputValue) {
+        spanAttrs["input.value"] = inputValue;
+      }
+      const outputValue = runtime.captureContent
+        ? normalizeOtelContentValue(privateData.harnessContent?.finalResponse)
+        : undefined;
+      if (outputValue) {
+        spanAttrs["output.value"] = outputValue;
       }
       const trustedTrace = runtime.trustedTraceContext(evt, metadata);
       const trackedSpan = trustedTrace?.spanId

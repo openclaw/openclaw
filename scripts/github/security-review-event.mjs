@@ -52,35 +52,40 @@ async function selectRunPullRequests(api, prefix, run, repository, defaultBranch
   if (!Array.isArray(candidates)) {
     throw new Error("CI workflow response has no pull request association list.");
   }
-  if (candidates.length === 0) {
-    candidates = await associatedPullRequests(api, prefix, run.head_sha);
-    // Fork run associations can be empty and the commit can be unavailable in
-    // the base repository. Query only the run's branch, never the PR backlog.
-    if (candidates.length === 0) {
-      const owner = run.head_repository?.owner?.login;
-      if (!owner || !run.head_branch) {
-        throw new Error("CI workflow response has no source branch identity.");
+  const selected = new Map();
+  async function selectCandidates(associations) {
+    for (const candidate of associations) {
+      if (!positiveInteger(candidate.number)) {
+        throw new Error("CI workflow association contains an invalid pull request number.");
       }
-      candidates = await api.paginate(
-        `${prefix}/pulls?state=open&head=${encodeURIComponent(`${owner}:${run.head_branch}`)}`,
-      );
+      const pullRequest = await api.request(`${prefix}/pulls/${candidate.number}`);
+      if (
+        reviewable(pullRequest, repository, defaultBranch) &&
+        pullRequest.head.sha === run.head_sha &&
+        positiveInteger(run.head_repository?.id) &&
+        pullRequest.head.repo?.id === run.head_repository.id &&
+        pullRequest.head.ref === run.head_branch
+      ) {
+        selected.set(pullRequest.number, { pr: pullRequest.number, head: pullRequest.head.sha });
+      }
     }
   }
-  const selected = new Map();
-  for (const candidate of candidates) {
-    if (!positiveInteger(candidate.number)) {
-      throw new Error("CI workflow association contains an invalid pull request number.");
+  if (candidates.length === 0) {
+    candidates = await associatedPullRequests(api, prefix, run.head_sha);
+  }
+  await selectCandidates(candidates);
+  // Associations can name stacked descendants without the completed run's PR.
+  // Fall back only after current head/repository/branch qualification.
+  if (selected.size === 0) {
+    const owner = run.head_repository?.owner?.login;
+    if (!owner || !run.head_branch) {
+      throw new Error("CI workflow response has no source branch identity.");
     }
-    const pullRequest = await api.request(`${prefix}/pulls/${candidate.number}`);
-    if (
-      reviewable(pullRequest, repository, defaultBranch) &&
-      pullRequest.head.sha === run.head_sha &&
-      positiveInteger(run.head_repository?.id) &&
-      pullRequest.head.repo?.id === run.head_repository.id &&
-      pullRequest.head.ref === run.head_branch
-    ) {
-      selected.set(pullRequest.number, { pr: pullRequest.number, head: pullRequest.head.sha });
-    }
+    await selectCandidates(
+      await api.paginate(
+        `${prefix}/pulls?state=open&head=${encodeURIComponent(`${owner}:${run.head_branch}`)}`,
+      ),
+    );
   }
   return selected;
 }

@@ -1,9 +1,9 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { resolveChannelInboundRouteEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ResolvedXAccount } from "./accounts.js";
-import { resolveXGuestSettings, supportsXGuestHelpers } from "./guest-policy.js";
+import { resolveXGuestSettings } from "./guest-policy.js";
 import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
 
 export function resolveXGuestContainmentError(
@@ -50,12 +50,12 @@ function resolveXGuestReadinessError(
       ? [routedAgentId]
       : [...peerIds].map(
           (id) =>
-            resolveChannelInboundRouteEnvelope({
+            resolveAgentRoute({
               cfg,
               channel: "x",
               accountId,
               peer: { kind: "group", id },
-            }).route.agentId,
+            }).agentId,
         );
   } catch {
     return "X guest mode requires valid X agent bindings. Add a channel-wide X binding and correct any missing target agents.";
@@ -67,7 +67,7 @@ function resolveXGuestReadinessError(
 }
 
 export async function getXGuestStatus(
-  runtime: Pick<PluginRuntime, "capabilities"> & {
+  runtime: {
     state: Pick<PluginRuntime["state"], "openKeyedStore" | "resolveStateDir">;
   },
   account: ResolvedXAccount,
@@ -75,14 +75,13 @@ export async function getXGuestStatus(
   routedAgentId?: string,
 ) {
   const { enabled, maxMentionsPerAuthorPerDay } = resolveXGuestSettings(account);
-  const helpersAvailable = supportsXGuestHelpers(runtime);
   const blockedReason = enabled
     ? resolveXGuestReadinessError(cfg, account.accountId, routedAgentId)
     : undefined;
   try {
     return {
       enabled,
-      helpersAvailable,
+      helpersAvailable: true,
       maxMentionsPerAuthorPerDay,
       ...(blockedReason ? { blockedReason } : {}),
       ...(await openXGuestUsage(runtime).counts(account.accountId)),
@@ -93,7 +92,7 @@ export async function getXGuestStatus(
     }
     return {
       enabled,
-      helpersAvailable,
+      helpersAvailable: true,
       maxMentionsPerAuthorPerDay,
       admittedToday: 0,
       rateLimitedToday: 0,

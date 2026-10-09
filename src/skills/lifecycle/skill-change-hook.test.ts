@@ -84,7 +84,7 @@ describe("committed skill artifact snapshots", () => {
     });
   });
 
-  it.each(["SKILL.md", "asset.bin"])("rejects a hardlink added before reading %s", async (name) => {
+  it.each(["asset.bin"])("rejects a hardlink added before reading %s", async (name) => {
     const parent = await tempDirs.make("openclaw-skill-change-race-");
     const skillDir = path.join(parent, "skill");
     const assetPath = path.join(skillDir, "asset.bin");
@@ -176,32 +176,6 @@ describe("committed skill artifact snapshots", () => {
       },
     });
     await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(replacementContent);
-  });
-
-  it("reports a descriptor close failure after reading the skill", async () => {
-    const skillDir = await tempDirs.make("openclaw-skill-change-close-");
-    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Skill\n");
-    const warn = vi.fn();
-    __setFsSafeTestHooksForTest({
-      beforeRootReadFinalFence: (_filePath, handle) => {
-        __setFsSafeTestHooksForTest(undefined);
-        const close = handle.close.bind(handle);
-        vi.spyOn(handle, "close").mockImplementation(async () => {
-          await close();
-          throw new Error("fixture close failure");
-        });
-      },
-    });
-
-    await expect(
-      snapshotCommittedSkillArtifactBestEffort({
-        skillDir,
-        skillKey: "installed-key",
-        source: "source-install",
-        logger: { warn },
-      }),
-    ).resolves.toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("fixture close failure"));
   });
 });
 

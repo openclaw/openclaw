@@ -110,16 +110,23 @@ export async function runPageEmulationTransition<T>(params: {
   );
 }
 
-export async function setOfflineViaPlaywright(
-  opts: InteractionTargetOptions & {
-    offline: boolean;
-  },
+async function changePageState(
+  opts: InteractionTargetOptions,
+  change: (page: Page) => Promise<void>,
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
   if (opts.assertCurrent) {
     await assertInteractionCurrent(opts);
   }
-  await page.context().setOffline(opts.offline);
+  await change(page);
+}
+
+export async function setOfflineViaPlaywright(
+  opts: InteractionTargetOptions & {
+    offline: boolean;
+  },
+): Promise<void> {
+  await changePageState(opts, (page) => page.context().setOffline(opts.offline));
 }
 
 export async function setExtraHTTPHeadersViaPlaywright(
@@ -127,11 +134,7 @@ export async function setExtraHTTPHeadersViaPlaywright(
     headers: Record<string, string>;
   },
 ): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  if (opts.assertCurrent) {
-    await assertInteractionCurrent(opts);
-  }
-  await page.context().setExtraHTTPHeaders(opts.headers);
+  await changePageState(opts, (page) => page.context().setExtraHTTPHeaders(opts.headers));
 }
 
 export async function setHttpCredentialsViaPlaywright(
@@ -141,20 +144,18 @@ export async function setHttpCredentialsViaPlaywright(
     clear?: boolean;
   },
 ): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  if (opts.assertCurrent) {
-    await assertInteractionCurrent(opts);
-  }
-  if (opts.clear) {
-    await page.context().setHTTPCredentials(null);
-    return;
-  }
-  const username = opts.username ?? "";
-  const password = opts.password ?? "";
-  if (!username) {
-    throw new Error("username is required (or set clear=true)");
-  }
-  await page.context().setHTTPCredentials({ username, password });
+  await changePageState(opts, async (page) => {
+    if (opts.clear) {
+      await page.context().setHTTPCredentials(null);
+      return;
+    }
+    const username = opts.username ?? "";
+    const password = opts.password ?? "";
+    if (!username) {
+      throw new Error("username is required (or set clear=true)");
+    }
+    await page.context().setHTTPCredentials({ username, password });
+  });
 }
 
 export async function setGeolocationViaPlaywright(
@@ -207,11 +208,7 @@ export async function emulateMediaViaPlaywright(
     colorScheme: "dark" | "light" | "no-preference" | null;
   },
 ): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  if (opts.assertCurrent) {
-    await assertInteractionCurrent(opts);
-  }
-  await page.emulateMedia({ colorScheme: opts.colorScheme });
+  await changePageState(opts, (page) => page.emulateMedia({ colorScheme: opts.colorScheme }));
 }
 
 async function setPageEmulationOverride(

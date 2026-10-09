@@ -2,6 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   deferSqlitePostCommitPublication,
+  publishSqliteCommittedState,
   stageSqliteCommittedPublication,
   stageSqliteTransactionState,
   withSqlitePostCommitPublications,
@@ -29,6 +30,38 @@ function fixture() {
     );
   return { database, rows, write, transaction };
 }
+
+it.each(["waiting", "active"] as const)(
+  "installs a received commit independently of a %s native transaction's rollback",
+  (phase) => {
+    const { database, transaction, write, rows } = fixture();
+    const installed: string[] = [];
+    const observed: string[][] = [];
+    const publication = (key: string): SqliteCommittedPublication => ({
+      installFacts: () => installed.push(key),
+      invalidate() {},
+      notify: () => observed.push([...installed]),
+    });
+    const native = () => {
+      stageSqliteCommittedPublication(database, publication("tentative-native"));
+      publishSqliteCommittedState(publication("committed-worker"));
+      expect(observed).toEqual([["committed-worker"]]);
+      stageSqliteCommittedPublication(database, publication("later-native"));
+      throw new Error("native transaction refused");
+    };
+    expect(() =>
+      phase === "active"
+        ? transaction(() => {
+            write("rolled-back");
+            native();
+          })
+        : withSqlitePostCommitPublications(database, native),
+    ).toThrow("native transaction refused");
+    expect(installed).toEqual(["committed-worker"]);
+    expect(observed).toEqual([["committed-worker"]]);
+    expect(rows()).toEqual([]);
+  },
+);
 
 it("retains committed success and delivers later observers when a notification throws", () => {
   const { database, rows, write, transaction } = fixture();

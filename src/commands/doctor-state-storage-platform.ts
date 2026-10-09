@@ -44,11 +44,8 @@ type LinuxMountInfoEntry = {
   source: string;
 };
 
-type LinuxSdBackedStateDir = {
+type LinuxSdBackedStateDir = LinuxMountInfoEntry & {
   path: string;
-  mountPoint: string;
-  fsType: string;
-  source: string;
 };
 
 function parseLinuxMountInfo(rawMountInfo: string): LinuxMountInfoEntry[] {

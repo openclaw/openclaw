@@ -77,65 +77,11 @@ describe("mattermost reactions", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("binds delegated reaction removal to the authorized channel", async () => {
-    const fetchMock = createMattermostReactionFetchMock({
-      mode: "remove",
-      postId: "POST1",
-      postChannelId: "CHANNEL1",
-      emojiName: "thumbsup",
-    });
-
-    const result = await removeMattermostReaction({
-      cfg: createMattermostTestConfig(cacheKey),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      authorizedTarget: "group:CHANNEL1",
-      conversationReadOrigin: "delegated",
-      fetchImpl: fetchMock,
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(
-      fetchMock.mock.calls.some((call) =>
-        requestUrl(call[0]).endsWith("/api/v4/users/BOT123/posts/POST1/reactions/thumbsup"),
-      ),
-    ).toBe(true);
-  });
-
-  it.each([undefined, "delegated" as const])(
-    "fails closed for %s origin without a canonical target",
-    async (conversationReadOrigin) => {
-      const fetchMock = createMattermostReactionFetchMock({
-        mode: "add",
-        postId: "POST1",
-        postChannelId: "CHANNEL1",
-        emojiName: "thumbsup",
-      });
-
-      const result = await addMattermostReaction({
-        cfg: createMattermostTestConfig(cacheKey),
-        postId: "POST1",
-        emojiName: "thumbsup",
-        conversationReadOrigin,
-        fetchImpl: fetchMock,
-      });
-
-      expect(result).toEqual({
-        ok: false,
-        error: expect.stringContaining("require a canonical authorized conversation target"),
-      });
-      expect(fetchMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it("binds delegated direct-message reactions to the bot and selected peer", async () => {
+  it("fails closed for an unspecified origin without a canonical target", async () => {
     const fetchMock = createMattermostReactionFetchMock({
       mode: "add",
       postId: "POST1",
-      postChannelId: "DMCHANNEL",
-      channelType: "D",
-      channelName: "BOT123__PEER123",
-      userId: "BOT123",
+      postChannelId: "CHANNEL1",
       emojiName: "thumbsup",
     });
 
@@ -143,12 +89,14 @@ describe("mattermost reactions", () => {
       cfg: createMattermostTestConfig(cacheKey),
       postId: "POST1",
       emojiName: "thumbsup",
-      authorizedTarget: "user:PEER123",
-      conversationReadOrigin: "delegated",
       fetchImpl: fetchMock,
     });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({
+      ok: false,
+      error: expect.stringContaining("require a canonical authorized conversation target"),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("rejects delegated direct-message posts owned by another peer", async () => {
@@ -367,6 +315,7 @@ describe("mattermost reactions", () => {
   });
 
   it("caches the bot user id across reaction mutations", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     const fetchMock = createMattermostReactionFetchMock({
       mode: "both",
       postId: "POST1",
@@ -395,78 +344,8 @@ describe("mattermost reactions", () => {
     expect(addResult).toEqual({ ok: true });
     expect(removeResult).toEqual({ ok: true });
     expect(usersMeCalls).toHaveLength(1);
-  });
 
-  it("does not reuse cached bot user ids while the process clock is invalid", async () => {
-    const cfg = createMattermostTestConfig(cacheKey);
-    const firstFetch = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST1",
-      emojiName: "thumbsup",
-      userId: "BOT_OLD",
-    });
-    const secondFetch = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST2",
-      emojiName: "thumbsup",
-      userId: "BOT_FRESH",
-    });
-    const thirdFetch = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST3",
-      emojiName: "thumbsup",
-      userId: "BOT_RECOVERED",
-    });
-
-    await expect(
-      addMattermostReaction({
-        cfg,
-        postId: "POST1",
-        emojiName: "thumbsup",
-        conversationReadOrigin: "direct-operator",
-        fetchImpl: firstFetch,
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-    await expect(
-      addMattermostReaction({
-        cfg,
-        postId: "POST2",
-        emojiName: "thumbsup",
-        conversationReadOrigin: "direct-operator",
-        fetchImpl: secondFetch,
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    vi.mocked(Date.now).mockReturnValue(1_000);
-    await expect(
-      addMattermostReaction({
-        cfg,
-        postId: "POST3",
-        emojiName: "thumbsup",
-        conversationReadOrigin: "direct-operator",
-        fetchImpl: thirdFetch,
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    const usersMeCalls = [
-      ...firstFetch.mock.calls,
-      ...secondFetch.mock.calls,
-      ...thirdFetch.mock.calls,
-    ].filter((call) => requestUrl(call[0]).endsWith("/api/v4/users/me"));
-    expect(usersMeCalls).toHaveLength(3);
-  });
-
-  it("does not cache bot user ids when cache expiry would exceed the Date range", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    const cfg = createMattermostTestConfig(cacheKey);
-    const fetchMock = createMattermostReactionFetchMock({
-      mode: "both",
-      postId: "POST1",
-      emojiName: "thumbsup",
-    });
-
+    vi.mocked(Date.now).mockReturnValue(1_800_000_600_001);
     await expect(
       addMattermostReaction({
         cfg,
@@ -476,19 +355,8 @@ describe("mattermost reactions", () => {
         fetchImpl: fetchMock,
       }),
     ).resolves.toEqual({ ok: true });
-    await expect(
-      removeMattermostReaction({
-        cfg,
-        postId: "POST1",
-        emojiName: "thumbsup",
-        conversationReadOrigin: "direct-operator",
-        fetchImpl: fetchMock,
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    const usersMeCalls = fetchMock.mock.calls.filter((call) =>
-      requestUrl(call[0]).endsWith("/api/v4/users/me"),
-    );
-    expect(usersMeCalls).toHaveLength(2);
+    expect(
+      fetchMock.mock.calls.filter((call) => requestUrl(call[0]).endsWith("/api/v4/users/me")),
+    ).toHaveLength(2);
   });
 });

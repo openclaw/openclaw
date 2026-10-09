@@ -33,12 +33,40 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
 } from "./worker-turn-launcher.test-support.js";
+import { withWorkerTurnTranscriptDatabase } from "./worker-turn-transcript-target.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import { executeRemoteExecTurn, reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
+import {
+  executeRemoteExecTurn as executeRemoteExecTurnCore,
+  reconcileWorkspaceAfterTurn as reconcileWorkspaceAfterTurnCore,
+} from "./workspace-result-finalize.js";
 import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
+
+function executeRemoteExecTurn(params: Parameters<typeof executeRemoteExecTurnCore>[0]) {
+  return withWorkerTurnTranscriptDatabase(
+    params.turn,
+    {
+      assertCurrent() {},
+      prepareAuthority: () => params.placements.prepareTurnClaimAuthority(params.turnClaim),
+    },
+    () => executeRemoteExecTurnCore(params),
+  );
+}
+
+function reconcileWorkspaceAfterTurn(
+  params: Parameters<typeof reconcileWorkspaceAfterTurnCore>[0],
+) {
+  return withWorkerTurnTranscriptDatabase(
+    { ...params.transcriptTarget, sessionTarget: params.transcriptTarget },
+    {
+      assertCurrent() {},
+      prepareAuthority: () => params.placements.prepareTurnClaimAuthority(params.turnClaim),
+    },
+    (transcriptTarget) => reconcileWorkspaceAfterTurnCore({ ...params, transcriptTarget }),
+  );
+}
 
 vi.mock("../../node-host/node-worker-transfer-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../node-host/node-worker-transfer-client.js")>()),

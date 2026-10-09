@@ -7,6 +7,8 @@ export type DoctorConfigWriter = (nextConfig: OpenClawConfig) => Promise<OpenCla
 
 export type DoctorMaintenanceParams = {
   options: DoctorOptions;
+  /** Interactive custody consent does not auto-approve individual repairs. */
+  interactiveRepair?: boolean;
   root: string | null;
   runtime: RuntimeEnv;
   runId?: string;

@@ -30,11 +30,12 @@ describe("ClickClack discussion service", () => {
     const harness = createHarness({ label: "Hydration ordering" });
     const entered = createDeferred<void>();
     const snapshot = createDeferred<PluginStateEntry<never>[]>();
-    const openStore = harness.runtime.state.openKeyedStore;
-    harness.runtime.state.openKeyedStore = <T>(
-      options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
+    const openStore = harness.runtime.state.openKeyedStoreV2;
+    harness.runtime.state.openKeyedStoreV2 = <T>(
+      options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+      authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
     ) => {
-      const store = openStore<T>(options);
+      const store = openStore<T>(options, authority);
       if (options.namespace !== "discussion-bindings") {
         return store;
       }
@@ -74,12 +75,13 @@ describe("ClickClack discussion service", () => {
       const harness = createHarness({ label: "Prepared metadata", category: "Projects" });
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
-      const openStore = harness.runtime.state.openKeyedStore;
+      const openStore = harness.runtime.state.openKeyedStoreV2;
       let holdEntries = false;
-      harness.runtime.state.openKeyedStore = <T>(
-        options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
+      harness.runtime.state.openKeyedStoreV2 = <T>(
+        options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+        authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
       ) => {
-        const store = openStore<T>(options);
+        const store = openStore<T>(options, authority);
         if (options.namespace !== "discussion-bindings") {
           return store;
         }
@@ -130,7 +132,7 @@ describe("ClickClack discussion service", () => {
         } else if (change === "retargeted") {
           harness.config.channels!.clickclack!.discussions!.workspace = "other-team";
         } else if (change === "revoked") {
-          markClickClackDiscussionChannelRevoked(harness.runtime, legacyBinding);
+          await markClickClackDiscussionChannelRevoked(harness.runtime, sessionKey, legacyBinding);
         } else {
           // Bypass local routing indexes, as another native writer can, then reset the session.
           harness.store.register(sessionKey, replacement);
@@ -155,7 +157,7 @@ describe("ClickClack discussion service", () => {
     },
   );
 
-  it("opens a managed channel once and returns stable info URLs", async () => {
+  it("opens one channel with stable URLs", async () => {
     const harness = createHarness({ label: "Release Planning", category: "Projects" });
     harness.config.channels!.clickclack!.apiBaseUrl = "http://127.0.0.1:8484";
     const sessionKey = "agent:main:main";
@@ -196,6 +198,16 @@ describe("ClickClack discussion service", () => {
       sidebar_section: "Projects",
       display_title: "Release Planning",
     });
+  });
+
+  it("propagates worker session read failures before creating a discussion", async () => {
+    const harness = createHarness({ label: "Unavailable session" });
+    const failure = new Error("Session worker unavailable");
+    vi.mocked(harness.runtime.agent.session.getSessionEntryAsync).mockRejectedValue(failure);
+
+    await expect(harness.service.open("agent:main:worker-unavailable")).rejects.toBe(failure);
+    expect(harness.runtime.agent.session.getSessionEntry).not.toHaveBeenCalled();
+    expect(harness.createChannel).not.toHaveBeenCalled();
   });
 
   it("clears display_title for fallback labels", async () => {
@@ -424,14 +436,16 @@ describe("ClickClack discussion service", () => {
   it("attaches a channel to the current incarnation when the session resets during open", async () => {
     const harness = createHarness({ sessionId: "session-old", label: "Reset race" });
     const sessionKey = "agent:main:reset-race";
-    vi.mocked(harness.runtime.agent.session.getSessionEntry)
-      .mockReturnValueOnce({ sessionId: "session-old", label: "Reset race", updatedAt: 1 })
-      .mockReturnValue({
-        sessionId: "session-new",
-        label: "Current reset race",
-        category: "Current sessions",
-        updatedAt: 2,
-      });
+    const replacement = {
+      sessionId: "session-new",
+      label: "Current reset race",
+      category: "Current sessions",
+      updatedAt: 2,
+    };
+    vi.mocked(harness.runtime.agent.session.getSessionEntry).mockReturnValue(replacement);
+    vi.mocked(harness.runtime.agent.session.getSessionEntryAsync)
+      .mockResolvedValueOnce({ sessionId: "session-old", label: "Reset race", updatedAt: 1 })
+      .mockResolvedValue(replacement);
 
     await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
     expect(harness.updateChannel).toHaveBeenCalledWith(

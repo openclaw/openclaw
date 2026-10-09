@@ -2,6 +2,7 @@ import path from "node:path";
 import type { HarnessContextEngine as ContextEngine } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
@@ -10,13 +11,14 @@ import {
   hasCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
 } from "./client-runtime.js";
+import { ownCodexInferenceClient } from "./inference-routing.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   assistantMessage,
   createParams,
   createStartedThreadHarness,
-  fastWait,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
@@ -39,6 +41,47 @@ import * as threadOwnership from "./thread-ownership.js";
 setupRunAttemptTestHooks();
 
 describe("Codex attempt subscription recovery", () => {
+  it("revokes native submission custody when an unstamped parent session is replaced", async () => {
+    // Worker preparation must not race this authority check's execution deadline.
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const params = createParams(path.join(tempDir, "unstamped-parent.jsonl"), tempDir);
+    const target = {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey!,
+      storePath: resolveStorePath(undefined, { agentId: "main" }),
+    };
+    params.sessionTarget = target;
+    const register = vi.spyOn(codexNativeSubagentMonitorRuntime, "register");
+    const harness = createStartedThreadHarness(async () => undefined);
+    const attempt = runCodexAppServerAttempt(params);
+    const settledAttempt = attempt.then(
+      (result) => result,
+      (error: unknown) => error,
+    );
+    await attempt.waitForTurnAccepted();
+    try {
+      const registration = register.mock.calls.at(-1)?.[0];
+      expect(registration?.historyOwner).toBeDefined();
+      expect(registration?.historyOwner?.lifecycleRevision).toBeUndefined();
+      const submission = registration?.submissionStore;
+      expect(submission).toBeDefined();
+      await submission!.assertCurrentAsync();
+      await patchSessionEntry({
+        ...target,
+        update: () => ({ sessionId: "replacement-parent" }),
+      });
+      await expect(submission!.assertCurrentAsync()).rejects.toThrow(
+        "Native submission session lifecycle is no longer current.",
+      );
+    } finally {
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      expect(await settledAttempt).toMatchObject({
+        message: `Codex session generation is no longer current: ${target.sessionId}`,
+      });
+    }
+  });
+
   it("continues a confirmed interrupted thread while a sibling turn stays active", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionFile = path.join(tempDir, "interrupted.jsonl");
@@ -55,6 +98,9 @@ describe("Codex attempt subscription recovery", () => {
     let turns = 0;
     const harness = createStartedThreadHarness(
       async (method) => {
+        if (method === "account/read") {
+          return { account: { type: "apiKey" } };
+        }
         if (method === "thread/start") {
           return threadStartResult(++starts === 1 ? "thread-1" : "thread-sibling");
         }
@@ -68,6 +114,7 @@ describe("Codex attempt subscription recovery", () => {
       },
       { persistedThreads: [] },
     );
+    ownCodexInferenceClient(harness.client);
     const first = runCodexAppServerAttempt(params);
     await first.waitForTurnAccepted();
     const sibling = runCodexAppServerAttempt(siblingParams);
@@ -262,7 +309,8 @@ describe("Codex attempt subscription recovery", () => {
       });
 
       const retry = runCodexAppServerAttempt({ ...params, runId: "run-retry" });
-      await vi.waitFor(() => expect(turnCount).toBe(2), fastWait);
+      await retry.waitForTurnAccepted();
+      expect(turnCount).toBe(2);
       await harness.completeTurn({ threadId, turnId: "turn-2" });
       await retry;
       expect(

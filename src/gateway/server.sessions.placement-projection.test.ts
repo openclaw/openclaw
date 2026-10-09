@@ -31,7 +31,7 @@ import {
   getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
-import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.types.js";
 import type { WorkerSessionPlacementReader } from "./worker-environments/placement-projector.js";
 import { placementTurnOwner } from "./worker-environments/placement-record.js";
 import {

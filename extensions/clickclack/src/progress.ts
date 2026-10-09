@@ -171,18 +171,6 @@ export function createClickClackAgentProgressPublisher(params: {
     queue.splice(0, queue.length, ...controlFrames);
   };
 
-  const waitForDrainWithinFinalizeGrace = async (pending: Promise<void>): Promise<boolean> => {
-    let drained = false;
-    await raceWithTimeout(
-      pending.then(() => {
-        drained = true;
-      }),
-      CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS,
-      () => undefined,
-    );
-    return drained;
-  };
-
   const scheduleLineDrain = (): void => {
     if (lineDrainTimer) {
       return;
@@ -285,7 +273,11 @@ export function createClickClackAgentProgressPublisher(params: {
       }
       flushQueuedLines();
       enqueue({ op: "clear" });
-      const drained = await waitForDrainWithinFinalizeGrace(drain());
+      const drained = await raceWithTimeout(
+        drain().then(() => true),
+        CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS,
+        () => false,
+      );
       if (!drained) {
         // Once the durable reply has been sent and the grace period expires,
         // stale detail frames no longer help the user. Keep only control frames

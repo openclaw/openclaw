@@ -40,6 +40,10 @@ export class CodexCatalogProjectionCapacityError extends Error {
 export class CodexCatalogProjections {
   private active = 0;
 
+  hasActiveWork(): boolean {
+    return this.active > 0;
+  }
+
   run<T>(work: () => Promise<T>): Promise<T> {
     if (this.active >= CODEX_CATALOG_MAX_ROWS) {
       return Promise.reject(new CodexCatalogProjectionCapacityError());

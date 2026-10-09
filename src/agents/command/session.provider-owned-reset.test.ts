@@ -7,29 +7,26 @@ const hoisted = vi.hoisted(() => ({
   terminalTranscriptNewer: false,
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadExactSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => {
+// mock-isolation: Provider-reset fixtures read cloned synthetic rows without opening a session store.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async ({ sessionKey }: { sessionKey: string }) => {
     const entry = hoisted.store[sessionKey];
-    return entry ? { sessionKey, entry: structuredClone(entry) } : undefined;
+    return entry ? structuredClone(entry) : undefined;
   },
-  listSessionEntriesReadOnly: () =>
-    Object.entries(hoisted.store).map(([sessionKey, entry]) => ({
-      sessionKey,
-      entry,
-    })),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: () => "/stores/main.json",
 }));
 
-vi.mock("../../config/sessions/lifecycle.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions/lifecycle.js")>(
-    "../../config/sessions/lifecycle.js",
+vi.mock("../../config/sessions/lifecycle-read.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/lifecycle-read.js")>(
+    "../../config/sessions/lifecycle-read.js",
   );
   return {
     ...actual,
-    hasTerminalMainSessionTranscriptNewerThanRegistrySync: () => hoisted.terminalTranscriptNewer,
+    hasTerminalMainSessionTranscriptNewerThanRegistryAsync: async () =>
+      hoisted.terminalTranscriptNewer,
   };
 });
 

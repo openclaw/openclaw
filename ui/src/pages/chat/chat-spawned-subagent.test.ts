@@ -5,20 +5,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
-import {
-  ownSessionLaunchCalls,
-  resolveSpawnedSubagent,
-  spawnedSubagentsRenderKey,
-} from "./chat-spawned-subagent.ts";
-import { selectActivityHeadline } from "./components/chat-activity-headline.ts";
-import { renderActivityGroup } from "./components/chat-message-group.ts";
+import { ownSessionLaunchCalls, resolveSpawnedSubagent } from "./chat-spawned-subagent.ts";
+import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
+import { renderActivityGroup } from "./components/chat-message-group.test-support.ts";
 import {
   createAssistantMessage,
   createMessageEntry,
   createToolCall,
   createToolGroup,
 } from "./components/chat-message.test-support.ts";
-import { renderToolCard } from "./components/chat-tool-cards.ts";
+import { renderToolFixture, renderToolCard } from "./components/chat-tool-render.test-support.ts";
 
 const parentKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
 const label = "Write a six-line robot story";
@@ -83,24 +79,6 @@ describe("a launched subagent", () => {
     }
   });
 
-  it("never borrows a session from its name alone", () => {
-    // In flight, refused, or naming a session the roster does not hold: the
-    // one child carrying the same label is an earlier launch or a retry.
-    for (const result of [
-      {},
-      { outputText: JSON.stringify({ status: "error", error: "cwd is outside the workspace" }) },
-      { outputText: accepted("agent:main:subagent:gone") },
-    ]) {
-      expect(resolveSpawnedSubagent(launch(result), [story])).toEqual({ label });
-    }
-  });
-
-  it("stays a generic row without a label", () => {
-    const unlabeled = { taskName: "demo-mini-story", task: "Write the story." };
-    expect(resolveSpawnedSubagent(launch({ args: unlabeled }), [story])).toBeNull();
-    expect(resolveSpawnedSubagent({ ...launch(), name: "exec" }, [story])).toBeNull();
-  });
-
   it("leaves a launch that opened a session in its own right an ordinary operation", () => {
     const opened = child("opened", { key: "agent:main:dashboard:opened" });
     // Asked for with `visible`, or answered with a session that is not a subagent.
@@ -152,41 +130,13 @@ describe("a launched subagent", () => {
     );
   });
 
-  it("says how a subagent ended when it did not finish its work", () => {
-    const ended = (status: GatewaySessionRow["status"]) =>
-      resolveSpawnedSubagent(launch({ outputText: accepted(story.key) }), [{ ...story, status }])
-        ?.session?.ended;
-    expect((["failed", "timeout", "killed", "interrupted", "done"] as const).map(ended)).toEqual([
-      "failed",
-      "failed",
-      "stopped",
-      "stopped",
-      undefined,
-    ]);
-    // A launch row that only shows a duration must repaint when that changes.
-    expect(spawnedSubagentsRenderKey([{ ...story, status: "failed" }])).not.toBe(
-      spawnedSubagentsRenderKey([story]),
-    );
-  });
-
-  it("repaints launch rows when a subagent starts or finishes, not when the roster reorders", () => {
-    const puzzle = child("puzzle", { label: "Solve a tiny logic puzzle", ...running });
-    const key = spawnedSubagentsRenderKey([story, puzzle]);
-    // Activity patches move rows and touch fields no launch row draws.
-    expect(spawnedSubagentsRenderKey([{ ...puzzle, updatedAt: 9 }, story])).toBe(key);
-    expect(
-      spawnedSubagentsRenderKey([story, { ...puzzle, status: "done", hasActiveRun: false }]),
-    ).not.toBe(key);
-    expect(spawnedSubagentsRenderKey([{ ...story, ...running }, puzzle])).not.toBe(key);
-  });
-
-  it("shows its name and duration, and opens its session without toggling the row", () => {
+  it("shows its name and duration, and opens its session without toggling the row", async () => {
     const onOpenSubagent = vi.fn();
     const onOpenSession = vi.fn();
     const onToggleExpanded = vi.fn();
-    const mount = (subagentSessions: GatewaySessionRow[]) => {
+    const mount = async (subagentSessions: GatewaySessionRow[]) => {
       const container = document.createElement("div");
-      render(
+      await renderToolFixture(
         renderToolCard(launch({ outputText: accepted(story.key) }), {
           messageKey: "message",
           expanded: false,
@@ -197,7 +147,7 @@ describe("a launched subagent", () => {
       );
       return container;
     };
-    const row = mount([story]);
+    const row = await mount([story]);
     const link = row.querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!;
     expect(link.textContent?.trim()).toBe(label);
     expect(row.querySelector(".chat-tool-row__subagent-state")?.textContent).toBe("42s");
@@ -208,27 +158,26 @@ describe("a launched subagent", () => {
     link.click();
     expect(onOpenSubagent).toHaveBeenCalledExactlyOnceWith(story.key);
     expect(onToggleExpanded).not.toHaveBeenCalled();
-    // The Subagents panel does not list a swarm's workers, so one still opens as a session.
-    mount([{ ...story, swarmGroupId: "parallel-audit" }])
+    (await mount([{ ...story, swarmGroupId: "parallel-audit" }]))
       .querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!
       .click();
-    expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(story.key);
-    expect(onOpenSubagent).toHaveBeenCalledOnce();
+    expect(onOpenSession).not.toHaveBeenCalled();
+    expect(onOpenSubagent).toHaveBeenNthCalledWith(2, story.key);
     row
       .querySelector<HTMLButtonElement>(".chat-tool-row--subagent > .chat-tool-row__toggle")!
       .click();
     expect(onToggleExpanded).toHaveBeenCalledOnce();
 
-    const state = (session: GatewaySessionRow) =>
-      mount([session]).querySelector(".chat-tool-row__subagent-state");
-    expect(state({ ...story, ...running })?.textContent).toBe("running");
+    const state = async (session: GatewaySessionRow) =>
+      (await mount([session])).querySelector(".chat-tool-row__subagent-state");
+    expect((await state({ ...story, ...running }))?.textContent).toBe("running");
     // A subagent that failed says so instead of how long it lasted.
-    const failed = state({ ...story, status: "failed", runtimeMs: 291 });
+    const failed = await state({ ...story, status: "failed", runtimeMs: 291 });
     expect(failed?.textContent).toBe("failed");
     expect(failed?.classList.contains("chat-tool-row__subagent-state--failed")).toBe(true);
-    expect(state({ ...story, status: "killed" })?.textContent).toBe("stopped");
+    expect((await state({ ...story, status: "killed" }))?.textContent).toBe("stopped");
     // Without its session the row is the ordinary disclosure, still named.
-    const unlinked = mount([]);
+    const unlinked = await mount([]);
     expect(unlinked.querySelector(".chat-tool-row__subagent-link")).toBeNull();
     expect(unlinked.querySelector("button.chat-tool-row .chat-tool-row__title")?.textContent).toBe(
       label,

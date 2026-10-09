@@ -219,17 +219,15 @@ export async function resolveStatusRuntimeSnapshot(params: {
     params.deep && !params.gatewayStartupPhase
       ? !params.gatewayReachable
         ? { error: params.gatewayProbeError ?? "Gateway is unreachable" }
-        : params.suppressHealthErrors
-          ? await resolveGatewayHealthSummary({
-              config: params.config,
-              timeoutMs: params.timeoutMs,
-              gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
-            }).catch((error: unknown) => ({ error: String(error) }))
-          : await resolveGatewayHealthSummary({
-              config: params.config,
-              timeoutMs: params.timeoutMs,
-              gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
-            })
+        : await resolveGatewayHealthSummary({
+            config: params.config,
+            timeoutMs: params.timeoutMs,
+            gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
+          }).catch(
+            params.suppressHealthErrors
+              ? (error: unknown) => ({ error: String(error) })
+              : undefined,
+          )
       : undefined;
   // Last heartbeat is a deep-only gateway call; fast status should not spend network time here.
   const lastHeartbeat =

@@ -7,6 +7,7 @@ import type { ContextEngineSessionTarget } from "../../../context-engine/types.j
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { adoptExecRequestSession } from "../../../infra/exec-request-context.js";
+import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn-transcript-admission.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { CustomMessage } from "../../sessions/messages.js";
 import { appendSessionTranscriptNote } from "../../sessions/session-manager-write-admission.js";
@@ -40,7 +41,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
   let activeSessionId = params.sessionId;
   let activeSessionFile = params.sessionFile;
   let activeSessionTarget: ContextEngineSessionTarget | undefined =
-    buildContextEngineCompactionSessionTarget({
+    await buildContextEngineCompactionSessionTarget({
       agentId: params.agentId ?? sessionAgentId,
       config: params.config,
       sessionFile: activeSessionFile,
@@ -122,7 +123,14 @@ export async function createEmbeddedRunSessionPromptState(input: {
     Object.assign(activePrompt, { persisted: true, internal: true });
     suppressNextUserMessagePersistence = true;
   };
-  if (params.pluginRuntimeRefreshContinuation) {
+  // An outer model fallback starts a fresh invocation, but its retry instructions
+  // cannot recapture the original user projection after that turn has dispatched.
+  const dispatchedFallback =
+    params.modelRoutingProvenance?.stage === "fallback" &&
+    params.userTurnTranscriptRecorder !== undefined &&
+    getUserTurnTranscriptAdmissionOwner(params.userTurnTranscriptRecorder)?.sentToProvider() ===
+      true;
+  if (params.pluginRuntimeRefreshContinuation || dispatchedFallback) {
     activateInternalPrompt(params.prompt);
   }
   const activateCompactionContinuation = (instruction: string) => {
@@ -218,8 +226,10 @@ export async function createEmbeddedRunSessionPromptState(input: {
         role: "custom",
         customType: "incomplete-tool-call",
         content:
-          `Runtime notice: The tool call${toolCallId ? ` ${JSON.stringify(toolCallId.slice(0, 200))}` : ""} was cut off at the provider's output limit (max_output_tokens) and was not executed. ` +
-          "Split the remaining work into smaller tool calls with shorter arguments. Earlier actions may have completed; verify their results before continuing and do not repeat completed actions.",
+          (toolCallId
+            ? `Runtime notice: The tool call ${JSON.stringify(toolCallId.slice(0, 200))} was cut off at the provider's output limit (max_output_tokens) and was not executed. Split the remaining work into smaller tool calls with shorter arguments. `
+            : "Runtime notice: The model response reached the provider's output limit (max_output_tokens) before producing an answer. Continue with a shorter response and smaller tool calls. ") +
+          "Earlier actions may have completed; verify their results before continuing and do not repeat completed actions.",
         display: false,
         details: { reason: "max_output_tokens", ...(toolCallId ? { toolCallId } : {}) },
         timestamp: Date.now(),

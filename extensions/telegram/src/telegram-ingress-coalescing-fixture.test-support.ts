@@ -11,6 +11,10 @@ import {
   type GetReplyOptions,
   type MsgContext,
 } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, vi, type Mock } from "vitest";
@@ -111,7 +115,6 @@ export function createDownstreamTurnFixture(
   function holdFirstDownstreamTurn() {
     const headDispatched = createDeferred<void>();
     const releaseHead = createDeferred<void>();
-    const headFinished = createDeferred<void>();
     downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
       if (downstreamTurns.mock.calls.length === 1) {
         if (!lifecycle?.deferredHeartbeatIntervalMs) {
@@ -130,18 +133,17 @@ export function createDownstreamTurnFixture(
           }
         } finally {
           clearInterval(heartbeat);
-          headFinished.resolve();
         }
       }
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
-    return { headDispatched, releaseHead, headFinished };
+    return { headDispatched, releaseHead };
   }
 
   function holdDownstreamLane() {
     const releaseHead = createDeferred<void>();
-    const turnsDeferred = [createDeferred<void>(), createDeferred<void>()];
-    const turnsFinished: Promise<void>[] = [];
+    const turnsDeferred = [createDeferred<void>(), createDeferred<void>()] as const;
+    let turnIndex = 0;
     // Session-lane stand-in: every turn defers, heartbeats, and adopts after the turn ahead.
     let laneTail: Promise<void> = releaseHead.promise;
     downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
@@ -151,13 +153,13 @@ export function createDownstreamTurnFixture(
       const ahead = laneTail;
       const finished = createDeferred<void>();
       laneTail = finished.promise;
-      const turnIndex = turnsFinished.push(finished.promise) - 1;
       lifecycle.onDeferred?.();
       const heartbeat = setInterval(
         () => lifecycle.onDeferredHeartbeat?.(),
         lifecycle.deferredHeartbeatIntervalMs,
       );
       turnsDeferred[turnIndex]?.resolve();
+      turnIndex += 1;
       try {
         await ahead;
         if (!abortSignal?.aborted) {
@@ -169,7 +171,7 @@ export function createDownstreamTurnFixture(
       }
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
-    return { releaseHead, turnsDeferred, turnsFinished };
+    return { releaseHead, turnsDeferred };
   }
 
   return {
@@ -182,6 +184,7 @@ export function createDownstreamTurnFixture(
 }
 
 export function resetTelegramIngressRuntime() {
+  setRuntimeConfigSnapshot(cfg);
   resetInboundDedupe();
   resetPluginStateStoreForTests({ closeDatabase: false });
   resetTelegramAccountThrottlersForTest();
@@ -290,6 +293,7 @@ export async function releaseIngressCase(
   }
   // Session maintenance outlives its writer by design; retire it with this case's databases.
   await closeOpenClawAgentDatabasesAsync(stateDir);
+  clearRuntimeConfigSnapshot();
 }
 
 export function useIngressTimers() {

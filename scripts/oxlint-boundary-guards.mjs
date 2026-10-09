@@ -1,3 +1,4 @@
+import noForcedProcessExit from "./lib/no-forced-process-exit.mjs";
 import {
   BOUNDARY_GUARD_FIXTURE_ROOT,
   CHAINED_ASSERTION_EXCLUDED_ROOTS,
@@ -29,7 +30,7 @@ function restrictedCallRule({ allowedFiles = [], message, objects, property, roo
     create(context) {
       const repoPath = repositoryPath(context);
       if (
-        !repoPath.endsWith(".ts") ||
+        !/\.tsx?$/u.test(repoPath) ||
         !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
         TYPE_ASSERTION_TEST_FILE_SUFFIXES.some((suffix) => repoPath.endsWith(suffix)) ||
         allowedFiles.includes(repoPath)
@@ -564,6 +565,7 @@ function noWidenThenAssertRule({ roots }) {
 export default {
   meta: { name: "openclaw-boundaries" },
   rules: {
+    "no-forced-process-exit": noForcedProcessExit,
     "no-raw-window-open-call": restrictedCallRule({
       allowedFiles: ["ui/src/lib/editor-links.ts", "ui/src/lib/open-external-url.ts"],
       roots: ["ui/src", "test/fixtures/oxlint-boundary-guards"],

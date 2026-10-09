@@ -13,11 +13,13 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createExternalAuthRuntime } from "./external-auth.js";
+import { refreshAuthProfileFileState } from "./file-state.js";
 import {
   loadInheritedAuthProfileStore,
   readRuntimeAuthProfileStoreFromSnapshots,
 } from "./inherited-store.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -96,6 +98,7 @@ it.each([
   const workerDir = path.join(root, "agents/worker/agent");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_AGENT_DIR", mainDir);
+  prepareSharedAuthStoreOwnershipForNative();
   const local = createStore("custom:local", "local-fixture");
   const inherited = createStore("custom:shared", "inherited-fixture");
   const main = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -142,7 +145,11 @@ it.each([
   };
   expect((await read())?.profiles).toMatchObject({ ...inherited.profiles, ...local.profiles });
   closeAuthProfileReadPool();
-  fs.writeFileSync(mainPath, "not a SQLite database");
+  // A replacement receives fresh admission; in-place foreign writes are not a runtime contract.
+  const replacementPath = `${mainPath}.replacement`;
+  fs.writeFileSync(replacementPath, "not a SQLite database");
+  fs.renameSync(replacementPath, mainPath);
+  await refreshAuthProfileFileState();
   await expect(read()).rejects.toThrow(AuthProfileStoreUnreadableError);
   recordAgentDatabaseAdmissions(
     [
@@ -166,7 +173,9 @@ it.each([
     ),
   ).toThrow(unrelatedError);
   closeAuthProfileReadPool();
-  fs.writeFileSync(mainPath, original);
+  fs.writeFileSync(replacementPath, original);
+  fs.renameSync(replacementPath, mainPath);
+  await refreshAuthProfileFileState();
   expect((await read())?.profiles).toMatchObject({ ...inherited.profiles, ...local.profiles });
 });
 
@@ -217,6 +226,7 @@ it.each(["explicit empty ids", "authoritative empty", "no overlay", "published o
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     writePersistedAuthProfileStoreRaw(durable, agentDir, database);
     if (published) {
+      prepareSharedAuthStoreOwnershipForNative();
       setRuntimeAuthProfileStoreSnapshot(published, agentDir);
     }
     if (emptyOverlay) {

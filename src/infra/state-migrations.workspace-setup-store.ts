@@ -1,5 +1,3 @@
-// SQLite import and receipt semantics for retired workspace state.
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
@@ -20,6 +18,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+// SQLite import and receipt semantics for retired workspace state.
+import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
@@ -152,7 +152,10 @@ export function parseSource(
   return source.kind === "setup" ? parseSetup(snapshot.raw) : parseAttestation(snapshot);
 }
 
-function readGeneratedHashes(database: DatabaseSync, workspaceKey: string): Map<string, string> {
+function readGeneratedHashes(
+  database: EngineConnection,
+  workspaceKey: string,
+): Map<string, string> {
   return new Map(
     executeSqliteQuerySync(
       database,
@@ -412,6 +415,10 @@ export function importAndRecordReceipt(params: {
           attestedAtMs: parsedAttestation.attestedAtMs,
           generatedHashes: parsedAttestation.generatedHashes,
         });
+        const attestationColumns = {
+          attested_at_ms: parsedAttestation.attestedAtMs,
+          attestation_updated_at_ms: now,
+        };
         const existingRow = readWorkspace();
         if (existingRow?.attested_at_ms != null) {
           const existingHashes = readGeneratedHashes(db, params.source.workspaceKey);
@@ -445,10 +452,7 @@ export function importAndRecordReceipt(params: {
               db,
               kysely
                 .updateTable("workspace_setup_state")
-                .set({
-                  attested_at_ms: parsedAttestation.attestedAtMs,
-                  attestation_updated_at_ms: now,
-                })
+                .set(attestationColumns)
                 .where("workspace_key", "=", params.source.workspaceKey),
             );
             executeSqliteQuerySync(
@@ -472,14 +476,10 @@ export function importAndRecordReceipt(params: {
                 // Orphan hashed-key attestation files carry no path; the row
                 // heals its NULL path when the workspace next appears live.
                 workspace_path: params.source.workspaceDir ?? null,
-                attested_at_ms: parsedAttestation.attestedAtMs,
-                attestation_updated_at_ms: now,
+                ...attestationColumns,
               })
               .onConflict((conflict) =>
-                conflict.column("workspace_key").doUpdateSet({
-                  attested_at_ms: parsedAttestation.attestedAtMs,
-                  attestation_updated_at_ms: now,
-                }),
+                conflict.column("workspace_key").doUpdateSet(attestationColumns),
               ),
           );
           insertGeneratedHashes();

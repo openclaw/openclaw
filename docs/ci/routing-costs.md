@@ -37,18 +37,26 @@ The table compares eleven successful B1/R1 main runs with five later successful 
 
 Independent hosted checks reached at most 664 seconds in this sample. Artifact builds reached 898 seconds before the shared preflight and gate; they retain Blacksmith. Only the gate depends on `build-artifacts`: the workflow does not contain a serial build-to-test job dependency.
 
-The package-boundary check now requests the existing Blacksmith 32-class when
-its route selects Blacksmith. In successful PR run
-`36248684656`, its 16-class allocation delivered four CPUs and the existing
-two-CPU reservation admitted two compilers. The 527-second check comprised
-257 seconds of declaration preparation and 268 seconds compiling all 125
-plugins. The 32-class delivers eight CPUs, allowing four compilers under that
-same policy. It adds no jobs or registrations. At the observed 569-second job
-duration, doubling the class would add 151.7 class-vCPU-minutes, or 1.17% of
-that run's 12,921.2 total. The later complete green run `36269840991` measured
-301 seconds and 160.5 class-vCPU-minutes with all 125 plugins checked. Upstream
-compiler optimization also contributed, so this is not an isolated runner
-speedup. Hosted, retry, trust, and cache policies remain unchanged.
+Current package-boundary checks request the Blacksmith 16-class in both the
+additional-check matrix and the shared SDK producer. Frozen targets retain the
+32-class. The existing two-CPU reservation admits two compilers on the observed
+four-CPU 16-class allocation, versus four on the eight-CPU 32-class allocation.
+Compiler, canary, hosted, retry, trust, and cache policies remain unchanged;
+this adds no jobs or registrations. The additional-check row has a 40-minute
+deadline; the SDK producer keeps its own budget.
+
+The October 13 sizing review covered 2,063 boundary jobs in the preceding
+24 hours. On the 32-class, median and p95 peak memory were 26.35% and 27.66%
+of approximately 31 GiB, with no reported OOMs. Median and p95 job durations
+were 183 and 292 seconds. These measurements support qualifying the smaller
+runner; they do not measure its runtime or savings.
+
+Historical full-inventory runs completed in 569 seconds on the 16-class
+(`36248684656`) and 301 seconds on the 32-class (`36269840991`). Compiler
+optimization also changed between those runs, so they do not isolate the
+runner's effect. Compare equivalent workloads and cache states before claiming
+a cost reduction: halving the runner rate only saves money if runtime grows
+by less than two times.
 
 Exact plugin envelopes and unsplit two-worker command envelopes now feed the
 existing timing owner using config, complete file inventory, and worker-bound

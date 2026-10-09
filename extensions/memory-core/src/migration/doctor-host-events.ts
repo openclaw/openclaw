@@ -45,6 +45,14 @@ const MAX_MEMORY_HOST_EVENT_MIGRATION_CHECKPOINTS = 10_000;
 const MAX_LEGACY_MEMORY_HOST_EVENT_VALUE_BYTES = 65_536;
 const LEGACY_MEMORY_HOST_SEQUENCE_BASE = Number.MIN_SAFE_INTEGER;
 
+function openMemoryHostCheckpointStore(context: PluginDoctorStateMigrationContext) {
+  return context.openPluginStateKeyedStore<StoredMemoryHostMigrationCheckpoint>({
+    namespace: MEMORY_HOST_EVENT_MIGRATION_CHECKPOINTS_NAMESPACE,
+    maxEntries: MAX_MEMORY_HOST_EVENT_MIGRATION_CHECKPOINTS,
+    overflowPolicy: "reject-new",
+  });
+}
+
 function memoryHostMigrationCheckpointKey(source: ReadyLegacyMemoryHostEventSource): string {
   if (!source.generationKey) {
     throw new Error(`Missing Memory Core host event archive generation for ${source.filePath}`);
@@ -73,13 +81,9 @@ async function memoryHostEventSourceNeedsMigration(params: {
   if (params.source.storage !== "archive") {
     return true;
   }
-  const checkpoint = await params.context
-    .openPluginStateKeyedStore<StoredMemoryHostMigrationCheckpoint>({
-      namespace: MEMORY_HOST_EVENT_MIGRATION_CHECKPOINTS_NAMESPACE,
-      maxEntries: MAX_MEMORY_HOST_EVENT_MIGRATION_CHECKPOINTS,
-      overflowPolicy: "reject-new",
-    })
-    .lookup(memoryHostMigrationCheckpointKey(params.source));
+  const checkpoint = await openMemoryHostCheckpointStore(params.context).lookup(
+    memoryHostMigrationCheckpointKey(params.source),
+  );
   if (!isMemoryHostMigrationCheckpoint(checkpoint)) {
     return true;
   }
@@ -248,12 +252,7 @@ async function migrateLegacyMemoryHostEventSource(params: {
       );
     }
 
-    const checkpointStore =
-      params.context.openPluginStateKeyedStore<StoredMemoryHostMigrationCheckpoint>({
-        namespace: MEMORY_HOST_EVENT_MIGRATION_CHECKPOINTS_NAMESPACE,
-        maxEntries: MAX_MEMORY_HOST_EVENT_MIGRATION_CHECKPOINTS,
-        overflowPolicy: "reject-new",
-      });
+    const checkpointStore = openMemoryHostCheckpointStore(params.context);
     // Plugin-wide shedding is namespace-local. `reject-new` therefore keeps
     // retained raw-archive checkpoints out of every sibling namespace's
     // eviction budget and fails before this namespace can rotate its own rows.
@@ -294,11 +293,11 @@ async function migrateLegacyMemoryHostEventSource(params: {
       LEGACY_MEMORY_HOST_SEQUENCE_BASE,
     );
     const legacyKeyPrefix = `${prefix}:event:0:s:`;
+    const existingLegacyEntries = existingEntries.filter(
+      (entry) => entry.key.startsWith(legacyKeyPrefix) && !(entry.value.sequence >= 0),
+    );
     const existingByIdentity = new Map<string, (typeof existingEntries)[number]>(
-      existingEntries.flatMap((entry) => {
-        if (!entry.key.startsWith(legacyKeyPrefix) || entry.value.sequence >= 0) {
-          return [];
-        }
+      existingLegacyEntries.flatMap((entry) => {
         const parts = entry.key.split(":");
         return parts.length === 8 ? [[`${parts[5]}:${parts[6]}:${parts[7]}`, entry] as const] : [];
       }),
@@ -308,10 +307,7 @@ async function migrateLegacyMemoryHostEventSource(params: {
       const existing = existingByIdentity.get(identity);
       return existing ? [existing.value.sequence - (record.ordinal + 1)] : [];
     })[0];
-    const laterGenerationExists = existingEntries.some((entry) => {
-      if (!entry.key.startsWith(legacyKeyPrefix) || entry.value.sequence >= 0) {
-        return false;
-      }
+    const laterGenerationExists = existingLegacyEntries.some((entry) => {
       const generationKey = entry.key.split(":")[5];
       return generationKey !== undefined && generationKey > source.generationKey!;
     });
@@ -533,6 +529,30 @@ export const hostEventsStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-host-events-jsonl-to-sqlite",
   label: "Memory Core host events",
   doctorOnly: true,
+  async collectBackupResources(params) {
+    const sources = await collectLegacyMemoryHostEventSources(params.config, params.env);
+    // Imported rows are core-captured; also track newly created claims and archives.
+    const resources: Array<{ path: string; kind: "file" }> = [];
+    for (const source of sources) {
+      if (source.kind !== "ready") {
+        continue;
+      }
+      resources.push({ path: source.filePath, kind: "file" });
+      if (source.storage === "active") {
+        const generation = await resolveMemoryHostEventArchivePath(source);
+        resources.push(
+          { path: path.join(source.workspaceDir, generation.claimRelativePath), kind: "file" },
+          { path: path.join(source.workspaceDir, generation.archiveRelativePath), kind: "file" },
+        );
+      } else if (source.archiveRelativePath) {
+        resources.push({
+          path: path.join(source.workspaceDir, source.archiveRelativePath),
+          kind: "file",
+        });
+      }
+    }
+    return resources;
+  },
   async detectLegacyState(params) {
     const preview: string[] = [];
     for (const source of await collectLegacyMemoryHostEventSources(params.config, params.env)) {

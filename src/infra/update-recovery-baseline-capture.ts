@@ -55,6 +55,7 @@ import { createUpdateDatabaseBackup } from "./update-database-backup.js";
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 import { hasPendingUpdateRecoverySeal } from "./update-recovery-capture-seal.js";
+import { canonicalEntryPath } from "./update-recovery-path.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
 
@@ -88,14 +89,6 @@ function within(candidate: string, root: string): boolean {
   return (
     relative === "" ||
     (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
-  );
-}
-
-function canonicalEntryPath(value: string): string {
-  const absolute = path.resolve(value);
-  return path.join(
-    resolvePathViaExistingAncestorSync(path.dirname(absolute)),
-    path.basename(absolute),
   );
 }
 
@@ -495,15 +488,22 @@ export function captureUpdateRecoveryBaseline(params: {
               timeoutMs: params.timeoutMs,
               acquisition: params.acquisition,
             });
-      if (
-        [...databasePaths].some(
-          (pathname) =>
-            !Object.hasOwn(databases.sourceGenerations, pathname) ||
-            databases.sourceGenerations[pathname] !== generations[pathname],
-        )
-      ) {
+      const unverified = [...databasePaths].flatMap((pathname): [string, string][] =>
+        !Object.hasOwn(databases.sourceGenerations, pathname)
+          ? [[pathname, "no stable generation was recorded during its snapshot."]]
+          : databases.sourceGenerations[pathname] !== generations[pathname]
+            ? [[pathname, "generation changed after its snapshot."]]
+            : [],
+      );
+      if (unverified.length) {
         throw new Error(
-          "Original database generation changed or could not be verified; capture is unsealed.",
+          [
+            "Original database generation changed or could not be verified; capture is unsealed.",
+            ...unverified.map(([pathname, reason]) => `${pathname}: ${reason}`),
+            ...databases.warnings.filter((warning) =>
+              unverified.some(([pathname]) => warning.includes(pathname)),
+            ),
+          ].join("\n"),
         );
       }
       for (const [pathname, before] of observed) {

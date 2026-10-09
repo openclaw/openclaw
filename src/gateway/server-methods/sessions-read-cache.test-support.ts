@@ -1,6 +1,7 @@
 import { afterEach, expect, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope-config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
@@ -8,11 +9,7 @@ import {
 import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
-import {
-  getUserProfileRole,
-  readUserProfileAliases,
-  resolveUserProfileId,
-} from "../../state/user-profiles.js";
+import { readUserProfileSnapshotSync } from "../../state/user-profile-identity.read.js";
 import {
   disposeSessionReadContexts,
   trackSessionReadProfileSubscription,
@@ -24,7 +21,7 @@ import {
 } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import type { SessionsListResult } from "../session-utils.types.js";
-import type { WorkerPlacementMoveIntent } from "../worker-environments/placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "../worker-environments/placement-move-intent.types.js";
 import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
@@ -70,7 +67,9 @@ export function createSessionPlacementFactsReader(
 ): Pick<WorkerSessionPlacementStore, "readProjection"> {
   return {
     async readProjection(sessionIds) {
-      const records = placements.getMany(sessionIds);
+      const records = placements.getManyAsync
+        ? await placements.getManyAsync(sessionIds)
+        : placements.getMany(sessionIds);
       const environments = new Map();
       for (const placement of records.values()) {
         const environmentId = placement.environmentId;
@@ -116,12 +115,17 @@ export function identifiedClient(profileId: string): GatewayClient {
   };
   const refresh = () => {
     const identity = client.authenticatedUserProfile?.profileId ?? profileId;
-    const resolved = resolveUserProfileId(identity);
-    const canonical = resolved ?? identity;
+    const { profiles } = readUserProfileSnapshotSync();
+    const source = profiles.find((profile) => profile.id === identity);
+    const canonical = source?.mergedInto ?? source?.id ?? identity;
+    const profile = profiles.find((candidate) => candidate.id === canonical);
     client.preparedSessionProfile = {
       profileId: canonical,
-      aliases: readUserProfileAliases(canonical),
-      role: resolved ? getUserProfileRole(canonical) : null,
+      aliases: new Set([
+        canonical,
+        ...profiles.filter((candidate) => candidate.mergedInto === canonical).map(({ id }) => id),
+      ]),
+      role: profile?.role ?? null,
     };
   };
   refresh();
@@ -165,6 +169,7 @@ export async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
     agents: { entries: { main: {}, work: {} } },
   };
+  setRuntimeConfigSnapshot(config);
   for (const [agentId, name, updatedAt, owner, overrides] of [
     ["main", "active", 400, "owner@example.com", {}],
     ["main", "draft", 300, "owner@example.com", { visibility: "draft" }],

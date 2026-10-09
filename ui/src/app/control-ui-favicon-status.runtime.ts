@@ -5,7 +5,7 @@ import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
-import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import type { ChatRunUiStatus } from "../pages/chat/run-lifecycle.ts";
 import type { ApplicationContext } from "./context.ts";
 import {
@@ -14,6 +14,7 @@ import {
 } from "./control-ui-environment-presentation.runtime.ts";
 import { connectControlUiFaviconArtwork } from "./control-ui-favicon-artwork.runtime.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
+import { canUseQuestionPrompts } from "./question-prompt-client.ts";
 import {
   createQuestionPromptState,
   disposeQuestionPromptState,
@@ -68,7 +69,7 @@ export function connectControlUiFavicon(
     synchronizeScope();
     const snapshot = context.gateway.snapshot;
     let working = false;
-    for (const pane of shell.querySelectorAll<ChatPaneBase>("openclaw-chat-pane")) {
+    for (const pane of shell.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")) {
       const activity = pane.runActivity;
       const completion = activity?.completion;
       const unseen = completion && !seenCompletions.has(completion);
@@ -142,6 +143,7 @@ export function connectControlUiFavicon(
     const snapshot = context.gateway.snapshot;
     const questionClient =
       snapshot.phase === "connected" &&
+      canUseQuestionPrompts(snapshot) &&
       isGatewayMethodAdvertised({ hello: snapshot.hello }, "question.list")
         ? snapshot.client
         : null;

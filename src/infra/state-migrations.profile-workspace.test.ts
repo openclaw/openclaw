@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveInstallAgentDir } from "../agents/install-agent-dir.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
@@ -16,6 +17,7 @@ import {
   autoMigrateLegacyState,
   planLegacyStateMigrationsReadOnly,
 } from "./state-migrations.doctor.js";
+import { resolveLegacyProfileMigrationExceptions } from "./state-migrations.profile-scope.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -59,6 +61,74 @@ async function makeFixture() {
 }
 
 describe("configured profile workspace preservation", () => {
+  it.each(["profile", "state-dir"])(
+    "keeps Doctor and SDK reads inside the active %s except its named workspace migration",
+    async (selector) => {
+      const fixture = await makeFixture();
+      if (selector === "state-dir") {
+        delete fixture.env.OPENCLAW_PROFILE;
+      }
+      delete fixture.env.OPENCLAW_AGENT_DIR;
+      const defaultState = path.join(fixture.homeDir, ".openclaw");
+      const ownWorkspace = path.join(defaultState, "workspace-work");
+      for (const directory of ["agent", "workspace-work", "workspace-other"]) {
+        fs.mkdirSync(path.join(defaultState, directory), { recursive: true });
+        fs.writeFileSync(path.join(defaultState, directory, "marker.txt"), directory);
+      }
+      const ownAgent = path.join(fixture.stateDir, "agent");
+      fs.mkdirSync(ownAgent);
+      fs.writeFileSync(path.join(ownAgent, "settings.json"), "own SDK settings");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { systemAgent: { agentId: "work" } }, entries: { work: {} } },
+        plugins: { enabled: false },
+      };
+      const params = { env: fixture.env, homedir: () => fixture.homeDir };
+      const exceptions = resolveLegacyProfileMigrationExceptions(params);
+      expect(exceptions).toEqual(selector === "profile" ? { profileWorkspace: ownWorkspace } : {});
+      const reads = [
+        vi.spyOn(fs, "existsSync"),
+        vi.spyOn(fs, "statSync"),
+        vi.spyOn(fs, "lstatSync"),
+        vi.spyOn(fs, "realpathSync"),
+        vi.spyOn(fs.realpathSync, "native"),
+        vi.spyOn(fs, "readdirSync"),
+        vi.spyOn(fs, "readFileSync"),
+      ];
+      const target = path.join(fixture.stateDir, "agents", "work", "agent");
+      expect(resolveInstallAgentDir(cfg, params).directory.dir).toBe(target);
+      const result = await autoMigrateLegacyState({
+        cfg,
+        ...params,
+        doctorOnlyStateMigrations: true,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
+      const outsideReads = reads
+        .flatMap((spy) => spy.mock.calls.map(([file]) => String(file)))
+        .filter((file) => file === defaultState || file.startsWith(`${defaultState}${path.sep}`))
+        .filter(
+          (file) =>
+            !Object.values(exceptions).some(
+              (allowed) => file === allowed || file.startsWith(`${allowed}${path.sep}`),
+            ),
+        );
+      expect(outsideReads).toEqual([]);
+      for (const spy of reads) {
+        spy.mockRestore();
+      }
+      expect(result.warnings).toEqual([]);
+      expect(fs.readFileSync(path.join(defaultState, "agent/marker.txt"), "utf8")).toBe("agent");
+      expect(fs.readFileSync(path.join(defaultState, "workspace-other/marker.txt"), "utf8")).toBe(
+        "workspace-other",
+      );
+      expect(fs.readFileSync(path.join(target, "settings.json"), "utf8")).toBe("own SDK settings");
+      const workspace =
+        selector === "profile"
+          ? path.join(fixture.homeDir, ".openclaw-work", "workspace")
+          : ownWorkspace;
+      expect(fs.readFileSync(path.join(workspace, "marker.txt"), "utf8")).toBe("workspace-work");
+    },
+  );
+
   it.each([
     { roster: "defaults", endpoint: "source", alias: "none", targetExists: true },
     { roster: "entries", endpoint: "source", alias: "leaf", targetExists: true },

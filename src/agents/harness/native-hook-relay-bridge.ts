@@ -13,7 +13,6 @@ import {
 } from "./native-hook-relay-client.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import {
-  clearNativeHookRelayBridgeRecordsForTests,
   deleteNativeHookRelayBridgeRecordIfOwned,
   pruneNativeHookRelayBridgeRecords,
   readNativeHookRelayBridgeRecord as readNativeHookRelayBridgeRecordFromStore,
@@ -158,8 +157,8 @@ function assertNativeHookRelayBridgeCurrent(
 }
 
 async function pruneNativeHookRelayBridges(stateDbPath: string): Promise<void> {
-  // Liveness checks stay outside the write transaction. The store rereads each
-  // authoritative row before deletion so renewal or replacement wins the race.
+  // Liveness checks stay outside the transaction; deletion checks the token
+  // owner and current expiry so renewal or replacement wins the race.
   try {
     const pruned = await pruneNativeHookRelayBridgeRecords({
       currentPid: process.pid,
@@ -408,5 +407,4 @@ export async function clearNativeHookRelayBridgesForTests(): Promise<void> {
   while (pendingOperations.size > 0) {
     await Promise.allSettled(pendingOperations);
   }
-  await clearNativeHookRelayBridgeRecordsForTests();
 }

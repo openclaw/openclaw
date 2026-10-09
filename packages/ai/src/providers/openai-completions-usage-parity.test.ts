@@ -38,9 +38,28 @@ type UsageScenario = {
   expectedCost?: number;
   cost?: typeof model.cost | typeof tieredCost;
   inChoice?: boolean;
+  interrupted?: boolean;
+  failureAfterTerminal?: boolean;
 };
 
 const scenarios: UsageScenario[] = [
+  {
+    name: "transport failure after terminal accounting",
+    package: true,
+    failureAfterTerminal: true,
+    usage: { prompt_tokens: 20, completion_tokens: 3, total_tokens: 23 },
+    expectedUsage: { usageReport: { state: "available" }, input: 20, output: 3, totalTokens: 23 },
+  },
+  ...[undefined, { prompt_tokens: 20, completion_tokens: 3, total_tokens: 23 }].map((usage) => ({
+    name: usage ? "interruption after provisional usage" : "interruption before usage",
+    package: true,
+    interrupted: true,
+    usage,
+    expectedUsage: {
+      usageReport: { state: "unavailable" },
+      contextUsage: { state: "unavailable" },
+    },
+  })),
   {
     name: "successful stream without usage",
     package: true,
@@ -51,6 +70,7 @@ const scenarios: UsageScenario[] = [
       cacheWrite: 0,
       totalTokens: 0,
       contextUsage: { state: "unavailable" },
+      usageReport: { state: "unavailable" },
     },
   },
   {
@@ -59,6 +79,8 @@ const scenarios: UsageScenario[] = [
     usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     expectedUsage: {
       totalTokens: 0,
+      usageReport: { state: "available" },
+      cacheTelemetry: { state: "unavailable" },
       contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 },
     },
   },
@@ -77,6 +99,7 @@ const scenarios: UsageScenario[] = [
       output: 20,
       cacheRead: 25,
       cacheWrite: 10,
+      cacheTelemetry: { state: "available" },
       reasoningTokens: 7,
       contextUsage: { state: "available", promptTokens: 100, totalTokens: 120 },
       totalTokens: 120,
@@ -171,6 +194,40 @@ const scenarios: UsageScenario[] = [
     expectedUsage: { input: 75, output: 20, cacheRead: 25, cacheWrite: 0, totalTokens: 120 },
     expectedCost: 0.00012125,
   },
+  ...[
+    { name: "top-level cached tokens", expectedCached: 25, cached_tokens: 25 },
+    {
+      name: "nested cache count takes precedence over top-level fallback",
+      expectedCached: 25,
+      cached_tokens: 90,
+      prompt_tokens_details: { cached_tokens: 25 },
+    },
+    {
+      name: "explicit nested zero takes precedence over top-level fallback",
+      expectedCached: 0,
+      cached_tokens: 25,
+      prompt_tokens_details: { cached_tokens: 0 },
+    },
+  ].map(({ name, expectedCached: cached, ...cacheUsage }) => {
+    return {
+      name,
+      package: true,
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 20,
+        total_tokens: 120,
+        ...cacheUsage,
+      },
+      expectedUsage: {
+        input: 100 - cached,
+        cacheRead: cached,
+        cacheTelemetry: { state: "available" },
+        totalTokens: 120,
+        contextUsage: { state: "available", promptTokens: 100, totalTokens: 120 },
+      },
+      expectedCost: (100 - cached + 40 + cached * 0.25) / 1_000_000,
+    };
+  }),
   {
     name: "invalid provider cost and cached-token overflow",
     usage: {
@@ -205,11 +262,16 @@ const scenarios: UsageScenario[] = [
   },
 ];
 
-function installUsageChunk(scenario: Pick<UsageScenario, "name" | "usage" | "inChoice">): void {
+function installUsageChunk(
+  scenario: Pick<
+    UsageScenario,
+    "name" | "usage" | "inChoice" | "interrupted" | "failureAfterTerminal"
+  >,
+): void {
   const choice = {
     index: 0,
     delta: { role: "assistant", content: "Usage preserved." },
-    finish_reason: "stop",
+    finish_reason: scenario.interrupted ? null : "stop",
     ...(scenario.inChoice ? { usage: scenario.usage } : {}),
   };
   const chunk = {
@@ -220,13 +282,33 @@ function installUsageChunk(scenario: Pick<UsageScenario, "name" | "usage" | "inC
     choices: [choice],
     ...(scenario.inChoice ? {} : { usage: scenario.usage }),
   } as ChatCompletionChunk;
-  const body = `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`;
+  const body = `data: ${JSON.stringify(chunk)}\n\n${scenario.interrupted || scenario.failureAfterTerminal ? "" : "data: [DONE]\n\n"}`;
+  let emitted = false;
   configureAiTransportHost({
     buildModelFetch: () => async () =>
-      new Response(body, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
+      new Response(
+        scenario.failureAfterTerminal
+          ? new ReadableStream(
+              {
+                pull(controller) {
+                  if (emitted) {
+                    controller.error(
+                      new Error("Fixture connection closed after terminal accounting"),
+                    );
+                  } else {
+                    emitted = true;
+                    controller.enqueue(new TextEncoder().encode(body));
+                  }
+                },
+              },
+              { highWaterMark: 0 },
+            )
+          : body,
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      ),
   });
 }
 
@@ -318,7 +400,9 @@ describe.each([
       expect(result.usage).not.toHaveProperty("reasoningTokens");
     }
 
-    expect(result.stopReason).toBe("stop");
+    expect(result.stopReason).toBe(
+      scenario.interrupted || scenario.failureAfterTerminal ? "error" : "stop",
+    );
     expect(result.usage).toMatchObject(expectedUsage);
     if (scenario.expectedCost !== undefined) {
       expect(result.usage.cost.total).toBeCloseTo(scenario.expectedCost, 10);

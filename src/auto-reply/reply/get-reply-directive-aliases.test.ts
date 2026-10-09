@@ -84,17 +84,12 @@ type DirectiveApplyParams = Parameters<
   typeof import("./get-reply-directives-apply.js").applyInlineDirectiveOverrides
 >[0];
 
-function configWithModelAlias(alias: string): OpenClawConfig {
+function configWithModelAlias(alias: string, agentId?: string): OpenClawConfig {
+  const models = { "anthropic/claude-opus-4-6": { alias } };
   return {
     commands: { text: true },
-    agents: {
-      defaults: {
-        models: {
-          "anthropic/claude-opus-4-6": { alias },
-        },
-      },
-    },
-  } as unknown as OpenClawConfig;
+    agents: agentId ? { entries: { [agentId]: { models } } } : { defaults: { models } },
+  };
 }
 
 function createAliasIndex(): ModelAliasIndex {
@@ -439,6 +434,37 @@ describe("reply directive resolution", () => {
     expect(result.result.cleanedBody).toBe(expected.cleaned);
     expect(sessionCtx.Body).toBe(expected.cleaned);
     expect(sessionEntry).toEqual(createSessionEntry());
+  });
+
+  it("routes an agent-local model alias shorthand as a model directive", async () => {
+    const { result, sessionCtx } = await resolveModelDirective({
+      body: "/localfast",
+      cfg: configWithModelAlias("localfast", "main"),
+    });
+
+    if (result.kind !== "continue") {
+      throw new Error(`expected continue result, got ${result.kind}`);
+    }
+    expect(result.result.directives).toMatchObject({
+      hasModelDirective: true,
+      rawModelDirective: "localfast",
+      cleaned: "",
+    });
+    expect(sessionCtx.Body).toBe("");
+  });
+
+  it("keeps another agent's model alias shorthand literal", async () => {
+    const { result, sessionCtx } = await resolveModelDirective({
+      body: "/localfast",
+      cfg: configWithModelAlias("localfast", "worker"),
+    });
+
+    if (result.kind !== "continue") {
+      throw new Error(`expected continue result, got ${result.kind}`);
+    }
+    expect(result.result.directives).toMatchObject({ hasModelDirective: false });
+    expect(result.result.cleanedBody).toBe("/localfast");
+    expect(sessionCtx.Body).toBe("/localfast");
   });
 
   it("preserves unauthorized mixed input exactly without exposing model state", async () => {

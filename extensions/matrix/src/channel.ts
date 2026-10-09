@@ -59,7 +59,7 @@ import {
   resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
-import { resolveMatrixConversationRouteOwner } from "./matrix/conversation-route-owner.js";
+import { prepareMatrixConversationRouteOwnersAsync } from "./matrix/conversation-route-owner.js";
 import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import type { MatrixProbe } from "./matrix/probe.js";
 import {
@@ -68,8 +68,8 @@ import {
   resolveMatrixTargetIdentity,
 } from "./matrix/target-ids.js";
 import {
-  setMatrixThreadBindingIdleTimeoutBySessionKey,
-  setMatrixThreadBindingMaxAgeBySessionKey,
+  setMatrixThreadBindingIdleTimeoutBySessionKeyAsync,
+  setMatrixThreadBindingMaxAgeBySessionKeyAsync,
 } from "./matrix/thread-bindings-shared.js";
 import { matrixPresentationCapabilities } from "./presentation-capabilities.js";
 import { matrixResolverAdapter } from "./resolver.js";
@@ -373,7 +373,7 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
     },
   },
   presentationCapabilities: matrixPresentationCapabilities,
-  shouldSuppressLocalPayloadPrompt: shouldSuppressLocalMatrixExecApprovalPrompt,
+  shouldSuppressLocalPayloadPromptAsync: shouldSuppressLocalMatrixExecApprovalPrompt,
   ...createRuntimeOutboundDelegates({
     getRuntime: loadMatrixChannelRuntime,
     renderPresentation: {
@@ -426,18 +426,22 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         supportsCurrentConversationBinding: true,
         bindingStore: "adapter",
         defaultTopLevelPlacement,
-        setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
-          setMatrixThreadBindingIdleTimeoutBySessionKey({
-            targetSessionKey,
-            accountId: accountId ?? "",
-            idleTimeoutMs,
-          }).map(projectMatrixConversationBinding),
-        setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
-          setMatrixThreadBindingMaxAgeBySessionKey({
-            targetSessionKey,
-            accountId: accountId ?? "",
-            maxAgeMs,
-          }).map(projectMatrixConversationBinding),
+        setIdleTimeoutBySessionKeyAsync: async ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+          (
+            await setMatrixThreadBindingIdleTimeoutBySessionKeyAsync({
+              targetSessionKey,
+              accountId: accountId ?? "",
+              idleTimeoutMs,
+            })
+          ).map(projectMatrixConversationBinding),
+        setMaxAgeBySessionKeyAsync: async ({ targetSessionKey, accountId, maxAgeMs }) =>
+          (
+            await setMatrixThreadBindingMaxAgeBySessionKeyAsync({
+              targetSessionKey,
+              accountId: accountId ?? "",
+              maxAgeMs,
+            })
+          ).map(projectMatrixConversationBinding),
       },
       messaging: {
         defaultMarkdownTableMode: "block",
@@ -451,7 +455,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         resolveInboundConversation: resolveMatrixInboundConversation,
         resolveDeliveryTarget: resolveMatrixDeliveryTarget,
         resolveOutboundSessionRoute: resolveMatrixOutboundSessionRoute,
-        resolveConversationRouteOwner: resolveMatrixConversationRouteOwner,
+        prepareConversationRouteOwnersAsync: prepareMatrixConversationRouteOwnersAsync,
         targetResolver: {
           looksLikeId: (raw) => {
             const trimmed = raw.trim();

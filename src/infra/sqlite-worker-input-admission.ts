@@ -9,7 +9,6 @@ import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 /** Retained inputs share the broker budget before they become queued jobs. */
 export class SqliteWorkerInputAdmission {
   private bytes = 0;
-  private inputPreparationGeneration = {};
   private readonly inputPreparations = new Set<Promise<void>>();
   private readonly openQueue = new Map<string, StoreWriterQueue>();
 
@@ -62,10 +61,6 @@ export class SqliteWorkerInputAdmission {
     return this.openQueue.get("sqlite-open")?.drainPromise ?? Promise.resolve();
   }
 
-  invalidatePreparations(): void {
-    this.inputPreparationGeneration = {};
-  }
-
   async joinPreparations(): Promise<void> {
     await Promise.allSettled(this.inputPreparations);
   }
@@ -87,25 +82,18 @@ export class SqliteWorkerInputAdmission {
     if (this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes) {
       throw new SqliteWorkerError("SQLite worker input preparation capacity reached", "overloaded");
     }
-    const generation = this.inputPreparationGeneration;
     this.bytes += bytes;
     const settled = createDeferredCore();
     this.inputPreparations.add(settled.promise);
-    let released = false;
     let handedOff = false;
     const release = () => {
-      if (!released) {
-        released = true;
+      if (this.inputPreparations.delete(settled.promise)) {
         this.bytes -= bytes;
-        this.inputPreparations.delete(settled.promise);
         settled.resolve();
       }
     };
     const assertCurrent = () => {
-      if (
-        !handedOff &&
-        (released || this.owner.isClosing() || generation !== this.inputPreparationGeneration)
-      ) {
+      if (!handedOff && (!this.inputPreparations.has(settled.promise) || this.owner.isClosing())) {
         throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
       }
     };
@@ -113,7 +101,7 @@ export class SqliteWorkerInputAdmission {
       assertCurrent,
       handoff: (dispatch) => {
         try {
-          if (released) {
+          if (!this.inputPreparations.has(settled.promise)) {
             throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
           }
           assertCurrent();

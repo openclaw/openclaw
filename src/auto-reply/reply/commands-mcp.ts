@@ -126,10 +126,7 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
       if (params.isGroup) {
         return await deliverGroupMcpShowReplyPrivately(params, mcpCommand.name);
       }
-      return {
-        shouldContinue: false,
-        reply: await buildMcpShowReply(mcpCommand.name),
-      };
+      return commandReply(await buildMcpShowReply(mcpCommand.name));
     }
 
     const missingAdminScope = requireGatewayClientScope(params, {
@@ -141,24 +138,19 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
       return missingAdminScope;
     }
 
-    if (mcpCommand.action === "set") {
-      const result = await setConfiguredMcpServer({
-        name: mcpCommand.name,
-        server: mcpCommand.value,
-        assertCurrent: params.command.assertOwnerCurrent,
-      });
-      if (!result.ok) {
-        return commandReply(`⚠️ ${result.error}`);
-      }
-      return commandReply(`🔌 MCP server "${mcpCommand.name}" saved to ${result.path}.`);
-    }
-
-    const result = await unsetConfiguredMcpServer({
+    const mutation = {
       name: mcpCommand.name,
       assertCurrent: params.command.assertOwnerCurrent,
-    });
+    };
+    const result =
+      mcpCommand.action === "set"
+        ? await setConfiguredMcpServer({ ...mutation, server: mcpCommand.value })
+        : await unsetConfiguredMcpServer(mutation);
     if (!result.ok) {
       return commandReply(`⚠️ ${result.error}`);
+    }
+    if (mcpCommand.action === "set") {
+      return commandReply(`🔌 MCP server "${mcpCommand.name}" saved to ${result.path}.`);
     }
     if (!result.removed) {
       return commandReply(`🔌 No MCP server named "${mcpCommand.name}" in ${result.path}.`);

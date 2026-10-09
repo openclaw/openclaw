@@ -22,7 +22,7 @@ import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   listStoredChatOutboxes,
-  loadChatComposerSnapshot,
+  loadChatComposerState,
   updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
@@ -126,7 +126,7 @@ describe("chat attachment terminal retirement", () => {
       await handleSendChat(source);
       holdHistory = true;
       const item = expectDefined(
-        loadChatComposerSnapshot(source, sessionKey)?.queue[0],
+        loadChatComposerState(source, sessionKey).snapshot?.queue[0],
         "Blob-backed terminal send",
       );
       expect(item.attachmentPayload).toBeDefined();
@@ -287,7 +287,7 @@ describe("chat attachment terminal retirement", () => {
       }
       if (handoff === "new-credentials" || handoff === "new-attempt") {
         expect(cleanup).not.toHaveBeenCalled();
-        expect(loadChatComposerSnapshot(visible, sessionKey)?.queue[0]).toMatchObject({
+        expect(loadChatComposerState(visible, sessionKey).snapshot?.queue[0]).toMatchObject({
           id: item.id,
           attachmentPayload: item.attachmentPayload,
           sendRunId: handoff === "new-attempt" ? "replacement-attempt" : item.sendRunId,

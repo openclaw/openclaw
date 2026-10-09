@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { RunInspectorResult, RunInspectorState } from "./run-inspector-model.ts";
-import { renderRunInspector } from "./run-inspector-view.ts";
+import { renderRunInspector } from "./run-inspector-view.tsx";
 
 const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
 
@@ -107,8 +109,6 @@ type ViewTestState =
     });
 
 function renderState(state: ViewTestState, onLoadMoreExecutions = vi.fn()) {
-  const container = document.createElement("div");
-  document.body.append(container);
   const normalizedState: RunInspectorState =
     state.status === "ready"
       ? {
@@ -120,7 +120,7 @@ function renderState(state: ViewTestState, onLoadMoreExecutions = vi.fn()) {
             ),
         }
       : state;
-  render(
+  const { container } = mountSolid(() =>
     renderRunInspector({
       basePath: "/operator",
       state: normalizedState,
@@ -131,14 +131,45 @@ function renderState(state: ViewTestState, onLoadMoreExecutions = vi.fn()) {
       onRestart: vi.fn(),
       onRetry: vi.fn(),
     }),
-    container,
   );
+  flush();
   return container;
 }
 
 describe("renderRunInspector", () => {
-  beforeEach(() => {
-    document.body.innerHTML = "";
+  it("updates inspection content when the selected run changes", () => {
+    const [state, setState] = createSignal<RunInspectorState>({
+      status: "loading",
+      waitingForGateway: false,
+    });
+
+    const { container } = mountSolid(() =>
+      renderRunInspector({
+        basePath: "/operator",
+        get state() {
+          return state();
+        },
+        selector: { kind: "run", id: "run-1" },
+        selectorId: null,
+        onLoadMoreDecisions: vi.fn(),
+        onLoadMoreExecutions: vi.fn(),
+        onRestart: vi.fn(),
+        onRetry: vi.fn(),
+      }),
+    );
+    flush();
+    expect(container.textContent).toContain("Loading run inspection");
+
+    setState({ status: "ready", result: presentResult(), receiptPageCursors: new Map() });
+    flush();
+    expect(container.textContent).toContain("Trust domain");
+    expect(container.querySelector("[data-run-id]")?.getAttribute("data-run-id")).toBe("run-1");
+    expect(container.textContent).not.toContain("Loading run inspection");
+
+    setState({ status: "empty" });
+    flush();
+    expect(container.textContent).toContain("No run selected");
+    expect(container.querySelector("[data-run-id]")).toBeNull();
   });
 
   it("renders every identity dimension with explicit text states and safe refs", () => {

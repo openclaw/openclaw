@@ -18,6 +18,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
@@ -29,6 +30,10 @@ import { activeSessions } from "../../transcripts/capture-startup.js";
 import { startTranscripts } from "../../transcripts/capture.js";
 import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import * as transcriptProviders from "../../transcripts/provider-registry.js";
+import {
+  deriveMeetingTranscriptSessionColumns,
+  deriveMeetingTranscriptSummaryColumns,
+} from "../../transcripts/store-columns.js";
 import { meetingTranscriptDb } from "../../transcripts/store-sqlite.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts, type TranscriptsSummary } from "../../transcripts/summary.js";
@@ -36,6 +41,8 @@ import type { OperatorScope } from "../operator-scopes.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { transcriptsHandlers } from "./transcripts.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
@@ -114,7 +121,7 @@ async function seed(stateDir: string) {
 
 describe("transcript Gateway read authorization and errors", () => {
   it("requires write scope and archive visibility to generate notes", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    await withOpenClawTestState(profileState, async ({ stateDir }) => {
       const { selector, store, session } = await seed(stateDir);
       expect((await request("transcripts.summarize", { selector }))[0]).toBe(false);
       expect(
@@ -149,7 +156,7 @@ describe("transcript Gateway read authorization and errors", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("returns explicit byte-limit errors without a partial read or download", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       const { store, session, selector } = await seed(state.stateDir);
       await store.appendUtteranceForSession(session, {
         text: "x".repeat(TRANSCRIPTS_EXPORT_MAX_BYTES + 1),
@@ -178,7 +185,7 @@ describe("transcript Gateway read authorization and errors", () => {
   });
 
   it("keeps configured capture intent out of RPC results and durable session metadata", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       const source = { providerId: "fixture-voice", channelId: "room" };
       const cfg = { transcripts: { autoStart: [source] } };
       const previousRegistry = captureActivePluginRegistrySnapshot();
@@ -225,9 +232,10 @@ describe("transcript Gateway read authorization and errors", () => {
   });
 
   it("denies every global archive read for sessions.others:none even with allowed or forged agent filters", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       const { selector } = await seed(state.stateDir);
       const profile = ensureProfileForEmail("transcript-guest@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg = roles("none");
       const queries: Array<[string, Record<string, unknown>]> = [
         ["transcripts.list", {}],
@@ -251,9 +259,10 @@ describe("transcript Gateway read authorization and errors", () => {
   });
 
   it("preserves global reads for view roles and admins without treating the creation agent allowlist as read scope", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       const { selector } = await seed(state.stateDir);
       const profile = ensureProfileForEmail("transcript-reader@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const caller = client(profile.id);
       const [ok, payload] = await request(
         "transcripts.list",
@@ -289,7 +298,7 @@ describe("transcript Gateway read authorization and errors", () => {
   });
 
   it("uses the normal operator role and scope fence and never advertises a capture mutation method", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       for (const [method, params] of [
         ["transcripts.list", {}],
         ["transcripts.get", { selector: "missing" }],
@@ -318,9 +327,10 @@ describe("transcript Gateway read authorization and errors", () => {
   it.each(["authority", "archive role", "cancellation"])(
     "refuses a public page after %s changes during its worker read",
     async (kind) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      await withOpenClawTestState(profileState, async ({ stateDir }) => {
         const { store } = await seed(stateDir);
         const profile = ensureProfileForEmail("public-page-reader@example.test");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const cancellation = new AbortController();
         let current = true;
         const cfg = roles("view");
@@ -383,7 +393,7 @@ describe("transcript Gateway read authorization and errors", () => {
   });
 
   it("rejects invalid requests and missing selectors, and redacts archive failures", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       const { session, selector } = await seed(state.stateDir);
       for (const [method, params] of [
         ["transcripts.list", { limit: 201 }],
@@ -407,11 +417,18 @@ describe("transcript Gateway read authorization and errors", () => {
       }
       expect(logGateway.warn).not.toHaveBeenCalled();
       const { db } = openOpenClawStateDatabase();
+      const corruptSource = "private corrupt source /host/private/path";
       executeSqliteQuerySync(
         db,
         meetingTranscriptDb(db)
           .updateTable("meeting_transcript_sessions")
-          .set({ source_json: "private corrupt source /host/private/path" })
+          .set({
+            source_json: corruptSource,
+            ...deriveMeetingTranscriptSessionColumns(
+              corruptSource,
+              JSON.stringify(session.metadata),
+            ),
+          })
           .where("session_id", "=", session.sessionId),
       );
       const result = await request("transcripts.get", { selector });
@@ -466,7 +483,7 @@ describe("meeting transcript RPC", () => {
 
   let state: OpenClawTestState;
   beforeEach(async () => {
-    state = await createOpenClawTestState({ scenario: "minimal" });
+    state = await createOpenClawTestState(profileState);
     const stateDir = state.stateDir;
     vi.spyOn(transcriptProviders, "getTranscriptSourceProvider").mockReturnValue(undefined);
     store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
@@ -623,12 +640,14 @@ describe("meeting transcript RPC", () => {
     const summary = summarizeTranscripts({ session, utterances: [{ text: "Legacy notes." }] });
     await store.writeSummary(summary, session);
     const database = openOpenClawStateDatabase().db;
+    const summaryJson = JSON.stringify({ ...summary, participants: undefined, source: undefined });
     executeSqliteQuerySync(
       database,
       meetingTranscriptDb(database)
         .updateTable("meeting_transcript_summaries")
         .set({
-          summary_json: JSON.stringify({ ...summary, participants: undefined, source: undefined }),
+          summary_json: summaryJson,
+          ...deriveMeetingTranscriptSummaryColumns(summaryJson),
         })
         .where("session_id", "=", session.sessionId)
         .where("session_started_at", "=", session.startedAt),

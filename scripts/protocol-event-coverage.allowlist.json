@@ -1,6 +1,7 @@
 {
   "$comment": "Gateway events each mobile client intentionally does not handle yet, with a one-line reason. Consumed by scripts/check-protocol-event-coverage.mjs (pnpm check:protocol-coverage). Adding a gateway event without a client handler requires either handling it or adding an entry here; the check also fails when an entry goes stale (event removed or now handled).",
   "ios": {
+    "agent.identity.changed": "Native identities refresh through native catalog loading; this event retires the Control UI connection-scoped identity cache.",
     "controlUi.sessionPullRequests.changed": "Sidebar PR indicators are a Control UI surface; native apps do not render session PR chips.",
     "cron": "Cron run activity is not surfaced in the iOS app.",
     "device.pair.changed": "Device label projection refresh is a Control UI surface; iOS does not render the Gateway Devices page.",
@@ -40,6 +41,7 @@
     "voicewake.routing.changed": "iOS only consumes voicewake.changed trigger updates; routing changes are not surfaced."
   },
   "android": {
+    "agent.identity.changed": "Native identities refresh through native catalog loading; this event retires the Control UI connection-scoped identity cache.",
     "controlUi.sessionPullRequests.changed": "Sidebar PR indicators are a Control UI surface; native apps do not render session PR chips.",
     "cron": "Cron run activity is not surfaced in the Android app.",
     "device.pair.changed": "Device label projection refresh is a Control UI surface; Android does not render the Gateway Devices page.",

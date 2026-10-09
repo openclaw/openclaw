@@ -1,44 +1,20 @@
 /* @vitest-environment jsdom */
 
-import { render, type TemplateResult } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  AgentsFilesGetResult,
-  AgentsFilesListResult,
-  AgentsListResult,
-} from "../../api/types.ts";
+import type { AgentsFilesGetResult, AgentsFilesListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { setAgentFileValues } from "./agent-file-state.test-helpers.ts";
+import { createAgentsPage, type TestAgentsPage } from "./agents-page.test-support.ts";
 import { loadAgentFileContent } from "./files.ts";
 import type { AgentsRouteData } from "./route.ts";
-import "./agents-page.ts";
+import { Agents } from "./view.tsx";
 
 const AGENT_FILE_GATEWAY_HELLO = gatewayHelloForMethods(["agents.files.set"]);
-
-type TestAgentsPage = HTMLElement &
-  Parameters<typeof loadAgentFileContent>[0] & {
-    context: ApplicationContext;
-    routeData?: AgentsRouteData;
-    agentsList: AgentsListResult | null;
-    agentsSelectedId: string | null;
-    agentFilesList: AgentsFilesListResult | null;
-    agentFileActive: string | null;
-    gateway: {
-      applySnapshot: (
-        snapshot: ApplicationGatewaySnapshot,
-        binding: { initial: boolean; sourceChanged: boolean },
-      ) => void;
-    };
-    selectDefaultAgentFile: (agentId: string) => Promise<void>;
-    syncCurrentAgentFiles: (agents?: ApplicationContext["agents"]) => void;
-    loadAgentFiles: (agentId: string, force?: boolean) => Promise<void>;
-    saveSelectedAgentFile: (agentId: string, name: string) => void;
-    render: () => TemplateResult;
-  };
 
 function snapshot(client: GatewayBrowserClient): ApplicationGatewaySnapshot {
   return {
@@ -85,7 +61,7 @@ describe("agent file lifecycle", () => {
       files: () => ({ list, loading: false, error: null }),
       recordFile: () => list,
     } as unknown as ApplicationContext["agents"];
-    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    const page = createAgentsPage();
     page.context = { gateway: gateway(snapshot(client)), agents } as unknown as ApplicationContext;
     setPageGateway(page, client);
     page.agentsSelectedId = "main";
@@ -113,7 +89,7 @@ describe("agent file lifecycle", () => {
     }));
     const refreshFiles = vi.fn(async () => list);
     const client = { request } as unknown as GatewayBrowserClient;
-    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    const page = createAgentsPage();
     page.context = {
       gateway: gateway(snapshot(client)),
       agents: {
@@ -148,7 +124,7 @@ describe("agent file lifecycle", () => {
       files: () => ({ list: null, loading: false, error: null }),
       refreshFiles,
     } as unknown as ApplicationContext["agents"];
-    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    const page = createAgentsPage();
     page.context = { gateway: gateway(snapshot(client)), agents } as unknown as ApplicationContext;
     setPageGateway(page, client);
     page.agentsSelectedId = "main";
@@ -201,7 +177,7 @@ describe("agent file lifecycle", () => {
       const currentGateway = gateway(snapshot(client));
       const agents = createAgentCapability(currentGateway);
       await agents.ensureFiles("main");
-      const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+      const page = createAgentsPage();
       page.context = { gateway: currentGateway, agents } as unknown as ApplicationContext;
       setPageGateway(page, client);
       page.agentsSelectedId = "main";
@@ -289,7 +265,7 @@ describe("agent file lifecycle", () => {
       const currentGateway = gateway(snapshot(client));
       const agents = createAgentCapability(currentGateway);
       await agents.ensureFiles("main");
-      const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+      const page = createAgentsPage();
       page.context = {
         basePath: "",
         gateway: { ...currentGateway, connection: { password: "" } },
@@ -313,9 +289,10 @@ describe("agent file lifecycle", () => {
       setAgentFileValues(page, "content", { "AGENTS.md": "original" });
       setAgentFileValues(page, "draft", { "AGENTS.md": savedContent });
       const unsubscribe = agents.subscribe(() => page.syncCurrentAgentFiles(agents));
-      const container = document.createElement("div");
+      const mounted = mountSolid(Agents, page.viewProps);
+      const { container } = mounted;
       const saveDraft = () => {
-        render(page.render(), container);
+        mounted.update(page.viewProps);
         const button = container.querySelector<HTMLButtonElement>(
           ".agent-file-header .agent-file-actions button.primary",
         );
@@ -339,7 +316,7 @@ describe("agent file lifecycle", () => {
         rebuild.reject(new Error(rebuildError));
         await vi.waitFor(() => expect(agents.files("main").error).toBe(rebuildError));
 
-        render(page.render(), container);
+        mounted.update(page.viewProps);
 
         expect(container.querySelector(".callout.danger")?.textContent).toBe(
           newerSaveFails ? writeError : rebuildError,
@@ -352,7 +329,7 @@ describe("agent file lifecycle", () => {
         unsubscribe();
         rebuild.resolve(list);
         agents.dispose();
-        render(null, container);
+        mounted.dispose();
       }
     },
   );

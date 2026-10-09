@@ -39,6 +39,16 @@ import {
 
 const optedOutNotificationMethods = new Set<string>(CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS);
 
+const RAW_TOOL_ITEM_PHASE: Record<string, "started" | "completed"> = {
+  function_call: "started",
+  custom_tool_call: "started",
+  local_shell_call: "started",
+  tool_search_call: "started",
+  function_call_output: "completed",
+  custom_tool_call_output: "completed",
+  tool_search_output: "completed",
+};
+
 export class CodexAppServerEventProjector extends CodexTurnProjection {
   private readonly compactionProgress = new Map<string, "open" | "closed">();
 
@@ -644,6 +654,19 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     item: CodexThreadItem | undefined,
     notification?: { itemId: string | undefined },
   ): Promise<void> {
+    // Codex deltas are best-effort and completed item text is authoritative (the
+    // codex-rs TUI consolidates from it); without this a dropped final delta
+    // leaves live and terminal chat text silently short.
+    const streamed =
+      item?.type === "agentMessage"
+        ? this.assistantProjection.assistantTextByItem.get(item.id)
+        : undefined;
+    if (streamed && typeof item?.text === "string" && item.text.startsWith(streamed)) {
+      await this.assistantProjection.handleAssistantDelta({
+        itemId: item.id,
+        delta: item.text.slice(streamed.length),
+      });
+    }
     const asyncMessage = this.assistantProjection.recordItemCompleted(
       item,
       notification && { ...notification, activeItemIds: this.activeItemIds },
@@ -664,6 +687,17 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     const item = isJsonObject(params.item) ? params.item : undefined;
     if (!item) {
       return;
+    }
+    const type = readString(item, "type");
+    const phase =
+      type && Object.hasOwn(RAW_TOOL_ITEM_PHASE, type) ? RAW_TOOL_ITEM_PHASE[type] : undefined;
+    const itemId = readString(item, "call_id");
+    if (phase && itemId) {
+      // Raw receipts include outer code-mode calls that have no ThreadItem lifecycle.
+      this.emitAgentEvent({
+        stream: "codex_app_server.item",
+        data: { phase, itemId, type },
+      });
     }
     if (item.role === "assistant" && extractRawResponseItemText(item)) {
       this.eventProjection.markSafetyBufferingAssistantStarted();

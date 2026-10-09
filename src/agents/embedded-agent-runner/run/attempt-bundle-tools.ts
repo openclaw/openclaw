@@ -44,6 +44,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     cronCreatorToolAllowlistCaptureRef,
     effectiveToolsAllow,
     inheritedToolAllowlist,
+    inheritedPublicationToolRef,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolsEnabled,
@@ -77,13 +78,13 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const tools = await withRuntimeToolSchemaQuarantine((record) =>
     normalizeTools(toolsEnabled ? toolsRaw : [], record),
   );
-  let clientTools =
+  const auxiliaryToolsEnabled =
     toolsEnabled &&
+    params.attempt.trigger !== "memory" &&
     !params.attempt.disableTools &&
     !params.isRawModelRun &&
-    !params.attempt.forceRestartSafeTools
-      ? params.attempt.clientTools
-      : undefined;
+    !params.attempt.forceRestartSafeTools;
+  let clientTools = auxiliaryToolsEnabled ? params.attempt.clientTools : undefined;
   // Client functions share the attempt's authority; filter before their names
   // can reserve bundled tools or enter deferred catalogs and provider requests.
   if (clientTools && effectiveToolsAllow) {
@@ -103,36 +104,34 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     toolOverrides: params.attempt.toolOverrides,
     toolDenylist: runtimeCapabilityProfile.policy.explicitToolDenylist,
   };
-  const bundleMcpEnabled =
-    !params.attempt.forceRestartSafeTools &&
-    shouldCreateBundleMcpRuntimeForAttempt({
-      toolsEnabled,
-      disableTools: params.attempt.disableTools || params.isRawModelRun,
-      toolsAllow: params.attempt.toolsAllow,
-      resolveConfiguredMcpNamespaces: () => {
-        const configuredNames = Object.keys(params.attempt.config?.mcp?.servers ?? {});
-        if (configuredNames.length === 0) {
-          return [];
-        }
-        const { loaded, safeServerNamesByServer } = loadSessionMcpConfig({
-          ...mcpConfig,
-          logDiagnostics: false,
-        });
-        // Use the complete merged declaration order: bundled peers can own a
-        // collision suffix before a configured server. This does not connect MCP.
-        return configuredNames.flatMap((name) => {
-          const safeName = Object.hasOwn(loaded.mcpServers, name)
-            ? safeServerNamesByServer.get(name)
-            : undefined;
-          return safeName ? [`${safeName}${TOOL_NAME_SEPARATOR}`] : [];
-        });
-      },
-    });
+  const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
+    toolsEnabled: auxiliaryToolsEnabled,
+    toolsAllow: params.attempt.toolsAllow,
+    resolveConfiguredMcpNamespaces: () => {
+      const configuredNames = Object.keys(params.attempt.config?.mcp?.servers ?? {});
+      if (configuredNames.length === 0) {
+        return [];
+      }
+      const { loaded, safeServerNamesByServer } = loadSessionMcpConfig({
+        ...mcpConfig,
+        logDiagnostics: false,
+      });
+      // Use the complete merged declaration order: bundled peers can own a
+      // collision suffix before a configured server. This does not connect MCP.
+      return configuredNames.flatMap((name) => {
+        const safeName = Object.hasOwn(loaded.mcpServers, name)
+          ? safeServerNamesByServer.get(name)
+          : undefined;
+        return safeName ? [`${safeName}${TOOL_NAME_SEPARATOR}`] : [];
+      });
+    },
+  });
   const bundleMcpAcquisition = bundleMcpEnabled
     ? await acquireSessionMcpRuntime({
         ...mcpConfig,
         sessionId: params.attempt.sessionId,
         sessionKey: params.attempt.sessionKey,
+        agentId: params.setup.sessionAgentId,
         agentDir: params.agentDir,
         // senderId is only set from the verified inbound sender (sessionCtx.SenderId
         // or the triggering run's sender on follow-ups). Cron/subagent/heartbeat runs
@@ -154,13 +153,10 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     : undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   try {
-    const bundleLspEnabled =
-      !params.attempt.forceRestartSafeTools &&
-      shouldCreateBundleLspRuntimeForAttempt({
-        toolsEnabled,
-        disableTools: params.attempt.disableTools || params.isRawModelRun,
-        toolsAllow: params.attempt.toolsAllow,
-      });
+    const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
+      toolsEnabled: auxiliaryToolsEnabled,
+      toolsAllow: params.attempt.toolsAllow,
+    });
     bundleLspRuntime = bundleLspEnabled
       ? await createBundleLspToolRuntime({
           workspaceDir: params.setup.effectiveWorkspace,
@@ -228,10 +224,14 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         (tool) => getPluginToolMeta(tool),
       );
       if (inheritedToolAllowlist?.length) {
-        // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
-        // only after final policy and schema projection so children inherit the
-        // parent's complete authorized surface, never denied bundled tools.
-        replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
+        // Refresh late-bound tools only after policy and schema projection.
+        // Publication passed core policy but is unavailable in this workspace;
+        // preserve its child capability under the final runtime cap.
+        const publicationTool = inheritedPublicationToolRef?.current;
+        replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, [
+          ...schemaProjection.tools,
+          ...applyRuntimeAllowlist(toolsEnabled && publicationTool ? [publicationTool] : []),
+        ]);
       }
       recordQuarantine({
         diagnostics: schemaProjection.diagnostics,

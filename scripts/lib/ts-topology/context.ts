@@ -97,48 +97,37 @@ export function canonicalSymbolInfo(context: ProgramContext, symbol: Symbol): Ca
   };
 }
 
-export function countIdentifierUsages(
+export function countImportUsages(
   context: ProgramContext,
   sourceFile: ts.SourceFile,
   importedSymbol: Symbol,
-  localName: string,
+  name: string,
+  kind: "identifier" | "namespace",
 ): number {
   const targetSymbol = comparableSymbol(context.checker, importedSymbol);
   let count = 0;
   const visit = (node: ts.Node) => {
-    if (ts.isIdentifier(node) && node.text === localName) {
-      const symbol = comparableSymbol(context.checker, context.checker.getSymbolAtLocation(node));
+    let reference: ts.Node | undefined;
+    if (kind === "namespace") {
       if (
-        symbol === targetSymbol &&
-        !ts.isImportClause(node.parent) &&
-        !ts.isImportSpecifier(node.parent)
+        ts.isPropertyAccessExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.name.text === name
       ) {
-        count += 1;
+        reference = node.expression;
       }
-    }
-    node.forEachChild(visit);
-  };
-  sourceFile.forEachChild(visit);
-  return count;
-}
-
-export function countNamespacePropertyUsages(
-  context: ProgramContext,
-  sourceFile: ts.SourceFile,
-  namespaceSymbol: Symbol,
-  exportedName: string,
-): number {
-  const targetSymbol = comparableSymbol(context.checker, namespaceSymbol);
-  let count = 0;
-  const visit = (node: ts.Node) => {
-    if (
-      ts.isPropertyAccessExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.name.text === exportedName
+    } else if (
+      ts.isIdentifier(node) &&
+      node.text === name &&
+      !ts.isImportClause(node.parent) &&
+      !ts.isImportSpecifier(node.parent)
     ) {
+      reference = node;
+    }
+    if (reference) {
       const symbol = comparableSymbol(
         context.checker,
-        context.checker.getSymbolAtLocation(node.expression),
+        context.checker.getSymbolAtLocation(reference),
       );
       if (symbol === targetSymbol) {
         count += 1;

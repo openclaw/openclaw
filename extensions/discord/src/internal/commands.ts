@@ -25,12 +25,6 @@ type CommandOption =
 export type CommandOptions = CommandOption[];
 export type DiscordCommand = Command | CommandWithSubcommands;
 
-type RawSubcommandOption = {
-  name?: unknown;
-  type?: unknown;
-  options?: RawSubcommandOption[];
-};
-
 export async function deferCommandInteractionIfNeeded(
   command: BaseCommand,
   interaction: CommandInteraction,
@@ -43,9 +37,9 @@ export async function deferCommandInteractionIfNeeded(
   });
 }
 
-function readRawCommandOptions(interaction: CommandInteraction): RawSubcommandOption[] {
-  const options = (interaction.rawData as { data?: { options?: unknown } }).data?.options;
-  return Array.isArray(options) ? (options as RawSubcommandOption[]) : [];
+function readRawCommandOptions(interaction: CommandInteraction) {
+  const options = interaction.rawData.data?.options;
+  return Array.isArray(options) ? options : [];
 }
 
 function findSelectedSubcommand(
@@ -121,18 +115,17 @@ export abstract class Command extends BaseCommand {
   }
   serializeOptions(): APIApplicationCommandBasicOption[] | undefined {
     return this.options?.map((option): APIApplicationCommandBasicOption => {
-      switch (option.type) {
-        case ApplicationCommandOptionType.String:
-        case ApplicationCommandOptionType.Integer:
-        case ApplicationCommandOptionType.Number:
-          if (typeof option.autocomplete === "function") {
-            const { autocomplete: _autocomplete, ...rest } = option;
-            return { ...rest, autocomplete: true };
-          }
-          return option;
-        default:
-          return option;
+      const type = option.type;
+      if (
+        (type === ApplicationCommandOptionType.String ||
+          type === ApplicationCommandOptionType.Integer ||
+          type === ApplicationCommandOptionType.Number) &&
+        typeof option.autocomplete === "function"
+      ) {
+        const { autocomplete: _autocomplete, ...rest } = option;
+        return { ...rest, autocomplete: true };
       }
+      return option;
     });
   }
 }

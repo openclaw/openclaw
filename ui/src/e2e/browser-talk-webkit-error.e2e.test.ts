@@ -118,6 +118,10 @@ suite.define(() => {
             expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
             expect(await gateway.getRequests("talk.session.create")).toHaveLength(0);
           } else {
+            // The error-state activity also renders a listening marker; it is not
+            // evidence that the recovery allocated its new provider session.
+            await gateway.waitForRequest("talk.client.create");
+            await expect.poll(() => alert.count()).toBe(0);
             await expect
               .poll(() =>
                 page.locator('.agent-chat__voice-activity[data-status="listening"]').count(),

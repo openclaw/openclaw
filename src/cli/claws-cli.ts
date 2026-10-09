@@ -81,7 +81,7 @@ export function registerClawsCli(program: Command) {
 
   claws
     .command("build")
-    .description("Build a deterministic Claw package artifact")
+    .description("Build a reproducible Claw package artifact")
     .argument("[path]", "Project directory", ".")
     .requiredOption("--out <artifact>", "New .tgz artifact to create")
     .option("--json", "Print JSON", false)
