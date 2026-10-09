@@ -8,6 +8,7 @@ import {
   type WorkboardWorktreeCleanupRuntime,
 } from "./dispatcher-workspace.js";
 import {
+  sessionKeyMatchesCard,
   workboardCardMatchesLifecycleLink,
   workboardCardSessionLookupKey,
 } from "./session-link.js";
@@ -48,7 +49,7 @@ type WorkboardLifecycleSession = {
   abortedLastRun?: boolean;
 };
 
-type WorkboardLifecycleSessionSnapshot = {
+export type WorkboardLifecycleSessionSnapshot = {
   sessions: WorkboardLifecycleSession[];
   complete: boolean;
 };
@@ -63,9 +64,13 @@ function sessionProvesPreparedAcceptance(session: WorkboardLifecycleSession): bo
   );
 }
 
-type WorkboardLifecycleSessionReadOptions = {
+export type WorkboardLifecycleSessionReadOptions = {
   includeUnknown: boolean;
 };
+
+export type WorkboardLifecycleSessionReader = (
+  options: WorkboardLifecycleSessionReadOptions,
+) => Promise<WorkboardLifecycleSessionSnapshot>;
 
 type WorkboardLifecycleMatchHandler = (input: {
   cards: readonly WorkboardCard[];
@@ -110,32 +115,71 @@ async function syncWorkboardLifecycleEvent(params: {
   source: { sessionKey?: string; runId?: string };
   observation: WorkboardLifecycleObservation;
   now: number;
+  readSessions?: WorkboardLifecycleSessionReader;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<{ cards: readonly WorkboardCard[]; count: number }> {
   const cards = (await params.store.list()).filter(
     (card) => !card.metadata?.archivedAt && workboardCardMatchesLifecycleLink(card, params.source),
   );
+  // Attempt-level end events (agent_end) fire per model candidate: a failed
+  // attempt can precede a fallback that continues the same run, so its terminal
+  // outcome is not authoritative. Consult the session rows before writing a
+  // failure; a live run keeps the card running and leaves the terminal
+  // transition to its run-level owners (subagent_ended, lifecycle sweep).
+  // An absent session or failed read keeps the event's own outcome so genuine
+  // failures are never lost.
+  let liveSessionKeys: ReadonlySet<string> | undefined;
+  if (params.readSessions && params.observation.state === "failed") {
+    try {
+      const snapshot = await params.readSessions({ includeUnknown: false });
+      liveSessionKeys = new Set(
+        snapshot.sessions
+          .filter((session) => session.hasActiveRun === true || session.status === "running")
+          .map((session) => session.key),
+      );
+    } catch {
+      liveSessionKeys = undefined;
+    }
+  }
+  const isLiveRunForCard = (card: WorkboardCard): boolean => {
+    if (!liveSessionKeys || liveSessionKeys.size === 0) {
+      return false;
+    }
+    const cardLookupKey = workboardCardSessionLookupKey(card);
+    for (const sessionKey of liveSessionKeys) {
+      if (
+        (params.source.sessionKey && sessionKeyMatchesCard(sessionKey, params.source.sessionKey)) ||
+        sessionKeyMatchesCard(sessionKey, cardLookupKey)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
   const updates = Promise.all(
-    cards.map(
-      async (card) =>
-        await params.store.syncLifecycle(card.id, {
-          ...LIFECYCLE_TARGETS[params.observation.state],
-          sourceUpdatedAt: params.observation.sourceUpdatedAt,
-          stale: params.observation.stale,
-          now: params.now,
-          ...(params.source.sessionKey
-            ? {
-                association: {
-                  ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
-                  ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
-                  sessionKey: params.source.sessionKey,
-                  ...(params.source.runId ? { runId: params.source.runId } : {}),
-                  acceptedAt: params.observation.sourceUpdatedAt ?? params.now,
-                },
-              }
-            : {}),
-        }),
-    ),
+    cards.map(async (card) => {
+      const state =
+        params.observation.state === "failed" && isLiveRunForCard(card)
+          ? ("running" as const)
+          : params.observation.state;
+      return await params.store.syncLifecycle(card.id, {
+        ...LIFECYCLE_TARGETS[state],
+        sourceUpdatedAt: params.observation.sourceUpdatedAt,
+        stale: params.observation.stale,
+        now: params.now,
+        ...(params.source.sessionKey
+          ? {
+              association: {
+                ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
+                ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
+                sessionKey: params.source.sessionKey,
+                ...(params.source.runId ? { runId: params.source.runId } : {}),
+                acceptedAt: params.observation.sourceUpdatedAt ?? params.now,
+              },
+            }
+          : {}),
+      });
+    }),
   );
   await Promise.all([
     updates,
@@ -190,6 +234,7 @@ export async function syncWorkboardAgentEnded(params: {
   event: { runId?: string; success: boolean };
   context: { runId?: string; sessionKey?: string };
   now?: number;
+  readSessions?: WorkboardLifecycleSessionReader;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
   const now = params.now ?? Date.now();
@@ -205,6 +250,7 @@ export async function syncWorkboardAgentEnded(params: {
         sourceUpdatedAt: now,
       },
       now,
+      ...(params.readSessions ? { readSessions: params.readSessions } : {}),
       ...(params.onMatched ? { onMatched: params.onMatched } : {}),
     })
   ).count;

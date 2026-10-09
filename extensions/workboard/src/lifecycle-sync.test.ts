@@ -400,6 +400,121 @@ describe("Workboard gateway lifecycle sync", () => {
     }
   });
 
+  it("keeps a live fallback run out of blocked on an attempt-level agent_end failure", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:worker:subagent:workboard-ops-fallback-live";
+    const card = await createLinkedCard(store, {
+      sessionKey,
+      runId: "run-agent",
+      execution: execution(sessionKey, "run-agent"),
+    });
+    const readSessions = vi.fn().mockResolvedValue({
+      sessions: [
+        { key: sessionKey, status: "running", hasActiveRun: true, updatedAt: card.updatedAt + 1 },
+      ],
+      complete: true,
+    });
+
+    await syncWorkboardAgentEnded({
+      store,
+      event: { runId: "run-agent", success: false },
+      context: { runId: "run-agent", sessionKey },
+      now: card.updatedAt + 2,
+      readSessions,
+    });
+
+    expect(readSessions).toHaveBeenCalledOnce();
+    const vetoed = await store.get(card.id);
+    expect(vetoed).toMatchObject({
+      status: "running",
+      execution: { status: "running" },
+    });
+    expect(vetoed?.metadata?.failureCount).toBeUndefined();
+    expect(
+      vetoed?.events?.some((event) => event.kind === "moved" && event.toStatus === "blocked"),
+    ).toBe(false);
+  });
+
+  it("still blocks immediately when agent_end fails after the run ended", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:worker:subagent:workboard-ops-terminal-failed";
+    const card = await createLinkedCard(store, {
+      sessionKey,
+      runId: "run-agent",
+      execution: execution(sessionKey, "run-agent"),
+    });
+    const readSessions = vi.fn().mockResolvedValue({
+      sessions: [
+        { key: sessionKey, status: "failed", hasActiveRun: false, updatedAt: card.updatedAt + 1 },
+      ],
+      complete: true,
+    });
+
+    await syncWorkboardAgentEnded({
+      store,
+      event: { runId: "run-agent", success: false },
+      context: { runId: "run-agent", sessionKey },
+      now: card.updatedAt + 2,
+      readSessions,
+    });
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "blocked",
+      execution: { status: "blocked" },
+      metadata: { failureCount: 1 },
+    });
+  });
+
+  it("keeps the event terminal outcome when the lifecycle liveness read fails", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:worker:subagent:workboard-ops-read-failure";
+    const card = await createLinkedCard(store, {
+      sessionKey,
+      runId: "run-agent",
+      execution: execution(sessionKey, "run-agent"),
+    });
+    const readSessions = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+
+    await syncWorkboardAgentEnded({
+      store,
+      event: { runId: "run-agent", success: false },
+      context: { runId: "run-agent", sessionKey },
+      now: card.updatedAt + 2,
+      readSessions,
+    });
+
+    expect(readSessions).toHaveBeenCalledOnce();
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "blocked",
+      execution: { status: "blocked" },
+    });
+  });
+
+  it("does not read lifecycle sessions for a successful agent_end", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:worker:subagent:workboard-ops-success";
+    const card = await createLinkedCard(store, {
+      sessionKey,
+      runId: "run-agent",
+      execution: execution(sessionKey, "run-agent"),
+    });
+    const readSessions = vi.fn();
+
+    await syncWorkboardAgentEnded({
+      store,
+      event: { runId: "run-agent", success: true },
+      context: { runId: "run-agent", sessionKey },
+      now: card.updatedAt + 2,
+      readSessions,
+    });
+
+    expect(readSessions).not.toHaveBeenCalled();
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "review",
+      execution: { status: "review" },
+    });
+  });
+
   it("marks an inactive running session stale and clears it after recovery", async () => {
     const store = createWorkboardSqliteTestStore();
     const sessionKey = "agent:main:dashboard:stale";
