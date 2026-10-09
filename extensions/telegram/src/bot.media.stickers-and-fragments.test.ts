@@ -68,7 +68,11 @@ describe("registered Telegram stickers and local media", () => {
     const context = harness.replySpy.mock.calls[0]![0];
     expect(context.BodyForAgent).toBe(caption ?? "");
     expect(context.media).toEqual([
-      expect.objectContaining({ kind: "video", contentType: "video/mp4", fileName: "animation.mp4" }),
+      expect.objectContaining({
+        kind: "video",
+        contentType: "video/mp4",
+        fileName: "animation.mp4",
+      }),
     ]);
     expect(await readFile(context.media![0]!.path!)).toEqual(animationBytes);
     expect(mediaDownload).toHaveBeenCalledOnce();
