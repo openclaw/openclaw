@@ -609,7 +609,7 @@ describe("prepareEmbeddedAttemptStream", () => {
   );
 
   it.each([false, true])(
-    "keeps finalization closed after revision or unsubscribe (unsubscribe: %s)",
+    "keeps finalization closed after a revision following side effects or unsubscribe (unsubscribe: %s)",
     async (unsubscribeDuringHook) => {
       let resolveHook:
         | ((value: { action: "revise"; reason: string } | { action: "continue" }) => void)
@@ -651,7 +651,11 @@ describe("prepareEmbeddedAttemptStream", () => {
       const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
         onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
       };
-      const decision = subscriptionInput.onBeforeTerminalDelivery?.(createBeforeFinalizeEvent());
+      // A revision after a side-effecting tool still rewinds only the draft.
+      const decision = subscriptionInput.onBeforeTerminalDelivery?.({
+        ...createBeforeFinalizeEvent(),
+        hadDeterministicSideEffect: true,
+      });
 
       try {
         await enteredHook.promise;
@@ -675,6 +679,7 @@ describe("prepareEmbeddedAttemptStream", () => {
           resolveHook?.({ action: "revise", reason: "Tighten the answer" });
           await expect(decision).resolves.toEqual({ suppressTerminalDelivery: true });
           expect(prepared.getBeforeAgentFinalizeRevisionEntryId()).toBe("canonical-entry-id");
+          expect(prepared.getBeforeAgentFinalizeRevisionReason()).toBe("Tighten the answer");
         }
         expect(hookMessages).toHaveLength(1);
         expect(prepared.queueHandle.isStopped?.()).toBe(true);
