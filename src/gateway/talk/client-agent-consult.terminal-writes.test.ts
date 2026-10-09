@@ -69,7 +69,7 @@ it.each([false, true])(
       },
       getVoiceSessionId: () => "voice-session",
       initialItems: [],
-      registerRun: () => {},
+      registerRun: async () => ({ release: () => {}, isCurrent: () => true }),
     });
     let settled = false;
     const run = runner.runPrompt({

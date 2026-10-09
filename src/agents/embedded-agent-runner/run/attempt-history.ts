@@ -32,7 +32,7 @@ export type CurrentUserTimestampMatch = {
 const LEADING_TIMESTAMP_ENVELOPE_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 const CONVERSATION_INFO_LABEL = markInboundContextLabel("Conversation info:");
 
-export function splitLeadingTimestampEnvelope(text: string): {
+function splitLeadingTimestampEnvelope(text: string): {
   body: string;
   envelope: string;
 } {

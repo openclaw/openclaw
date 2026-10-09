@@ -49,10 +49,13 @@ import type {
   SessionTranscriptCurrentTurnEntryRead,
   SessionTranscriptCurrentTurnEntryRequest,
 } from "./session-transcript-worker.types.js";
-import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
+import {
+  captureSessionTranscriptTargetBinding,
+  type CapturedSessionTranscriptTargetBinding,
+} from "./transcript-target-binding.js";
 
 type SessionTranscriptHydrationReader = {
-  target: ReturnType<typeof captureSessionTranscriptTargetBinding>;
+  target: CapturedSessionTranscriptTargetBinding;
   assertCurrent: () => void;
   read: () => Promise<PreparedSessionTranscriptHydration>;
   readCohort?: (

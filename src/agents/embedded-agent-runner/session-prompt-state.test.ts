@@ -155,6 +155,31 @@ describe("system prompt series", () => {
     ]);
   });
 
+  it("checkpoints permission-only changes across restored turns without repeating them", async () => {
+    const entries: SessionEntry[] = [];
+    const first = project(base);
+    await persist(entries);
+    const notice = "## Permission change\nThe workspace is now read-only.";
+    const withNotice = `${base.trimEnd()}\n\n<!-- openclaw:attempt:PERMISSION -->\n${notice}\n<!-- /openclaw:attempt:PERMISSION -->`;
+    for (const prompt of [withNotice, base, withNotice]) {
+      clearEmbeddedSessionPromptStates(["system-series"]);
+      const prepared = project(prompt, entries);
+      expect(prepared.systemPrompt).toBe(first.systemPrompt);
+      expect(prepared.update?.content).toBe(
+        prompt === base
+          ? undefined
+          : `System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n${notice}`,
+      );
+      const checkpoints = entries.length;
+      await persist(entries);
+      expect(entries).toHaveLength(checkpoints + 1);
+      clearEmbeddedSessionPromptStates(["system-series"]);
+      expect(project(prompt, entries).update).toBeUndefined();
+      await persist(entries);
+      expect(entries).toHaveLength(checkpoints + 1);
+    }
+  });
+
   it("retries an unpersisted update after cancellation or a failed checkpoint write", async () => {
     const entries: SessionEntry[] = [];
     project(base);

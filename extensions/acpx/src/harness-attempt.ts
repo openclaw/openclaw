@@ -367,10 +367,10 @@ export async function runAcpHarnessAttempt(params: {
       runId: input.runId,
       updateMode: "inline",
       message: { ...assistant, idempotencyKey: assistantItemId },
-      beforeFreshMessageCommit: createNativeSessionBindingAuthority(
-        [],
-        input.hostCapabilities.assertActive,
-      ).assertLegacyCurrent,
+      preparation: {
+        source: createNativeSessionBindingAuthority([], input.hostCapabilities.assertActive)
+          .assertLegacyCurrent,
+      },
     });
     if (written.kind !== "result") {
       throw new Error("ACP assistant transcript was not committed");

@@ -146,7 +146,7 @@ describe("ManagedWorktreeService branch discovery", () => {
         signal,
       );
       release.resolve();
-      expect(await Promise.all(pending)).toEqual(
+      expect(await Promise.all(pending)).toMatchObject(
         Array.from({ length: callers }, () => ({
           commit: head,
           gitOperand: "refs/remotes/origin/main",

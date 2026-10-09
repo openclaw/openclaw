@@ -482,7 +482,7 @@ export function createSessionHistoryWorkerReaders(
       (value) => value.entry,
     ),
     readDiagnosticText: reader("session-diagnostic-text", "diagnostic text", (value) => value.text),
-    readEntries: async (scope, continuation, expectedIdentity) => {
+    readEntries: async (scope, continuation, expectedIdentity, ifRevision) => {
       const captured = expectedIdentity && { ...expectedIdentity };
       const assertIdentity = () => {
         if (
@@ -496,13 +496,19 @@ export function createSessionHistoryWorkerReaders(
       return runRequest(
         () => {
           assertIdentity();
-          return { kind: "session-entry-list", scope, continuation, expectedIdentity: captured };
+          return {
+            kind: "session-entry-list",
+            scope,
+            continuation,
+            expectedIdentity: captured,
+            ifRevision,
+          };
         },
-        JSON.stringify({ scope, continuation, expectedIdentity: captured }).length * 2,
+        JSON.stringify({ scope, continuation, expectedIdentity: captured, ifRevision }).length * 2,
         (value) => {
           assertResultKind(value, "session-entry-list", "entries");
           assertIdentity();
-          return value.entries;
+          return value;
         },
       );
     },

@@ -130,22 +130,16 @@ function providerHint(provider: SecretProviderConfig): string {
 }
 
 function toSourceChoices(config: OpenClawConfig): Array<{ value: SecretRefSource; label: string }> {
-  const hasSource = (source: SecretRefSource) =>
-    Object.values(config.secrets?.providers ?? {}).some((provider) => provider.source === source);
-  const choices: Array<{ value: SecretRefSource; label: string }> = [
-    {
-      value: "env",
-      label: "env",
-    },
-    { value: "store", label: "store" },
-  ];
-  if (hasSource("file")) {
-    choices.push({ value: "file", label: "file" });
-  }
-  if (hasSource("exec")) {
-    choices.push({ value: "exec", label: "exec" });
-  }
-  return choices;
+  return (["env", "store", "file", "exec"] as const)
+    .filter(
+      (source) =>
+        source === "env" ||
+        source === "store" ||
+        Object.values(config.secrets?.providers ?? {}).some(
+          (provider) => provider.source === source,
+        ),
+    )
+    .map((value) => ({ value, label: value }));
 }
 
 function assertNoCancel<T>(value: T | typeof CANCEL_SYMBOL): T {

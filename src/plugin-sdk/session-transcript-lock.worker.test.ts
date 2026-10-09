@@ -38,11 +38,15 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withCodexSessionTranscriptMirrorWriteLock } from "./codex-session-transcript-runtime.js";
+import {
+  withCodexSessionTranscriptMirrorWrite,
+  withCodexSessionTranscriptMirrorWriteLock,
+} from "./codex-session-transcript-runtime.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
   composeSessionTranscriptWriteAssertion,
+  withSessionTranscriptWrite,
   withSessionTranscriptWriteLock,
   type SessionTranscriptWriteLockContext,
 } from "./session-transcript-runtime.js";
@@ -109,11 +113,11 @@ it.each([false, true])(
           })
         : undefined;
       const expected = { ...message, custom: prepared ? "prepared value" : "stored value" };
-      const result = await withSessionTranscriptWriteLock(scope, (locked) =>
+      const result = await withSessionTranscriptWrite(scope, (locked) =>
         locked.appendMessage({
           eventId: "custom-json",
           message,
-          prepareMessageAfterIdempotencyCheckAsync: prepare,
+          ...(prepare ? { preparation: { prepareMessage: prepare } } : {}),
         }),
       );
       expect(result).toMatchObject({ appended: true, message: expected });
@@ -121,8 +125,11 @@ it.each([false, true])(
         expect.objectContaining({ id: "custom-json", message: expected }),
       );
       await expect(
-        withSessionTranscriptWriteLock(scope, (locked) =>
-          locked.appendMessage({ message, prepareMessageAfterIdempotencyCheckAsync: prepare }),
+        withSessionTranscriptWrite(scope, (locked) =>
+          locked.appendMessage({
+            message,
+            ...(prepare ? { preparation: { prepareMessage: prepare } } : {}),
+          }),
         ),
       ).resolves.toMatchObject({ appended: false, message: expected });
     });
@@ -159,10 +166,10 @@ it("rechecks the Codex prepared guard at the worker commit grant", async () => {
     const sql = observeHostDataSql();
     try {
       await expect(
-        withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
+        withCodexSessionTranscriptMirrorWrite(scope, (locked) =>
           locked.appendMessageWithMessageSequence({
             message: { role: "assistant", content: "revoked" },
-            beforeFreshMessageCommit: guard,
+            preparation: { source: guard },
           }),
         ),
       ).rejects.toThrow("Codex write authority revoked");
@@ -176,7 +183,7 @@ it("rechecks the Codex prepared guard at the worker commit grant", async () => {
 });
 
 it.each(["physical", "logical"] as const)(
-  "retains the prepared owner's %s target binding for a locked write",
+  "retains the prepared owner's %s target binding for writes and facts queries",
   async (locator) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const scope = await seed(env, locator);
@@ -190,6 +197,37 @@ it.each(["physical", "logical"] as const)(
         ),
       ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
       expect(messageIds(other)).toEqual([]);
+      await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        eventId: "captured-facts",
+        message: { role: "assistant", content: "captured target", idempotencyKey: "captured" },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        ...other,
+        eventId: "foreign-facts",
+        message: { role: "assistant", content: "foreign target", idempotencyKey: "foreign" },
+      });
+      const query = {
+        idempotencyKeys: ["captured", "foreign"],
+        scope: { ...other, path: openOpenClawAgentDatabase(other).path },
+        sessionKey: other.sessionKey,
+        sessionId: other.sessionId,
+      };
+      await withCodexSessionTranscriptMirrorWrite(scope, async (transcript) => {
+        const facts = await transcript.readMessageFacts(query);
+        expect(
+          [...facts.existingIdempotencyKeys],
+          "Facts queries must retain their captured transcript target",
+        ).toEqual(["captured"]);
+        expect(facts.messagesByIdempotencyKey.get("captured")).toMatchObject({
+          content: "captured target",
+        });
+        expect(facts.anchorsByIdempotencyKey.get("captured")).toMatchObject({
+          entryId: "captured-facts",
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+        });
+      });
     });
   },
 );
@@ -342,11 +380,11 @@ it.each([
       const options = {
         eventId: "prepared-grant",
         message,
-        beforeFreshMessageCommit,
+        preparation: { source: beforeFreshMessageCommit },
       };
       const sql = observeHostDataSql();
       try {
-        const operation = withSessionTranscriptWriteLock(scope, (locked) =>
+        const operation = withSessionTranscriptWrite(scope, (locked) =>
           locked.appendMessage(options),
         );
         if (stale && !replay) {

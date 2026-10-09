@@ -12,7 +12,9 @@ import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -32,6 +34,7 @@ import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenan
 import { historicalV14AgentSchemaSql } from "./state-migrations.media-persistence.historical-schema.test-support.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
+import { repairDoctorSessionWindowsBeforeMigration } from "./state-migrations.session-window-repair.js";
 
 const tempDirs: string[] = [];
 
@@ -72,12 +75,30 @@ function seedOrphanSessionWindows(pathname: string) {
   database.exec("DELETE FROM session_nodes WHERE current_session_id != 'retained';");
 }
 
-it.each(["repair", "unrelated violation", "cleanup failure"] as const)(
-  "Doctor preserves original orphan history before repair and refuses unsafe changes (%s)",
-  async (scenario) => {
+it.each([
+  ["repair", OPENCLAW_AGENT_SCHEMA_VERSION, false],
+  ["unrelated violation", OPENCLAW_AGENT_SCHEMA_VERSION, false],
+  ["cleanup failure", OPENCLAW_AGENT_SCHEMA_VERSION, false],
+  ["repair", 24, false],
+  ["repair", 24, true],
+] as const)(
+  "Doctor preserves original orphan history before repair (%s, schema %i, before migration %s)",
+  async (scenario, schemaVersion, beforeMigration) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { agentId: "main", env: state.env };
-      const { path: pathname } = openOpenClawAgentDatabase(options);
+      const pathname = resolveOpenClawAgentSqlitePath(options);
+      if (schemaVersion === 24) {
+        openOpenClawStateDatabase({ env: state.env });
+        fs.mkdirSync(path.dirname(pathname), { recursive: true });
+        using source = new NativeDatabaseSync(pathname);
+        source.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
+        source.exec(`PRAGMA user_version = 24;
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+          VALUES ('primary', 'agent', 24, 'main', '2026.9.9', 1, 1)`);
+        registerOpenClawAgentDatabase({ ...options, path: pathname, schemaVersion });
+      } else {
+        openOpenClawAgentDatabase(options);
+      }
       closeOpenClawAgentDatabasesForTest();
       seedOrphanSessionWindows(pathname);
       const readRows = (database: DatabaseSync) => ({
@@ -123,7 +144,21 @@ it.each(["repair", "unrelated violation", "cleanup failure"] as const)(
           throw new Error("fixture cleanup refused after deleting search rows");
         });
       }
+      const preMigrationChanges = beforeMigration
+        ? await repairDoctorSessionWindowsBeforeMigration({
+            env: state.env,
+            targets: [
+              {
+                agentId: "main",
+                path: pathname,
+                realPath: fs.realpathSync(pathname),
+                source: "registry",
+              },
+            ],
+          })
+        : [];
       const result = await migrateLegacyMediaPersistence({ env: state.env });
+      result.changes.unshift(...preMigrationChanges);
       if (scenario === "cleanup failure") {
         expect(removedSearchRows).toBe(1);
       }
@@ -134,6 +169,9 @@ it.each(["repair", "unrelated violation", "cleanup failure"] as const)(
           `Removed 2 orphan session window(s) from ${pathname}; their dependent history remains in the backup.`,
         );
         expect(repaired.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(repaired.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
         const retained = readRows(repaired);
         for (const key of ["windows", "events", "search"] as const) {
           expect(retained[key]).toEqual(

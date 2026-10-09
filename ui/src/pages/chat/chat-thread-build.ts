@@ -10,7 +10,6 @@ import {
   accumulatedStreamText,
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
-  streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
@@ -539,16 +538,11 @@ export function buildChatItems(
     const segment = indexedSegments[i];
     if (segment) {
       const text = sanitizeStreamText(segment.text);
-      const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
-      const visibleText = usesAccumulatedText
-        ? trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText)
-        : text;
-      if (usesAccumulatedText) {
-        previousAccumulatedStreamText = advanceAccumulatedStreamText(
-          previousAccumulatedStreamText,
-          text,
-        );
-      }
+      const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+      previousAccumulatedStreamText = advanceAccumulatedStreamText(
+        previousAccumulatedStreamText,
+        text,
+      );
       if (visibleText.length > 0 && segment.persisted !== true) {
         const streamKey = `stream-seg:${props.sessionKey}:${i}`;
         appendStreamSegment(segment, streamKey, visibleText);

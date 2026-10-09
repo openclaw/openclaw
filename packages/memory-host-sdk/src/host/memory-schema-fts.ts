@@ -109,38 +109,30 @@ function buildMemoryFtsTriggers<
   Insert extends string,
   Delete extends string,
 >(name: Name, table: Table, columns: Columns, insert: Insert, remove: Delete) {
+  const trigger = <Event extends string, Clause extends string, Body extends string>(
+    event: Event,
+    clause: Clause,
+    body: Body,
+  ) =>
+    ({
+      name: `${name}_after_${event}`,
+      sql: `
+      CREATE TRIGGER IF NOT EXISTS main.${name}_after_${event}
+      AFTER ${clause} ON ${table}
+      BEGIN
+${body}
+      END;
+    `,
+    }) as const;
   return [
-    {
-      name: `${name}_after_insert`,
-      sql: `
-      CREATE TRIGGER IF NOT EXISTS main.${name}_after_insert
-      AFTER INSERT ON ${table}
-      BEGIN
-${insert}
-      END;
-    `,
-    },
-    {
-      name: `${name}_after_update`,
-      sql: `
-      CREATE TRIGGER IF NOT EXISTS main.${name}_after_update
-      AFTER UPDATE OF ${columns} ON ${table}
-      BEGIN
-${remove}
-${insert}
-      END;
-    `,
-    },
-    {
-      name: `${name}_after_delete`,
-      sql: `
-      CREATE TRIGGER IF NOT EXISTS main.${name}_after_delete
-      AFTER DELETE ON ${table}
-      BEGIN
-${remove}
-      END;
-    `,
-    },
+    trigger("insert", "INSERT", insert),
+    trigger(
+      "update",
+      `UPDATE OF ${columns}`,
+      `${remove}
+${insert}`,
+    ),
+    trigger("delete", "DELETE", remove),
   ] as const;
 }
 

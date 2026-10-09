@@ -98,8 +98,16 @@ export async function consumeAnthropicStream(params: {
     let sawMessageStop = false;
     let sawStopReason = false;
     const pendingTextEnds: Array<Extract<AssistantMessageEvent, { type: "text_end" }>> = [];
-    // Hold text_end until tool-boundary classification is known.
-    const flushPendingTextEnds = () => {
+    // Proxies may label tool turns end_turn; classify their text before releasing text_end.
+    const flushPendingTextEnds = (classifyToolTurn = false) => {
+      if (
+        managed &&
+        classifyToolTurn &&
+        (output.stopReason === "toolUse" ||
+          output.content.some((block) => block.type === "toolCall"))
+      ) {
+        tagPendingCommentaryText(output.content);
+      }
       for (const event of pendingTextEnds) {
         eventSink.push(event);
       }
@@ -494,17 +502,7 @@ export async function consumeAnthropicStream(params: {
         }
         applyAnthropicMessageDeltaUsage(output.usage, usage, messageStartPromptUsage);
         calculateCost(costModel, output.usage);
-        // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
-        // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on
-        // tool-using turns. No-op for direct Anthropic (already "toolUse" here).
-        if (
-          managed &&
-          (output.stopReason === "toolUse" ||
-            output.content.some((block) => block.type === "toolCall"))
-        ) {
-          tagPendingCommentaryText(output.content);
-        }
-        flushPendingTextEnds();
+        flushPendingTextEnds(true);
       }
     }
     // Anthropic completes every SSE response with message_stop. Compatible
@@ -547,18 +545,7 @@ export async function consumeAnthropicStream(params: {
       });
     }
     refusalBuffer?.flush();
-    // Backstop: streaming tags commentary at the tool-boundary above, but
-    // replay/non-streaming assembly may reach here with tool calls untagged.
-    // Idempotent, so it never double-tags the streaming path. Gate on the turn
-    // containing a tool call (not stop_reason) so proxied Bedrock/Vertex routes
-    // that mislabel tool turns as "end_turn" still tag their narration.
-    if (
-      managed &&
-      (output.stopReason === "toolUse" || output.content.some((block) => block.type === "toolCall"))
-    ) {
-      tagPendingCommentaryText(output.content);
-    }
-    flushPendingTextEnds();
+    flushPendingTextEnds(true);
   } finally {
     logAnthropicThinkingDrops(inputTransformations);
   }

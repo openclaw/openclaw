@@ -17,7 +17,6 @@ import {
 import { prepareSqliteTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { canonicalSessionValidationQuery } from "../config/sessions/session-canonical-key.js";
 import { validateCanonicalSessionRow } from "../config/sessions/session-canonical-row.js";
-import { certifyCanonicalSessionValidationRow } from "../config/sessions/session-canonical-validation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -373,7 +372,6 @@ test.each(["unchanged", "caller", "runtime"] as const)(
               foreign
                 .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
                 .run(sessionKey);
-              certifyCanonicalSessionValidationRow(database, sessionKey);
             });
           } finally {
             foreign.close();

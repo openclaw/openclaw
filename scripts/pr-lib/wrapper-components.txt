@@ -644,6 +644,7 @@ src/config/sessions/session-sqlite-target.ts
 src/config/sessions/session-store-config.ts
 src/config/sessions/session-store-owner.ts
 src/config/sessions/session-store-read-candidates.ts
+src/config/sessions/session-store-target-inventory.ts
 src/config/sessions/supported-session-store.ts
 src/config/sessions/session-transcript-projection-error.ts
 src/config/sessions/session-transcript-read-fence-error.ts
@@ -656,6 +657,7 @@ src/config/sessions/store-entry.ts
 src/config/sessions/targets-collision.ts
 src/config/sessions/targets-configured-agents.ts
 src/config/sessions/targets-path-validation.ts
+src/config/sessions/targets-read-availability.ts
 src/config/sessions/targets.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-target-binding.ts
@@ -894,7 +896,6 @@ src/infra/git-network-retry.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
 src/infra/git-path-quote.ts
-src/infra/git-read-operations.runtime.ts
 src/infra/git-ref-lock-repair.ts
 src/infra/git-repository-repair.ts
 src/infra/git-root.ts
@@ -1628,6 +1629,7 @@ src/state/config-machine-state-write.ts
 src/state/config-machine-state.ts
 src/state/creator-namespace-migration.ts
 src/state/openclaw-agent-board-schema.ts
+src/state/openclaw-agent-canonical-validation-migration.ts
 src/state/openclaw-agent-canonical-validation-receipt.ts
 src/state/openclaw-agent-canonical-validation-schema.ts
 src/state/openclaw-agent-context-engine-turn-outbox-schema.ts
@@ -1664,6 +1666,7 @@ src/state/openclaw-agent-db-session-migrations.ts
 src/state/openclaw-agent-db-session-nodes-migration.ts
 src/state/openclaw-agent-db-session-provenance.ts
 src/state/openclaw-agent-db-terminal.ts
+src/state/openclaw-agent-db-transaction.ts
 src/state/openclaw-agent-db-validation-cache.ts
 src/state/openclaw-agent-db.paths.ts
 src/state/openclaw-agent-db.ts
@@ -1671,8 +1674,10 @@ src/state/openclaw-agent-db.wal.ts
 src/state/openclaw-agent-execution-cleanup.ts
 src/state/openclaw-agent-execution-config.ts
 src/state/openclaw-agent-execution-contract.ts
+src/state/openclaw-agent-execution-incognito-absence.ts
 src/state/openclaw-agent-execution-incognito.ts
 src/state/openclaw-agent-execution-native.ts
+src/state/openclaw-agent-execution-owner.ts
 src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
@@ -1922,6 +1927,8 @@ src/config/sessions/session-accessor.sqlite-entry-cache-publication.ts
 src/config/sessions/session-accessor.sqlite-entry-cache.ts
 src/config/sessions/session-accessor.sqlite-entry-cache.types.ts
 src/config/sessions/session-accessor.sqlite-entry-receipt.ts
+src/config/sessions/session-accessor.sqlite-entry-worker-publication.ts
+src/config/sessions/session-transcript-authority.ts
 src/config/sessions/session-accessor.sqlite-incognito-sharing.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age-queries.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age.ts

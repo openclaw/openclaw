@@ -174,6 +174,18 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/session-accessor.sqlite-transcript-state.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["advanceTranscriptMutationAtInTransaction"],
+        guard: "!findOpenClawAgentDatabaseIdentity(database)",
+        evidence:
+          "Only the unadmitted legacy UPDATE is guarded here. createMigrationDatabaseHandle in state-migrations.agent-database.ts supplies raw media/directive migration handles. Durable and incognito runtime openers register identity before exposure; their RETURNING executor remains T1.",
+      },
+    ],
+  ],
+  [
     "src/plugins/installed-plugin-index-store-write.ts",
     [
       {
@@ -1063,10 +1075,27 @@ const reviewedOperations = new Map([
     "src/gateway/worker-environments/placement-workspace-reservation.kernel.ts",
     [
       {
+        tier: "T1",
+        operations: ["readWorkspaceReservationAuthority"],
+        evidence:
+          "Native workspace reservation preparation and final publication guard share one current query. Native/SDK and foreign writers prevent cached authority; retirement requires complete revocation publications and foreign-writer custody at the next Plugin SDK major.",
+      },
+      {
         tier: "W",
         operations: ["assertSessionWorkspaceUnreserved"],
         evidence:
           "placement-dispatch-store.worker.ts:39 and placement-turn-claims.ts:93 claim path; claims only invoked at placement-turn-claims.worker.ts:160,175,345. Native placement-store.ts:75,76 selects clear/wait/validate methods.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/worker-environments/placement-read-projection.ts",
+    [
+      {
+        tier: "T1",
+        operations: ["readWorkerPlacementMoveAuthorityInDatabase"],
+        evidence:
+          "placement-store.readCurrentMoveAuthority serves native move-abandon, move-service recovery, and pending-result guards. Retained until native/SDK and foreign-writer revocation is fully owned at the next Plugin SDK major. Other projection operations remain worker-only.",
       },
     ],
   ],
@@ -2114,7 +2143,7 @@ const workerModules = new Set([
   "src/gateway/session-history-worker-reader.ts", // Only session-transcript.worker.ts dispatches history metadata reads.
 
   "src/gateway/worker-environments/inference-store.kernel.ts", // Inference worker dispatcher creates this kernel only.
-  "src/gateway/worker-environments/placement-read-projection.ts", // Shared-state read worker placement projection and recovery dispatchers only.
+  "src/gateway/worker-environments/placement-read-projection.ts", // Worker projection; the retained final move guard has an explicit T1 override.
   "src/gateway/worker-environments/session-attachment-store.ts", // Environment worker kernel and read-worker attachment facts only.
   "src/gateway/worker-environments/store-mutations.ts", // Environment worker kernel, transitions, and initialization only.
   "src/gateway/worker-environments/store-row-codec.ts", // Environment and placement workers plus shared-state read-worker facts only.
@@ -2185,13 +2214,14 @@ const cliModules = new Map([
   ],
 ]);
 
-function classify(file, operation, binding) {
+function classify(file, operation, binding, guards) {
   const reviewedOperation = reviewedOperations
     .get(file)
     ?.find(
       (entry) =>
         entry.operations.includes(operation) &&
-        (entry.binding === undefined || entry.binding === binding),
+        (entry.binding === undefined || entry.binding === binding) &&
+        (entry.guard === undefined || guards?.includes(entry.guard)),
     );
   if (reviewedOperation) {
     return { tier: reviewedOperation.tier, priority: 99, evidence: reviewedOperation.evidence };
@@ -2266,12 +2296,14 @@ function findCalls(source) {
     }
   }
   const calls = [];
-  function visit(node, parentOperation, parentBinding) {
+  function visit(node, parentOperation, parentBinding, parentGuards = []) {
     let operation = parentOperation;
     let binding = parentBinding;
-    // Initializer exceptions stop at callbacks; their SQL needs its own caller proof.
+    let guards = parentGuards;
+    // Callback SQL needs its own proof; neither an initializer nor a caller's guard covers it.
     if (ts.isFunctionLikeDeclaration(node)) {
       binding = undefined;
+      guards = [];
     } else if (ts.isVariableDeclaration(node) && node.initializer) {
       binding = ts.isIdentifier(node.name) ? node.name.text : undefined;
     }
@@ -2285,6 +2317,14 @@ function findCalls(source) {
       (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer));
     if ((namedFunction || assignedFunction) && node.name && ts.isIdentifier(node.name)) {
       operation = operation ? `${operation}.${node.name.text}` : node.name.text;
+    }
+    if (ts.isIfStatement(node)) {
+      visit(node.expression, operation, binding, guards);
+      visit(node.thenStatement, operation, binding, [...guards, node.expression.getText(source)]);
+      if (node.elseStatement) {
+        visit(node.elseStatement, operation, binding, guards);
+      }
+      return;
     }
     if (ts.isCallExpression(node)) {
       const expression = node.expression;
@@ -2304,10 +2344,11 @@ function findCalls(source) {
           column: character + 1,
           operation,
           ...(binding === undefined ? {} : { binding }),
+          ...(guards.length === 0 ? {} : { guards }),
         });
       }
     }
-    node.forEachChild((child) => visit(child, operation, binding));
+    node.forEachChild((child) => visit(child, operation, binding, guards));
   }
   visit(source, "");
   return calls;
@@ -2367,7 +2408,7 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
       const calls = findCalls(sources[index]);
       const groups = new Map();
       for (const call of calls) {
-        const classification = classify(file, call.operation, call.binding);
+        const classification = classify(file, call.operation, call.binding, call.guards);
         const group = groups.get(classification.tier) ?? {
           file,
           owner: ownerOf(file),
@@ -2415,13 +2456,13 @@ function render(rows) {
     "",
     `This snapshot contains **${total.files} non-test files and ${total.calls} call expressions** for the five primitives below. The campaign previously reported 404 files; that is a historical estimate, not a fixed target or a count of call expressions. This inventory follows current source and excludes import-only matches, comments, tests, fixtures, and test support. Its scan scope and exclusions are explicit below.`,
     "",
-    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser and `rg`; it does not load application code or open a database.",
+    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, enclosing synchronous guards, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser and `rg`; it does not load application code or open a database.",
     "",
     "## Scope and interpretation",
     "",
     "T1 is request/event/timer exposure, including conservatively retained runtime or mixed kernels whose callers still need tracing. T2 is startup, migration, or a named boot/lock exception candidate. T3 is CLI, Doctor, or developer one-shot code. W marks worker implementations separately: their synchronous SQL is intentional and is not outstanding main-thread debt. A filename-based T2/T3/W classification is an audit lead, not a proof that every caller is safe. Do not move a mixed kernel or a module with ‘worker’ in its name to W without tracing its callers.",
     "",
-    "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer. Initializer exceptions exclude nested function bodies, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
+    "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer or an exact synchronous guard. These qualifiers exclude nested function bodies, and a guard applies only to its then-branch, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",
     "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks or initialization rollback require native transactions. Synchronous lifecycle and final-effect authority checks remain native residuals. Incognito category reads and native approval SDK compatibility retain their existing classifications. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
     "",

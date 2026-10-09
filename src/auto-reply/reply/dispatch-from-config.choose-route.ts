@@ -36,11 +36,7 @@ import {
 } from "./dispatch-from-config.payloads.js";
 import { suppressPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
-import { runReplyDispatchTakeover } from "./dispatch-from-config.reply-dispatch-hook.js";
-import {
-  resolveRestrictedRuntimeTakeover,
-  type DispatchTakeoverReply,
-} from "./dispatch-from-config.restricted-runtime.js";
+import { runReplyDispatchHook } from "./dispatch-from-config.reply-dispatch-hook.js";
 import { createSessionMetadataChangeNotifier } from "./dispatch-from-config.session-metadata.js";
 import {
   captureDeliveredTranscriptMirror,
@@ -355,15 +351,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     let appliedTtsPayload = payload;
     if (!options.skipTts && payload.isReasoning !== true && payload.isCommentary !== true) {
       try {
-        appliedTtsPayload = await state.maybeApplyTtsWithFinalizationLease({
-          payload: ttsInputPayload,
-          cfg,
-          channel: deliveryChannel,
-          kind: "final",
-          ttsAuto: sessionTtsAuto,
-          agentId: sessionAgentId,
-          accountId: replyRoute.accountId,
-        });
+        appliedTtsPayload = await state.maybeApplyTtsWithFinalizationLease(
+          ttsInputPayload,
+          "final",
+        );
       } catch (error) {
         if (!shouldAttachDeferredText) {
           throw error;
@@ -556,7 +547,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     };
   };
 
-  let takeover: DispatchTakeoverReply | undefined;
+  let takeover:
+    | { payload: ReplyPayload; deliveryId: string; recordProcessed: () => void }
+    | undefined;
   if (
     state.allowInboundHandlers &&
     !admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings) &&
@@ -624,7 +617,20 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
   }
 
-  takeover ??= resolveRestrictedRuntimeTakeover(state);
+  if (
+    !takeover &&
+    state.dispatchKind === "acp" &&
+    admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings)
+  ) {
+    const error =
+      "This session's bound runtime cannot enforce its permission or tool policy; use an embedded runtime for this restricted conversation.";
+    takeover = {
+      payload: { text: error, isError: true },
+      deliveryId: "restricted-runtime-takeover",
+      recordProcessed: () =>
+        state.recordProcessed("error", { reason: "restricted_runtime_takeover", error }),
+    };
+  }
   if (takeover) {
     const { queuedFinal, routedFinalCount } =
       takeover.payload.text && !state.suppressDelivery
@@ -645,13 +651,20 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     };
   }
 
-  const replyDispatchTakeover = await runReplyDispatchTakeover(
-    state,
+  const replyDispatchTakeover = await runReplyDispatchHook(state, {
     shouldSendToolSummaries,
     shouldSendToolSummariesAsync,
-  );
-  if (replyDispatchTakeover) {
-    return replyDispatchTakeover;
+  });
+  if (replyDispatchTakeover?.handled) {
+    commitInboundDedupeIfClaimed();
+    completeDispatchReplyOperation();
+    return {
+      status: "complete" as const,
+      result: attachSourceReplyDeliveryMode({
+        queuedFinal: replyDispatchTakeover.queuedFinal,
+        counts: replyDispatchTakeover.counts,
+      }),
+    };
   }
 
   const dispatchPhase = state.activeRunSafeCommandTurn ? "command_resolution" : "dispatch";

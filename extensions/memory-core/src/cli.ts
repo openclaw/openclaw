@@ -13,7 +13,6 @@ import type {
   MemoryForgetCommandOptions,
   MemoryPromoteExplainOptions,
   MemorySearchCommandOptions,
-  MemoryResetCommandOptions,
 } from "./cli.types.js";
 import { configureMemoryCoreDreamingState } from "./dreaming-state.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
@@ -64,6 +63,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       name:
         | "runMemoryStatus"
         | "runMemoryIndex"
+        | "runMemoryReset"
         | "runMemoryPromote"
         | "runMemoryRemHarness"
         | "runMemoryRemBackfill"
@@ -128,10 +128,18 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
     );
 
-  memory
-    .command("status")
-    .description("Show memory search index status")
-    .option("--agent <id>", "Agent id (default: all configured agents)")
+  const agentCommand = (name: string, description: string, allAgents = false) =>
+    memory
+      .command(name)
+      .description(description)
+      .option(
+        "--agent <id>",
+        allAgents
+          ? "Agent id (default: all configured agents)"
+          : "Agent id (default: default agent)",
+      );
+
+  agentCommand("status", "Show memory search index status", true)
     .option("--json", "Print JSON")
     .option("--deep", "Check embedding provider availability")
     .option("--index", "Reindex if dirty (implies --deep)")
@@ -139,23 +147,18 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--verbose", "Verbose logging", false)
     .action(lazyAction("runMemoryStatus"));
 
-  memory
-    .command("index")
-    .description("Reindex memory files")
-    .option("--agent <id>", "Agent id (default: all configured agents)")
+  agentCommand("index", "Reindex memory files", true)
     .option("--force", "Force full reindex", false)
     .option("--verbose", "Verbose logging", false)
     .action(lazyAction("runMemoryIndex"));
 
-  memory
-    .command("reset")
-    .description("Clear the derived memory index and embedding cache without deleting sessions")
-    .option("--agent <id>", "Agent id (default: all configured agents)")
+  agentCommand(
+    "reset",
+    "Clear the derived memory index and embedding cache without deleting sessions",
+    true,
+  )
     .option("--yes", "Skip confirmation", false)
-    .action(async (opts: MemoryResetCommandOptions) => {
-      const runtime = await import("./cli.runtime.js");
-      await runtime.runMemoryReset(opts);
-    });
+    .action(lazyAction("runMemoryReset"));
 
   memory
     .command("search")
@@ -183,10 +186,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       await runtime.runMemorySearch(query, opts, hostOptions);
     });
 
-  memory
-    .command("forget")
-    .description("Delete memories and derived artifacts from selected sessions")
-    .option("--agent <id>", "Agent id (default: default agent)")
+  agentCommand("forget", "Delete memories and derived artifacts from selected sessions")
     .option(
       "--session <id-or-key>",
       "Source session ID or key (repeatable)",
@@ -218,10 +218,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       await runtime.runMemoryForget(opts);
     });
 
-  memory
-    .command("promote")
-    .description("Rank short-term recalls and optionally append top entries to MEMORY.md")
-    .option("--agent <id>", "Agent id (default: default agent)")
+  agentCommand("promote", "Rank short-term recalls and optionally append top entries to MEMORY.md")
     .option("--limit <n>", "Max candidates", memoryCliNumberOption("--limit", "positive integer"))
     .option(
       "--min-score <n>",
@@ -259,20 +256,20 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       await runtime.runMemoryPromoteExplain(selector, opts, hostOptions);
     });
 
-  memory
-    .command("rem-harness")
-    .description("Preview REM reflections, candidate truths, and deep promotions without writing")
-    .option("--agent <id>", "Agent id (default: default agent)")
+  agentCommand(
+    "rem-harness",
+    "Preview REM reflections, candidate truths, and deep promotions without writing",
+  )
     .option("--path <file-or-dir>", "Seed the harness from historical daily memory file(s)")
     .option("--grounded", "Also render a grounded day-level REM preview")
     .option("--include-promoted", "Include already promoted deep candidates", false)
     .option("--json", "Print JSON")
     .action(lazyAction("runMemoryRemHarness"));
 
-  memory
-    .command("rem-backfill")
-    .description("Write grounded historical REM summaries into DREAMS.md for UI review")
-    .option("--agent <id>", "Agent id (default: default agent)")
+  agentCommand(
+    "rem-backfill",
+    "Write grounded historical REM summaries into DREAMS.md for UI review",
+  )
     .option("--path <file-or-dir>", "Historical daily memory file(s) or directory")
     .option("--rollback", "Remove previously written grounded REM backfill entries", false)
     .option(
@@ -288,10 +285,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--json", "Print JSON")
     .action(lazyAction("runMemoryRemBackfill"));
 
-  memory
-    .command("session-backfill")
-    .description("Distill retained session history into staged memory candidates")
-    .option("--agent <id>", "Agent id (default: default agent)")
+  agentCommand("session-backfill", "Distill retained session history into staged memory candidates")
     .option("--from <YYYY-MM-DD>", "Oldest transcript day to include")
     .option("--to <YYYY-MM-DD>", "Newest transcript day to include")
     .option(

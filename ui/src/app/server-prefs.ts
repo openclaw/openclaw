@@ -194,13 +194,8 @@ function cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[]): void 
 // localStorage pending is a cross-tab merged pool per gateway. Per-key read-merge-write prevents
 // one tab from clobbering sibling offline intent; its ms-scale race is accepted because storage has
 // no CAS and the drain converges through server-side LWW.
-function mergePendingIntoStorage(): void {
+function mergePendingIntoStorage(ackedBatch: ServerUiPrefs = {}): void {
   const stored = parseStoredPrefs(readStorage(PENDING_KEY, pendingScope)) ?? {};
-  const merged = { ...stored, ...pendingPrefs };
-  writePendingStorage(Object.keys(merged).length ? merged : null);
-}
-function settlePendingStorage(ackedBatch: ServerUiPrefs): void {
-  const stored = { ...parseStoredPrefs(readStorage(PENDING_KEY, pendingScope)) };
   for (const key of Object.keys(ackedBatch) as SyncedPrefKey[]) {
     if (prefValuesEqual(stored[key], ackedBatch[key])) {
       delete stored[key];
@@ -327,16 +322,19 @@ export function applyServerUiPrefs(
   // A known identity switch keeps the existing full reset; its mirror belongs
   // to the previous identity. Only defer a pending profile within the same scope.
   const appearanceReady = !hooks.profileId || profilePrefs !== null || scopeChanged;
-  const recordReconciledObject = () => {
-    lastReconciledScope = scope;
-    lastReconciledConfigObject = configObject;
-  };
   const shadowPrefs =
     scope === pendingScope ? pendingPrefs : parseStoredPrefs(readStorage(PENDING_KEY, scope));
   const retainedLocalKeys = readRetainedLocalKeys(scope);
   const reconciledRetainedKeys = [...retainedLocalKeys].filter(
     (key) => appearanceReady || !isAppearancePref(key),
   );
+  const finishReconciliation = () => {
+    if (reconciledRetainedKeys.length) {
+      updateRetainedLocalKeys(scope, reconciledRetainedKeys, false);
+    }
+    lastReconciledScope = scope;
+    lastReconciledConfigObject = configObject;
+  };
   const prefs = { ...extractServerUiPrefs(configObject), ...profilePrefs };
   const lastSeenRaw = readStorage(LAST_SEEN_KEY, scope);
   const lastSeen = parseStoredPrefs(lastSeenRaw) ?? {};
@@ -354,10 +352,7 @@ export function applyServerUiPrefs(
   }
   const key = JSON.stringify(prefs);
   if (!scopeChanged && key === lastSeenRaw) {
-    if (reconciledRetainedKeys.length) {
-      updateRetainedLocalKeys(scope, reconciledRetainedKeys, false);
-    }
-    recordReconciledObject();
+    finishReconciliation();
     return false;
   }
   const changed = serverUiPrefsSnapshotDelta(prefs, lastSeen, {
@@ -368,10 +363,7 @@ export function applyServerUiPrefs(
     retainedLocalKeys,
   });
   writeStorage(LAST_SEEN_KEY, scope, key);
-  if (reconciledRetainedKeys.length) {
-    updateRetainedLocalKeys(scope, reconciledRetainedKeys, false);
-  }
-  recordReconciledObject();
+  finishReconciliation();
   if (Object.hasOwn(changed, "theme")) {
     hooks.onThemeChanged?.(changed.theme ?? null);
   }
@@ -601,7 +593,7 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
           lastReconciledConfigObject = null;
         }
         writeStorage(LAST_SEEN_KEY, pendingScope, JSON.stringify(nextLastSeen));
-        settlePendingStorage(dispatchedBatch);
+        mergePendingIntoStorage(dispatchedBatch);
         clearConflictRedrain();
         if (pushWriter !== writer || pushEpoch !== epoch) {
           return;
@@ -637,7 +629,7 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
       // LAST_SEEN still owns the authoritative server value per key, so identical
       // refreshes and reloads preserve this local edit; only a server delta replaces it.
       removeBatch(dispatchedBatch);
-      settlePendingStorage(dispatchedBatch);
+      mergePendingIntoStorage(dispatchedBatch);
       afterCommit?.({ needsRefresh: false, retainedLocal: true });
       break;
     }

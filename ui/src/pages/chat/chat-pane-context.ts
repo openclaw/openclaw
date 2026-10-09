@@ -116,7 +116,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         (row?.placement?.state === "active" || row?.placement?.state === "draining") &&
         row.placement.workspaceResultReconciling === true,
       onRecover: () => row && void this.changeHeaderPlacement(row, "recover"),
-      onReclaim: () => row && void this.reclaimHeaderPlacement(row),
+      onReclaim: () => row && void this.changeHeaderPlacement(row, "reclaim"),
     });
   }
 
@@ -127,10 +127,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     this.gatewayConnectionLifecycle = undefined;
     this.outboxRecoveryReady = false;
     super.disconnectedCallback();
-  }
-
-  protected reclaimHeaderPlacement(row: GatewaySessionRow): Promise<void> {
-    return this.changeHeaderPlacement(row, "reclaim");
   }
 
   protected async changeHeaderPlacement(

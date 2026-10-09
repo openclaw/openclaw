@@ -13,13 +13,91 @@ import {
   gatewayReplyMock,
   installGatewayTestHooks,
 } from "../test-helpers.js";
-import { handleChatSend } from "./chat-send-handler.js";
+import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import type { RespondFn } from "./types.js";
 
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createFixture = useBrowserFollowupFixture();
+
+it.for([false, true])(
+  "settles internal run registration before ACK and dispatch (revoked: %s)",
+  async (revoked, { signal }) => {
+    const fixture = await createFixture({ active: false });
+    const registrationEntered = createDeferred();
+    const releaseRegistration = createDeferred();
+    const respond = vi.fn<RespondFn>();
+    const release = vi.fn();
+    let current = true;
+    const sending = withPluginRuntimeGatewayRequestScope(
+      { context: fixture.context, isWebchatConnect: () => true },
+      () =>
+        handleTrustedInternalChatSend(
+          {
+            req: {
+              type: "req",
+              id: fixture.params.idempotencyKey,
+              method: "chat.send",
+            },
+            params: fixture.params,
+            client: fixture.client,
+            context: fixture.context,
+            respond,
+            isWebchatConnect: () => true,
+            sessionMutationCommitGuard: () => {
+              if (!current) {
+                throw new Error("Talk requester was revoked during registration");
+              }
+            },
+          },
+          undefined,
+          {
+            beforeDispatch: async ({ runId }) => {
+              expect(runId).toBe(fixture.params.idempotencyKey);
+              registrationEntered.resolve();
+              await releaseRegistration.promise;
+              return release;
+            },
+          },
+        ),
+    );
+    try {
+      await withinTest(
+        Promise.race([
+          registrationEntered.promise,
+          sending.then(() => {
+            throw new Error("chat.send returned before awaiting run registration");
+          }),
+        ]),
+        signal,
+      );
+      expect(respond).not.toHaveBeenCalled();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      current = !revoked;
+      releaseRegistration.resolve();
+      await sending;
+      if (revoked) {
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          expect.objectContaining({ status: "error" }),
+          expect.objectContaining({ message: expect.stringContaining("requester was revoked") }),
+          expect.anything(),
+        );
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect(release).toHaveBeenCalledOnce();
+      } else {
+        expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+        await withinTest(fixture.dispatchedRecorder, signal);
+        expect(release).not.toHaveBeenCalled();
+      }
+    } finally {
+      releaseRegistration.resolve();
+      await sending;
+      await fixture.cleanup();
+    }
+  },
+);
 
 it.for([false, true])(
   "dispatches acknowledged inputs in order when the first skill preparation stalls (retry: %s)",

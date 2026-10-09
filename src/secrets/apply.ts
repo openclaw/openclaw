@@ -124,24 +124,14 @@ function scrubEnvRaw(
     return raw;
   }
   const lines = raw.split(/\r?\n/);
-  const nextLines: string[] = [];
-  for (const line of lines) {
+  const nextLines = lines.filter((line) => {
     const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!match) {
-      nextLines.push(line);
-      continue;
-    }
-    const envKey = match[1] ?? "";
-    if (!allowedEnvKeys.has(envKey)) {
-      nextLines.push(line);
-      continue;
-    }
-    const parsedValue = parseEnvAssignmentValue(match[2] ?? "");
-    if (migratedValues.has(parsedValue)) {
-      continue;
-    }
-    nextLines.push(line);
-  }
+    return (
+      !match ||
+      !allowedEnvKeys.has(match[1] ?? "") ||
+      !migratedValues.has(parseEnvAssignmentValue(match[2] ?? ""))
+    );
+  });
   if (nextLines.length === lines.length) {
     return raw;
   }
