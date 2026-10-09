@@ -26,45 +26,6 @@ const CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS = String.raw`access-token|refresh-tok
 export const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS = String.raw`password|passphrase|pass|passwd`;
 const CLI_SECRET_FLAG_KEYS = String.raw`${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 
-export const BODY_SECRET_KEYS = new Set([
-  "access_token",
-  "auth_token",
-  "awssecretaccesskey",
-  "aws_secret_access_key",
-  "hook_token",
-  "refresh_token",
-  "id_token",
-  "token",
-  "api_key",
-  "apikey",
-  "client_secret",
-  "app_secret",
-  "password",
-  "pass",
-  "passwd",
-  "auth",
-  "jwt",
-  "session",
-  "code",
-  "signature",
-  "x_amz_signature",
-  "x_amz_security_token",
-  "secret",
-  "secretaccesskey",
-  "credential",
-  "private_key",
-  "authorization",
-  "key",
-  "card_number",
-  "card_cvc",
-  "card_cvv",
-  "cvc",
-  "cvv",
-  "security_code",
-  "payment_credential",
-  "shared_payment_token",
-]);
-
 export const FORM_BODY_KEY_INVISIBLE_CHARS = String.raw`\p{C}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0`;
 const ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`;
 const ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`;
@@ -367,10 +328,6 @@ const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b
 const CREDENTIAL_STYLE_HEADER_KEYS = "x-goog-api-key|api-key|apikey|x-api-token|x-access-token";
 const GATEWAY_SECURITY_HEADER_KEYS =
   "X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token";
-export const CREDENTIAL_HEADER_FIELD_RE = new RegExp(
-  `^(?:${CREDENTIAL_STYLE_HEADER_KEYS}|${GATEWAY_SECURITY_HEADER_KEYS})$`,
-  "i",
-);
 // Colons identify HTTP headers. Equals assignments may be form bodies, so stop only before an
 // actual following `&key=` pair; otherwise opaque credential punctuation stays fully masked.
 const LOG_HEADER_BOUNDARY_PATTERN = String.raw`(^|[^A-Za-z0-9_?&-]|\\{1,64}[rn])`;
@@ -378,10 +335,6 @@ const CREDENTIAL_STYLE_COLON_HEADER_REDACT_PATTERN = String.raw`${LOG_HEADER_BOU
 const CREDENTIAL_STYLE_EQUALS_ASSIGNMENT_REDACT_PATTERN = String.raw`${LOG_HEADER_BOUNDARY_PATTERN}(?:${CREDENTIAL_STYLE_HEADER_KEYS})${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*=${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}([^\s\\"',;]+)`;
 const GATEWAY_SECURITY_COLON_HEADER_REDACT_PATTERN = String.raw`${LOG_HEADER_BOUNDARY_PATTERN}(?:${GATEWAY_SECURITY_HEADER_KEYS})\s*:\s*([^\s"',;]+)`;
 const GATEWAY_SECURITY_EQUALS_ASSIGNMENT_REDACT_PATTERN = String.raw`${LOG_HEADER_BOUNDARY_PATTERN}(?:${GATEWAY_SECURITY_HEADER_KEYS})\s*=\s*([^\s"',;]+)`;
-export const FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES = new Set([
-  CREDENTIAL_STYLE_EQUALS_ASSIGNMENT_REDACT_PATTERN,
-  GATEWAY_SECURITY_EQUALS_ASSIGNMENT_REDACT_PATTERN,
-]);
 const HTTP_AUTH_HEADER_REDACT_PATTERNS = [
   String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}${HTTP_AUTH_SCHEME_PATTERN}${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`,
   String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})[ \t]*(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
@@ -394,12 +347,6 @@ const AUTHORIZATION_BEARER_REDACT_PATTERN = String.raw`Authorization${HTTP_AUTH_
 const AUTHORIZATION_BASIC_REDACT_PATTERN = String.raw`Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Basic${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`;
 const AUTHORIZATION_BOT_REDACT_PATTERN = String.raw`Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Bot${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`;
 const STANDALONE_BEARER_REDACT_PATTERN = String.raw`\bBearer\s+([-A-Za-z0-9._~+/=]{18,})(?![-A-Za-z0-9._~+/=])`;
-export const SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
-  ENV_ASSIGNMENT_REDACT_PATTERN,
-  ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
-  STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN,
-  STANDALONE_ASSIGNMENT_REDACT_PATTERN,
-]);
 const DEFAULT_REDACT_FIELD_PATTERNS: readonly RedactPattern[] = [
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
@@ -533,6 +480,58 @@ export const DEFAULT_REDACT_PATTERNS: readonly RedactPattern[] = [
 
 // Browser callers share the canonical patterns without constructing backend-only projections.
 export function createBackendRedactPatterns() {
+  const bodySecretKeys = new Set([
+    "access_token",
+    "auth_token",
+    "awssecretaccesskey",
+    "aws_secret_access_key",
+    "hook_token",
+    "refresh_token",
+    "id_token",
+    "token",
+    "api_key",
+    "apikey",
+    "client_secret",
+    "app_secret",
+    "password",
+    "pass",
+    "passwd",
+    "auth",
+    "jwt",
+    "session",
+    "code",
+    "signature",
+    "x_amz_signature",
+    "x_amz_security_token",
+    "secret",
+    "secretaccesskey",
+    "credential",
+    "private_key",
+    "authorization",
+    "key",
+    "card_number",
+    "card_cvc",
+    "card_cvv",
+    "cvc",
+    "cvv",
+    "security_code",
+    "payment_credential",
+    "shared_payment_token",
+  ]);
+  const credentialHeaderField = new RegExp(
+    `^(?:${CREDENTIAL_STYLE_HEADER_KEYS}|${GATEWAY_SECURITY_HEADER_KEYS})$`,
+    "i",
+  );
+  const formAware = new Set([
+    CREDENTIAL_STYLE_EQUALS_ASSIGNMENT_REDACT_PATTERN,
+    GATEWAY_SECURITY_EQUALS_ASSIGNMENT_REDACT_PATTERN,
+  ]);
+  const shellReferencePreserving = new Set([
+    ENV_ASSIGNMENT_REDACT_PATTERN,
+    ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
+    STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN,
+    STANDALONE_ASSIGNMENT_REDACT_PATTERN,
+  ]);
   // Necessary conditions only: the canonical rules still decide boundaries, captures and masks.
   // Probes are stateless and run against each rule's current input, including earlier replacements.
   const CONFIG_KEY_PROBE = new RegExp(
@@ -634,6 +633,10 @@ export function createBackendRedactPatterns() {
   );
 
   return {
+    bodySecretKeys,
+    credentialHeaderField,
+    formAware,
+    shellReferencePreserving,
     prefilters,
     chunkUnsafe,
     ambiguousAssignments,

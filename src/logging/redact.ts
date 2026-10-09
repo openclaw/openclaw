@@ -46,17 +46,13 @@ import {
 import {
   AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
   AWS_SECRET_ACCESS_KEY_MATCHER,
-  BODY_SECRET_KEYS,
-  CREDENTIAL_HEADER_FIELD_RE,
   createBackendRedactPatterns,
   DEFAULT_REDACT_PATTERNS,
-  FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES,
   FORM_BODY_KEY_INVISIBLE_CHARS,
   IDENTIFIER_SAFE_TOKEN_BOUNDARY,
   PAYMENT_CREDENTIAL_ENV_KEYS,
   PAYMENT_CREDENTIAL_JSON_KEYS,
   PAYMENT_CREDENTIAL_QUERY_KEYS,
-  SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES,
   VENDOR_TOKEN_REDACT_PATTERNS,
 } from "./redact-patterns.js";
 import { PEM_REDACT_MATCHER, PEM_REDACT_PATTERN_SOURCE } from "./redact-pem.js";
@@ -203,13 +199,13 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
       pattern.exec === RegExp.prototype.exec &&
       pattern[Symbol.replace] === RegExp.prototype[Symbol.replace];
   }
-  if (pattern && typeof raw === "string" && SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
+  if (pattern && typeof raw === "string" && backendPatterns.shellReferencePreserving.has(raw)) {
     shellReferencePreservingPatterns.add(pattern);
   }
   if (pattern && typeof raw === "string" && backendPatterns.ambiguousAssignments.has(raw)) {
     sourceAssignmentPatterns.add(pattern);
   }
-  if (pattern && typeof raw === "string" && FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES.has(raw)) {
+  if (pattern && typeof raw === "string" && backendPatterns.formAware.has(raw)) {
     formAwareEqualsAssignmentPatterns.add(pattern);
   }
   if (
@@ -296,7 +292,10 @@ function normalizeSensitiveKeyName(value: string): string {
 }
 
 function isSensitiveBodyKey(key: string): boolean {
-  return isSensitiveUrlQueryParamName(key) || BODY_SECRET_KEYS.has(normalizeSensitiveKeyName(key));
+  return (
+    isSensitiveUrlQueryParamName(key) ||
+    backendPatterns.bodySecretKeys.has(normalizeSensitiveKeyName(key))
+  );
 }
 
 function hasEncodedOrInvisibleFormKey(key: string): boolean {
@@ -1160,7 +1159,7 @@ function classifyLogFieldProtection(
       ? shouldRedactStructuredPrimitiveField(key, path)
       : isPublicShareIdPath(path) ||
         shouldRedactStructuredStringField(key, value, path, objectPath);
-  return legacy ? "legacy" : CREDENTIAL_HEADER_FIELD_RE.test(key) ? "header" : undefined;
+  return legacy ? "legacy" : backendPatterns.credentialHeaderField.test(key) ? "header" : undefined;
 }
 
 function getFieldRecordEdits(field: RedactionField, mode: RedactSensitiveMode): RedactionEdit[] {
