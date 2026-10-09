@@ -404,7 +404,6 @@ export async function prepareManagedLlamaServer(params: {
   // Runtime embedding refreshes preserve chat. Explicit embedding-only setup removes it.
   chatModel: ManagedLlamaChatModel;
   configuredChatModelIds?: readonly string[];
-  embeddingModelIsDefault?: boolean;
   embeddingModelPath?: string;
   defaultEmbeddingModelPath?: string;
   port?: number;
@@ -468,7 +467,6 @@ export async function prepareManagedLlamaServer(params: {
   await updatePreset(presetPath, {
     chatModel: params.chatModel,
     configuredChatModelIds: params.configuredChatModelIds,
-    embeddingModelIsDefault: params.embeddingModelIsDefault,
     embeddingModelPath: params.embeddingModelPath,
     defaultEmbeddingModelPath: params.defaultEmbeddingModelPath,
     // Every launch inherits process.env. An isolated candidate is accepted with generated args

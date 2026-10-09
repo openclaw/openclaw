@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { withMockedPlatform } from "openclaw/plugin-sdk/test-node-mocks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildLlamaServerPreset, type LlamaServerPresetOptions } from "./llama-server-preset.js";
 import { prepareManagedLlamaServer } from "./managed-server.js";
@@ -10,36 +11,36 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 const EMBEDDING = "[embeddinggemma-300m-qat-q8_0]";
+const CAPACITY = "parallel = 1\nctx-size = 2048\nubatch-size = 2048\n";
 
-function refreshDefaultEmbedding(
+function refreshEmbedding(
   existing: string | undefined,
   options: Partial<LlamaServerPresetOptions> = {},
 ): string {
   return buildLlamaServerPreset(existing, {
     chatModel: { mode: "remove" },
-    embeddingModelIsDefault: true,
     embeddingModelPath: "/models/embedding.gguf",
     ...options,
   });
 }
 
-describe("managed embedding slot default", () => {
-  it("writes one slot for a new default embedding preset", () => {
-    expect(refreshDefaultEmbedding(undefined)).toBe(
-      `version = 1\n\n${EMBEDDING}\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true\nparallel = 1\n`,
-    );
-  });
+describe("managed embedding capacity defaults", () => {
+  it.each(["embeddinggemma-300m-qat-Q8_0.gguf", "custom.gguf"])(
+    "bounds fresh and regenerated presets for %s without relying on model identity",
+    (filename) => {
+      const options = { embeddingModelPath: `/models/${filename}` };
+      const preset = refreshEmbedding(undefined, options);
+      expect(preset).toBe(
+        `version = 1\n\n${EMBEDDING}\nmodel = /models/${filename}\nembedding = true\n${CAPACITY}`,
+      );
+      expect(refreshEmbedding(preset, options)).toBe(preset);
+    },
+  );
 
-  it("adds the slot bound when regenerating an existing default embedding section", () => {
+  it("adds missing capacity bounds to an old section while preserving tuning", () => {
     const existing = `version = 1\n\n${EMBEDDING}\nmodel = /models/old.gguf\nubatch-size = 2048\nembedding = true\nflash-attn = on\n`;
-    expect(refreshDefaultEmbedding(existing)).toBe(
-      `version = 1\n\n${EMBEDDING}\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true\nflash-attn = on\nparallel = 1\n`,
-    );
-  });
-
-  it("leaves llama.cpp slot defaults for a custom embedding model", () => {
-    expect(refreshDefaultEmbedding(undefined, { embeddingModelIsDefault: false })).not.toContain(
-      "parallel",
+    expect(refreshEmbedding(existing)).toBe(
+      `version = 1\n\n${EMBEDDING}\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true\nflash-attn = on\nparallel = 1\nctx-size = 2048\n`,
     );
   });
 
@@ -48,60 +49,59 @@ describe("managed embedding slot default", () => {
     { label: "np alias", global: "", section: "np = 2\n" },
     { label: "environment alias", global: "", section: "LLAMA_ARG_N_PARALLEL = 3\n" },
     { label: "[*] default", global: "[*]\nparallel = 2\n\n", section: "" },
-  ])("keeps a preset $label slot count", ({ global, section }) => {
+  ])("keeps a preset $label slot count without shrinking its context", ({ global, section }) => {
     const existing = `version = 1\n\n${global}${EMBEDDING}\nmodel = /models/old.gguf\n${section}embedding = true\n`;
-    const preset = refreshDefaultEmbedding(existing);
+    const preset = refreshEmbedding(existing);
     expect(preset).not.toContain("parallel = 1");
+    expect(preset).not.toContain("ctx-size");
     expect(preset).toContain(`${global}${EMBEDDING}\nmodel = /models/embedding.gguf\n${section}`);
+    expect(preset).toContain("ubatch-size = 2048");
+  });
+
+  it.each([
+    { global: "", section: "c = 4096\nub = 4096\n" },
+    { global: "[*]\nLLAMA_ARG_CTX_SIZE = 8192\nLLAMA_ARG_UBATCH = 1024\n\n", section: "" },
+    { global: "", section: "kv-unified-per-slot = 8192\nub = 4096\n" },
+    {
+      global: "[*]\nLLAMA_ARG_KV_UNIFIED_PER_SLOT = 8192\nLLAMA_ARG_UBATCH = 1024\n\n",
+      section: "",
+    },
+  ])("keeps explicit context and physical batch settings", ({ global, section }) => {
+    const existing = `version = 1\n\n${global}${EMBEDDING}\nmodel = /models/old.gguf\n${section}`;
+    const preset = refreshEmbedding(existing);
+    expect(preset).toContain(`${global}${EMBEDDING}\nmodel = /models/embedding.gguf\n${section}`);
+    expect(preset).toContain("parallel = 1");
+    expect(preset).not.toMatch(/ctx-size|ubatch-size/u);
   });
 
   it.each([
     { label: "env", serviceSettings: { env: { LLAMA_ARG_N_PARALLEL: "4" } } },
     { label: "--parallel arg", serviceSettings: { args: ["--port", "1", "--parallel", "2"] } },
     { label: "-np arg", serviceSettings: { args: ["-np", "3"] } },
-    { label: "--parallel= arg", serviceSettings: { args: ["--parallel=2"] } },
-    {
-      label: "lowercase Windows env",
-      serviceSettings: { env: { llama_arg_n_parallel: "4" }, platform: "win32" as const },
-    },
-    {
-      label: "mixed-case Windows env",
-      serviceSettings: { env: { Llama_Arg_N_Parallel: "4" }, platform: "win32" as const },
-    },
-  ])("keeps a slot count the router service sets through its $label", ({ serviceSettings }) => {
-    expect(refreshDefaultEmbedding(undefined, { serviceSettings })).not.toContain("parallel");
+  ])("keeps the router service's $label slot/context policy", ({ serviceSettings }) => {
+    const preset = refreshEmbedding(undefined, { serviceSettings });
+    expect(preset).not.toMatch(/parallel|ctx-size/u);
+    expect(preset).toContain("ubatch-size = 2048");
   });
 
-  it("bounds slots when a POSIX env name differs only in case", () => {
-    expect(
-      refreshDefaultEmbedding(undefined, {
-        serviceSettings: { env: { llama_arg_n_parallel: "4" }, platform: "linux" },
-      }),
-    ).toContain("embedding = true\nparallel = 1\n");
-  });
+  it.each([
+    { platform: "win32", key: "llama_arg_n_parallel", expectedDefault: false },
+    { platform: "win32", key: "Llama_Arg_N_Parallel", expectedDefault: false },
+    { platform: "linux", key: "llama_arg_n_parallel", expectedDefault: true },
+    { platform: "linux", key: "parallel", expectedDefault: true },
+  ] as const)(
+    "matches $platform environment names for $key",
+    ({ platform, key, expectedDefault }) => {
+      withMockedPlatform(platform, () => {
+        const preset = refreshEmbedding(undefined, { serviceSettings: { env: { [key]: "4" } } });
+        expect(preset.includes("parallel = 1")).toBe(expectedDefault);
+        expect(preset.includes("ctx-size = 2048")).toBe(expectedDefault);
+      });
+    },
+  );
 });
 
-describe("managed embedding slot default through server preparation", () => {
-  it("keeps the configured service's environment slot count on regeneration", async () => {
-    const root = tempDirs.make("llama-server-service-slots-");
-    const presetPath = path.join(root, "custom.ini");
-    await fs.writeFile(presetPath, `version = 1\n\n${EMBEDDING}\nmodel = /models/old.gguf\n`);
-    await prepareManagedLlamaServer({
-      localService: {
-        command: path.join(root, "custom-server"),
-        args: ["--models-preset", presetPath],
-        env: { LLAMA_ARG_N_PARALLEL: "4" },
-      },
-      chatModel: { mode: "remove" },
-      embeddingModelIsDefault: true,
-      embeddingModelPath: "/models/embedding.gguf",
-      port: 19_436,
-    });
-    expect(await fs.readFile(presetPath, "utf8")).toBe(
-      `version = 1\n\n${EMBEDDING}\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true\n`,
-    );
-  });
-
+describe("managed embedding capacity through server preparation", () => {
   async function prepareCandidatePreset(root: string, activePreset: string): Promise<string> {
     const runtime = await prepareManagedLlamaServer({
       localService: {
@@ -111,7 +111,6 @@ describe("managed embedding slot default through server preparation", () => {
       },
       isolated: true,
       chatModel: { mode: "remove" },
-      embeddingModelIsDefault: true,
       embeddingModelPath: "/models/embedding.gguf",
       port: 19_437,
     });
@@ -120,32 +119,34 @@ describe("managed embedding slot default through server preparation", () => {
     return await fs.readFile(candidatePreset, "utf8");
   }
 
-  it("bounds an isolated candidate, which is accepted without the service args and env", async () => {
+  it("bounds an isolated candidate without changing the active preset or adopting its settings", async () => {
     const root = tempDirs.make("llama-server-candidate-slots-");
     const activePreset = path.join(root, "models.ini");
     await fs.writeFile(activePreset, "version = 1\n");
-    expect(await prepareCandidatePreset(root, activePreset)).toContain(
-      "embedding = true\nparallel = 1\n",
-    );
+    expect(await prepareCandidatePreset(root, activePreset)).toContain(CAPACITY);
     expect(await fs.readFile(activePreset, "utf8")).toBe("version = 1\n");
   });
 
-  it("keeps a slot count inherited from the OpenClaw process environment", async () => {
-    vi.stubEnv("LLAMA_ARG_N_PARALLEL", "4");
-    const root = tempDirs.make("llama-server-process-env-slots-");
+  it.each(["service", "process"])("keeps slot settings from the %s environment", async (source) => {
+    if (source === "process") {
+      vi.stubEnv("LLAMA_ARG_N_PARALLEL", "4");
+    }
+    const root = tempDirs.make("llama-server-environment-slots-");
     const presetPath = path.join(root, "custom.ini");
     await fs.writeFile(presetPath, `version = 1\n\n${EMBEDDING}\nmodel = /models/old.gguf\n`);
     await prepareManagedLlamaServer({
       localService: {
         command: path.join(root, "custom-server"),
         args: ["--models-preset", presetPath],
+        ...(source === "service" ? { env: { LLAMA_ARG_N_PARALLEL: "4" } } : {}),
       },
       chatModel: { mode: "remove" },
-      embeddingModelIsDefault: true,
       embeddingModelPath: "/models/embedding.gguf",
       port: 19_436,
     });
-    expect(await fs.readFile(presetPath, "utf8")).not.toContain("parallel");
-    expect(await prepareCandidatePreset(root, presetPath)).not.toContain("parallel");
+    expect(await fs.readFile(presetPath, "utf8")).not.toMatch(/parallel|ctx-size/u);
+    if (source === "process") {
+      expect(await prepareCandidatePreset(root, presetPath)).not.toMatch(/parallel|ctx-size/u);
+    }
   });
 });

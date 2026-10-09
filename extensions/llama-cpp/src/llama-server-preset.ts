@@ -1,5 +1,6 @@
 import {
   DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
+  DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
 } from "./defaults.js";
 
@@ -17,24 +18,14 @@ export type ManagedLlamaChatModel =
 export type LlamaServerPresetOptions = {
   chatModel: ManagedLlamaChatModel;
   configuredChatModelIds?: readonly string[];
-  embeddingModelIsDefault?: boolean;
   embeddingModelPath?: string;
   defaultEmbeddingModelPath?: string;
   // Settings the router already passes to every model: its args and its effective environment.
   serviceSettings?: {
     args?: readonly string[];
     env?: Readonly<Record<string, string | undefined>>;
-    // Windows environment names are case-insensitive. Defaults to process.platform.
-    platform?: NodeJS.Platform;
   };
 };
-
-const LLAMA_CPP_EMBEDDING_UBATCH_SIZE = 2048; // Fit one input in one physical batch.
-// llama-server defaults to 4 slots that share one decode, and its host output buffer holds
-// n_vocab floats per token (ggml-org/llama.cpp#29388). EmbeddingGemma's 262,144-token vocabulary
-// makes that 1 MiB per token, so a packed 2048-token batch reaches about 2.2 GB. One slot bounds
-// each decode to one input.
-const LLAMA_CPP_EMBEDDING_PARALLEL_SLOTS = 1;
 
 function assertIniValue(value: string, label: string): string {
   if (/\r|\n/u.test(value)) {
@@ -89,6 +80,7 @@ const PRESET_KEY_ALIASES: Record<string, string> = {
   LLAMA_ARG_EMBEDDINGS: "embedding",
   np: "parallel",
   LLAMA_ARG_N_PARALLEL: "parallel",
+  LLAMA_ARG_KV_UNIFIED_PER_SLOT: "kv-unified-per-slot",
 };
 
 const PRESET_SETTING_PATTERN =
@@ -105,15 +97,16 @@ function readSettingKeys(section: string | undefined): Set<string> {
 // Router children inherit the service env, so those keys count as configured too. A preset
 // key becomes a child CLI option, which llama.cpp applies over the inherited env value.
 function readServiceSettingKeys(service: LlamaServerPresetOptions["serviceSettings"]): Set<string> {
-  const caseInsensitiveEnv = (service?.platform ?? process.platform) === "win32";
+  const caseInsensitiveEnv = process.platform === "win32";
   const keys = [
     ...Object.entries(service?.env ?? {})
       .filter(([, value]) => value !== undefined)
       // The env aliases are uppercase, so this matches `llama_arg_n_parallel` the way Windows does.
-      .map(([key]) => (caseInsensitiveEnv ? key.toUpperCase() : key)),
+      .map(([key]) => (caseInsensitiveEnv ? key.toUpperCase() : key))
+      .filter((key) => key.startsWith("LLAMA_ARG_")),
     ...(service?.args ?? [])
       .filter((arg) => arg.startsWith("-"))
-      .map((arg) => arg.replace(/^-+/u, "").split("=")[0] ?? ""),
+      .map((arg) => arg.replace(/^-+/u, "")),
   ];
   return new Set(keys.map((key) => PRESET_KEY_ALIASES[key] ?? key));
 }
@@ -123,9 +116,6 @@ function updateModelSection(
   id: string,
   values: Record<string, string>,
   newline: string,
-  // Written only when this section, `[*]` and the service leave the key unset.
-  defaults: Record<string, string> = {},
-  serviceKeys: ReadonlySet<string> = new Set(),
 ): void {
   assertIniValue(id, "llama.cpp model id");
   if (id.includes("]")) {
@@ -138,17 +128,6 @@ function updateModelSection(
       .toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
       .at(-1) ?? id;
   const pending = new Set(Object.keys(values));
-  const configured = new Set([
-    ...readSettingKeys(sections.get(name)),
-    ...readSettingKeys(sections.get("*")),
-    ...serviceKeys,
-  ]);
-  for (const key of Object.keys(defaults)) {
-    if (!configured.has(key)) {
-      pending.add(key);
-    }
-  }
-  const pendingValues: Record<string, string> = { ...defaults, ...values };
   let contents = (sections.get(name) ?? `[${id}]${newline}`).replace(
     PRESET_SETTING_PATTERN,
     (line, key: string, separator: string, _value: string, comment: string, ending: string) => {
@@ -161,7 +140,7 @@ function updateModelSection(
     },
   );
   for (const key of pending) {
-    contents += `${/[\r\n]$/u.test(contents) ? "" : newline}${key} = ${pendingValues[key]}${newline}`;
+    contents += `${/[\r\n]$/u.test(contents) ? "" : newline}${key} = ${values[key]}${newline}`;
   }
   sections.set(name, contents);
 }
@@ -204,18 +183,33 @@ export function buildLlamaServerPreset(
       ? params.defaultEmbeddingModelPath
       : undefined);
   if (embeddingPath) {
-    const isDefault = params.embeddingModelPath ? params.embeddingModelIsDefault : true;
+    const configured = new Set([
+      ...readSettingKeys(sections.get(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID)),
+      ...readSettingKeys(sections.get("*")),
+      ...readServiceSettingKeys(params.serviceSettings),
+    ]);
+    // One slot bounds the vocabulary-sized output buffer to one input (ggml-org/llama.cpp#29388).
+    const defaults: Record<string, string> = {
+      parallel: "1",
+      "ctx-size": String(DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE),
+      "ubatch-size": String(DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE),
+    };
+    // Explicit slots can divide total context; a per-slot cap can also auto-size it.
+    if (configured.has("parallel") || configured.has("kv-unified-per-slot")) {
+      delete defaults["ctx-size"];
+    }
+    for (const key of configured) {
+      delete defaults[key];
+    }
     updateModelSection(
       sections,
       DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
       {
         model: assertIniValue(embeddingPath, "llama.cpp embedding model path"),
-        ...(isDefault ? { "ubatch-size": String(LLAMA_CPP_EMBEDDING_UBATCH_SIZE) } : {}),
         embedding: "true",
+        ...defaults,
       },
       newline,
-      isDefault ? { parallel: String(LLAMA_CPP_EMBEDDING_PARALLEL_SLOTS) } : {},
-      readServiceSettingKeys(params.serviceSettings),
     );
   }
   const embeddingSection = sections.get(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID);
