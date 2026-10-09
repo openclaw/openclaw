@@ -2,7 +2,6 @@ import { hostname } from "node:os";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
@@ -16,7 +15,6 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabase,
 } from "./openclaw-state-db-contract.js";
-import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import {
   createOpenClawStateLeaseLostError,
@@ -217,48 +215,45 @@ export function executeOpenClawStateLeaseCommand(
     command.type === "stateLease.renew"
       ? takeLeaseExpiryObservation(command.input.identity)
       : undefined;
-  return runWithSqliteBusyTimeout(database.db, 0, () =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        if (command.type === "stateLease.renew") {
-          assertOpenClawStateLeaseWorkerOwnedInTransaction(db, command.input.identity, "renew");
-          const expiresAt = renewOpenClawStateLeaseInTransaction(
-            db,
-            command.input.identity,
-            command.input.leaseMs,
-          );
-          if (expiresAt === undefined) {
-            throw createOpenClawStateLeaseLostError(command.input.identity);
-          }
-          assertOpenClawStateLeaseWorkerOwnedInTransaction(
-            db,
-            command.input.identity,
-            "renew",
-            "commit",
-          );
-          if (shared) {
-            stageLeaseExpiryObservation(db, shared, expiresAt);
-          }
-          return expiresAt;
+  return withLeaseWriteTransaction(
+    {
+      scope: "shared",
+      options: { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    },
+    command.input.operationLabel !== "state.lease"
+      ? command.input.operationLabel
+      : command.type === "stateLease.renew"
+        ? "state.lease.renew"
+        : "state.lease.release",
+    (db) => {
+      if (command.type === "stateLease.renew") {
+        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, command.input.identity, "renew");
+        const expiresAt = renewOpenClawStateLeaseInTransaction(
+          db,
+          command.input.identity,
+          command.input.leaseMs,
+        );
+        if (expiresAt === undefined) {
+          throw createOpenClawStateLeaseLostError(command.input.identity);
         }
-        const facts = { kind: "state-lease-release", identity: command.input.identity };
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts });
-        assertExistingDatabaseIdentity(database.path, command.input.databaseIdentity);
-        releaseOpenClawStateLeaseInTransaction(db, command.input.identity);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
-        assertExistingDatabaseIdentity(database.path, command.input.databaseIdentity);
-        return undefined;
-      },
-      { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-      {
-        busyTimeoutMs: 0,
-        operationLabel:
-          command.input.operationLabel !== "state.lease"
-            ? command.input.operationLabel
-            : command.type === "stateLease.renew"
-              ? "state.lease.renew"
-              : "state.lease.release",
-      },
-    ),
+        assertOpenClawStateLeaseWorkerOwnedInTransaction(
+          db,
+          command.input.identity,
+          "renew",
+          "commit",
+        );
+        if (shared) {
+          stageLeaseExpiryObservation(db, shared, expiresAt);
+        }
+        return expiresAt;
+      }
+      const facts = { kind: "state-lease-release", identity: command.input.identity };
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts });
+      assertExistingDatabaseIdentity(database.path, command.input.databaseIdentity);
+      releaseOpenClawStateLeaseInTransaction(db, command.input.identity);
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
+      assertExistingDatabaseIdentity(database.path, command.input.databaseIdentity);
+      return undefined;
+    },
   );
 }
