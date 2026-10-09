@@ -358,7 +358,7 @@ function drainLane(
       canAdmitInGroup(lane)
     ) {
       const entry = dequeueLaneQueue(state.queue) as QueueEntry;
-      const waitedMs = Date.now() - entry.enqueuedAt;
+      const waitedMs = Math.floor(performance.now()) - entry.enqueuedAt;
       const activeBeforeStart = state.activeTaskIds.size;
       const taskId = getQueueState().nextTaskId++;
       const taskGeneration = state.generation;
@@ -547,7 +547,7 @@ export function enqueueCommandInLane<T>(
       task: (marker) => runInAsyncContext(runWithGatewayRootWorkReadmission, () => task(marker)),
       resolve: (value) => resolve(value as T),
       reject,
-      enqueuedAt: Date.now(),
+      enqueuedAt: Math.floor(performance.now()),
       sequence: queueState.nextQueueSequence++,
       priority: resolveQueuePriority(opts?.priority),
       warnAfterMs,
