@@ -13,6 +13,7 @@ import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import * as internalSessionEffects from "../../internal-session-effects.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
@@ -484,31 +485,19 @@ describe("subagent registry archive behavior", () => {
         ]),
       };
     });
-    const execute = stateWorker.runOpenClawStateWorkerOperation;
     let rejectedWrites = 0;
     let refusedPreimage: SubagentRunRecord | undefined;
-    const writer = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((owner, run, options) =>
-        execute(
-          owner,
-          (scope) =>
-            run({
-              execute: async (command, executeOptions) => {
-                if (
-                  command.type === "subagents.persistChanges" &&
-                  (command.input as SubagentRegistryWrite).deleteRunIds.includes(runId)
-                ) {
-                  rejectedWrites += 1;
-                  refusedPreimage = subagentRuns.get(runId);
-                  throw new Error("retirement write rejected");
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-      );
+    const writer = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (
+        command.type === "subagents.persistChanges" &&
+        (command.input as SubagentRegistryWrite).deleteRunIds.includes(runId)
+      ) {
+        rejectedWrites += 1;
+        refusedPreimage = subagentRuns.get(runId);
+        throw new Error("retirement write rejected");
+      }
+      return scope.execute(command, executeOptions);
+    });
     try {
       await sweepAndSettleCleanup();
       expect(rejectedWrites).toBe(1);

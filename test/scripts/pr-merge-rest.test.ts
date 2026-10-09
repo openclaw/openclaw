@@ -135,6 +135,13 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       f.recover();
       expect(f.run().status).toBe(1);
       expect(f.state().mutations).toBe(1);
+      if (asyncMergeStatus !== "failed") {
+        f.recover();
+        const previous = f.git(["rev-parse", outcomeRef]);
+        expect(f.run(false, f.repo, "squash", previous).status).toBe(1);
+        expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
+        expect(f.state().mutations).toBe(1);
+      }
     },
   );
 
@@ -161,6 +168,69 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     expect(f.state().mutations).toBe(2);
     expect(f.state().graphqlMergePayloads).toEqual([]);
   });
+
+  it("recovers an authoritatively failed async merge and retains its ancestry", () => {
+    const f = restFixture();
+    f.save({ ...f.state(), asyncMergeStatus: "failed" });
+    expect(f.run().status).toBe(1);
+    const previous = f.git(["rev-parse", outcomeRef]);
+    const original = f.record();
+    expect(original).toMatchObject({ accepted: true, asyncMerge: { status: "failed", sha: null } });
+    expect(f.recover()).toBe(true);
+
+    const run = f.run(false, f.repo, "squash", previous);
+
+    expect(run.status, run.output).toBe(0);
+    expect(f.state().asyncPolls).toBe(2);
+    expect(f.state().mutations).toBe(2);
+    expect(f.record()).toMatchObject({
+      phase: expect.stringMatching(/^(commented|complete)$/u),
+      head: f.head,
+      method: "squash",
+      recovery: {
+        outcome: previous,
+        attempt: original.attempt,
+        asyncFailure: original.asyncMerge,
+      },
+    });
+    expect(JSON.parse(f.git(["show", `${previous}:outcome.json`]))).toEqual(original);
+    expect(f.git(["merge-base", "--is-ancestor", previous, outcomeRef])).toBe("");
+    expect(f.run().status).toBe(0);
+    expect(f.state().mutations).toBe(2);
+  });
+
+  it.each(["pending", "enqueued", "expired", "unknown", "sha", "head", "closed", "checks"])(
+    "refuses async failure recovery after %s drift without consuming the intent",
+    (fault) => {
+      const f = restFixture();
+      f.save({ ...f.state(), asyncMergeStatus: "failed" });
+      expect(f.run().status).toBe(1);
+      const previous = f.git(["rev-parse", outcomeRef]);
+      expect(f.recover()).toBe(true);
+      f.save({
+        ...f.state(),
+        asyncMergeStatus: ["pending", "enqueued", "expired", "unknown"].includes(fault)
+          ? fault
+          : "failed",
+        asyncMergeFault: fault === "sha" ? "sha" : "",
+        gates: fault === "checks" ? "fail" : "pass",
+        pr: {
+          ...f.state().pr,
+          ...(fault === "head" ? { headRefOid: f.base } : {}),
+          ...(fault === "closed" ? { state: "CLOSED" } : {}),
+        },
+      });
+
+      const run = f.run(false, f.repo, "squash", previous);
+
+      expect(run.status, run.output).toBe(1);
+      if (!["head", "closed", "checks"].includes(fault)) {
+        expect(f.state().asyncPolls).toBe(2);
+      }
+      expect(f.state().mutations).toBe(1);
+      expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
+    },
+  );
 
   it.each(["uuid", "head", "conflict"])(
     "preserves an uncertain async %s response without fallback",

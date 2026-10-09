@@ -277,9 +277,7 @@ async function handleDiscordReactionEvent(
     if (isGuildMessage && guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
       return;
     }
-    const memberRoleIds = Array.isArray(data.rawMember?.roles)
-      ? data.rawMember.roles.map((roleId: string) => roleId)
-      : [];
+    const memberRoleIds = Array.isArray(data.rawMember?.roles) ? data.rawMember.roles.slice() : [];
     const reactionMode = guildInfo?.reactionNotifications ?? "own";
     if (
       isGuildMessage &&

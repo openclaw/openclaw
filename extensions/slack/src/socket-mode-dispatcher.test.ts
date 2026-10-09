@@ -168,6 +168,7 @@ async function startEchoWebSocketServer(options: { tls?: boolean } = {}): Promis
 
 async function echoThroughTrustedChildProcess(options: {
   proxyUrl: string;
+  signal: AbortSignal;
   targetCaFile: string;
   targetUrl: string;
 }): Promise<{ ok: true; echoed: string }> {
@@ -220,7 +221,7 @@ async function echoThroughTrustedChildProcess(options: {
     phase("dispatcher-close-ready");
     process.stdout.write(JSON.stringify(result), () => process.exit(0));
   `;
-  const { stdout, stderr } = await execFileAsync(
+  const completed = execFileAsync(
     process.execPath,
     ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", script],
     {
@@ -231,9 +232,16 @@ async function echoThroughTrustedChildProcess(options: {
         NODE_EXTRA_CA_CERTS: options.targetCaFile,
         TEST_WEBSOCKET_URL: options.targetUrl,
       },
+      signal: options.signal,
       timeout: 10_000,
     },
   );
+  // An abort rejects execFile before the child closes; join it before fixture teardown.
+  const closed = new Promise<void>((resolve) => {
+    completed.child.once("close", () => resolve());
+  });
+  closers.push(() => closed);
+  const { stdout, stderr } = await completed;
   const phases = stderr
     .split(String.fromCharCode(10))
     .filter((line) => line.startsWith('{"fixture":"slack-proxy-child",'));
@@ -292,7 +300,7 @@ describe("slack socket mode dispatcher", () => {
     },
   );
 
-  it("opens a trusted wss target through HTTPS_PROXY", async () => {
+  it("opens a trusted wss target through HTTPS_PROXY", async ({ signal }) => {
     const proxy = await startConnectProxy();
     const target = await startEchoWebSocketServer({ tls: true });
     const dir = tempDirs.make("openclaw-slack-target-ca-");
@@ -303,6 +311,7 @@ describe("slack socket mode dispatcher", () => {
     await expect(
       echoThroughTrustedChildProcess({
         proxyUrl: proxy.url,
+        signal,
         targetCaFile,
         targetUrl: target,
       }).catch((error: unknown) => {

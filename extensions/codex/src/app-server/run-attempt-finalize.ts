@@ -4,10 +4,8 @@ import {
   formatErrorMessage,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  appendSessionYieldContext,
-  composeSessionTranscriptWriteAssertion,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { appendSessionYieldContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -350,7 +348,7 @@ export async function finalizeCodexAttempt(
       const mirrorTerminal = projectTerminalOutcome();
       state.pendingSettlementStage = "transcript/mirror";
       return codexTranscriptMirrorRuntime.mirrorBestEffort({
-        assertWriteCurrent: composeSessionTranscriptWriteAssertion([], () => {
+        assertWriteCurrent: createNativeSessionBindingAuthority([], () => {
           // Expiry replaces this exact pending write; it cannot borrow the degraded final's owner.
           if (!isSettlementActive() || state.settlementWarning !== warning) {
             throw new Error("Codex transcript settlement is no longer active");
@@ -363,7 +361,7 @@ export async function finalizeCodexAttempt(
           ) {
             throw new Error("Codex transcript terminal outcome changed before write");
           }
-        }),
+        }).assertLegacyCurrent,
         params,
         settlementWarning: warning,
         agentId: sessionAgentId,

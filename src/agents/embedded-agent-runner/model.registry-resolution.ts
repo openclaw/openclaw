@@ -5,10 +5,10 @@ import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metad
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { loadAuthProfileStoreForRuntimeAsync, resolveAuthProfileOrder } from "../auth-profiles.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
-import { AuthProfileRuntimeReadStaleError } from "../auth-profiles/runtime-persisted-rows.js";
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
+import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
@@ -20,7 +20,7 @@ import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   findInlineModelMatch,
-  mergeStaticCatalogInlineModel,
+  mergeCatalogInlineModel,
   resolveConfiguredProviderConfig,
   shouldSuppressConfiguredModel,
 } from "./model.configured-overrides.js";
@@ -91,10 +91,14 @@ export function resolveExplicitModelWithRegistry(params: {
   const inlineModel = inlineMatch?.api ? inlineMatch : undefined;
   const registryModel = params.preparedCatalogModel ?? modelRegistry.find(provider, modelId);
   const staticCatalogModel = inlineModel ? params.getStaticCatalogModel?.() : undefined;
-  // Inline config owns transport and sizing; the captured catalog owns its lower price schedule.
+  // Live facts belong to their route; authored fields still override the catalog donor.
+  const catalogModel =
+    inlineModel && registryModel && modelTransportRoutesMatch(registryModel, inlineModel)
+      ? registryModel
+      : staticCatalogModel;
   const discoveredModel = inlineModel
     ? {
-        ...mergeStaticCatalogInlineModel(staticCatalogModel, inlineModel as Model),
+        ...mergeCatalogInlineModel(catalogModel, inlineModel as Model),
         cost: registryModel?.cost ?? staticCatalogModel?.cost ?? inlineModel.cost,
       }
     : registryModel;
@@ -112,7 +116,7 @@ export function resolveExplicitModelWithRegistry(params: {
     providerConfig,
     providerMetadataOwners,
     preferDiscoveredTransport: Boolean(inlineModel),
-    staticCatalogModel,
+    staticCatalogModel: catalogModel,
   });
   if (!model) {
     return undefined;
@@ -178,22 +182,11 @@ export async function resolveDynamicModelAuthProfile(params: {
       preferredProfile: params.preferredProfile,
     }),
   };
-  const readStore = () => {
-    params.abortSignal?.throwIfAborted();
-    return loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
-  };
   const providers = listOpenAIAuthProfileProvidersForAgentRuntime({
     provider: params.provider,
     config: params.cfg,
   });
-  const store = await readStore().catch(async (error: unknown) => {
-    if (!(error instanceof AuthProfileRuntimeReadStaleError)) {
-      throw error;
-    }
-    // OAuth publication can overlap selection. The rejected reader has joined its cleanup.
-    await error.waitForSettlement?.(params.abortSignal);
-    return readStore();
-  });
+  const store = await loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
   params.abortSignal?.throwIfAborted();
   const profileId =
     explicitProfileId ??

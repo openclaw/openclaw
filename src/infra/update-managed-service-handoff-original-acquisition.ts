@@ -9,7 +9,10 @@ import type {
   ManagedHandoffLeaseStoreOptions,
   ManagedHandoffParent,
 } from "./update-managed-service-handoff-lease-types.js";
-import type { ManagedHandoffOriginalAdmission } from "./update-managed-service-handoff-original-owner.js";
+import {
+  managedHandoffOriginalGeneration,
+  type ManagedHandoffOriginalAdmission,
+} from "./update-managed-service-handoff-original-owner.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
 import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
 import { managedHandoffLeaseText as text } from "./update-managed-service-handoff-rows.js";
@@ -90,12 +93,7 @@ export function createManagedHandoffOriginalAcquisition(deps: {
       originalParent?.version === 2 &&
       originalParent.action.kind === "update" &&
       originalParent.action.mutationProtocol === "original-cancellation-v1"
-        ? {
-            key: originalParent.key,
-            owner: originalParent.owner,
-            payload: originalParent.payload,
-            updatedAt: originalParent.updatedAt,
-          }
+        ? managedHandoffOriginalGeneration(originalParent)
         : undefined;
     const payload = JSON.stringify({
       version: 2,

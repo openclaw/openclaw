@@ -37,7 +37,6 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig, TypingMode } from "../../config/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
@@ -56,6 +55,7 @@ import type { TemplateContext } from "../templating.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
 import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
 import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
+import { registerReplyCompactionCases } from "./agent-runner.runreplyagent.compaction.cases.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
 import { createReplyAgentSessionFixture } from "./agent-runner.runreplyagent.fixture.test-support.js";
 import { registerFollowupDrainCases } from "./agent-runner.runreplyagent.followup-drain.cases.js";
@@ -73,7 +73,6 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { clearFollowupQueueForTest } from "./queue.test-helpers.js";
-import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   resolveReplyOperationAgentTurn,
@@ -90,6 +89,7 @@ import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
+import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -270,13 +270,14 @@ vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
   getChannelPlugin: (channel: unknown) => state.getChannelPluginMock(channel),
 }));
 
+// mock-isolation: Queue admission is controlled here; only logical-turn registration, snapshots, and retirement stay real.
 vi.mock("../../agents/embedded-agent-runner/runs.js", async (importOriginal) => {
-  const { clearActiveEmbeddedRun, setActiveEmbeddedRun } =
+  const { clearActiveEmbeddedRun, setActiveEmbeddedRun, updateActiveEmbeddedRunSnapshot } =
     await importOriginal<typeof import("../../agents/embedded-agent-runner/runs.js")>();
   return {
-    // Queue admission is controlled here; logical-turn registration and retirement stay real.
     clearActiveEmbeddedRun,
     setActiveEmbeddedRun,
+    updateActiveEmbeddedRunSnapshot,
     formatEmbeddedAgentQueueFailureSummary: () => "test queue rejection",
     queueEmbeddedAgentMessageWithOutcomeAsync: async (
       sessionId: string,
@@ -388,6 +389,7 @@ function createMinimalRun(params?: {
   bindActiveAuthority?: boolean;
   attachSteerBackend?: boolean;
   activeBackendRunId?: string;
+  runtimePolicySessionKey?: string;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -521,6 +523,7 @@ function createMinimalRun(params?: {
         sessionEntry: params?.sessionEntry,
         sessionStore: params?.sessionStore,
         sessionKey,
+        runtimePolicySessionKey: params?.runtimePolicySessionKey,
         storePath: params?.storePath,
         sessionCtx,
         defaultModel: "anthropic/claude-opus-4-6",
@@ -647,13 +650,21 @@ describe("runReplyAgent active steering", () => {
       resetTriggered: false,
     });
     first.setPhase("running");
-    const createController = (
+    const createController = async (
       operation: ReplyOperation,
       initialEntry: SessionEntry,
       sourceTurnId: string,
     ) => {
       let entry = initialEntry;
-      return createReplyAgentRestartRecoveryController({
+      const actor = createReplyRecoveryActorFixture({
+        agentId: "main",
+        storePath,
+        sessionKey: "main",
+        getSessionId: () => operation.sessionId,
+        operation,
+      });
+      await actor.bind();
+      const controller = createReplyAgentRestartRecoveryController({
         activeSessionStore: sessionStore,
         cfg: {},
         followupRun: {
@@ -672,8 +683,11 @@ describe("runReplyAgent active steering", () => {
         },
         storePath,
       });
+      return Object.assign(controller, {
+        [Symbol.asyncDispose]: () => actor[Symbol.asyncDispose](),
+      });
     };
-    const firstController = createController(first, sessionEntry, "source-first");
+    await using firstController = await createController(first, sessionEntry, "source-first");
     attachSourceTurnRecorder({
       followupRun,
       sessionEntry,
@@ -741,9 +755,12 @@ describe("runReplyAgent active steering", () => {
           storePath,
         },
       });
-      await createController(replacement, replacementEntry, "source-replacement").admitUserTurn(
-        replacementRecorder,
+      await using replacementController = await createController(
+        replacement,
+        replacementEntry,
+        "source-replacement",
       );
+      await replacementController.admitUserTurn(replacementRecorder);
       expect(replyRunRegistry.resolveCurrentMessageInjectionTarget("main")).toMatchObject({
         sourceTurnId: "source-replacement",
       });
@@ -1684,26 +1701,6 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("releases reply admission and typing when the recovery read fails", async () => {
-    const failure = new Error("synthetic recovery read failure");
-    vi.spyOn(entryReads, "readSessionEntryInWorker").mockRejectedValueOnce(failure);
-    const ticket = reserveReplyAdmissionTicket(["main"]);
-    if (!ticket) {
-      throw new Error("expected a reply admission ticket");
-    }
-    const release = vi.spyOn(ticket, "release");
-    const { run, typing } = createMinimalRun({
-      opts: { [REPLY_ADMISSION_TICKET]: ticket },
-      storePath: "/tmp/synthetic-recovery-read.sqlite",
-    });
-
-    await expect(run()).rejects.toBe(failure);
-
-    expect(release).toHaveBeenCalledOnce();
-    expect(typing.cleanup).toHaveBeenCalledOnce();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
-
   it("records queue-cap rejection while cleaning up typing", async () => {
     vi.mocked(enqueueFollowupRun).mockImplementationOnce((...args) => {
       args[1].onQueueDisposition?.("queue-cap-new");
@@ -1798,9 +1795,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("drains followup queue when an unexpected exception escapes the run path", async () => {
-    const accounting = await import("./session-usage.js");
+    const accounting = await import("./agent-runner-result-accounting.js");
     const persistSpy = vi
-      .spyOn(accounting, "persistSessionUsageUpdate")
+      .spyOn(accounting, "accountAgentTurn")
       .mockRejectedValueOnce(new Error("persist exploded"));
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -1835,9 +1832,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   ])(
     "preserves $label through terminal failure with block streaming disabled",
     async ({ callbackResult, sessionCtx }) => {
-      const accounting = await import("./session-usage.js");
+      const accounting = await import("./agent-runner-result-accounting.js");
       const persistSpy = vi
-        .spyOn(accounting, "persistSessionUsageUpdate")
+        .spyOn(accounting, "accountAgentTurn")
         .mockRejectedValueOnce(new Error("persist exploded"));
       const onPartialReply = vi.fn(async () => callbackResult);
       let observedCallbackResult: boolean | void = undefined;
@@ -1948,9 +1945,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("rethrows after a delivered partial without visible content", async () => {
-    const accounting = await import("./session-usage.js");
+    const accounting = await import("./agent-runner-result-accounting.js");
     const persistSpy = vi
-      .spyOn(accounting, "persistSessionUsageUpdate")
+      .spyOn(accounting, "accountAgentTurn")
       .mockRejectedValueOnce(new Error("persist exploded"));
     const onPartialReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -1974,9 +1971,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("rethrows heartbeat failures after a delivered partial", async () => {
-    const accounting = await import("./session-usage.js");
+    const accounting = await import("./agent-runner-result-accounting.js");
     const persistSpy = vi
-      .spyOn(accounting, "persistSessionUsageUpdate")
+      .spyOn(accounting, "accountAgentTurn")
       .mockRejectedValueOnce(new Error("persist exploded"));
     const onPartialReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -2025,9 +2022,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   it.each(["reasoning", "commentary"] as const)(
     "reports failure after visible %s-only block streaming",
     async (lane) => {
-      const accounting = await import("./session-usage.js");
+      const accounting = await import("./agent-runner-result-accounting.js");
       const persistSpy = vi
-        .spyOn(accounting, "persistSessionUsageUpdate")
+        .spyOn(accounting, "accountAgentTurn")
         .mockRejectedValueOnce(new Error("persist exploded"));
       const onBlockReply = vi.fn();
       const runState: ReplyOperationRunState = {};
@@ -2068,6 +2065,8 @@ describe("runReplyAgent heartbeat followup guard", () => {
     },
   );
 });
+
+registerReplyCompactionCases({ createMinimalRun, makeSessionFixture, tempDirs, state });
 
 describe("runReplyAgent pending final delivery capture", () => {
   it("delivers an authenticated channel reply through the explicitly selected agent", async () => {
@@ -2351,49 +2350,39 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("rejects canonical SQLite pending final delivery when its session is deleted", async () => {
+  it.each([
+    {
+      name: "rejects canonical SQLite pending final delivery when its session is deleted",
+      reset: false,
+    },
+    {
+      name: "does not persist canonical SQLite pending final delivery on a reset session",
+      reset: true,
+    },
+  ])("$name", async ({ reset }) => {
     const sessionKey = "agent:main:main";
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({}, sessionKey);
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      const operation = replyRunRegistry.get(sessionKey);
-      if (!operation) {
-        throw new Error("expected admitted reply operation");
+      if (reset) {
+        await replaceSessionEntry(
+          { sessionKey, storePath },
+          { sessionId: "session-after-reset", updatedAt: Date.now() },
+        );
+      } else {
+        const operation = replyRunRegistry.get(sessionKey);
+        if (!operation) {
+          throw new Error("expected admitted reply operation");
+        }
+        // Match the dispatcher's initiating context so the injected deletion reaches
+        // final-delivery persistence instead of the competing-work guard.
+        await runWithReplyOperationLifecycleAdmission(operation, () =>
+          applySessionEntryLifecycleMutation({
+            removals: [{ sessionKey }],
+            skipMaintenance: true,
+            storePath,
+          }),
+        );
       }
-      // Match the dispatcher's initiating context so the injected deletion reaches
-      // final-delivery persistence instead of the competing-work guard.
-      await runWithReplyOperationLifecycleAdmission(operation, () =>
-        applySessionEntryLifecycleMutation({
-          removals: [{ sessionKey }],
-          skipMaintenance: true,
-          storePath,
-        }),
-      );
-      return {
-        payloads: [{ text: "final from deleted session" }],
-        meta: {},
-      };
-    });
-
-    const { run } = createMinimalRun({
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-    });
-
-    await expect(run()).rejects.toThrow("pending final delivery session changed or was deleted");
-    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  });
-
-  it("does not persist canonical SQLite pending final delivery on a reset session", async () => {
-    const sessionKey = "agent:main:main";
-    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({}, sessionKey);
-    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      await replaceSessionEntry(
-        { sessionKey, storePath },
-        { sessionId: "session-after-reset", updatedAt: Date.now() },
-      );
       return {
         payloads: [{ text: "final from previous session" }],
         meta: {},
@@ -2405,13 +2394,18 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore,
       sessionKey,
       storePath,
+      // Explicitly disabled verbosity lets this case reach final-intent persistence.
+      runOverrides: { verboseLevelOverride: "off" },
     });
 
-    await expect(run()).rejects.toThrow("pending final delivery session changed or was deleted");
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionId: "session-after-reset",
-    });
-    expect(loadSessionEntry({ sessionKey, storePath })?.pendingFinalDelivery).toBeUndefined();
+    await expect(run()).rejects.toThrow("Terminal accounting session changed");
+    const stored = loadSessionEntry({ sessionKey, storePath });
+    if (reset) {
+      expect(stored).toMatchObject({ sessionId: "session-after-reset" });
+      expect(stored?.pendingFinalDelivery).toBeUndefined();
+    } else {
+      expect(stored).toBeUndefined();
+    }
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
@@ -3174,6 +3168,14 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionId: "session",
       resetTriggered: false,
     });
+    await using actor = createReplyRecoveryActorFixture({
+      agentId: "main",
+      sessionKey: "main",
+      storePath,
+      getSessionId: () => replyOperation.sessionId,
+      operation: replyOperation,
+    });
+    await actor.bind();
     replyOperation.setPhase("running");
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       expect(replyOperation.abortByUser()).toBe(true);
@@ -5274,7 +5276,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           activeModel: "deepinfra/moonshotai/Kimi-K2.5",
           reason: "rate limit",
         };
-        expect(sessionEntry.fallbackNotice).toEqual(activeFallback);
+        expect(sessionStore.main.fallbackNotice).toEqual(activeFallback);
         expect(requireStoredSessionEntry(storePath).fallbackNotice).toEqual(activeFallback);
         const second = await run();
         const third = await run();
@@ -5292,7 +5294,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         }
         expect(phases.filter((phase) => phase === "fallback").length).toBe(1);
         expect(phases.filter((phase) => phase === "fallback_cleared").length).toBe(1);
-        expect(sessionEntry.fallbackNotice).toBeUndefined();
+        expect(sessionStore.main.fallbackNotice).toBeUndefined();
         expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
       } finally {
         fallbackSpy.mockRestore();
@@ -5703,58 +5705,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
     await run();
 
     const stored = requireStoredSessionEntry(storePath);
-    expect(sessionEntry.fallbackNotice).toBeUndefined();
+    expect(sessionStore.main.fallbackNotice).toBeUndefined();
     expect(stored.fallbackNotice).toBeUndefined();
     expect(stored.modelProvider).toBe("claude-cli");
     expect(stored.model).toBe("claude-opus-4-7");
     expect(stored.totalTokens).toBe(42_000);
     expect(stored.totalTokensFresh).toBe(false);
-  });
-
-  it("surfaces overflow fallback when embedded run returns empty payloads", async () => {
-    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
-      payloads: [],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "context_overflow",
-          message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-        },
-      },
-    }));
-
-    const { run } = createMinimalRun();
-    const res = await run();
-    const payload = Array.isArray(res) ? res[0] : res;
-    if (!payload) {
-      throw new Error("expected payload");
-    }
-    expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("fresh session or using a model with a larger context window");
-    expect(payload.text).toContain("/new");
-  });
-
-  it("surfaces overflow fallback when embedded payload text is whitespace-only", async () => {
-    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
-      payloads: [{ text: "   \n\t  ", isError: true }],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "context_overflow",
-          message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-        },
-      },
-    }));
-
-    const { run } = createMinimalRun();
-    const res = await run();
-    const payload = Array.isArray(res) ? res[0] : res;
-    if (!payload) {
-      throw new Error("expected payload");
-    }
-    expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("fresh session or using a model with a larger context window");
-    expect(payload.text).toContain("/new");
   });
 
   it("returns friendly message for role ordering errors thrown as exceptions", async () => {

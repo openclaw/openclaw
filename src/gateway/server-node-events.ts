@@ -1,8 +1,6 @@
 // Gateway node event dispatcher.
 // Handles device/node-originated events and routes them to sessions/channels.
 import { randomUUID } from "node:crypto";
-import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
-import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -19,7 +17,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { updatePairedDevicePresence, type NodePairingGeneration } from "../infra/device-pairing.js";
+import { updatePairedDevicePresence } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -50,14 +48,23 @@ import {
   persistInboundImagesForTranscript,
 } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
+import {
+  withNodeEventSessionSource,
+  isNodeEventConnectionCurrent,
+  pairingChangedResult,
+  parseNodeEventPayload,
+  type NodeEventSessionSource,
+} from "./server-node-event-source.js";
 import { registerNodeApnsEvent } from "./server-node-events-apns.js";
 import { enqueueNodeExecNotice } from "./server-node-events-exec-notice.js";
 import { publishNodeConnectionFacts } from "./server-node-events-publications.js";
 import type {
   NodeEvent,
   NodeEventContext,
+  NodeEventHandlerOptions,
   NodeEventHandleResult,
 } from "./server-node-events-types.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import {
   loadSessionEntry,
   resolveGatewayModelSupportsImages,
@@ -102,11 +109,11 @@ function dispatchNodeAgentCommand(
   input: NodeAgentCommandInput,
   isConnectionCurrent?: () => boolean | Promise<boolean>,
   onAdmissionRejected?: () => void | Promise<void>,
-): void {
+): Promise<void> {
   // The node RPC can finish before the agent starts its own session admission.
   // Reserve a root now so suspension cannot acknowledge and then strand the turn,
   // but recheck the admitted connection before agent work actually starts.
-  void runWithGatewayIndependentRootWorkContinuation(async () => {
+  return runWithGatewayIndependentRootWorkContinuation(async () => {
     if (isConnectionCurrent && !(await isConnectionCurrent())) {
       await onAdmissionRejected?.();
       return;
@@ -274,8 +281,8 @@ function dispatchReservedVoiceAgentCommand(params: {
   reservation: ReturnType<typeof reserveVoiceTranscript>;
   isConnectionCurrent?: () => boolean | Promise<boolean>;
   onStart: () => void;
-}): void {
-  void runWithGatewayIndependentRootWorkContinuation(async () => {
+}): Promise<void> {
+  return runWithGatewayIndependentRootWorkContinuation(async () => {
     if (params.isConnectionCurrent && !(await params.isConnectionCurrent())) {
       params.reservation.reject();
       return;
@@ -349,9 +356,9 @@ type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
 async function touchSessionStore(params: {
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
-  entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
+  assertCurrent?: () => void;
 }) {
   const { storePath } = params;
   if (!storePath) {
@@ -365,14 +372,8 @@ async function touchSessionStore(params: {
     {
       sessionId: params.sessionId,
       updatedAt: params.now,
-      thinkingLevel: params.entry?.thinkingLevel,
-      fastMode: params.entry?.fastMode,
-      verboseLevel: params.entry?.verboseLevel,
-      reasoningLevel: params.entry?.reasoningLevel,
-      systemSent: params.entry?.systemSent,
-      sendPolicy: params.entry?.sendPolicy,
-      delivery: params.entry?.delivery,
     },
+    { workerGuard: { assertCurrent: params.assertCurrent } },
   );
 }
 
@@ -381,10 +382,10 @@ function queueSessionStoreTouch(
     ctx: NodeEventContext;
     isConnectionCurrent?: () => boolean | Promise<boolean>;
   },
-) {
+): Promise<void> {
   // Voice dispatch intentionally does not wait for persistence, but a host
   // snapshot must not race the accepted write after its node RPC returns.
-  void runWithGatewayIndependentRootWorkContinuation(async () => {
+  return runWithGatewayIndependentRootWorkContinuation(async () => {
     if (params.isConnectionCurrent && !(await params.isConnectionCurrent())) {
       return;
     }
@@ -392,23 +393,6 @@ function queueSessionStoreTouch(
   }, "node-events:voice-persist").catch((err: unknown) => {
     params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
   });
-}
-
-async function isNodeEventConnectionCurrent(opts?: {
-  isConnectionCurrent?: () => boolean | Promise<boolean>;
-}): Promise<boolean> {
-  if (!opts?.isConnectionCurrent) {
-    return true;
-  }
-  try {
-    return await opts.isConnectionCurrent();
-  } catch {
-    return false;
-  }
-}
-
-function pairingChangedResult(event: string): NodeEventHandleResult {
-  return { ok: true, event, handled: false, reason: "pairing_changed" };
 }
 
 async function cleanupNodeEventMedia(
@@ -426,10 +410,6 @@ async function cleanupNodeEventMedia(
   }
 }
 
-function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown> | null {
-  return payloadJSON ? asNullableObjectRecord(safeParseJson(payloadJSON)) : null;
-}
-
 async function sendReceiptAck(params: {
   cfg: OpenClawConfig;
   deps: NodeEventContext["deps"];
@@ -438,7 +418,7 @@ async function sendReceiptAck(params: {
   to: string;
   text: string;
 }) {
-  const resolved = resolveOutboundTarget({
+  const resolved = await resolveOutboundTarget({
     channel: params.channel,
     to: params.to,
     cfg: params.cfg,
@@ -466,26 +446,29 @@ async function sendReceiptAck(params: {
   }
 }
 
-export const handleNodeEvent = async (
+export const handleNodeEvent = (
   ctx: NodeEventContext,
   nodeId: string,
   evt: NodeEvent,
-  opts?: {
-    connId?: string;
-    deviceId?: string;
-    pairingGeneration?: NodePairingGeneration;
-    presenceAllowed?: boolean;
-    isConnectionCurrent?: () => boolean | Promise<boolean>;
-    resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
-    assertApnsRegistrationCurrent?: () => void;
-  },
-): Promise<NodeEventHandleResult | undefined> => {
+  opts?: NodeEventHandlerOptions,
+): Promise<NodeEventHandleResult | undefined> =>
+  withNodeEventSessionSource(evt, opts, (preparedOptions, source) =>
+    handlePreparedNodeEvent(ctx, nodeId, evt, preparedOptions, source),
+  );
+
+async function handlePreparedNodeEvent(
+  ctx: NodeEventContext,
+  nodeId: string,
+  evt: NodeEvent,
+  opts?: NodeEventHandlerOptions,
+  source?: NodeEventSessionSource,
+): Promise<NodeEventHandleResult | undefined> {
   if (!(await isNodeEventConnectionCurrent(opts))) {
     return pairingChangedResult(evt.event);
   }
   switch (evt.event) {
     case "node.desktop.availability": {
-      const availability = parsePayloadObject(evt.payloadJSON);
+      const availability = parseNodeEventPayload(evt.payloadJSON);
       if (!Value.Check(DesktopAvailabilitySchema, availability)) {
         return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
       }
@@ -505,7 +488,7 @@ export const handleNodeEvent = async (
       };
     }
     case "voice.transcript": {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj) {
         return undefined;
       }
@@ -520,7 +503,7 @@ export const handleNodeEvent = async (
       const cfg = getRuntimeConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
-      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } = source?.loaded ?? loadSessionEntry(sessionKey);
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
@@ -534,7 +517,8 @@ export const handleNodeEvent = async (
         receivedAt,
       });
 
-      dispatchReservedVoiceAgentCommand({
+      source?.assertCurrent();
+      const voiceWork = dispatchReservedVoiceAgentCommand({
         ctx,
         nodeId,
         input: {
@@ -555,15 +539,17 @@ export const handleNodeEvent = async (
         reservation: transcriptReservation,
         isConnectionCurrent: opts?.isConnectionCurrent,
         onStart: () => {
-          queueSessionStoreTouch({
+          const touch = queueSessionStoreTouch({
             ctx,
             storePath,
             canonicalKey,
-            entry,
             sessionId,
             now: receivedAt,
+            assertCurrent: source?.assertCurrent,
             isConnectionCurrent: opts?.isConnectionCurrent,
           });
+
+          source?.pending.push(touch);
 
           // Voice now has a unique per-turn run id, so it is also the stable
           // client identity for chat streaming and abort lifecycle ownership.
@@ -573,6 +559,7 @@ export const handleNodeEvent = async (
           });
         },
       });
+      source?.pending.push(voiceWork);
       return undefined;
     }
     case "agent.request": {
@@ -608,7 +595,7 @@ export const handleNodeEvent = async (
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
-      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } = source?.loaded ?? loadSessionEntry(sessionKey);
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
@@ -696,9 +683,9 @@ export const handleNodeEvent = async (
       await touchSessionStore({
         storePath,
         canonicalKey,
-        entry,
         sessionId,
         now,
+        assertCurrent: source?.assertCurrent,
       });
       if (!(await isNodeEventConnectionCurrent(opts))) {
         await cleanupNodeEventMedia(offloadedRefs ?? [], ctx);
@@ -751,7 +738,7 @@ export const handleNodeEvent = async (
       if (wantsReceipt && deliveryChannel && deliveryTo) {
         // Delivery stays detached from agent startup, but remains part of the
         // accepted node request until the durable send settles.
-        void runWithGatewayIndependentRootWorkContinuation(async () => {
+        const receipt = runWithGatewayIndependentRootWorkContinuation(async () => {
           if (!(await isNodeEventConnectionCurrent(opts))) {
             return;
           }
@@ -766,13 +753,15 @@ export const handleNodeEvent = async (
         }, "node-events:delivery").catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });
+        source?.pending.push(receipt);
       } else if (wantsReceipt) {
         ctx.logGateway.warn(
           `agent receipt skipped node=${nodeId}: missing delivery route (channel=${deliveryChannel ?? "-"} to=${deliveryTo ?? "-"})`,
         );
       }
 
-      dispatchNodeAgentCommand(
+      source?.assertCurrent();
+      const agentWork = dispatchNodeAgentCommand(
         ctx,
         nodeId,
         {
@@ -798,10 +787,11 @@ export const handleNodeEvent = async (
         opts?.isConnectionCurrent,
         () => cleanupNodeEventMedia(persistedTranscriptMedia.entries, ctx),
       );
+      source?.pending.push(agentWork);
       return undefined;
     }
     case "notifications.changed": {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj) {
         return undefined;
       }
@@ -829,7 +819,8 @@ export const handleNodeEvent = async (
         canonicalKey: sessionKey,
         entry,
         agentId,
-      } = loadSessionEntry(target.sessionKey, {
+      } = source?.loaded ??
+      loadSessionEntry(target.sessionKey, {
         agentId: target.agentId,
       });
       if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
@@ -857,6 +848,7 @@ export const handleNodeEvent = async (
         }
       }
 
+      source?.assertCurrent();
       const queued = enqueueSystemEvent(
         summary,
         withSystemEventOwner({ sessionKey, contextKey: `notification:${key}` }, agentId),
@@ -874,11 +866,13 @@ export const handleNodeEvent = async (
     }
     case "chat.subscribe":
     case "chat.unsubscribe": {
-      const sessionKey = normalizeOptionalString(parsePayloadObject(evt.payloadJSON)?.sessionKey);
+      const sessionKey = normalizeOptionalString(
+        parseNodeEventPayload(evt.payloadJSON)?.sessionKey,
+      );
       if (!sessionKey) {
         return undefined;
       }
-      const { canonicalKey } = loadSessionEntry(sessionKey);
+      const { canonicalKey } = resolveSessionStoreIdentity({ cfg: getRuntimeConfig(), sessionKey });
       // Fanout is keyed by the canonical session; retain the connection owner for safe reconnect.
       if (evt.event === "chat.subscribe") {
         await ctx.nodeSubscribe(nodeId, canonicalKey, opts?.connId);
@@ -890,13 +884,16 @@ export const handleNodeEvent = async (
     case "exec.started":
     case "exec.finished":
     case "exec.denied": {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj) {
         return undefined;
       }
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
-      const { canonicalKey: sessionKey, agentId } = loadSessionEntry(sessionKeyRaw);
       const cfg = getRuntimeConfig();
+      const { canonicalKey: sessionKey, agentId } = resolveSessionStoreIdentity({
+        cfg,
+        sessionKey: sessionKeyRaw,
+      });
       const runId = normalizeOptionalString(obj.runId) ?? "";
       const auth = ctx.authorizeNodeSystemRunEvent({
         nodeId,
@@ -967,7 +964,7 @@ export const handleNodeEvent = async (
       return undefined;
     }
     case "push.apns.register": {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj) {
         return undefined;
       }
@@ -980,11 +977,11 @@ export const handleNodeEvent = async (
         ctx,
         nodeId,
         evt.event,
-        parsePayloadObject(evt.payloadJSON),
+        parseNodeEventPayload(evt.payloadJSON),
         opts?.connId,
       );
     case NODE_PRESENCE_ACTIVITY_EVENT: {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj || !validateNodePresenceActivityPayload(obj)) {
         return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
       }
@@ -1022,7 +1019,7 @@ export const handleNodeEvent = async (
       return { ok: true, event: evt.event, handled: true, reason: "updated" };
     }
     case NODE_PRESENCE_ALIVE_EVENT: {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj) {
         return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
       }
@@ -1071,5 +1068,5 @@ export const handleNodeEvent = async (
     default:
       return { ok: true, event: evt.event, handled: false, reason: "unsupported_event" };
   }
-};
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

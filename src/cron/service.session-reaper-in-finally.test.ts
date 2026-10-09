@@ -5,7 +5,7 @@ import {
   listSessionEntriesCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import * as sessionEntryReadRuntime from "../config/sessions/session-entry-read-runtime.js";
+import * as sessionEntryReadRuntime from "../config/sessions/session-entry-read-maintenance.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createSessionReaperTimerHarness } from "./service.session-reaper.test-support.js";
 import {
@@ -163,23 +163,31 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     });
   });
 
-  it("keeps the scheduler running after reaper session-store resolution fails", async () => {
-    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
-    const { state } = await fixture([dueJob("recover-reaper-store")], {
-      runIsolatedAgentJob,
-      resolveSessionStoreAgentIds: () => ["main"],
-      resolveSessionStorePath: () => {
-        throw new Error("session store temporarily unavailable");
-      },
-    });
-    await withCronServiceStateForTest(state, async () => {
-      await expect(onTimer(state)).resolves.toBeUndefined();
-      expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
-      expect(state.running).toBe(false);
-      expect(state.timer).not.toBeNull();
-      expect(log.warn).toHaveBeenCalled();
-    });
-  });
+  it.each(["owner discovery", "store path"])(
+    "keeps the scheduler running after reaper %s fails",
+    async (failure) => {
+      const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
+      const { state } = await fixture([dueJob("recover-reaper-store")], {
+        runIsolatedAgentJob,
+        resolveSessionStoreAgentIds: async () => {
+          if (failure === "owner discovery") {
+            throw new Error("session store temporarily unavailable");
+          }
+          return ["main"];
+        },
+        resolveSessionStorePath: () => {
+          throw new Error("session store temporarily unavailable");
+        },
+      });
+      await withCronServiceStateForTest(state, async () => {
+        await expect(onTimer(state)).resolves.toBeUndefined();
+        expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+        expect(state.running).toBe(false);
+        expect(state.timer).not.toBeNull();
+        expect(log.warn).toHaveBeenCalled();
+      });
+    },
+  );
 
   it("prunes expired run sessions after a job execution error", async () => {
     const runIsolatedAgentJob = vi.fn().mockRejectedValue(new Error("gateway down"));
@@ -270,7 +278,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       {
         defaultAgentId: undefined,
         resolveDefaultAgentId: () => undefined,
-        resolveSessionStoreAgentIds: () => ["live", "blocked"],
+        resolveSessionStoreAgentIds: async () => ["live", "blocked"],
         isAgentAvailable,
       },
     );

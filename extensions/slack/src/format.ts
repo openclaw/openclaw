@@ -233,11 +233,8 @@ function resolveSlackCodeMarkerTransition(
   active: SlackCodeMarker | undefined,
   token: string,
 ): SlackCodeMarker | undefined | null {
-  if (token === "```" && active !== "`") {
-    return active === "```" ? undefined : "```";
-  }
-  if (token === "`" && active !== "```") {
-    return active === "`" ? undefined : "`";
+  if ((token === "`" || token === "```") && (active === undefined || active === token)) {
+    return active === token ? undefined : token;
   }
   return null;
 }
@@ -302,14 +299,9 @@ function projectSlackAngleToken(token: string, dateDisplay: SlackDateDisplay): s
   if (labelSeparator >= 0) {
     return decodeSlackMrkdwnEntities(inner.slice(labelSeparator + 1));
   }
-  if (inner.startsWith("@")) {
-    return "@";
-  }
-  if (inner.startsWith("#")) {
-    return "#";
-  }
-  if (inner.startsWith("!")) {
-    return "!";
+  const prefix = inner.charAt(0);
+  if (prefix === "@" || prefix === "#" || prefix === "!") {
+    return prefix;
   }
   return decodeSlackMrkdwnEntities(inner);
 }
@@ -489,19 +481,14 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
       flush();
       const marker = wrapper(activeMarker);
       if (activeMarker) {
-        if (marker) {
-          chunks.push(
-            ...chunkTextForOutbound(token, Math.max(1, Math.floor(contentLimit)), {
-              preserveWhitespace: true,
-            }).map((fragment) => `${marker}${fragment}${marker}`),
-          );
-        } else {
-          chunks.push(
-            ...chunkTextForOutbound(escapeSlackMrkdwn(token), Math.max(1, Math.floor(limit)), {
-              preserveWhitespace: true,
-            }),
-          );
-        }
+        const fragments = chunkTextForOutbound(
+          marker ? token : escapeSlackMrkdwn(token),
+          Math.max(1, Math.floor(marker ? contentLimit : limit)),
+          { preserveWhitespace: true },
+        );
+        chunks.push(
+          ...(marker ? fragments.map((fragment) => `${marker}${fragment}${marker}`) : fragments),
+        );
         continue;
       }
       chunks.push(...(token.length <= limit ? [token] : chunkTextForOutbound(token, limit)));

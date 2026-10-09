@@ -206,11 +206,10 @@ export function enforceCrossContextPolicy(params: {
       break;
     }
   }
-  if (!target) {
-    return;
-  }
-
-  if (!isCrossContextTarget({ channel: params.channel, target, toolContext: params.toolContext })) {
+  if (
+    !target ||
+    !isCrossContextTarget({ channel: params.channel, target, toolContext: params.toolContext })
+  ) {
     return;
   }
 
@@ -231,14 +230,12 @@ export async function buildCrossContextDecoration(params: {
 }): Promise<CrossContextDecoration | null> {
   const currentTarget =
     params.toolContext?.currentChannelId ?? params.toolContext?.currentMessagingTarget;
-  if (!currentTarget) {
-    return null;
-  }
   // Direct tool sends are authored for their destination, not forwarded from a bound context.
-  if (params.toolContext?.skipCrossContextDecoration) {
-    return null;
-  }
-  if (!isCrossContextTarget(params)) {
+  if (
+    !currentTarget ||
+    params.toolContext?.skipCrossContextDecoration ||
+    !isCrossContextTarget(params)
+  ) {
     return null;
   }
 

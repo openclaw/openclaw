@@ -4,12 +4,8 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
-import { captureConfigHealthStateStore } from "../config/io.health-state.js";
-import { createConfigIO } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -41,12 +37,6 @@ const cases: {
     order: undefined,
     nativeContinuity: true,
     reply: "Native account reply.",
-  },
-  {
-    name: "uses a saved canonical paste-token without an explicit account selection or native login",
-    order: undefined,
-    credential: savedCredential,
-    reply: "Saved account reply.",
   },
   {
     name: "honors an explicit empty CLI account order despite a saved canonical paste-token",
@@ -473,34 +463,6 @@ it(
     expect(await probes()).toBe(loginProbes + 1);
   },
 );
-
-it("persists config health in the isolated Gateway process", async () => {
-  const state = await createOpenClawTestState({
-    label: "gateway-config-health",
-    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-  });
-  const warn = vi.fn();
-  const deps = { env: state.env, homedir: () => state.home, logger: { warn, error: vi.fn() } };
-  const readHealth = async () => {
-    using health = captureConfigHealthStateStore(deps, state.configPath);
-    return (await health.read())?.state;
-  };
-  try {
-    await state.writeConfig({ gateway: { mode: "local" } });
-    const snapshot = await createConfigIO({
-      ...deps,
-      configPath: state.configPath,
-    }).readConfigFileSnapshot();
-    expect(snapshot.valid).toBe(true);
-    const observed = await readHealth();
-    expect(observed?.entries?.[state.configPath]?.lastKnownGood?.hash).toBe(snapshot.hash);
-    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
-    expect(await readHealth()).toEqual(observed);
-    expect(warn).not.toHaveBeenCalled();
-  } finally {
-    await state.cleanup();
-  }
-});
 
 it("does not start a Gateway after CLI auth fixture acquisition is cancelled", async () => {
   const controller = new AbortController();

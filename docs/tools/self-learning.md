@@ -32,10 +32,8 @@ reaches 10 since its last review, a review is queued and the count starts over.
 The count also resets when the foreground turn itself changed a learned skill,
 so work the agent already saved is not reviewed again.
 
-A turn that read or viewed a learned skill also queues a review, whatever the
-count, so a skill that just misled or helped the agent gets a fresh look. The
-same eligibility rules apply, and a turn that changed a learned skill itself
-still skips the review.
+Reading or viewing a learned skill does not queue an extra review; those turns
+count toward the same 10-iteration threshold.
 
 A queued review starts after 30 seconds with no agent or reply run active; later
 activity in the same session restarts that wait. Reviews run one at a time.
@@ -88,9 +86,9 @@ skill: the review patches the survivor and archives the rest with
 worked before the stop.
 
 It does not capture environment-specific or transient failures, negative claims
-about tools, unresolved failures or guesses, one-off tasks, personal facts,
-secrets, or generic advice without concrete commands, paths, or ids. When
-nothing durable was learned, it changes nothing.
+about tools, unresolved failures or guesses, knowledge about one codebase,
+one-off tasks, personal facts, secrets, or generic advice without concrete
+commands, paths, or ids. When nothing durable was learned, it changes nothing.
 
 ## What you see
 
@@ -101,9 +99,16 @@ triggered it and mirrored into the session transcript:
 💾 Learned: updated `deploy-staging` (tightened the rollback step). Say "undo" to revert this skill change.
 ```
 
-Channel-less Control UI sessions get the line as a transcript entry. Nothing is
-posted when nothing changed. Reply "undo" and the agent restores the previous
-version.
+Channel-less Control UI sessions show it as a **Learned** row instead: one chip
+per changed skill, each opening that skill in the Skill Workshop, and an
+**Undo** button. Nothing is posted when nothing changed. Slack conversations get
+no notice; the change still appears in the Skill Workshop, where you can undo it.
+
+To undo everything the review changed, press **Undo** on the notice (a button
+on channels that render buttons, a copyable `/learn undo <id>` command on
+plain-text ones) or on the Control UI card. You can also reply "undo" and the
+agent restores the previous version. See
+[Skill Workshop undo](/tools/skill-workshop#undo).
 
 A review stops without changing anything further if you turn learning off, or
 if the source session is deleted, replaced, or changes permission mode while it
@@ -128,7 +133,7 @@ substantial work, not after every message. It can make several requests while
 it views and edits skills. Prompt-cache reuse lowers the cost of re-reading the
 conversation; provider pricing still applies.
 
-**Learn from past conversations** opens a normal chat in which the agent reads
+**Learn from history** in the Control UI opens a normal chat in which the agent reads
 earlier conversations it can access, with its configured model and tools. You
 can watch, steer, or stop it. Starting one does not change the learning mode.
 

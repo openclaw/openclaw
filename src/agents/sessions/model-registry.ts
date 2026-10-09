@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { normalizeResolvedPricing } from "@openclaw/llm-core";
-import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
@@ -13,6 +12,7 @@ import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input
 import { getAgentDir } from "../config.js";
 import { sanitizeModelHeaders } from "../embedded-agent-runner/model.inline-provider.js";
 import { hasUsableCustomProviderApiKey } from "../model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../model-auth-runtime-config.js";
 import { parseModelCatalogJson } from "../model-catalog-json.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
@@ -44,13 +44,15 @@ import {
   type ModelsConfig,
   type ProviderAuthMode,
 } from "./model-registry-schema.js";
-import type { ProviderConfigBase, ProviderModelConfig } from "./provider-config.js";
+import type { ProviderConfigInput } from "./provider-config.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
   resolveConfigValueOrThrow,
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
 } from "./resolve-config-value.js";
+
+export type { ProviderConfigInput } from "./provider-config.js";
 
 const log = createSubsystemLogger("agents/model-registry");
 
@@ -499,7 +501,11 @@ export class ModelRegistry {
               config: this.config,
               isProviderAvailable: (providerId) =>
                 this.authStorage.hasAuth(normalizeProviderId(providerId)) ||
-                hasUsableCustomProviderApiKey(this.config, providerId),
+                hasUsableCustomProviderApiKey(this.config, providerId) ||
+                resolveManagedSecretRefRuntimeProviderAuth({
+                  cfg: this.config,
+                  provider: providerId,
+                }) !== undefined,
               parsedCatalog: parsed,
               pluginMetadataSnapshot: this.pluginMetadataSnapshot,
               providers: parsed.providers,
@@ -568,18 +574,13 @@ export class ModelRegistry {
     config: ProviderModelCatalog,
     source: "catalog" | "registration",
   ): void {
-    const hasProviderApi = source === "catalog" && Boolean(config.api);
     const models = config.models ?? [];
-    if (models.length === 0) {
-      return;
-    }
-    if (!config.baseUrl) {
+    if (models.length > 0 && !config.baseUrl) {
       const subject = source === "catalog" ? "custom models" : "models";
       throw new Error(`Provider ${providerName}: "baseUrl" is required when defining ${subject}.`);
     }
     for (const model of models) {
-      const hasApi = source === "catalog" ? hasProviderApi || model.api : model.api || config.api;
-      if (!hasApi) {
+      if (!model.api && !config.api) {
         const guidance = source === "catalog" ? " Set at provider or model level." : "";
         throw new Error(
           `Provider ${providerName}, model ${model.id}: no "api" specified.${guidance}`,
@@ -649,7 +650,9 @@ export class ModelRegistry {
       thinkingLevelMap: model.thinkingLevelMap,
       input: catalog ? catalog.input : model.input,
       cost: catalog ? normalizeResolvedPricing(model.cost ?? {}) : model.cost,
-      contextWindow: catalog ? (model.contextWindow ?? 128000) : model.contextWindow,
+      // Missing catalog windows remain unknown on disk; estimates belong to runtime models.
+      contextWindow: model.contextWindow ?? Math.max(model.contextTokens ?? 0, 128000),
+      ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
       contextTokens: model.contextTokens,
       contextWindows: model.contextWindows,
       contextWindowDefault: model.contextWindowDefault,
@@ -945,17 +948,4 @@ export class ModelRegistry {
   }
 }
 
-export interface ProviderConfigInput extends ProviderConfigBase {
-  auth?: ProviderAuthMode;
-  /** OAuth provider for /login support */
-  oauth?: Omit<OAuthProviderInterface, "id">;
-  models?: Array<
-    ProviderModelConfig & {
-      contextTokens?: number;
-      contextWindows?: ModelCatalogContextWindowOption[];
-      contextWindowDefault?: string;
-      params?: Record<string, unknown>;
-    }
-  >;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

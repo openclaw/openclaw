@@ -27,7 +27,7 @@ import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-
 import type { FastMode } from "../../shared/fast-mode.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { notifyListeners } from "../../shared/listeners.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
@@ -101,6 +101,7 @@ type BoundWorkerTurnOwner = {
   runtime: {
     assertActive: () => void;
     toolSurface?: WorkerGatewayToolRuntime;
+    inference?: WorkerInferenceExecutor;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
     githubGrant?: WorkerGitHubBindingGrant;
     delegatedAuthority: AgentRunDelegatedAuthority;
@@ -196,7 +197,6 @@ export async function bindWorkerTurnOwner(
         throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
       }
     };
-    assertPreparedCurrent();
     assertRunActive();
     operatorAuthority?.assertCurrent();
     assertPreparedCurrent();
@@ -231,15 +231,8 @@ export async function bindWorkerTurnOwner(
     delegatedSource.assertBinding();
   };
   const assertActive = composeSessionSourceAssertion(
-    [
-      delegatedSource.assertCurrent,
-      assertRunActive,
-      operatorAuthority?.assertCurrent,
-      delegatedSource.assertCurrent,
-    ],
+    [delegatedSource.assertCurrent, assertRunActive, operatorAuthority?.assertCurrent],
     (assertSources) => {
-      // A closed claim must not consult its retired source. Callbacks can also revoke it.
-      assertOwnerCurrent();
       assertSources();
       assertOwnerCurrent();
     },
@@ -355,7 +348,6 @@ export function captureWorkerTurnClaimCurrentness(
     owners?.get(claim.sessionId) === bound &&
     bound.runtime.claimAuthority.isCurrent();
   return () =>
-    isBoundCurrent() &&
     validateAgentRunDelegatedAuthority(delegatedAuthority, bound.runtime.delegatedAuthority) &&
     isBoundCurrent();
 }
@@ -414,6 +406,7 @@ export function bindWorkerTurnCapabilities(
   capabilities: {
     toolSurface: WorkerGatewayToolRuntime;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
+    inference?: WorkerInferenceExecutor;
   },
 ): void {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
@@ -471,6 +464,10 @@ export function assertWorkerTurnGitHubGrantCurrent(
     throw new Error("Worker GitHub grant owner changed");
   }
   expected?.assertCurrent?.();
+}
+
+export function getWorkerTurnInference(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.inference;
 }
 
 /** Capture before buffering; delayed events must never bind to a replacement owner. */

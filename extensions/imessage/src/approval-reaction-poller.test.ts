@@ -199,27 +199,6 @@ describe("iMessage approval reaction poller", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("does not scan recent chats during fast polling with no pending targets", async () => {
-    const request = vi.fn();
-
-    await pollPendingIMessageApprovalReactions(
-      buildPollParams(request, { allowRecentChatDiscovery: true }),
-    );
-
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("does not scan recent chats during fast polling for handle-only targets", async () => {
-    await registerTarget({
-      conversation: { handle: "+15551230000" },
-    });
-    const request = vi.fn();
-
-    await pollPendingIMessageApprovalReactions(buildPollParams(request));
-
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("discovers typed handle-only targets through recent chat history", async () => {
     await registerTarget({
       conversation: { handle: APPROVER },

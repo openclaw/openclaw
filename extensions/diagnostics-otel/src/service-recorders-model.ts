@@ -79,17 +79,15 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
           : {}),
       };
       runtime.modelCallDurationHistogram.record(evt.durationMs, metricAttrs);
-      const requestPayloadBytes = asPositiveFiniteNumber(evt.requestPayloadBytes);
-      if (requestPayloadBytes !== undefined) {
-        runtime.modelCallRequestBytesHistogram.record(requestPayloadBytes, metricAttrs);
-      }
-      const responseStreamBytes = asPositiveFiniteNumber(evt.responseStreamBytes);
-      if (responseStreamBytes !== undefined) {
-        runtime.modelCallResponseBytesHistogram.record(responseStreamBytes, metricAttrs);
-      }
-      const timeToFirstByteMs = asPositiveFiniteNumber(evt.timeToFirstByteMs);
-      if (timeToFirstByteMs !== undefined) {
-        runtime.modelCallTimeToFirstByteHistogram.record(timeToFirstByteMs, metricAttrs);
+      for (const [histogram, value] of [
+        [runtime.modelCallRequestBytesHistogram, evt.requestPayloadBytes],
+        [runtime.modelCallResponseBytesHistogram, evt.responseStreamBytes],
+        [runtime.modelCallTimeToFirstByteHistogram, evt.timeToFirstByteMs],
+      ] as const) {
+        const normalized = asPositiveFiniteNumber(value);
+        if (normalized !== undefined) {
+          histogram.record(normalized, metricAttrs);
+        }
       }
       runtime.genAiOperationDurationHistogram.record(evt.durationMs / 1000, {
         "gen_ai.operation.name": genAiOperationName(evt.api, evt.observationUnit),

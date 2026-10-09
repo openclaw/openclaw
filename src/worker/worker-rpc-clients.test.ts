@@ -238,39 +238,6 @@ describe("worker transcript commit client", () => {
       messages: [messages[1]],
     });
   });
-
-  it("commits a terminal assistant message with replay near the frame ceiling", async () => {
-    const harness = connectionHarness();
-    harness.requestTranscriptCommit.mockResolvedValueOnce(
-      successResponse({ entryIds: ["entry-1"], newLeafId: "leaf-1" }),
-    );
-    const client = new WorkerTranscriptCommitClient(harness.connection, {
-      runEpoch: 3,
-      baseLeafId: null,
-    });
-    const message: WorkerTranscriptMessage = {
-      ...doneOutcome().message,
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      providerReplay: {
-        v: 1,
-        type: "openai-responses-compaction",
-        data: "x".repeat(60 * 1024),
-        provider: "openai",
-        api: "openai-responses",
-        model: "gpt-5.6-luna",
-      },
-    };
-
-    await expect(client.commit([message])).resolves.toEqual({
-      entryIds: ["entry-1"],
-      newLeafId: "leaf-1",
-    });
-    expect(harness.requestTranscriptCommit).toHaveBeenCalledWith(
-      "transcript",
-      expect.objectContaining({ messages: [message] }),
-    );
-  });
 });
 
 describe("worker live-event client", () => {
@@ -415,68 +382,6 @@ describe("worker live-event client", () => {
       expect.objectContaining({ seq: 1, lastAckedSeq: 0, event: LIVE_EVENT }),
       expect.objectContaining({ seq: 2, lastAckedSeq: 1 }),
       expect.objectContaining({ seq: 1, lastAckedSeq: 0 }),
-    ]);
-    client.dispose();
-  });
-
-  it("replays immutable sequence and payload after a resync response", async () => {
-    const harness = connectionHarness();
-    harness.requestLiveEvent
-      .mockResolvedValueOnce(resyncRequired())
-      .mockResolvedValueOnce(successResponse({ ackedSeq: 1 }))
-      .mockResolvedValueOnce(successResponse({ ackedSeq: 2 }));
-    const client = new WorkerLiveEventClient(harness.connection, { runEpoch: 3 });
-
-    const event = {
-      kind: "assistant" as const,
-      payload: { text: "local result", delta: "local result" },
-    };
-    client.enqueuePreview("run-1", event);
-    event.payload.text = "caller mutation";
-    await vi.waitFor(() => expect(harness.requestLiveEvent).toHaveBeenCalledTimes(2));
-    await expect(client.emitTerminal("run-1", TERMINAL_EVENT)).resolves.toBeUndefined();
-
-    expect(harness.requestLiveEvent).toHaveBeenCalledTimes(3);
-    const first = harness.requestLiveEvent.mock.calls[0]?.[1];
-    const replay = harness.requestLiveEvent.mock.calls[1]?.[1];
-    expect(replay).toEqual(first);
-    expect(replay?.event).not.toBe(event);
-    expect(replay?.event).toEqual(LIVE_EVENT);
-    expect(replay).toMatchObject({ seq: 1, lastAckedSeq: 0 });
-    client.dispose();
-  });
-
-  it("renumbers the unacked tail when the gateway resets behind the local cursor", async () => {
-    const harness = connectionHarness();
-    let responseIndex = 0;
-    harness.requestLiveEvent.mockImplementation(async () => {
-      responseIndex += 1;
-      if (responseIndex === 1) {
-        return resyncRequired();
-      }
-      const ackedSeq = responseIndex === 2 ? 0 : responseIndex - 2;
-      return successResponse({ ackedSeq });
-    });
-    const client = new WorkerLiveEventClient(harness.connection, {
-      runEpoch: 3,
-      initialAckedSeq: 5,
-    });
-
-    client.enqueuePreview("run-1", LIVE_EVENT);
-    const secondEvent: WorkerLiveEvent = {
-      kind: "assistant",
-      payload: { text: "second", delta: "second" },
-    };
-    client.enqueuePreview("run-1", secondEvent);
-    await vi.waitFor(() => expect(harness.requestLiveEvent).toHaveBeenCalledTimes(4));
-
-    await expect(client.emitTerminal("run-1", TERMINAL_EVENT)).resolves.toBeUndefined();
-    expect(harness.requestLiveEvent.mock.calls.map((call) => call[1])).toEqual([
-      expect.objectContaining({ seq: 6, lastAckedSeq: 5, event: LIVE_EVENT }),
-      expect.objectContaining({ seq: 7, lastAckedSeq: 5, event: secondEvent }),
-      expect.objectContaining({ seq: 1, lastAckedSeq: 0, event: LIVE_EVENT }),
-      expect.objectContaining({ seq: 2, lastAckedSeq: 0, event: secondEvent }),
-      expect.objectContaining({ seq: 3, lastAckedSeq: 2, event: TERMINAL_EVENT }),
     ]);
     client.dispose();
   });

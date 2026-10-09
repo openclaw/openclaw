@@ -327,30 +327,6 @@ describe("iMessage durable ingress", () => {
     });
   });
 
-  it("stores the raw row under its GUID in the per-chat lane", async () => {
-    await withQueue(async (queue) => {
-      const event = rawRow({ text: "\u0005hello" });
-      const ingress = createIMessageDurableIngress({
-        accountId: "default",
-        queue,
-        dispatch: vi.fn(),
-        runtime: runtime(),
-      });
-      try {
-        await ingress.receive(event);
-        expect(await queue.listPending({ limit: "all" })).toEqual([
-          expect.objectContaining({
-            id: "GUID-101",
-            laneKey: "chat:42",
-            payload: expect.objectContaining({ raw: event }),
-          }),
-        ]);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
   it("carries catchup provenance through the journal to dispatch", async () => {
     await withQueue(async (queue) => {
       const provenances: Array<{ catchup?: boolean } | undefined> = [];

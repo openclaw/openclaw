@@ -13,10 +13,6 @@ import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -36,6 +32,7 @@ import {
 } from "./bot.create-telegram-bot.test-support.js";
 import {
   createTelegramCallbackContext,
+  makeTelegramKeyedStoreTestMock,
   runTelegramTestMiddlewareChain,
   type TelegramTestContext as TelegramMiddlewareTestContext,
 } from "./bot.test-helpers.js";
@@ -384,32 +381,14 @@ describe("createTelegramBot", () => {
 
   it("keeps poll registry preparation failures retryable during durable replay", async () => {
     const readError = new Error("poll registry unavailable");
-    const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>() => ({
-      register: async () => {},
-      registerIfAbsent: async () => false,
-      lookup: async (): Promise<T | undefined> => {
-        throw readError;
-      },
-      consume: async () => undefined,
-      delete: async () => false,
-      entries: async () => [],
-      clear: async () => {},
-    });
-    const openSyncKeyedStore: TelegramRuntime["state"]["openSyncKeyedStore"] = <
-      T,
-    >(): PluginStateSyncKeyedStore<T> => ({
-      register: () => {},
-      registerIfAbsent: () => false,
-      lookup: (): T | undefined => {
-        throw readError;
-      },
-      consume: () => undefined,
-      delete: () => false,
-      entries: () => [],
-      clear: () => {},
-    });
+    const openKeyedStoreV2: TelegramRuntime["state"]["openKeyedStoreV2"] = <T>() =>
+      makeTelegramKeyedStoreTestMock<T>({
+        lookup: async () => {
+          throw readError;
+        },
+      });
     setTelegramRuntime({
-      state: { openKeyedStore, openSyncKeyedStore },
+      state: { openKeyedStoreV2 },
       channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
     } as TelegramRuntime);
     await createTelegramBot({ token: "tok" });
@@ -445,10 +424,10 @@ describe("createTelegramBot", () => {
     const lookup = vi.fn(async () => {
       throw new Error("registry should not be read");
     });
-    const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>() =>
-      ({ lookup }) as unknown as PluginStateKeyedStore<T>;
+    const openKeyedStoreV2: TelegramRuntime["state"]["openKeyedStoreV2"] = <T>() =>
+      makeTelegramKeyedStoreTestMock<T>({ lookup });
     setTelegramRuntime({
-      state: { openKeyedStore },
+      state: { openKeyedStoreV2 },
       channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
     } as TelegramRuntime);
     await createTelegramBot({ token: "tok" });

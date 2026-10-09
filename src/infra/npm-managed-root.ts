@@ -83,18 +83,19 @@ function readManagedKeys(
 function buildManagedNpmRootManifest(params: {
   manifest: ManagedNpmRootManifest;
   dependencies: Record<string, string>;
-  overrides: Record<string, unknown>;
-  managedOverrideKeys: string[];
-  managedPeerDependencyKeys: string[];
+  managedOverrides: Record<string, unknown>;
+  managedDependencyNames: ReadonlySet<string>;
 }): ManagedNpmRootManifest {
+  const { overrides, managedOverrideKeys } = applyManagedNpmRootOverrides(params);
+  const managedPeerDependencyKeys = [...params.managedDependencyNames].toSorted();
   const metadata = isRecord(params.manifest.openclaw) ? { ...params.manifest.openclaw } : {};
-  if (params.managedOverrideKeys.length > 0) {
-    metadata.managedOverrides = params.managedOverrideKeys;
+  if (managedOverrideKeys.length > 0) {
+    metadata.managedOverrides = managedOverrideKeys;
   } else {
     delete metadata.managedOverrides;
   }
-  if (params.managedPeerDependencyKeys.length > 0) {
-    metadata.managedPeerDependencies = params.managedPeerDependencyKeys;
+  if (managedPeerDependencyKeys.length > 0) {
+    metadata.managedPeerDependencies = managedPeerDependencyKeys;
   } else {
     delete metadata.managedPeerDependencies;
   }
@@ -103,8 +104,8 @@ function buildManagedNpmRootManifest(params: {
     private: true,
     dependencies: params.dependencies,
   };
-  if (Object.keys(params.overrides).length > 0) {
-    next.overrides = params.overrides;
+  if (Object.keys(overrides).length > 0) {
+    next.overrides = overrides;
   } else {
     delete next.overrides;
   }
@@ -322,18 +323,11 @@ export async function upsertManagedNpmRootDependency(params: {
     readManagedKeys(manifest.openclaw, "managedPeerDependencies"),
   );
   managedDependencyNames.delete(params.packageName);
-  const { overrides, managedOverrideKeys } = applyManagedNpmRootOverrides({
+  const next = buildManagedNpmRootManifest({
     manifest,
     managedOverrides,
     dependencies: nextDependencies,
     managedDependencyNames,
-  });
-  const next = buildManagedNpmRootManifest({
-    manifest,
-    dependencies: nextDependencies,
-    overrides,
-    managedOverrideKeys,
-    managedPeerDependencyKeys: [...managedDependencyNames].toSorted(),
   });
   await writeJson(manifestPath, next, { trailingNewline: true });
 }
@@ -790,18 +784,11 @@ export async function syncManagedNpmRootPeerDependencies(params: {
 
   // Also catches the plan-failure fallback (stale pins reused) and alias overrides whose
   // lock-resolved version can never string-match the override spec.
-  const { overrides, managedOverrideKeys } = applyManagedNpmRootOverrides({
+  const next = buildManagedNpmRootManifest({
     manifest,
     managedOverrides,
     dependencies: nextDependencies,
     managedDependencyNames: managedPeerDependencyNames,
-  });
-  const next = buildManagedNpmRootManifest({
-    manifest,
-    dependencies: nextDependencies,
-    overrides,
-    managedOverrideKeys,
-    managedPeerDependencyKeys: [...managedPeerDependencyNames].toSorted(),
   });
   const changed = JSON.stringify(next) !== JSON.stringify(manifest);
   if (changed) {

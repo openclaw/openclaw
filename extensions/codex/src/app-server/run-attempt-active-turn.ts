@@ -6,9 +6,13 @@ import {
   resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  composeSessionTranscriptWriteAssertion,
+  hasPromptImageInput,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
@@ -413,11 +417,10 @@ export function activateCodexAttemptTurn(
       const messages = activeProjector.buildSteeringTranscriptPrefix();
       if (params.sessionTarget && messages.length > 0) {
         await codexTranscriptMirrorRuntime.mirror({
-          // Transcript SDK commit callback must remain synchronous.
-          assertCurrent: () => {
-            connection.assertLegacyCurrent();
-            assertSteeringActive();
-          },
+          assertCurrent: composeSessionTranscriptWriteAssertion([
+            connection.assertLegacyCurrent,
+            createNativeSessionBindingAuthority([], assertSteeringActive).assertLegacyCurrent,
+          ]),
           agentId: sessionAgentId,
           sessionKey: contextSessionKey,
           sessionId: params.sessionId,

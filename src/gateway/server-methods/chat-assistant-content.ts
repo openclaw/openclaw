@@ -32,14 +32,10 @@ export function combineNonStreamingReplyParts(parts: readonly string[]): string 
     if (!part.trim()) {
       continue;
     }
-    if (!combined) {
-      combined = part;
-      continue;
-    }
     // Outbound media normalization trims a chunk's trailing newline, so an
     // indented following chunk still needs its original single-line boundary.
     const separator =
-      /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
+      !combined || /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
         ? ""
         : /^[\t ]+\S/.test(part)
           ? "\n"

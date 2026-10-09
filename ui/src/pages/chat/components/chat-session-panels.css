@@ -101,3 +101,15 @@ openclaw-chat-subagents-panel {
   text-align: left;
   text-transform: uppercase;
 }
+
+.chat-processes__metadata,
+.chat-subagents__metadata {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 17px;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}

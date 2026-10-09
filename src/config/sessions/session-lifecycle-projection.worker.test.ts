@@ -1,23 +1,30 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { SessionEntryLifecycleUpsert } from "./session-accessor.lifecycle-types.js";
+import {
+  commitReplySessionInitialization,
+  loadReplySessionInitializationSnapshot,
+} from "./session-accessor.reset.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation-commit.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import {
   SessionEntryLifecycleUpsertConflictError,
-  SessionMaintenancePreservationConflictError,
+  SqliteSessionMutationConflictError,
 } from "./session-mutation-conflict-error.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 
@@ -91,6 +98,9 @@ function fixture() {
   const initial = {
     sessionId: "lifecycle-original",
     updatedAt: Date.now(),
+    createdAt: 123,
+    createdVia: "operator" as const,
+    createdActor: { type: "human" as const, source: "profile" as const, id: "creator" },
     skillsSnapshot: { prompt: "original saved prompt", skills: [] },
     sessionDiffBaseline: {
       version: 1 as const,
@@ -115,7 +125,7 @@ function maintenanceFixture() {
   const now = Date.now();
   replaceSessionEntrySync(
     { ...f.scope, sessionKey: siblingKey },
-    { sessionId: siblingId, updatedAt: now - 86_400_000 },
+    { sessionId: siblingId, updatedAt: now - 86_400_000, createdAt: 17 },
   );
   return {
     ...f,
@@ -153,30 +163,20 @@ async function runMaintenanceDrift(
     dispose() {},
   }));
   if (drift.removalOnly) {
-    const authorize = reclamation.withSqliteReclamationAuthorization;
-    vi.spyOn(reclamation, "withSqliteReclamationAuthorization").mockImplementation(
-      (gate, database, assertCurrent, run) => {
-        const assertAfterDrift = () => {
-          changed();
-          assertCurrent();
-        };
-        return authorize(gate, database, assertAfterDrift, run);
-      },
-    );
+    const reclaim = reclamation.runSqliteSessionReclamation;
+    vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation((params) => {
+      if (params.plan.kind === "lifecycle-projection-commit") {
+        changed();
+      }
+      return reclaim(params);
+    });
   } else {
-    const create = admission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        create((request, grant) => {
-          if (
-            delivery.currentCommand === "session.lifecycle.project" &&
-            request.stage === "commit"
-          ) {
-            changed();
-          }
-          callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      if (delivery.currentCommand === "session.lifecycle.project" && request.stage === "commit") {
+        changed();
+      }
+      callback(request, grant);
+    });
   }
   try {
     const operation = applySessionEntryLifecycleMutation({
@@ -207,6 +207,24 @@ async function runMaintenanceDrift(
 it("moves lifecycle counts and snapshot writes off the host while preserving maintenance", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = maintenanceFixture();
+    replaceSessionEntrySync(
+      { ...f.scope, sessionKey: f.siblingKey },
+      {
+        ...f.read(f.siblingKey)!,
+        displayName: "Archived sibling",
+        createdAt: 17,
+        skillsSnapshot: { prompt: "archived saved prompt", skills: [] },
+      },
+    );
+    const publications = new Map<string, ReturnType<typeof readPreparedSessionEntryChange>>();
+    const stop = sessionChanges.subscribeFacts((change) => {
+      if ("sessionKey" in change) {
+        const publication = readPreparedSessionEntryChange(change, change.sessionKey);
+        if (publication) {
+          publications.set(change.sessionKey, publication);
+        }
+      }
+    });
     const sql = observeHostDataSql();
     try {
       const result = await applySessionEntryLifecycleMutation({
@@ -230,13 +248,51 @@ it("moves lifecycle counts and snapshot writes off the host while preserving mai
           /\b(?:delete\s+from|insert\s+into|update)\s+"?session_entry_snapshots\b/i.test(query),
       );
       expect(movedQueries).toEqual([]);
+      expect(publications.get(f.scope.sessionKey)?.entry).toMatchObject({
+        sessionId: f.initial.sessionId,
+        createdAt: f.initial.createdAt,
+        createdActor: f.initial.createdActor,
+      });
+      expect(publications.get(f.siblingKey)?.entry).toMatchObject({
+        displayName: "Archived sibling",
+        createdAt: 17,
+        archivedAt: expect.any(Number),
+        archiveReason: "active-session-cap",
+      });
     } finally {
       sql.restore();
+      stop();
     }
     expect(f.read()?.skillsSnapshot).toEqual(f.upserts[0].entry.skillsSnapshot);
+    expect(f.read()).toMatchObject({
+      createdAt: f.initial.createdAt,
+      createdVia: f.initial.createdVia,
+      createdActor: f.initial.createdActor,
+    });
     expect(f.read()?.sessionDiffBaseline).toBeUndefined();
     expect(f.read(f.siblingKey)).toMatchObject({ archiveReason: "active-session-cap" });
+    expect(f.read(f.siblingKey)?.skillsSnapshot?.prompt).toBe("archived saved prompt");
     expect(f.read(f.createdKey)).toMatchObject({ sessionId: "new-session" });
+  });
+});
+
+it("does not classify another operation's conflict as retryable reply initialization", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const snapshot = await loadReplySessionInitializationSnapshot(f.scope);
+    const conflict = new SqliteSessionMutationConflictError("unrelated operation");
+    await expect(
+      commitReplySessionInitialization({
+        ...f.scope,
+        activeSessionKey: f.scope.sessionKey,
+        expectedRevision: snapshot.revision,
+        sessionEntry: { ...f.initial, label: "must not commit" },
+        beforeEntryMutation() {
+          throw conflict;
+        },
+      }),
+    ).rejects.toBe(conflict);
+    expect(f.read()).toEqual(snapshot.currentEntry);
   });
 });
 
@@ -276,20 +332,13 @@ it.each(["transaction", "commit"] as const)(
       const committed = vi.fn();
       let live = true;
       let revokedAtGrant = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            if (
-              delivery.currentCommand === "session.lifecycle.project" &&
-              request.stage === stage
-            ) {
-              live = false;
-              revokedAtGrant = true;
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, callback) => {
+        if (delivery.currentCommand === "session.lifecycle.project" && request.stage === stage) {
+          live = false;
+          revokedAtGrant = true;
+        }
+        callback(request, grant);
+      });
       const operation = applySessionEntryLifecycleMutation({
         ...f.scope,
         activeSessionKey: f.scope.sessionKey,
@@ -356,9 +405,9 @@ it.each([
           }
         },
       });
-      await expect(operation).rejects.toBeInstanceOf(SessionMaintenancePreservationConflictError);
+      await expect(operation).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
       await expect(operation).rejects.toThrow(
-        "Session maintenance protection changed before lifecycle commit",
+        "SQLite session state changed while preparing session maintenance",
       );
       expect([f.read(), f.read(f.siblingKey), f.read(f.createdKey)]).toEqual(before);
     } finally {

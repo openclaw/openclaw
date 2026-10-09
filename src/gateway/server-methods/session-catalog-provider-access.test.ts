@@ -134,7 +134,7 @@ describe("session catalog provider admission", () => {
         ),
       );
       const owner = new AbortController();
-      const lifetime = new SessionCatalogListLifetime(() => true, [owner.signal], [queued.id]);
+      const lifetime = new SessionCatalogListLifetime([owner.signal], [queued.id]);
       let retiredErrors: unknown[] | undefined;
       const rejected = root.run(async () => {
         try {

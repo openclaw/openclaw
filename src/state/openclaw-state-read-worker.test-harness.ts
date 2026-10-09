@@ -33,7 +33,8 @@ const mock = vi.hoisted(() => ({
   capabilities:
     vi.fn<typeof import("../infra/bun-sqlite-library.js").getSqliteRuntimeCapabilities>(),
 }));
-vi.mock("../infra/bun-sqlite-library.js", () => ({
+vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
   ensureSqliteLibrarySelected: mock.selectSqlite,
   getSqliteRuntimeCapabilities: mock.capabilities,
 }));

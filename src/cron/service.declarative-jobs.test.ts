@@ -238,6 +238,11 @@ describe("CronService declarative jobs", () => {
 
   it("keeps the first creator across declaration convergence and restart", async () => {
     const { cron: writer, storePath } = await setup();
+    const sourceConversation = {
+      sessionKey: "agent:ops:conversation",
+      sessionId: "creating-session",
+      lifecycleRevision: "generation-1",
+    };
     const selections = [
       {
         skillId: "00000000-0000-4000-8000-000000000001",
@@ -249,25 +254,40 @@ describe("CronService declarative jobs", () => {
 
     const created = await add(writer, declaration(), {
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      sourceConversation,
       skillLibrarySelections: selections,
     });
     expect(created.job).toMatchObject({
       createdActor: { type: "human", id: "profile-ada" },
+      sourceConversation,
+    });
+
+    const replayed = await add(writer, declaration(), {
+      sourceConversation: { ...sourceConversation, lifecycleRevision: "generation-2" },
+    });
+    expect(replayed).toMatchObject({
+      created: false,
+      updated: false,
+      job: { sourceConversation },
     });
 
     const converged = await add(writer, declaration({ displayName: "Updated report" }), {
       createdActor: { type: "human", source: "profile", id: "profile-bob" },
+      sourceConversation: { sessionKey: "agent:ops:other", sessionId: "other-session" },
       skillLibrarySelections: [],
     });
     expect(converged).toMatchObject({ created: false, updated: true, id: created.id });
     expect(converged.job).toMatchObject({
       createdActor: { type: "human", id: "profile-ada" },
+      sourceConversation,
     });
+    await writer.update(created.id, { sessionKey: "agent:ops:other" });
     writer.stop();
 
     const reader = createCronService(storePath, false);
     await expect(reader.readJob(created.id)).resolves.toMatchObject({
       createdActor: { type: "human", id: "profile-ada" },
+      sourceConversation,
       skillLibrarySelections: selections,
     });
     const job = (await loadCronStore(storePath)).jobs.find((stored) => stored.id === created.id)!;

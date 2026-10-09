@@ -30,8 +30,7 @@ export async function sendLocationTelegram(
       throw new Error("Telegram location is required.");
     }
     const hasName = Boolean(location.name);
-    const hasAddress = Boolean(location.address);
-    if (hasName !== hasAddress) {
+    if (hasName !== Boolean(location.address)) {
       throw new Error("Telegram venues require both location.name and location.address.");
     }
 
@@ -80,12 +79,11 @@ export async function sendLocationTelegram(
         }, retryLabel);
       },
     });
-    const result = delivery.result;
     const acceptedParams = toAcceptedThreadScopedParams(delivery.acceptedParams);
     return finalizeTelegramOutbound({
       context,
       prepared,
-      result,
+      result: delivery.result,
       resultContext: `${label} send`,
       ...(botUserId !== undefined ? { botUserId } : {}),
       text: formatLocationText(location),

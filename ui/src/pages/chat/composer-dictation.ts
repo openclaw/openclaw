@@ -384,7 +384,6 @@ export class ComposerDictationController {
   private pointerBounds: DOMRect | null = null;
   private holdTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private session: ComposerDictationSession | null = null;
-  private suppressClick = false;
   private suppressedPointerId: number | null = null;
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private pendingCommitSession: ComposerDictationSession | null = null;
@@ -466,7 +465,6 @@ export class ComposerDictationController {
     this.pointerBounds = this.pointerTarget?.getBoundingClientRect() ?? null;
     this.pointerTarget?.setPointerCapture?.(event.pointerId);
     this.pointerTarget?.addEventListener("lostpointercapture", this.handleDocumentPointerCancel);
-    this.suppressClick = true;
     this.suppressedPointerId = event.pointerId;
     this.setPhase("pressing");
     // A normal click gets a quiet grace period. Only a sustained press enters
@@ -487,7 +485,7 @@ export class ComposerDictationController {
   }
 
   handleClick(event: MouseEvent): void {
-    if (this.suppressClick) {
+    if (this.suppressedPointerId !== null) {
       this.clearClickSuppression();
       event.preventDefault();
       return;
@@ -726,7 +724,7 @@ export class ComposerDictationController {
   }
 
   private expireClickSuppression(): void {
-    if (!this.suppressClick || this.suppressClickTimer !== null) {
+    if (this.suppressedPointerId === null || this.suppressClickTimer !== null) {
       return;
     }
     this.suppressClickTimer = globalThis.setTimeout(() => this.clearClickSuppression(), 0);
@@ -740,7 +738,6 @@ export class ComposerDictationController {
     document.removeEventListener("pointerup", this.handleSuppressedPointerRelease);
     document.removeEventListener("pointercancel", this.handleSuppressedPointerRelease);
     this.suppressedPointerId = null;
-    this.suppressClick = false;
   }
 
   private setPhase(phase: DictationPhase): void {

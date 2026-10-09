@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
+import {
+  createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
+} from "../../agents/model-catalog-decisions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearUserProfileAuthLink,
@@ -198,7 +201,7 @@ describe("models.list CLI runtime availability", () => {
             params: { view: "configured", preparedOnly: true },
             preloadedCatalog: { agentId: "main", config: cfg, snapshot },
             preloadedOnly: true,
-            catalogProjector: createModelCatalogDecisions({
+            catalogProjector: await prepareModelCatalogDecisions({
               cfg,
               agentId: "main",
               agentDir: state.agentDir(),

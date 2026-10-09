@@ -1,8 +1,9 @@
+import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
 import { workboardTestHost } from "./test/host.setup.ts";
 import { createViewContext } from "./test/host.ts";
-import { createWorkboardWidget } from "./widgets.ts";
+import { createWorkboardWidget } from "./widgets.tsx";
 
 const disposers: (() => void)[] = [];
 afterEach(() => {
@@ -15,6 +16,7 @@ afterEach(() => {
 function mountWidget(canMutate = true, presented = true) {
   const fixture = workboardTestHost();
   fixture.connection.connected = true;
+  const initialListeners = new Set(fixture.listeners);
   const card = createWorkboardCard();
   const request = vi.fn(async () => ({ cards: [card] }));
   fixture.host.request = request as typeof fixture.host.request;
@@ -32,7 +34,7 @@ function mountWidget(canMutate = true, presented = true) {
   );
   const mounted = createWorkboardWidget(fixture.host, "card")(container, context);
   disposers.push(() => mounted?.dispose?.());
-  return { fixture, request, card, container, context, mounted };
+  return { fixture, request, card, container, context, mounted, initialListeners };
 }
 
 it("renders the public card widget with read-only status controls", async () => {
@@ -50,10 +52,17 @@ it("starts visible widgets and releases hidden widget subscriptions", async () =
   expect(widget.request).not.toHaveBeenCalled();
   widget.mounted?.update?.({ ...widget.context, presented: true });
   await vi.waitFor(() => expect(widget.container.textContent).toContain(widget.card.title));
-  widget.mounted?.update?.({ ...widget.context, presented: false });
-  expect(widget.fixture.listeners.size).toBe(0);
-  expect(widget.fixture.events.get("plugin.workboard.changed")?.size).toBe(0);
+  const select = widget.container.querySelector("select")!;
   const count = widget.request.mock.calls.length;
+  widget.mounted?.update?.({ ...widget.context, presented: false });
+  flush();
+  expect(widget.container.querySelector("select")).toBe(select);
+  expect(select.disabled).toBe(true);
+  select.value = "done";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(widget.request).toHaveBeenCalledTimes(count);
+  expect(widget.fixture.listeners).toEqual(widget.initialListeners);
+  expect(widget.fixture.events.get("plugin.workboard.changed")?.size).toBe(0);
   widget.fixture.emit("plugin.workboard.changed", {});
   expect(widget.request).toHaveBeenCalledTimes(count);
   widget.mounted?.update?.({ ...widget.context, presented: true });

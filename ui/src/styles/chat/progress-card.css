@@ -64,7 +64,8 @@
   color: var(--muted);
 }
 
-.session-progress-card__chevron svg {
+.session-progress-card__chevron svg,
+.session-progress-card__refresh svg {
   width: 14px;
   height: 14px;
 }
@@ -151,11 +152,6 @@
   outline-offset: 2px;
 }
 
-.session-progress-card__refresh svg {
-  width: 14px;
-  height: 14px;
-}
-
 .session-progress-card__refresh[data-state="pending"] svg {
   animation: btn-spinner-spin 1.2s linear infinite;
 }
@@ -164,7 +160,8 @@
   color: var(--ok);
 }
 
-.session-progress-card__refresh:is([data-state="failed"], [data-state="timeout"]) {
+.session-progress-card__refresh:is([data-state="failed"], [data-state="timeout"]),
+.session-progress-card__refresh-status:is([data-state="failed"], [data-state="timeout"]) {
   color: var(--warn);
 }
 
@@ -175,10 +172,6 @@
   font-weight: 400;
   line-height: 1.4;
   overflow-wrap: anywhere;
-}
-
-.session-progress-card__refresh-status:is([data-state="failed"], [data-state="timeout"]) {
-  color: var(--warn);
 }
 
 /* Keep live announcements accessible; the button carries the visible feedback. */

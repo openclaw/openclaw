@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
@@ -19,6 +28,7 @@ import {
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   advancePlacementFixtureToActive,
   writePlacementEnvironmentFixture,
@@ -51,6 +61,8 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
+afterAll(closeStateDatabaseForTest);
+
 function createLane(initialParams: SessionPlacementTurnParams) {
   let params = initialParams;
   let generation = getAgentEventLifecycleGeneration();
@@ -71,7 +83,7 @@ function createLane(initialParams: SessionPlacementTurnParams) {
 
 describe("local claim recovery before backend registration", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each(["local", "standalone", "remote"] as const)(
     "admits a queued %s child after its inherited parent claim closes",
@@ -299,7 +311,7 @@ describe("local claim recovery before backend registration", () => {
 
 describe("worker pre-launch claim recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each([
     "workspace resolution",

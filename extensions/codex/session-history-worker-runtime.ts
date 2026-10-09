@@ -53,6 +53,8 @@ const historyReads = new WorkerTaskPool<CodexHistoryWorkerInput, CodexHistoryWor
         root: fileURLToPath(new URL("../..", import.meta.url)),
       })
     : sourceWorkerUrl,
+  workerClass: "reader",
+  // Published plugin supports older hosts that only understand numeric sizing.
   maxWorkers: 1,
 });
 
@@ -62,13 +64,10 @@ export async function projectCodexSettledHistoryInWorker(
   contextReader?: CodexSessionContextReader,
 ): Promise<CodexHistoryReadResult<JsonValue[]>> {
   signal?.throwIfAborted();
-  if (contextReader && !target.sessionTarget) {
-    throw new Error("Actor history requires a captured sessionTarget");
-  }
-  const resolved = resolveCodexHistoryTarget(target);
+  const resolved = await resolveCodexHistoryTarget(target);
   const reader =
     contextReader ??
-    (target.sessionTarget && resolved.kind === "sqlite"
+    (resolved.kind === "sqlite"
       ? captureCodexSessionContextReader({ ...target.sessionTarget, ...resolved.target }, signal)
       : undefined);
   if (reader) {

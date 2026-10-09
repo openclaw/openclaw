@@ -282,27 +282,17 @@ function parseCommentLinkedDocumentPath(pathname: string): {
   return { urlKind: kind, token };
 }
 
-function hasResolvedLinkedDocumentReference(link: ParsedCommentLinkedDocument): boolean {
-  return (
-    link.urlKind !== "unknown" && (Boolean(link.resolvedObjToken) || Boolean(link.wikiNodeToken))
-  );
-}
-
 function resolveCommentLinkedDocumentFromUrl(params: {
   rawUrl: string;
   currentDocument?: ParsedCommentDocumentRef;
-}): ParsedCommentLinkedDocument {
-  const link: ParsedCommentLinkedDocument = {
-    rawUrl: params.rawUrl,
-    urlKind: "unknown",
-  };
+}): ParsedCommentLinkedDocument | undefined {
   const parsed = URL.parse(params.rawUrl);
   const parsedPath = parsed && parseCommentLinkedDocumentPath(parsed.pathname);
   if (!parsedPath) {
-    return link;
+    return undefined;
   }
   const { urlKind, token } = parsedPath;
-  link.urlKind = urlKind;
+  const link: ParsedCommentLinkedDocument = { rawUrl: params.rawUrl, urlKind };
   if (urlKind === "wiki") {
     link.wikiNodeToken = token;
   } else {
@@ -366,7 +356,7 @@ export function parseCommentContentElements(params: {
           rawUrl,
           currentDocument: params.currentDocument,
         });
-        if (hasResolvedLinkedDocumentReference(linkedDocument)) {
+        if (linkedDocument) {
           const key = [
             linkedDocument.rawUrl,
             linkedDocument.urlKind,

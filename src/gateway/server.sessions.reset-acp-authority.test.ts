@@ -8,7 +8,7 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import { afterEach, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -54,7 +54,7 @@ test.each(["already retired", "caller retired"] as const)(
     });
     const scope = { agentId: "main", sessionKey, storePath };
     const beforeEntry = structuredClone(loadSessionEntry(scope));
-    const beforeMeta = readAcpSessionMeta({ sessionKey });
+    const beforeMeta = readAcpSessionEntry({ sessionKey })?.acp;
     const reached = createDeferred();
     const release = createDeferred();
     const originalWrite = acpEntryWriter.updateAcpSessionStoreEntry;
@@ -103,7 +103,7 @@ test.each(["already retired", "caller retired"] as const)(
         }
       }
       expect(loadSessionEntry(scope)).toEqual(beforeEntry);
-      expect(readAcpSessionMeta({ sessionKey })).toEqual(beforeMeta);
+      expect(readAcpSessionEntry({ sessionKey })?.acp).toEqual(beforeMeta);
     } finally {
       release.resolve();
       await outcome;

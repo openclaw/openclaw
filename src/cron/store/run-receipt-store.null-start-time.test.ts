@@ -6,7 +6,7 @@ vi.mock("../../shared/pid-alive.js", async (importOriginal) => ({
   getFileLockProcessStartTime: () => null,
 }));
 
-const { prepareCronRunReceiptClaim } = await import("./run-receipt-store.js");
+const { prepareCronRunReceiptClaim } = await import("./run-receipt-store.test-support.js");
 
 describe("cron run receipt process identity", () => {
   it("refuses a null-start-time owner so PID reuse cannot fence the job forever", () => {

@@ -88,17 +88,15 @@ function resolveAllowedExternalCliAuthProfiles(params: {
     providerIds: params.externalCli?.externalCliProviderIds,
     profileIds: explicitProfileIds,
   });
-  return cliProfiles
-    .filter((profile) =>
-      isExternalAuthProfileAllowed(
-        profile,
-        params.store,
-        params.externalCli?.config,
-        explicitProfileIds,
-        env,
-      ),
-    )
-    .map(({ profileId, credential, persistence }) => ({ profileId, credential, persistence }));
+  return cliProfiles.filter((profile) =>
+    isExternalAuthProfileAllowed(
+      profile,
+      params.store,
+      params.externalCli?.config,
+      explicitProfileIds,
+      env,
+    ),
+  );
 }
 
 function hasScopedExternalCliOverlay(params?: ExternalCliOverlayOptions): boolean {

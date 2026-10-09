@@ -328,6 +328,7 @@ const WorkerLiveAssistantPayloadSchema = closedObject({
 const WorkerLiveThinkingPayloadSchema = closedObject({
   text: LiveTextSchema,
   delta: LiveTextSchema,
+  itemId: Type.Optional(WorkerIdentifierSchema),
 });
 
 const WorkerLiveToolCommonProperties = {

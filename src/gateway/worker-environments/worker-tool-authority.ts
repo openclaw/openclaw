@@ -75,6 +75,13 @@ export async function resolveWorkerToolAuthority(params: {
     runtimeToolAllowlist: turn.toolsAllow,
     inheritRuntimeToolAllowlist: true,
   });
+  if (capabilityProfile.policy.delegatedToolPolicy) {
+    // Worker-local tools do not carry the Gateway’s live delegation authority.
+    // This gate also covers dispatch of existing sessions and required placement.
+    throw new Error(
+      "Worker execution cannot enforce a delegated tool grant. Run this session locally.",
+    );
+  }
   const contextWindow =
     resolveContextTokensForModel({
       cfg: turn.config ?? {},

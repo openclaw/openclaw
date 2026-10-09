@@ -192,13 +192,12 @@ function toConfigCandidate(
       at: parseDateStringTimestampMs(value.ts) ?? record.createdAt,
       kind: value.event === "config.external" ? "external-edit" : "config-write",
       source,
-      summary:
+      summary: summarizePaths(
         value.event === "config.external"
-          ? summarizePaths("Configuration edited outside OpenClaw", changedPaths)
-          : summarizePaths(
-              CONFIG_WRITE_PREFIXES.get(source) ?? "Configuration updated",
-              changedPaths,
-            ),
+          ? "Configuration edited outside OpenClaw"
+          : (CONFIG_WRITE_PREFIXES.get(source) ?? "Configuration updated"),
+        changedPaths,
+      ),
       ...(changedPaths ? { changedPaths } : {}),
       ...(value.event === "config.external" && !value.valid ? { invalid: true } : {}),
       ...(value.event === "config.external" && value.opaqueChange ? { opaqueChange: true } : {}),
@@ -523,17 +522,15 @@ export async function listSystemChanges(
   // remaining config record has passed the cursor and none was a partner.
   const pendingCollapse =
     configScan.exhausted && !merged.hasBufferedConfigEntries ? [] : merged.pendingCollapse;
-  const next = { ...cursor };
-  if (!merged.hasBufferedSystemEntries) {
-    next.systemAgentBefore = systemScan.nextBeforeSequence;
-  } else if (merged.systemBefore !== undefined) {
-    next.systemAgentBefore = merged.systemBefore;
-  }
-  if (!merged.hasBufferedConfigEntries) {
-    next.configBefore = configScan.nextBeforeSequence;
-  } else if (merged.configBefore !== undefined) {
-    next.configBefore = merged.configBefore;
-  }
+  const next = {
+    ...cursor,
+    systemAgentBefore: merged.hasBufferedSystemEntries
+      ? (merged.systemBefore ?? cursor.systemAgentBefore)
+      : systemScan.nextBeforeSequence,
+    configBefore: merged.hasBufferedConfigEntries
+      ? (merged.configBefore ?? cursor.configBefore)
+      : configScan.nextBeforeSequence,
+  };
   if (pendingCollapse.length > 0) {
     next.pendingCollapse = pendingCollapse;
   } else {

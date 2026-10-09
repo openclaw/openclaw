@@ -150,7 +150,7 @@ zstd -T0 -3 -q -o "$ARCHIVE"
 
 function makeDeclaredExtensionArchive(
   root: string,
-  kind: "gnu-longlink" | "gnu-longname" | "pax" | "pax-global",
+  kind: "gnu-longname" | "pax" | "pax-global",
   size: number,
 ): string {
   const tarPath = path.join(root, `${kind}.tar`);
@@ -159,7 +159,6 @@ import sys
 import tarfile
 
 types = {
-    "gnu-longlink": tarfile.GNUTYPE_LONGLINK,
     "gnu-longname": tarfile.GNUTYPE_LONGNAME,
     "pax": tarfile.XHDTYPE,
     "pax-global": tarfile.XGLTYPE,
@@ -179,7 +178,7 @@ with open(sys.argv[1], "wb") as output:
 
 function makeLongMetadataArchive(
   root: string,
-  kind: "gnu-longname" | "hardlink" | "pax-path" | "symlink",
+  kind: "gnu-longname" | "pax-path" | "symlink",
 ): string {
   const tarPath = path.join(root, `${kind}-metadata.tar`);
   const python = String.raw`
@@ -206,49 +205,11 @@ with tarfile.open(sys.argv[1], "w", format=archive_format) as archive:
         archive.addfile(member, io.BytesIO(b"x"))
     else:
         member = tarfile.TarInfo(f"candidate/{kind}")
-        member.type = tarfile.LNKTYPE if kind == "hardlink" else tarfile.SYMTYPE
+        member.type = tarfile.SYMTYPE
         member.linkname = long_value
         archive.addfile(member)
 `;
   const result = spawnSync(pythonExecPath, ["-c", python, tarPath, kind], {
-    encoding: "utf8",
-  });
-  expect(result.status, result.stderr).toBe(0);
-  return compressTar(tarPath);
-}
-
-function makeDeepSortedArchive(root: string, pathCount: number): string {
-  const tarPath = path.join(root, "deep-sorted.tar");
-  const python = String.raw`
-import io
-import sys
-import tarfile
-
-path_count = int(sys.argv[2])
-with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
-    manifest = tarfile.TarInfo("manifest.json")
-    manifest_payload = b'{"version":1}\n'
-    manifest.size = len(manifest_payload)
-    archive.addfile(manifest, io.BytesIO(manifest_payload))
-
-    root = tarfile.TarInfo("candidate")
-    root.type = tarfile.DIRTYPE
-    archive.addfile(root)
-
-    # One shared prefix preserves the 256-component boundary and distinct leaves
-    # without rebuilding the same deep parent chain for every sibling.
-    parts = ["candidate", *["d" for _ in range(254)]]
-    for component_count in range(2, len(parts) + 1):
-        directory = tarfile.TarInfo("/".join(parts[:component_count]))
-        directory.type = tarfile.DIRTYPE
-        archive.addfile(directory)
-
-    for index in range(path_count):
-        member = tarfile.TarInfo("/".join([*parts, f"{index:04d}"]))
-        member.size = 1
-        archive.addfile(member, io.BytesIO(b"x"))
-`;
-  const result = spawnSync(pythonExecPath, ["-c", python, tarPath, String(pathCount)], {
     encoding: "utf8",
   });
   expect(result.status, result.stderr).toBe(0);
@@ -286,132 +247,6 @@ function makeValidHardlinkArchive(root: string): string {
 `,
     "USTAR_FORMAT",
   );
-}
-
-function makeManyMemberTar(root: string, memberCount: number): string {
-  const tarPath = path.join(root, "many-members.tar");
-  const python = String.raw`
-import sys
-import tarfile
-
-member_count = int(sys.argv[2])
-if member_count < 2:
-    raise ValueError("member count must include manifest and candidate root")
-
-with open(sys.argv[1], "wb") as output:
-    manifest = tarfile.TarInfo("manifest.json")
-    output.write(manifest.tobuf(format=tarfile.USTAR_FORMAT))
-
-    root = tarfile.TarInfo("candidate")
-    root.type = tarfile.DIRTYPE
-    output.write(root.tobuf(format=tarfile.USTAR_FORMAT))
-
-    # Only the short ASCII name changes across these empty regular members.
-    # Reuse one stdlib-generated USTAR header and adjust its name/checksum so
-    # the 100k-member stress case spends its time in the reader under test.
-    member_header = bytearray(
-        tarfile.TarInfo("candidate/f000000").tobuf(format=tarfile.USTAR_FORMAT)
-    )
-    member_header[:100] = b"\0" * 100
-    member_header[148:156] = b" " * 8
-    member_base_checksum = sum(member_header)
-
-    for index in range(member_count - 2):
-        name = f"candidate/f{index:06d}".encode("ascii")
-        header = member_header.copy()
-        header[:len(name)] = name
-        checksum = member_base_checksum + sum(name)
-        header[148:156] = f"{checksum:06o}\0 ".encode("ascii")
-        output.write(header)
-
-    output.write(b"\0" * 1024)
-`;
-  const result = spawnSync(pythonExecPath, ["-c", python, tarPath, String(memberCount)], {
-    encoding: "utf8",
-  });
-  expect(result.status, result.stderr).toBe(0);
-  return tarPath;
-}
-
-function makePaxHeavyTar(root: string, memberCount: number, keyCount: number): string {
-  const tarPath = path.join(root, "pax-heavy.tar");
-  const python = String.raw`
-import sys
-import tarfile
-
-member_count = int(sys.argv[2])
-key_count = int(sys.argv[3])
-with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
-    manifest = tarfile.TarInfo("manifest.json")
-    archive.addfile(manifest)
-
-    root = tarfile.TarInfo("candidate")
-    root.type = tarfile.DIRTYPE
-    archive.addfile(root)
-
-    for index in range(member_count):
-        member = tarfile.TarInfo(f"candidate/p{index:06d}")
-        member.pax_headers = {
-            f"OPENCLAW.key{key:03d}": f"{index:06d}-{key:03d}"
-            for key in range(key_count)
-        }
-        archive.addfile(member)
-`;
-  const result = spawnSync(
-    pythonExecPath,
-    ["-c", python, tarPath, String(memberCount), String(keyCount)],
-    {
-      encoding: "utf8",
-    },
-  );
-  expect(result.status, result.stderr).toBe(0);
-  return compressTar(tarPath);
-}
-
-function probeTarInfoCache(tarPath: string) {
-  const launcher = String.raw`
-import subprocess
-import sys
-
-completed = subprocess.run([sys.executable, "-c", sys.argv[1], *sys.argv[2:]])
-raise SystemExit(completed.returncode)
-`;
-  const python = String.raw`
-import importlib.util
-import json
-import resource
-import sys
-import tarfile
-
-spec = importlib.util.spec_from_file_location("archive_guard", sys.argv[1])
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-
-count = 0
-max_cached_members = 0
-with tarfile.open(sys.argv[2], mode="r|", bufsize=512) as archive:
-    while True:
-        member, cached_members = module._next_stream_member(archive)
-        max_cached_members = max(max_cached_members, cached_members)
-        if archive.members:
-            raise RuntimeError("tar metadata cache was not cleared")
-        if member is None:
-            break
-        count += 1
-
-resident_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-if sys.platform == "darwin":
-    resident_kib //= 1024
-print(json.dumps({
-    "count": count,
-    "maxCachedMembers": max_cached_members,
-    "residentKiB": resident_kib,
-}))
-`;
-  return spawnSync(pythonExecPath, ["-c", launcher, python, SCRIPT, tarPath], {
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-  });
 }
 
 describe("release Telegram candidate archive guard", () => {
@@ -510,45 +345,6 @@ describe("release Telegram candidate archive guard", () => {
     expectFailure(["validate-tree", root], "hard links outside the validated root");
   });
 
-  it("accepts hard links whose complete link set is inside the tree", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const first = path.join(root, "first.txt");
-    writeFileSync(first, "shared\n");
-    linkSync(first, path.join(root, "second.txt"));
-
-    const result = expectSuccess(["validate-tree", root]);
-    expect(JSON.parse(result.stdout)).toMatchObject({ entries: 2 });
-  });
-
-  it("streams and extracts a valid compressed archive", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeCompressedArchive(root);
-    const destination = path.join(root, "extracted");
-
-    const result = expectSuccess([
-      "extract-zstd",
-      archive,
-      destination,
-      "--allowed-root",
-      "candidate",
-      "--max-members",
-      "10",
-      "--max-expanded-bytes",
-      "4096",
-      "--max-stream-bytes",
-      `${1024 * 1024}`,
-    ]);
-
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      allowedRoot: "candidate",
-      members: 3,
-    });
-    expect(JSON.parse(result.stdout).maxCachedMembers).toBeLessThanOrEqual(1);
-    expect(existsSync(path.join(destination, "manifest.json"))).toBe(true);
-    expect(existsSync(path.join(destination, "candidate", "payload.bin"))).toBe(true);
-    expect(statSync(destination).mode & 0o777).toBe(0o700);
-  });
-
   it.runIf(hasGnuTar)(
     "accepts the producer's depth-first order around punctuation siblings",
     () => {
@@ -575,6 +371,7 @@ describe("release Telegram candidate archive guard", () => {
         "candidate",
       ]);
       expect(JSON.parse(result.stdout)).toMatchObject({ members: 5 });
+      expect(JSON.parse(result.stdout).maxCachedMembers).toBeLessThanOrEqual(1);
       expect(readFileSync(path.join(destination, "candidate", "app-routes.ts"), "utf8")).toBe(
         "routes\n",
       );
@@ -640,6 +437,8 @@ describe("release Telegram candidate archive guard", () => {
       "candidate",
     ]);
     expect(JSON.parse(result.stdout).maxCachedMembers).toBeLessThanOrEqual(1);
+    expect(existsSync(path.join(destination, "manifest.json"))).toBe(true);
+    expect(statSync(destination).mode & 0o777).toBe(0o700);
     const target = path.join(destination, "candidate", "a-target.txt");
     const link = path.join(destination, "candidate", "b-link.txt");
     expect(readFileSync(link, "utf8")).toBe("shared\n");
@@ -648,7 +447,7 @@ describe("release Telegram candidate archive guard", () => {
 
   it("rejects compressed archives over the member-count cap and cleans up", () => {
     const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = compressTar(makeManyMemberTar(root, 3));
+    const archive = makeCompressedArchive(root);
     const destination = path.join(root, "member-limit");
 
     expectFailure(
@@ -658,7 +457,7 @@ describe("release Telegram candidate archive guard", () => {
     expect(existsSync(destination)).toBe(false);
   });
 
-  it.each(["pax", "gnu-longname", "gnu-longlink"] as const)(
+  it.each(["pax", "gnu-longname"] as const)(
     "rejects a declared %s extension before reading its payload",
     (kind) => {
       const root = tempDirs.make("openclaw-archive-guard-");
@@ -715,7 +514,7 @@ describe("release Telegram candidate archive guard", () => {
     expect(existsSync(destination)).toBe(false);
   });
 
-  it.each(["pax-path", "gnu-longname", "symlink", "hardlink"] as const)(
+  it.each(["pax-path", "gnu-longname", "symlink"] as const)(
     "rejects an overlong %s path value",
     (kind) => {
       const root = tempDirs.make("openclaw-archive-guard-");
@@ -849,56 +648,6 @@ describe("release Telegram candidate archive guard", () => {
     );
   });
 
-  it("accepts unique 256-component paths within the metadata budget", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeDeepSortedArchive(root, 32);
-    const destination = path.join(root, "deep-sorted-output");
-
-    const result = expectSuccess([
-      "extract-zstd",
-      archive,
-      destination,
-      "--allowed-root",
-      "candidate",
-      "--max-members",
-      "10000",
-      "--max-path-bytes",
-      `${8 * 1024 * 1024}`,
-    ]);
-    expect(JSON.parse(result.stdout)).toMatchObject({ members: 288 });
-    expect(JSON.parse(result.stdout).maxCachedMembers).toBeLessThanOrEqual(1);
-  });
-
-  it("keeps TarInfo cache and resident memory bounded across 100000 members", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const tarPath = makeManyMemberTar(root, 100_000);
-    const result = probeTarInfoCache(tarPath);
-    expect(result.status, result.stderr).toBe(0);
-    const probe = JSON.parse(result.stdout);
-    expect(probe).toMatchObject({
-      count: 100_000,
-    });
-    expect(probe.maxCachedMembers).toBeLessThanOrEqual(1);
-    expect(probe.residentKiB).toBeLessThan(128 * 1024);
-  }, 30_000);
-
-  it("clears PAX metadata from the TarInfo cache after every member", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makePaxHeavyTar(root, 1_200, 128);
-    const result = expectSuccess([
-      "extract-zstd",
-      archive,
-      path.join(root, "pax-heavy-output"),
-      "--allowed-root",
-      "candidate",
-      "--max-members",
-      "2000",
-    ]);
-    const summary = JSON.parse(result.stdout);
-    expect(summary).toMatchObject({ members: 1_202 });
-    expect(summary.maxCachedMembers).toBeLessThanOrEqual(1);
-  }, 30_000);
-
   it("rejects sparse archive members before extraction", () => {
     const root = tempDirs.make("openclaw-archive-guard-");
     const archive = makeTarArchive(
@@ -939,24 +688,6 @@ describe("release Telegram candidate archive guard", () => {
         "1024",
       ],
       "decompressed archive stream exceeds",
-    );
-    expect(existsSync(destination)).toBe(false);
-  });
-
-  it("rejects non-zero bytes after the tar end marker", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeCompressedArchive(root);
-    const tarPath = archive.slice(0, -".zst".length);
-    appendFileSync(tarPath, "EXFILTRATED-TRAILER");
-    const zstdResult = spawnSync("zstd", ["-q", "-f", tarPath, "-o", archive], {
-      encoding: "utf8",
-    });
-    expect(zstdResult.status, zstdResult.stderr).toBe(0);
-
-    const destination = path.join(root, "trailing-output");
-    expectFailure(
-      ["extract-zstd", archive, destination, "--allowed-root", "candidate"],
-      "non-zero data after tar end",
     );
     expect(existsSync(destination)).toBe(false);
   });

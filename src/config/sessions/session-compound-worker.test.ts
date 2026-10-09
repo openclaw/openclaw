@@ -7,6 +7,7 @@ import { createChatSendGoalCommitGuard } from "../../gateway/server-methods/chat
 import { loadSessionEntry as loadGatewaySessionEntry } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -199,21 +200,17 @@ it.each([
       if (operation === "turn") {
         expect(pending).toBeDefined();
       }
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
       let finalGrant = false;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage && (operation === "turn" || resetPrepared)) {
-              finalGrant = true;
-              if (pending) {
-                expect(pending.state).toBe("queued");
-              }
-              current = false;
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, callback) => {
+        if (request.stage === stage && (operation === "turn" || resetPrepared)) {
+          finalGrant = true;
+          if (pending) {
+            expect(pending.state).toBe("queued");
+          }
+          current = false;
+        }
+        callback(request, grant);
+      });
       const committed = vi.fn();
       try {
         const work =
@@ -429,38 +426,48 @@ it("reconciles a dirty reset transcript through the host owner after commit", as
   });
 });
 
-it("preserves reset conflict identity and does not overwrite a concurrent entry", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
-    const concurrent = { sessionId: "original", updatedAt: 2, label: "concurrent writer" };
-    const replaceAfterSelection = vi.fn(() => replaceSessionEntrySync(f.scope, concurrent));
-    delivery.afterCommit = (type) => {
-      if (type === "session.entry.patch.prepare") {
-        replaceAfterSelection();
-      }
-    };
-    const buildNextEntry = vi.fn<
-      Parameters<typeof resetSessionEntryLifecycle>[0]["buildNextEntry"]
-    >(({ currentEntry }) => {
-      expect(currentEntry?.label).toBe("initial");
-      return { sessionId: "rejected-reset", updatedAt: 3 };
+it.for([false, true])(
+  "preserves reset conflict identity and does not overwrite a concurrent entry (boundary=%s)",
+  async (withBoundary) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const concurrent = { sessionId: "original", updatedAt: 2, label: "concurrent writer" };
+      const replaceAfterSelection = vi.fn(() => replaceSessionEntrySync(f.scope, concurrent));
+      delivery.afterCommit = (type) => {
+        if (type === "session.entry.patch.prepare") {
+          replaceAfterSelection();
+        }
+      };
+      const buildNextEntry = vi.fn<
+        Parameters<typeof resetSessionEntryLifecycle>[0]["buildNextEntry"]
+      >(({ currentEntry }) => {
+        expect(currentEntry?.label).toBe("initial");
+        return { sessionId: "rejected-reset", updatedAt: 3 };
+      });
+      const committed = vi.fn();
+      const work = resetSessionEntryLifecycle({
+        ...f.scope,
+        target: f.target,
+        resetBoundary: withBoundary
+          ? {
+              context: "clear",
+              reason: "new",
+              cwd: "/synthetic/workspace",
+            }
+          : undefined,
+        buildNextEntry,
+        afterEntryMutation: committed,
+      });
+      await expect(work).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
+      await expect(work).rejects.toMatchObject({ operationLabel: "reset" });
+      expect(replaceAfterSelection).toHaveBeenCalledOnce();
+      expect(buildNextEntry).toHaveBeenCalledOnce();
+      expect(committed).not.toHaveBeenCalled();
+      expect(f.read()).toMatchObject(concurrent);
+      expect(f.events()).toEqual([]);
     });
-    const committed = vi.fn();
-    const work = resetSessionEntryLifecycle({
-      ...f.scope,
-      target: f.target,
-      buildNextEntry,
-      afterEntryMutation: committed,
-    });
-    await expect(work).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
-    await expect(work).rejects.toMatchObject({ operationLabel: "reset" });
-    expect(replaceAfterSelection).toHaveBeenCalledOnce();
-    expect(buildNextEntry).toHaveBeenCalledOnce();
-    expect(committed).not.toHaveBeenCalled();
-    expect(f.read()).toMatchObject(concurrent);
-    expect(f.events()).toEqual([]);
-  });
-});
+  },
+);
 
 it("rolls collaboration cleanup back with a refused reset and clears only the committed target", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -582,16 +589,12 @@ it("commits a pending-input turn with zero host SQL", async () => {
         observedCustody.push(pending!.state);
       }
     });
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            grantStates.push(pending!.state);
-          }
-          callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "commit") {
+        grantStates.push(pending!.state);
+      }
+      callback(request, grant);
+    });
     const committed = vi.fn<NonNullable<SessionTranscriptTurnPersistOptions["onMessageCommitted"]>>(
       (message) => {
         expect(pending!.state).toBe("consumed");
@@ -867,21 +870,17 @@ it.each(["commit", "captured-root", "native-replay"])(
       const sql = observeHostDataSql();
       const grants: string[] = [];
       let commitSeen = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            const before = sql.queries.length;
-            try {
-              callback(request, grant);
-            } finally {
-              if (request.stage === "commit") {
-                commitSeen = true;
-                grants.push(...sql.queries.slice(before));
-              }
-            }
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, callback) => {
+        const before = sql.queries.length;
+        try {
+          callback(request, grant);
+        } finally {
+          if (request.stage === "commit") {
+            commitSeen = true;
+            grants.push(...sql.queries.slice(before));
+          }
+        }
+      });
       try {
         const scope = {
           env,

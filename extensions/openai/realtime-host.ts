@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
   resolveProviderAuthProfileApiKey,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -24,6 +25,7 @@ const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureWsEventAsync">> 
 export const openAIRealtimeHost = {
   resolveAgentDir,
   isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
   resolveProviderAuthProfileApiKey,
   resolveProviderRequestHeaders,
   createRealtimeTranscriptionWebSocketSession,
@@ -40,6 +42,7 @@ export const openAIRealtimeHost = {
 } satisfies Omit<
   PluginCapabilityCatalogHostContext,
   | "isProviderApiKeyConfigured"
+  | "isProviderApiKeyConfiguredAsync"
   | "resolveApiKeyForProvider"
   | "captureWsEvent"
   | "captureWsEventAsync"

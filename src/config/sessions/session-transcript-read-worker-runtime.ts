@@ -1,19 +1,26 @@
+import path from "node:path";
+import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
+import {
+  resolveWorkerPoolSize,
+  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
+} from "../../infra/worker-pool-sizing.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
-import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
-  createSessionTranscriptReadPool,
-  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
-} from "./session-transcript-read-pools.js";
+  listSqliteTargetCandidatePathsForSessionStorePath,
+  resolveUnsuffixedSqliteTargetFromSessionStorePath,
+} from "./session-sqlite-target-paths.js";
+import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { createSessionTranscriptReadPool } from "./session-transcript-read-pools.js";
 import type {
   SessionEntryWorkerInput,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
-} from "./session-transcript-worker.types.js";
+} from "./session-transcript-worker-read.types.js";
 
 // Callers retain writer admission and validate snapshots before consuming parallel reads.
 const modelContextReads = createSessionTranscriptReadPool<
@@ -25,7 +32,7 @@ const modelContextReads = createSessionTranscriptReadPool<
 // Background transcript exports cannot occupy the foreground context worker.
 const sessionEntries = createSessionTranscriptReadPool<
   SessionEntryWorkerInput | SessionResetRecallWorkerInput
->(1, true);
+>(resolveWorkerPoolSize("singleton"), true);
 
 export async function readSessionTranscriptModelContextInWorker(
   target: SessionTranscriptRuntimeTarget,
@@ -37,9 +44,13 @@ export async function readSessionTranscriptModelContextInWorker(
 ): Promise<ReturnType<typeof readSessionTranscriptModelContext>> {
   signal?.throwIfAborted();
   const value = unwrapSessionTranscriptWorkerReply(
-    await modelContextReads.run(
-      { kind: "model-context", target, admission, through, limits, expectedIdentity },
-      { timeoutMs: 60_000, signal },
+    await runWithSqliteDatabaseAdmissionTurn(
+      [resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path],
+      () =>
+        modelContextReads.run(
+          { kind: "model-context", target, admission, through, limits, expectedIdentity },
+          { timeoutMs: 60_000, signal },
+        ),
     ),
   );
   if (!("events" in value)) {
@@ -53,10 +64,16 @@ export async function resolveSessionSqliteTargetInWorker(
   signal?: AbortSignal,
 ) {
   signal?.throwIfAborted();
+  const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(input.storePath);
   const value = unwrapSessionTranscriptWorkerReply(
-    await modelContextReads.run(
-      { kind: "sqlite-target", ...input },
-      { inputBytes: JSON.stringify(input).length * 2, timeoutMs: 60_000, signal },
+    await runWithSqliteDatabaseAdmissionTurn(
+      listSqliteTargetCandidatePathsForSessionStorePath(input.storePath),
+      () =>
+        modelContextReads.run(
+          { kind: "sqlite-target", ...input },
+          { inputBytes: JSON.stringify(input).length * 2, timeoutMs: 60_000, signal },
+        ),
+      target.agentId || target.shared ? [] : [path.dirname(target.path)],
     ),
   );
   if (!("target" in value)) {
@@ -73,9 +90,13 @@ export async function readSessionTranscriptContextMessagesInWorker(
 ) {
   signal?.throwIfAborted();
   const value = unwrapSessionTranscriptWorkerReply(
-    await modelContextReads.run(
-      { kind: "context-messages", target, admission, expectedIdentity },
-      { timeoutMs: 60_000, signal },
+    await runWithSqliteDatabaseAdmissionTurn(
+      [resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path],
+      () =>
+        modelContextReads.run(
+          { kind: "context-messages", target, admission, expectedIdentity },
+          { timeoutMs: 60_000, signal },
+        ),
     ),
   );
   if (!("messages" in value)) {
@@ -91,24 +112,28 @@ export async function prepareSessionEntryInWorker(
 ) {
   const receipt = resolveSessionTranscriptReadFence(options);
   const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
-    await sessionEntries.run(
-      {
-        kind: "session-entry",
-        absPath,
-        options,
-        redaction,
-        ...(receipt ? { admission: { ...receipt } } : {}),
-      },
-      {
-        inputBytes:
-          2 *
-          (absPath.length +
-            options.agentId.length +
-            options.sessionId.length +
-            options.storePath.length +
-            (options.sessionKey?.length ?? 0) +
-            redaction.registeredSecretValues.reduce((bytes, value) => bytes + value.length, 0)),
-      },
+    await runWithSqliteDatabaseAdmissionTurn(
+      [resolveUnsuffixedSqliteTargetFromSessionStorePath(options.storePath).path],
+      () =>
+        sessionEntries.run(
+          {
+            kind: "session-entry",
+            absPath,
+            options,
+            redaction,
+            ...(receipt ? { admission: { ...receipt } } : {}),
+          },
+          {
+            inputBytes:
+              2 *
+              (absPath.length +
+                options.agentId.length +
+                options.sessionId.length +
+                options.storePath.length +
+                (options.sessionKey?.length ?? 0) +
+                redaction.registeredSecretValues.reduce((bytes, value) => bytes + value.length, 0)),
+          },
+        ),
     ),
   );
   if (!("entry" in result)) {
@@ -122,13 +147,17 @@ export async function readSessionResetRecallCutoffInWorker(
 ) {
   const receipt = resolveSessionTranscriptReadFence(scope);
   const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
-    await sessionEntries.run(
-      {
-        kind: "session-reset-recall",
-        scope,
-        ...(receipt ? { admission: { ...receipt } } : {}),
-      },
-      { inputBytes: JSON.stringify(scope).length * 2 },
+    await runWithSqliteDatabaseAdmissionTurn(
+      [resolveUnsuffixedSqliteTargetFromSessionStorePath(scope.storePath).path],
+      () =>
+        sessionEntries.run(
+          {
+            kind: "session-reset-recall",
+            scope,
+            ...(receipt ? { admission: { ...receipt } } : {}),
+          },
+          { inputBytes: JSON.stringify(scope).length * 2 },
+        ),
     ),
   );
   if (!("cutoff" in result)) {

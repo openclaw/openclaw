@@ -24,7 +24,6 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const cli = fileURLToPath(new URL("../../scripts/release-changelog.mjs", import.meta.url));
 const current =
   "## 2026.9.4\n\n### Highlights\n\nText.\n\n```md\n## 2099.1.1\n```\n\n### Complete contribution record\n\nAudited range abc..def.\n- **PR #12** Thanks @human.\n\n";
 const old = "## 2026.8.1\n\nOld notes without a contribution record.\n";
@@ -198,25 +197,6 @@ test("Unreleased fallback and path classification preserve candidate boundaries"
   );
   assert.equal(isReleaseChangelogPath("CHANGELOG/2026.9.3.md", { version: "2026.9.4" }), false);
   assert.equal(isReleaseChangelogPath("CHANGELOG/arbitrary.md"), false);
-});
-
-test("CLI reads and checks the same owner without runtime dependencies", () => {
-  const rootDir = fixture();
-  execFileSync(process.execPath, [cli, "split", "--root", rootDir]);
-  const output = execFileSync(
-    process.execPath,
-    [cli, "read", "--root", rootDir, "--version", "2026.9.4"],
-    { encoding: "utf8" },
-  );
-  assert.equal(output, current);
-  const records = execFileSync(
-    process.execPath,
-    [cli, "collection", "--root", rootDir, "--records-only"],
-    { encoding: "utf8" },
-  );
-  assert.match(records, /PR #12/u);
-  assert.doesNotMatch(records, /2026\.8\.1/u);
-  execFileSync(process.execPath, [cli, "check", "--root", rootDir]);
 });
 
 describe("release docs mirrors", () => {

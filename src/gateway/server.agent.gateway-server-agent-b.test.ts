@@ -27,7 +27,6 @@ import {
   startServerWithClient,
   testState,
   trackConnectChallengeNonce,
-  withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
@@ -36,7 +35,6 @@ installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
-
 let port: number;
 
 beforeAll(async () => {
@@ -123,24 +121,23 @@ describe("gateway server agent", () => {
   });
 
   test("write-scoped callers cannot reset conversations via agent", async () => {
-    await withGatewayServer(async ({ port: portValue }) => {
-      await useTempSessionStorePath();
-      const storePath = testState.sessionStorePath;
-      if (!storePath) {
-        throw new Error("missing session store path");
-      }
+    const storePath = testState.sessionStorePath;
+    if (!storePath) {
+      throw new Error("missing session store path");
+    }
 
-      await writeSessionStore({
-        entries: {
-          main: {
-            sessionId: "sess-main-before-write-reset",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main-before-write-reset",
+          updatedAt: Date.now(),
         },
-      });
+      },
+    });
 
-      const writeWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
-      trackConnectChallengeNonce(writeWs);
+    const writeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    trackConnectChallengeNonce(writeWs);
+    try {
       await new Promise<void>((resolve) => {
         writeWs.once("open", resolve);
       });
@@ -170,129 +167,108 @@ describe("gateway server agent", () => {
       const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
       expect(stored?.sessionId).toBe("sess-main-before-write-reset");
       expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
-
-      writeWs.close();
-    });
-  });
-
-  test("agent durably admits the user turn before acknowledging a hanging dispatch", async () => {
-    await writeMainSessionEntry({ sessionId: "sess-durable-agent-ack" });
-    const dispatch = createDeferred<unknown>();
-    vi.mocked(agentCommandMock).mockImplementationOnce(async () => await dispatch.promise);
-    const runId = "idem-agent-durable-ack";
-    const ackP = onceMessage(
-      ws,
-      (message) =>
-        message.type === "res" && message.id === runId && message.payload?.status === "accepted",
-    );
-    const finalP = onceMessage(
-      ws,
-      (message) =>
-        message.type === "res" && message.id === runId && message.payload?.status !== "accepted",
-    );
-
-    try {
-      await sendAgentWsRequest(ws, {
-        reqId: runId,
-        message: "persist this agent turn before ACK",
-        sessionKey: "main",
-        idempotencyKey: runId,
-      });
-      expect((await ackP).payload).toMatchObject({ runId, status: "accepted" });
-
-      const storePath = testState.sessionStorePath;
-      if (!storePath) {
-        throw new Error("expected session store path");
-      }
-      const scope = {
-        agentId: "main",
-        sessionId: "sess-durable-agent-ack",
-        sessionKey: "agent:main:main",
-        storePath,
-      };
-      expect(loadTranscriptEventsSync(scope)).toEqual([]);
-      expect(await listSessionPendingInputs(scope)).toMatchObject({
-        total: 1,
-        items: [
-          {
-            runId,
-            state: "queued",
-            message: {
-              role: "user",
-              content: "persist this agent turn before ACK",
-              idempotencyKey: `${runId}:user`,
-            },
-          },
-        ],
-      });
     } finally {
-      dispatch.resolve({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
-      expect((await finalP).payload).toMatchObject({ runId, status: "ok" });
+      writeWs.close();
     }
   });
 
-  test("an aborted hanging agent dispatch leaves its acknowledged turn queryable", async () => {
-    await writeMainSessionEntry({ sessionId: "sess-durable-agent-abort" });
-    const runId = "idem-agent-durable-abort";
-    vi.mocked(agentCommandMock).mockImplementationOnce(
-      async (...args: unknown[]) =>
-        await new Promise<void>((_resolve, reject) => {
-          const options = args[0] as { abortSignal?: AbortSignal };
-          const finish = () => {
-            const reason = options.abortSignal?.reason;
-            reject(reason instanceof Error ? reason : new Error("agent run aborted"));
-          };
-          options.abortSignal?.addEventListener("abort", finish, { once: true });
-        }),
-    );
-    const ackP = onceMessage(
-      ws,
-      (message) =>
-        message.type === "res" && message.id === runId && message.payload?.status === "accepted",
-    );
-    const finalP = onceMessage(
-      ws,
-      (message) =>
-        message.type === "res" && message.id === runId && message.payload?.status !== "accepted",
-    );
+  test.each(["completion", "abort"] as const)(
+    "a hanging agent dispatch durably admits its turn before ACK and %s",
+    async (outcome) => {
+      await writeMainSessionEntry({ sessionId: "sess-durable-agent-abort" });
+      const runId = `idem-agent-durable-${outcome}`;
+      const dispatch = createDeferred<unknown>();
+      vi.mocked(agentCommandMock).mockImplementationOnce(async (...args: unknown[]) => {
+        const options = args[0] as { abortSignal?: AbortSignal };
+        const finish = () => {
+          const reason = options.abortSignal?.reason;
+          dispatch.reject(reason instanceof Error ? reason : new Error("agent run aborted"));
+        };
+        options.abortSignal?.addEventListener("abort", finish, { once: true });
+        try {
+          return await dispatch.promise;
+        } finally {
+          options.abortSignal?.removeEventListener("abort", finish);
+        }
+      });
+      const ackP = onceMessage(
+        ws,
+        (message) =>
+          message.type === "res" && message.id === runId && message.payload?.status === "accepted",
+      );
+      const finalP = onceMessage(
+        ws,
+        (message) =>
+          message.type === "res" && message.id === runId && message.payload?.status !== "accepted",
+      );
 
-    await sendAgentWsRequest(ws, {
-      reqId: runId,
-      message: "keep this aborted agent turn queryable",
-      sessionKey: "main",
-      idempotencyKey: runId,
-    });
-    await ackP;
-    await readAgentCommandCall({ runId });
-    await rpcReq(ws, "chat.abort", { runId, sessionKey: "main" });
-    const final = await finalP;
-    expect(final.payload).toMatchObject({ runId, status: "timeout", stopReason: "rpc" });
+      try {
+        await sendAgentWsRequest(ws, {
+          reqId: runId,
+          message: "keep this aborted agent turn queryable",
+          sessionKey: "main",
+          idempotencyKey: runId,
+        });
+        expect((await ackP).payload).toMatchObject({ runId, status: "accepted" });
+        const storePath = testState.sessionStorePath;
+        if (!storePath) {
+          throw new Error("expected session store path");
+        }
+        const scope = {
+          agentId: "main",
+          sessionId: "sess-durable-agent-abort",
+          sessionKey: "agent:main:main",
+          storePath,
+        };
+        expect(loadTranscriptEventsSync(scope)).toEqual([]);
+        expect(await listSessionPendingInputs(scope)).toMatchObject({
+          total: 1,
+          items: [
+            {
+              runId,
+              state: "queued",
+              message: {
+                role: "user",
+                content: "keep this aborted agent turn queryable",
+                idempotencyKey: `${runId}:user`,
+              },
+            },
+          ],
+        });
 
-    const storePath = testState.sessionStorePath;
-    if (!storePath) {
-      throw new Error("expected session store path");
-    }
-    const scope = {
-      agentId: "main",
-      sessionId: "sess-durable-agent-abort",
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-    expect(loadTranscriptEventsSync(scope)).toEqual([]);
-    expect(await listSessionPendingInputs(scope)).toMatchObject({
-      total: 1,
-      items: [
-        {
-          runId,
-          state: "cancelled",
-          message: {
-            role: "user",
-            content: "keep this aborted agent turn queryable",
-          },
-        },
-      ],
-    });
-  });
+        await readAgentCommandCall({ runId });
+        if (outcome === "abort") {
+          const aborted = await rpcReq(ws, "chat.abort", { runId, sessionKey: "main" });
+          expect(aborted.ok).toBe(true);
+        } else {
+          dispatch.resolve({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+        }
+        const final = await finalP;
+        if (outcome === "abort") {
+          expect(final.payload).toMatchObject({ runId, status: "timeout", stopReason: "rpc" });
+          expect(loadTranscriptEventsSync(scope)).toEqual([]);
+          expect(await listSessionPendingInputs(scope)).toMatchObject({
+            total: 1,
+            items: [
+              {
+                runId,
+                state: "cancelled",
+                message: {
+                  role: "user",
+                  content: "keep this aborted agent turn queryable",
+                },
+              },
+            ],
+          });
+        } else {
+          expect(final.payload).toMatchObject({ runId, status: "ok" });
+        }
+      } finally {
+        dispatch.resolve({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+        await Promise.allSettled([ackP, finalP]);
+      }
+    },
+  );
 
   test("agent returns a wire error when durable user-turn admission fails", async () => {
     await writeMainSessionEntry({ sessionId: "sess-durable-agent-failure" });
@@ -344,41 +320,39 @@ describe("gateway server agent", () => {
     expect(errorMessage).not.toContain("AcpRuntimeError");
     expect(JSON.stringify(final)).not.toContain(token);
   });
+
   test("agent events stream to webchat clients when run context is registered", async () => {
     await writeMainSessionEntry({ sessionId: "sess-main" });
-
     const webchatWs = await connectWebchatClient({ port });
-
-    registerAgentRunContext("run-auto-1", { sessionKey: "main" });
-
-    const finalChatP = onceMessage(
-      webchatWs,
-      (o) => {
-        if (o.type !== "event" || o.event !== "chat") {
-          return false;
-        }
-        const payload = o.payload as { state?: unknown; runId?: unknown } | undefined;
-        return payload?.state === "final" && payload.runId === "run-auto-1";
-      },
-      8000,
-    );
-
-    emitAgentEvent({
-      runId: "run-auto-1",
-      stream: "assistant",
-      data: { text: "hi from agent" },
-    });
-    emitAgentEvent({
-      runId: "run-auto-1",
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-
-    const evt = await finalChatP;
-    const payload = evt.payload && typeof evt.payload === "object" ? evt.payload : {};
-    expect(payload.sessionKey).toBe("main");
-    expect(payload.runId).toBe("run-auto-1");
-
-    webchatWs.close();
+    try {
+      registerAgentRunContext("run-auto-1", { sessionKey: "main" });
+      const finalChatP = onceMessage(
+        webchatWs,
+        (o) => {
+          if (o.type !== "event" || o.event !== "chat") {
+            return false;
+          }
+          const payload = o.payload as { state?: unknown; runId?: unknown } | undefined;
+          return payload?.state === "final" && payload.runId === "run-auto-1";
+        },
+        8000,
+      );
+      emitAgentEvent({
+        runId: "run-auto-1",
+        stream: "assistant",
+        data: { text: "hi from agent" },
+      });
+      emitAgentEvent({
+        runId: "run-auto-1",
+        stream: "lifecycle",
+        data: { phase: "end" },
+      });
+      const evt = await finalChatP;
+      const payload = evt.payload && typeof evt.payload === "object" ? evt.payload : {};
+      expect(payload.sessionKey).toBe("main");
+      expect(payload.runId).toBe("run-auto-1");
+    } finally {
+      webchatWs.close();
+    }
   });
 });

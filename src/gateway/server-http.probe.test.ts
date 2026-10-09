@@ -575,12 +575,14 @@ describe("gateway probe endpoints", () => {
       enabled: true,
       configured: true,
       lifecycle: "ready" as "ready" | "blocked",
+      linked: true,
+      terminalDisconnect: false,
       lastStartAt: startedAt,
     };
     const channelManager = {
       getRuntimeSnapshot: () => ({
-        channels: { telegram: account },
-        channelAccounts: { telegram: { default: account } },
+        channels: { whatsapp: account },
+        channelAccounts: { whatsapp: { default: account } },
       }),
       getAutostartSuppression: () => null,
       isAmbientAutostartSuppressed: () => false,
@@ -656,11 +658,15 @@ describe("gateway probe endpoints", () => {
 
         refusals = [];
         account.lifecycle = "blocked";
+        account.running = false;
+        account.connected = false;
+        account.linked = false;
+        account.terminalDisconnect = true;
         const readiness = await sendRequest(server, { path: "/readyz" });
         expect(readiness.res.statusCode).toBe(503);
         expect(JSON.parse(readiness.getBody())).toMatchObject({
           ready: false,
-          failing: ["telegram"],
+          failing: ["whatsapp"],
         });
 
         const channelIndependentStartup = await sendRequest(server, {

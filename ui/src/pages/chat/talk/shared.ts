@@ -232,10 +232,9 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
     timeoutPhase === "provider" ||
     timeoutPhase === "post_turn" ||
     result.providerStarted === true;
-  if (hasTerminalTimeoutMetadata) {
-    return new Error(message || "OpenClaw tool call timed out");
-  }
-  return undefined;
+  return hasTerminalTimeoutMetadata
+    ? new Error(message || "OpenClaw tool call timed out")
+    : undefined;
 }
 
 function waitForChatResult(params: {
@@ -266,7 +265,12 @@ function waitForChatResult(params: {
         return;
       }
       settled = true;
-      cleanup();
+      window.clearTimeout(timer);
+      if (emptyFinalFallbackTimer !== undefined) {
+        window.clearTimeout(emptyFinalFallbackTimer);
+      }
+      params.signal?.removeEventListener("abort", onAbort);
+      unsubscribe();
       if (typeof result === "string") {
         resolve(result);
       } else {
@@ -327,14 +331,6 @@ function waitForChatResult(params: {
         settle(new Error(payload.errorMessage ?? "OpenClaw tool call failed"));
       }
     });
-    function cleanup() {
-      window.clearTimeout(timer);
-      if (emptyFinalFallbackTimer !== undefined) {
-        window.clearTimeout(emptyFinalFallbackTimer);
-      }
-      params.signal?.removeEventListener("abort", onAbort);
-      unsubscribe();
-    }
   });
 }
 

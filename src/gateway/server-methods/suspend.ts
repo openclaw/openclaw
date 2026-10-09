@@ -6,8 +6,6 @@ import {
   validateGatewaySuspendResumeParams,
   validateGatewaySuspendStatusParams,
   validateGatewaySuspendHandoffParams,
-  type GatewaySuspendPrepareResult,
-  type GatewaySuspendStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { waitForGatewayDrain } from "../../infra/gateway-drain.js";
 import {
@@ -33,17 +31,6 @@ function schedulerRecoveryError(retryAfterMs: number) {
   });
 }
 
-function logDraining(
-  result: GatewaySuspendPrepareResult | GatewaySuspendStatusResult,
-  log: GatewayRequestContext["logGateway"],
-): void {
-  if (result.status === "draining") {
-    log.info(
-      `DRAINING activeCount=${result.activeCount} blockers=${result.blockers.map(({ kind, count }) => `${kind}:${count}`).join(",")} holders=${JSON.stringify(result.blockers.map(({ message }) => message))} custody=${result.writeCustody?.some(({ count }) => count > 0) ? "held" : "clear"}`,
-    );
-  }
-}
-
 function respondSuspendStatus(
   result: ReturnType<typeof prepareGatewaySuspend> | ReturnType<typeof getGatewaySuspendStatus>,
   context: GatewayRequestContext,
@@ -63,7 +50,11 @@ function respondSuspendStatus(
   } else if (result.status === "recovering") {
     respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
   } else {
-    logDraining(result, context.logGateway);
+    if (result.status === "draining") {
+      context.logGateway.info(
+        `DRAINING activeCount=${result.activeCount} blockers=${result.blockers.map(({ kind, count }) => `${kind}:${count}`).join(",")} holders=${JSON.stringify(result.blockers.map(({ message }) => message))} custody=${result.writeCustody?.some(({ count }) => count > 0) ? "held" : "clear"}`,
+      );
+    }
     respond(true, result);
   }
 }

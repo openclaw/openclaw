@@ -10,8 +10,9 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
@@ -77,7 +78,11 @@ describe("worker turn trajectory authority", () => {
           recorder.recordEvent("session.started", { backend: "cloud-worker" });
           const options = toDatabaseOptions(resolveSqliteReadScope(source.sessionTarget));
           const pathname = resolveOpenClawAgentSqlitePath(options);
-          await closeOpenClawAgentDatabaseByPathAsync(pathname);
+          const cached = getOpenClawAgentDatabaseIfOpen(options);
+          assert(cached, "expected the turn's cached host database before eviction");
+          // Evict the host handle without draining this callback's accepted turn custody.
+          closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+          expect(cached.db.isOpen).toBe(false);
           expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
 
           let pendingTransaction = false;
@@ -92,28 +97,23 @@ describe("worker turn trajectory authority", () => {
               }
               return open(...args);
             });
-          const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-          const admission = vi
-            .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-            .mockImplementation((callback, attachment) =>
-              createAdmission((request, grant) => {
-                if (request.stage === "transaction" || request.stage === "commit") {
-                  pendingTransaction = true;
-                  stages.push(request.stage);
-                  const current = getOpenClawAgentDatabaseIfOpen(options)?.db;
-                  assert(current?.isOpen, "receipt checks require the retained host database");
-                  if (request.stage === "transaction") {
-                    hostDatabase = current;
-                  } else {
-                    expect(current).toBe(hostDatabase);
-                    if (authority === "revoked-at-commit") {
-                      abort.abort(revoked);
-                    }
-                  }
+          const admission = probe.admission(workerAdmission, (request, grant, callback) => {
+            if (request.stage === "transaction" || request.stage === "commit") {
+              pendingTransaction = true;
+              stages.push(request.stage);
+              const current = getOpenClawAgentDatabaseIfOpen(options)?.db;
+              assert(current?.isOpen, "receipt checks require the retained host database");
+              if (request.stage === "transaction") {
+                hostDatabase = current;
+              } else {
+                expect(current).toBe(hostDatabase);
+                if (authority === "revoked-at-commit") {
+                  abort.abort(revoked);
                 }
-                callback(request, grant);
-              }, attachment),
-            );
+              }
+            }
+            callback(request, grant);
+          });
           try {
             await recorder.flush().catch((error: unknown) => {
               flushFailure = error;

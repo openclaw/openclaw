@@ -1,9 +1,10 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
-import { renderStreamGroupParts } from "./chat-message-stream.ts";
+import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 import { renderSidebarPanel } from "./chat-sidebar-content.ts";
 
 const text =
@@ -38,11 +39,11 @@ describe("GitHub reference presentation parity", () => {
         );
       } else if (surface === "streaming") {
         render(
-          renderStreamGroupParts(
-            [{ kind: "stream", key: "live", text, isStreaming: true, startedAt: 1 }],
-            context,
-            "standalone",
-          ),
+          solidContent(StreamGroupParts, {
+            parts: [{ kind: "stream", key: "live", text, isStreaming: true, startedAt: 1 }],
+            options: context,
+            presentation: "standalone",
+          }),
           container,
         );
       } else {

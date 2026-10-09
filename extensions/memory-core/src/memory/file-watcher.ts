@@ -10,7 +10,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemoryWorkspaceWatchRequest } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
-import { runInMemoryBackgroundContext } from "./background-context.js";
+import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 import { MemoryWatchPolicy, type MemoryObservation } from "./watch-policy.js";
 import {
   MEMORY_WATCH_MAX_PATHS,
@@ -24,6 +24,7 @@ const log = createSubsystemLogger("memory");
 const RETRY_DELAYS_MS = [500, 2_000, 5_000];
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 type MemoryFileWatcherOptions = {
+  runInBackgroundContext: NonNullable<MemoryCoreRuntimeHost["runInBackgroundContext"]>;
   workspaceDir: string;
   agentId: string;
   settings: MemoryWorkspaceWatchRequest["settings"];
@@ -94,9 +95,7 @@ export class MemoryFileWatcher {
   }
 
   start(): Promise<void> {
-    // Both local and remote callers can arrive from a turn. Resource lifetimes
-    // inherit the plugin service context, never the requesting turn's ALS store.
-    return (this.starting ??= runInMemoryBackgroundContext(() => this.refresh()));
+    return (this.starting ??= this.options.runInBackgroundContext(() => this.refresh()));
   }
 
   private get canObserve(): boolean {
@@ -361,7 +360,7 @@ export class MemoryFileWatcher {
               return;
             }
             this.pendingChange = this.revision !== revision;
-            await this.options.onChange();
+            await this.options.runInBackgroundContext(() => this.options.onChange());
           })
           .catch((error: unknown) => {
             if (error instanceof ObservationSampleCloseError) {
@@ -390,12 +389,12 @@ export class MemoryFileWatcher {
     if (this.closing) {
       return this.closing;
     }
-    this.closed = true;
-    this.lifetime.abort();
-    clearTimeout(this.watchTimer);
-    clearTimeout(this.retryTimer);
-    const retirement = this.retire([...this.observations.values()]);
-    this.closing = runInMemoryBackgroundContext(async () => {
+    this.closing = this.options.runInBackgroundContext(async () => {
+      this.closed = true;
+      this.lifetime.abort();
+      clearTimeout(this.watchTimer);
+      clearTimeout(this.retryTimer);
+      const retirement = this.retire([...this.observations.values()]);
       await Promise.allSettled([
         this.starting,
         this.refreshing,

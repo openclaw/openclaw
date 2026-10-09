@@ -48,18 +48,6 @@ type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
 const PROMPT_BUILD_DRAIN_CACHE_MAX = 256;
 const promptBuildDrainCache = new Map<string, PluginNextTurnInjectionRecord[]>();
 
-function rememberDrainedInjections(
-  runId: string,
-  injections: PluginNextTurnInjectionRecord[],
-): void {
-  if (promptBuildDrainCache.has(runId)) {
-    promptBuildDrainCache.delete(runId);
-  } else if (promptBuildDrainCache.size >= PROMPT_BUILD_DRAIN_CACHE_MAX) {
-    pruneMapToMaxSize(promptBuildDrainCache, PROMPT_BUILD_DRAIN_CACHE_MAX - 1);
-  }
-  promptBuildDrainCache.set(runId, injections);
-}
-
 /** Release at run termination so active retries retain cache headroom. */
 export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): void {
   if (runId) {
@@ -87,7 +75,9 @@ export async function resolvePromptBuildHookResult(params: {
         agentId: params.hookCtx.agentId,
       });
   if (runId && !cachedInjections) {
-    rememberDrainedInjections(runId, queuedContext.queuedInjections);
+    promptBuildDrainCache.delete(runId);
+    pruneMapToMaxSize(promptBuildDrainCache, PROMPT_BUILD_DRAIN_CACHE_MAX - 1);
+    promptBuildDrainCache.set(runId, queuedContext.queuedInjections);
   }
   // Hook ordering mirrors the prompt assembly boundary: queued injections first,
   // then prepare/heartbeat contributions, then prompt-build hooks.
@@ -334,8 +324,7 @@ function stringifyStructuredContentPart(part: unknown): string | undefined {
 
 function extractUserMessagePromptText(content: unknown): string | undefined {
   if (typeof content === "string") {
-    const trimmed = content.trim();
-    return trimmed || undefined;
+    return content.trim() || undefined;
   }
   if (!Array.isArray(content)) {
     return undefined;
@@ -372,12 +361,10 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   leafMessage: { content?: unknown; provenance?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
-  if (!orphanText) {
-    return { prompt: params.prompt, merged: false, removeLeaf: true };
-  }
   if (
-    params.prompt.trim().length > 0 &&
-    shouldPreserveUserFacingSessionStateForInputProvenance(params.leafMessage.provenance)
+    !orphanText ||
+    (params.prompt.trim().length > 0 &&
+      shouldPreserveUserFacingSessionStateForInputProvenance(params.leafMessage.provenance))
   ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }

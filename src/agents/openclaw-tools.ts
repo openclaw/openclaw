@@ -8,10 +8,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
-import {
-  hasConfiguredWebSearchProvider,
-  prepareWebSearchConfiguration,
-} from "../web-search/runtime.js";
+import { hasConfiguredWebSearchProvider } from "../web-search/runtime.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -24,6 +21,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
@@ -33,6 +31,7 @@ import {
   resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
+import { prepareOpenClawTools } from "./openclaw-tools.preparation.js";
 import {
   applyNodesToolWorkspaceGuard,
   shouldIncludePrimarySessionToolForOpenClawTools,
@@ -75,11 +74,10 @@ import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { callAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
-import { createMessageTool } from "./tools/message-tool-execution.js";
+import { createMessageTool, createMessageToolAsync } from "./tools/message-tool-execution.js";
 import { createMobileUiTool } from "./tools/mobile-ui-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
-import { createOpenClawDelegateToolsForRunAsync } from "./tools/openclaw-delegate-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createAvailablePortalTools } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
@@ -126,32 +124,21 @@ export async function createOpenClawToolsWithPreparation(
   options: OpenClawToolsOptions | undefined,
   shared: PreparedToolConstruction,
 ): Promise<AnyAgentTool[]> {
-  const captured = { ...options, config: shared.config };
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
-    config: captured.config,
-    agentId: captured.requesterAgentIdOverride,
-  });
-  const delegated = isEmbeddedMode()
-    ? []
-    : await createOpenClawDelegateToolsForRunAsync({ ...captured, sessionAgentId }, shared);
+  const { captured, delegated, webSearchConfigured, mediaTools } = await prepareOpenClawTools(
+    options,
+    shared,
+  );
   shared.assertCurrent();
   captured.assertInvocationCurrent?.();
-  const webSearchConfigured =
-    captured.webSearchEnabled === false || captured.config?.tools?.web?.search?.enabled === false
-      ? undefined
-      : await prepareWebSearchConfiguration({
-          config: captured.config,
-          agentDir: captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
-          authStore: captured.authProfileStore,
-          ...(captured.authProfileStoreSource !== undefined
-            ? { resolveAuthProfileStoreSource: () => captured.authProfileStoreSource === true }
-            : {}),
-          runtimeWebSearch: getActiveRuntimeWebToolsMetadataFromState()?.search,
-        });
-  shared.assertCurrent();
-  captured.assertInvocationCurrent?.();
-  return createOpenClawTools(captured, delegated, webSearchConfigured);
+  const steps = createOpenClawToolsSteps(captured, delegated, webSearchConfigured, mediaTools);
+  let next = steps.next();
+  while (!next.done) {
+    const messageTool = await createMessageToolAsync(next.value);
+    shared.assertCurrent();
+    captured.assertInvocationCurrent?.();
+    next = steps.next(messageTool);
+  }
+  return next.value;
 }
 
 /** @deprecated Use createOpenClawToolsAsync for runtime construction. */
@@ -160,6 +147,34 @@ export function createOpenClawTools(
   preparedDelegateTools?: AnyAgentTool[],
   preparedWebSearchConfigured?: boolean,
 ): AnyAgentTool[] {
+  const captured = { ...options };
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
+    config: captured.config,
+    agentId: captured.requesterAgentIdOverride,
+  });
+  captured.authProfileStore ??= ensureAuthProfileStoreWithoutExternalProfiles(
+    captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
+    { allowKeychainPrompt: false },
+  );
+  const steps = createOpenClawToolsSteps(
+    captured,
+    preparedDelegateTools,
+    preparedWebSearchConfigured,
+  );
+  let next = steps.next();
+  while (!next.done) {
+    next = steps.next(createMessageTool(next.value));
+  }
+  return next.value;
+}
+
+function* createOpenClawToolsSteps(
+  options?: OpenClawToolsOptions,
+  preparedDelegateTools?: AnyAgentTool[],
+  preparedWebSearchConfigured?: boolean,
+  preparedMediaTools?: Readonly<ReturnType<typeof resolveOptionalMediaToolFactoryPlan>>,
+): Generator<Parameters<typeof createMessageTool>[0], AnyAgentTool[], AnyAgentTool> {
   const resolvedConfig = options?.config;
   const sessionConfig = options?.sessionConfigSource === "runtime" ? undefined : resolvedConfig;
   const activeProjectKeys = options?.preparedModelRuntime?.activeProjectKeys ?? [];
@@ -206,14 +221,16 @@ export function createOpenClawTools(
           stagedMediaPaths: options.stagedMediaPaths,
         }
       : undefined;
-  const optionalMediaTools = resolveOptionalMediaToolFactoryPlan({
-    config: availabilityConfig ?? resolvedConfig,
-    workspaceDir,
-    authStore: options?.authProfileStore,
-    toolAllowlist: options?.pluginToolAllowlist,
-    toolDenylist: options?.pluginToolDenylist,
-    preparedModelRuntime: options?.preparedModelRuntime,
-  });
+  const optionalMediaTools =
+    preparedMediaTools ??
+    resolveOptionalMediaToolFactoryPlan({
+      config: availabilityConfig ?? resolvedConfig,
+      workspaceDir,
+      authStore: options?.authProfileStore,
+      toolAllowlist: options?.pluginToolAllowlist,
+      toolDenylist: options?.pluginToolDenylist,
+      preparedModelRuntime: options?.preparedModelRuntime,
+    });
   const trimmedRunSessionKey = options?.runSessionKey?.trim();
   const requesterSessionKey = trimmedRunSessionKey || options?.agentSessionKey;
   const mediaGenerationAgentSessionKey =
@@ -248,15 +265,15 @@ export function createOpenClawTools(
     sandbox,
   };
   const imageGenerateTool = optionalMediaTools.imageGenerate
-    ? createImageGenerateTool(mediaGenerationToolOptions)
+    ? createImageGenerateTool(mediaGenerationToolOptions, preparedMediaTools ? true : undefined)
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:image-generate-tool");
   const videoGenerateTool = optionalMediaTools.videoGenerate
-    ? createVideoGenerateTool(mediaGenerationToolOptions)
+    ? createVideoGenerateTool(mediaGenerationToolOptions, preparedMediaTools ? true : undefined)
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:video-generate-tool");
   const musicGenerateTool = optionalMediaTools.musicGenerate
-    ? createMusicGenerateTool(mediaGenerationToolOptions)
+    ? createMusicGenerateTool(mediaGenerationToolOptions, preparedMediaTools ? true : undefined)
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:music-generate-tool");
   const pdfTool =
@@ -314,7 +331,7 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
   const messageTool = options?.disableMessageTool
     ? null
-    : createMessageTool({
+    : yield {
         ...options,
         agentSessionKey: options?.messageToolTurnCapability?.sessionKey ?? options?.agentSessionKey,
         runSessionKey:
@@ -332,7 +349,7 @@ export function createOpenClawTools(
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
         workspaceDir,
-      });
+      };
   const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({

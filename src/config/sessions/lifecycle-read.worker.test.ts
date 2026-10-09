@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import {
   withOpenClawTestState,
@@ -11,8 +12,8 @@ import { upsertSessionEntryCore } from "./session-accessor.entry.js";
 import {
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
-} from "./session-accessor.sqlite-transcript-write.js";
-import * as historyReaders from "./session-transcript-worker-readers.js";
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
+import * as transcriptReaders from "./session-transcript-execution-read.js";
 
 function scopeFor(state: OpenClawTestState) {
   return {
@@ -73,13 +74,13 @@ it.each(["rewrite", "close"] as const)(
       const scope = scopeFor(state);
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 42 });
       await replaceTranscriptEvents(scope, [header]);
-      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+      const createReaders = transcriptReaders.createPreparedSessionTranscriptReads;
       let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
       let intercepted = false;
       const spy = vi
-        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-        .mockImplementation((runRequest) => {
-          const readers = createReaders(runRequest);
+        .spyOn(transcriptReaders, "createPreparedSessionTranscriptReads")
+        .mockImplementation((params) => {
+          const readers = createReaders(params);
           return {
             ...readers,
             readAnchors: async (input, signal) => {
@@ -91,8 +92,10 @@ it.each(["rewrite", "close"] as const)(
                     replaceTranscriptEventsSync(scope, [{ ...header, timestamp: "2027" }]),
                   ).toBe(true);
                 } else {
-                  // Close revokes now and joins this accepted read after it refuses disclosure.
-                  closing = closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
+                  // The independent close revokes now, then joins the read after disclosure is refused.
+                  closing = runInDetachedAsyncContext(() =>
+                    closeOpenClawAgentDatabaseByPathAsync(scope.storePath),
+                  );
                 }
               }
               return facts;

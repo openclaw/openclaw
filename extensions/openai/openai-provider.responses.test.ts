@@ -1,7 +1,9 @@
 import { streamSimpleOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import { wrapOpenAIResponsesStream } from "./responses-stream.runtime.js";
 
 const params = vi.hoisted(() => [] as unknown[]);
@@ -86,4 +88,68 @@ describe("Daybreak Responses requests", () => {
       }
     },
   );
+});
+
+it.each([false, true])(
+  "uses host-admitted prompt updates on native Responses (enabled=%s)",
+  (inHistorySystemUpdates) => {
+    const policy = buildOpenAIReplayPolicy({
+      provider: "openai",
+      modelApi: "openai-responses",
+      modelId: "gpt-5.4",
+      inHistorySystemUpdates,
+    });
+    expect(policy.inHistorySystemUpdates).toBe(inHistorySystemUpdates || undefined);
+  },
+);
+
+it("owns replay policy for OpenAI and Codex transports", () => {
+  const provider = buildOpenAIProvider();
+  const codexProvider = buildOpenAIProvider();
+
+  expect(
+    provider.buildReplayPolicy?.({
+      provider: "openai",
+      modelApi: "openai",
+      modelId: "gpt-5.4",
+    } as never),
+  ).toEqual({
+    sanitizeMode: "images-only",
+    applyAssistantFirstOrderingFix: false,
+    sanitizeToolCallIds: false,
+    validateGeminiTurns: false,
+    validateAnthropicTurns: false,
+  });
+
+  expect(
+    provider.buildReplayPolicy?.({
+      provider: "openai",
+      modelApi: "openai-completions",
+      modelId: "gpt-5.4",
+    } as never),
+  ).toEqual({
+    sanitizeMode: "images-only",
+    applyAssistantFirstOrderingFix: false,
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict",
+    duplicateToolCallIdStyle: "openai",
+    validateGeminiTurns: false,
+    validateAnthropicTurns: false,
+  });
+
+  expect(
+    codexProvider.buildReplayPolicy?.({
+      provider: "openai",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.4",
+    } as never),
+  ).toEqual({
+    sanitizeMode: "images-only",
+    applyAssistantFirstOrderingFix: false,
+    sanitizeToolCallIds: false,
+    validateGeminiTurns: false,
+    validateAnthropicTurns: false,
+    allowSyntheticToolResults: true,
+    appendOnlyRuntimeContext: true,
+  });
 });

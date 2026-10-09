@@ -1,6 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
-import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
+import { shouldSuppressLocalExecApprovalPromptAsync } from "../../channels/plugins/exec-approval-local.js";
 import { formatPlanChecklistLines } from "../../channels/streaming.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -80,7 +80,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     };
     state.assertProgressCurrent();
     if (shouldRouteToOriginating) {
-      await sendPayloadAsync(replyPayload, undefined, false);
+      await sendPayloadAsync(replyPayload);
       return;
     }
     markInboundDedupeReplayUnsafe();
@@ -112,7 +112,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     payload: ReplyPayload,
   ): Promise<ReplyPayload | null> => {
     if (
-      shouldSuppressLocalExecApprovalPrompt({
+      await shouldSuppressLocalExecApprovalPromptAsync({
         channel: normalizeMessageChannel(ctx.Surface ?? ctx.Provider),
         cfg,
         accountId: ctx.AccountId,
@@ -342,7 +342,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       : runtimeReplyConfig,
   );
   state.recordAgentDispatchStarted();
-  const nextState = Object.assign(state, {
+  return Object.assign(state, {
     sendPlanUpdate,
     cleanBlockTtsDirectiveText,
     resolveToolDeliveryPayload,
@@ -364,9 +364,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     replyConfig,
     progressState,
   });
-  return { status: "ready" as const, state: nextState };
 }
 
 export type PrepareDispatchExecutionReadyState = Awaited<
   ReturnType<typeof prepareDispatchExecution>
->["state"];
+>;

@@ -273,14 +273,17 @@ export async function runCodexNodeExecServer(params: {
         GITHUB_ENTERPRISE_TOKEN: "",
       };
     }
-    const resolved = await resolveManagedCodexAppServerStartOptions({
-      transport: "stdio",
-      command: "codex",
-      commandSource: "managed",
-      managedCommandOrder: "package-first",
-      args: ["exec-server", "--listen", "stdio"],
-      headers: {},
-    });
+    const resolved = await resolveManagedCodexAppServerStartOptions(
+      {
+        transport: "stdio",
+        command: "codex",
+        commandSource: "managed",
+        managedCommandOrder: "package-first",
+        args: ["exec-server", "--listen", "stdio"],
+        headers: {},
+      },
+      { preferInstalled: false },
+    );
     const native = resolveManagedCodexNativeCommand(resolved.command);
     if (!native || isManagedCodexDesktopCommand(resolved.command)) {
       throw new Error("Codex node exec-server requires the pinned managed package binary.");

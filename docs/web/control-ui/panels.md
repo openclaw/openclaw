@@ -75,6 +75,8 @@ The terminal is an unconfined host shell and inherits the Gateway process enviro
 
 Use **Ctrl + backtick** to toggle the **Terminal** tab in the selected Chat pane's unified side panel. You can also open **Terminal** from the panel's **+** menu. The shared panel docks right or bottom, resizes with the browser viewport, can expand over the Chat pane, and keeps multiple shell tabs. The dock remains available for ad-hoc operator shells. Starting a native CLI from **New session**, or opening a Claude Code or Codex catalog session in the terminal, opens the [main terminal page](/web/urls#terminal-urls), keeping the sidebar and application chrome while replacing the composer. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.
 
+Selecting terminal text copies it automatically. A brief **Copied to clipboard** notice confirms a successful copy without taking keyboard focus. If clipboard access fails, no success notice appears.
+
 Terminal sessions appear as tabs in the Chat side-panel header; choosing **Terminal** again in the panel's **+** menu opens another shell, while sessions, upload, and dock-to-bottom actions sit in the header. A Terminal moved to the main area keeps its own tab strip.
 
 The unified panel also hosts **Browser**, **Files**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so switching sessions or reloading restores each session's own working layout. A chat conversation without a saved panel layout does not inherit panels open in another session. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
@@ -158,6 +160,8 @@ viewport alone. A browser that cannot honor a requested size is not repeatedly
 resized while its reported dimensions remain unchanged.
 
 Browser tabs appear directly in the Chat side-panel header, with the URL toolbar below. Each tab shows its page favicon when automatic favicon fetching is enabled and an icon is available. Closing the last browser tab leaves the Browser panel open so you can create another tab with **+**. When Browser is moved to the main area, its tabs appear above its own toolbar.
+
+When the Gateway browser is stopped, choose **Start browser**. The panel shows a loading indicator while startup is pending. If startup fails, it shows the error and restores **Start browser** so you can retry.
 
 While an Agent browser preview refreshes, the current page stays visible and the reload icon spins in the toolbar. A loading skeleton appears only before the first page image is available. If refreshing fails, the panel keeps the previous image and shows the error above it.
 

@@ -10,7 +10,7 @@ import {
 import { observeSessionMaintenanceChanges } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
 import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.sqlite-projection.js";
 import * as reclamationRun from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
-import { SessionMaintenancePreservationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
+import { SqliteSessionMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import { prepareSessionMaintenancePreservation } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -127,6 +127,7 @@ function createMaintenanceRuntime(params: {
     stop,
   };
   const runtime = createGatewayWorkerPlacementRuntime({
+    initialPlacements: [],
     scheduler: createTestGatewayScheduler(),
     getCommittedRuntimeConfig: getRuntimeConfig,
     cancelSessionWork: vi.fn(async () => {}),
@@ -281,9 +282,7 @@ describe("worker placement session maintenance ownership", () => {
             await expect(committed).resolves.toMatchObject({ ok: false, reason: "stale-snapshot" });
           } else {
             await expect(committed).rejects.toThrow("Worker placement inventory changed");
-            await expect(committed).rejects.not.toBeInstanceOf(
-              SessionMaintenancePreservationConflictError,
-            );
+            await expect(committed).rejects.not.toBeInstanceOf(SqliteSessionMutationConflictError);
           }
           expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
           expect(loadSessionEntryReadOnly(protectedScope)).toEqual(protectedSnapshot);
@@ -310,7 +309,7 @@ describe("worker placement session maintenance ownership", () => {
   );
 
   it.each(["claim", "release"] as const)(
-    "refreshes unpublished maintenance inventory during a concurrent worker %s",
+    "rejects unpublished maintenance inventory during a concurrent worker %s",
     async (publication) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const database = openOpenClawStateDatabase();
@@ -387,14 +386,12 @@ describe("worker placement session maintenance ownership", () => {
                 maxDiskBytes: false,
               }),
             }),
-          ).resolves.toMatchObject({ afterCount: 2 });
-          expect(preservationReads).toBe(2);
+          ).rejects.toThrow("Worker placement inventory changed");
+          expect(preservationReads).toBe(1);
           expect(loadSessionEntryReadOnly({ ...identity, env: state.env, storePath })).toEqual(
             preservedSnapshot,
           );
-          expect(loadSessionEntryReadOnly(trigger)?.sessionId).toBe(
-            "concurrent-maintenance-trigger",
-          );
+          expect(loadSessionEntryReadOnly(trigger)).toBeUndefined();
         } finally {
           interleave.mockRestore();
           if (claim) {
@@ -467,7 +464,12 @@ describe("worker placement session maintenance ownership", () => {
           });
         try {
           if (publication === "worker dispatch") {
-            await expect(mutate()).rejects.toThrow("Worker placement inventory changed");
+            await expect(mutate()).rejects.toThrow(
+              expect.objectContaining({
+                name: "SqliteSessionMutationConflictError",
+                operationLabel: "session maintenance",
+              }),
+            );
             expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
           }
           await expect(mutate()).resolves.toMatchObject({ afterCount: 1 });
@@ -634,7 +636,7 @@ describe("worker placement session maintenance ownership", () => {
           .spyOn(reclamationRun, "runSqliteSessionReclamation")
           .mockImplementation(async (params) => {
             const result = await reclaim(params);
-            if (params.plan.kind === "maintenance-age" && params.plan.expected === undefined) {
+            if (params.plan.kind === "maintenance-age") {
               agePublished.resolve();
             }
             return result;
@@ -718,7 +720,12 @@ describe("worker placement session maintenance ownership", () => {
       expect(prepared.capture().providerKeys).not.toContain(failedLive.sessionKey);
     } finally {
       await sidecar.stop();
-      expect(() => prepared.capture()).toThrow("providers changed");
+      expect(() => prepared.capture()).toThrow(
+        expect.objectContaining({
+          name: "SqliteSessionMutationConflictError",
+          operationLabel: "session maintenance",
+        }),
+      );
       prepared.dispose();
     }
     expect((await preservedSessionKeys()).has("agent:main:placement-requested")).not.toBe(true);
@@ -737,7 +744,12 @@ describe("worker placement session maintenance ownership", () => {
     try {
       expect(prepared.capture().providerKeys).toContain(placement.sessionKey);
       const firstStop = sidecar.stop();
-      expect(() => prepared.capture()).toThrow("providers changed");
+      expect(() => prepared.capture()).toThrow(
+        expect.objectContaining({
+          name: "SqliteSessionMutationConflictError",
+          operationLabel: "session maintenance",
+        }),
+      );
       expect(sidecar.stop()).toBe(firstStop);
       await expect(firstStop).rejects.toBe(stopError);
       await expect(sidecar.stop()).resolves.toBeUndefined();

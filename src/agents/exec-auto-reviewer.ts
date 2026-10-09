@@ -1,3 +1,4 @@
+import { adjustMaxTokensForThinking } from "@openclaw/ai/internal/shared";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,6 +11,7 @@ import {
   type ExecAutoReviewDecision,
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
+import type { Model } from "../llm/types.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
@@ -201,33 +203,25 @@ function hasDuplicateJsonObjectKeys(text: string): boolean {
   return false;
 }
 
+function deferReview(rationale: string): ExecAutoReviewDecision {
+  return { decision: "ask", risk: "unknown", rationale };
+}
+
 function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
   const objectText = extractJsonObject(text);
   if (!objectText) {
-    return {
-      decision: "ask",
-      risk: "unknown",
-      rationale: "exec reviewer returned no parseable JSON",
-    };
+    return deferReview("exec reviewer returned no parseable JSON");
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(objectText);
   } catch {
-    return {
-      decision: "ask",
-      risk: "unknown",
-      rationale: "exec reviewer returned malformed JSON",
-    };
+    return deferReview("exec reviewer returned malformed JSON");
   }
   // JSON.parse silently keeps the last duplicate key, which can turn an
   // earlier ask or high-risk decision into an unreviewed allow.
   if (hasDuplicateJsonObjectKeys(objectText)) {
-    return {
-      decision: "ask",
-      risk: "unknown",
-      rationale: "exec reviewer returned ambiguous JSON",
-    };
+    return deferReview("exec reviewer returned ambiguous JSON");
   }
   // Zod ignores JSON's own `__proto__` field even in strict mode, so check
   // actual parsed keys before trusting the closed reviewer response schema.
@@ -236,19 +230,11 @@ function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
     parsed !== null &&
     Object.keys(parsed).some((key) => !Object.hasOwn(execAutoReviewResponseSchema.shape, key))
   ) {
-    return {
-      decision: "ask",
-      risk: "unknown",
-      rationale: "exec reviewer returned an unsupported response",
-    };
+    return deferReview("exec reviewer returned an unsupported response");
   }
   const response = execAutoReviewResponseSchema.safeParse(parsed);
   if (!response.success) {
-    return {
-      decision: "ask",
-      risk: "unknown",
-      rationale: "exec reviewer returned an unsupported response",
-    };
+    return deferReview("exec reviewer returned an unsupported response");
   }
 
   const { decision, risk } = response.data;
@@ -292,19 +278,19 @@ function extractCompletionFailure(
   return `model stopped without a complete response (${stopReason ?? "unknown"})`;
 }
 
-function resolveExecReviewerMaxTokens(modelMaxTokens?: number): number {
-  if (typeof modelMaxTokens === "number" && Number.isFinite(modelMaxTokens) && modelMaxTokens > 0) {
-    return Math.max(1, Math.floor(Math.min(EXEC_REVIEWER_MAX_TOKENS, modelMaxTokens)));
-  }
-  return EXEC_REVIEWER_MAX_TOKENS;
-}
-
-function buildReviewerTimeoutDecision(timeoutMs: number): ExecAutoReviewDecision {
-  return {
-    decision: "ask",
-    risk: "unknown",
-    rationale: `exec reviewer timed out after ${timeoutMs}ms`,
-  };
+function resolveExecReviewerMaxTokens(
+  model: Model,
+  thinking?: ExecReviewerConfig["thinking"],
+): number {
+  const modelMaxTokens =
+    Number.isFinite(model.maxTokens) && model.maxTokens > 0
+      ? Math.max(1, Math.floor(model.maxTokens))
+      : Number.POSITIVE_INFINITY;
+  // Reasoning can share the completion limit with the verdict, including provider defaults.
+  return model.reasoning
+    ? adjustMaxTokensForThinking(EXEC_REVIEWER_MAX_TOKENS, modelMaxTokens, thinking ?? "medium")
+        .maxTokens
+    : Math.min(EXEC_REVIEWER_MAX_TOKENS, modelMaxTokens);
 }
 
 async function raceWithReviewerTimeout<T>(
@@ -342,11 +328,7 @@ export function createModelExecAutoReviewer(params: {
   if (!cfg) {
     return (input) =>
       "kind" in input
-        ? {
-            decision: "ask",
-            risk: "unknown",
-            rationale: "no model-backed widget reviewer is configured",
-          }
+        ? deferReview("no model-backed widget reviewer is configured")
         : defaultExecAutoReviewer(input);
   }
   const agentId = params.agentId ?? resolveAmbientOwnerAgentId(cfg);
@@ -363,26 +345,19 @@ export function createModelExecAutoReviewer(params: {
       params.signal?.throwIfAborted();
       const serializedInput = stringifyInput(input);
       if (serializedInput.length > MAX_EXEC_REVIEWER_INPUT_CHARS) {
-        return {
-          decision: "ask",
-          risk: "unknown",
-          rationale: "exec reviewer deferred because the request exceeds review input limits",
-        };
+        return deferReview(
+          "exec reviewer deferred because the request exceeds review input limits",
+        );
       }
       if (hasReviewerDirective(input)) {
-        return "kind" in input
-          ? {
-              decision: "ask",
-              risk: "medium",
-              rationale:
-                "exec reviewer deferred because the command contains reviewer-directed text",
-            }
-          : {
-              decision: "deny",
-              risk: "high",
-              rationale:
-                "exec reviewer denied the command because it contains reviewer-directed text",
-            };
+        const widget = "kind" in input;
+        return {
+          decision: widget ? "ask" : "deny",
+          risk: widget ? "medium" : "high",
+          rationale: widget
+            ? "exec reviewer deferred because the command contains reviewer-directed text"
+            : "exec reviewer denied the command because it contains reviewer-directed text",
+        };
       }
       completionController = new AbortController();
       const signal = params.signal
@@ -423,7 +398,7 @@ export function createModelExecAutoReviewer(params: {
         onTimeout: () => completionController?.abort(),
       });
       if (prepared === EXEC_REVIEWER_TIMEOUT) {
-        return buildReviewerTimeoutDecision(timeoutMs);
+        return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
       }
       if ("error" in prepared) {
         return buildExecAutoReviewFailureDecision(
@@ -452,7 +427,7 @@ export function createModelExecAutoReviewer(params: {
               ],
             },
             options: {
-              maxTokens: resolveExecReviewerMaxTokens(prepared.model.maxTokens),
+              maxTokens: resolveExecReviewerMaxTokens(prepared.model, params.reviewer?.thinking),
               temperature: 0,
               ...(params.reviewer?.thinking ? { reasoning: params.reviewer.thinking } : {}),
               ...(params.reviewer?.fastMode !== undefined
@@ -469,7 +444,7 @@ export function createModelExecAutoReviewer(params: {
         },
       );
       if (result === EXEC_REVIEWER_TIMEOUT) {
-        return buildReviewerTimeoutDecision(timeoutMs);
+        return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
       }
       const completionFailure = extractCompletionFailure(result);
       if (completionFailure) {
@@ -482,7 +457,7 @@ export function createModelExecAutoReviewer(params: {
     } catch (err) {
       params.signal?.throwIfAborted();
       if (completionController?.signal.aborted) {
-        return buildReviewerTimeoutDecision(timeoutMs);
+        return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
       }
       return buildExecAutoReviewFailureDecision("exec reviewer failed", err);
     } finally {

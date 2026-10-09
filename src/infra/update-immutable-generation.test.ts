@@ -107,6 +107,29 @@ async function generation() {
 }
 
 describe("sealed immutable generation", () => {
+  it.each(["config", "commondir"])(
+    "refuses build-authored Git helpers through %s before privileged Git verification",
+    async (kind) => {
+      const { root, sha } = await generation();
+      const metadata = kind === "config" ? path.join(root, ".git") : path.join(root, "shared-git");
+      if (kind === "commondir") {
+        await fs.cp(path.join(root, ".git"), metadata, { recursive: true });
+        await fs.writeFile(path.join(root, ".git", "commondir"), "../shared-git\n");
+      }
+      await fs.appendFile(path.join(metadata, "config"), '\n[filter "candidate"]\n\tclean = cat\n');
+      await fs.writeFile(
+        path.join(metadata, "info", "attributes"),
+        "source.txt filter=candidate\n",
+      );
+      await sealImmutableGeneration(root);
+      const command = vi.fn(runGit);
+      await expect(verifyImmutableGeneration(root, sha, command)).rejects.toThrow(
+        kind === "config" ? "unsupported Git configuration" : "independent Git metadata",
+      );
+      expect(command).not.toHaveBeenCalled();
+    },
+  );
+
   it("checks the selected generation even when the caller supplies another Git repository", async () => {
     const { root, sha } = await generation();
     const foreign = temporary.make("openclaw-immutable-foreign-git-");

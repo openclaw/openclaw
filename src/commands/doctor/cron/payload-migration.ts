@@ -76,23 +76,17 @@ export function copyTopLevelAgentTurnFields(raw: UnknownRecord, payload: Unknown
     mutated = true;
   }
 
-  const copyBoolean = (field: "allowUnsafeExternalContent" | "deliver" | "bestEffortDeliver") => {
-    if (typeof payload[field] !== "boolean" && typeof raw[field] === "boolean") {
-      payload[field] = raw[field];
-      mutated = true;
-    }
-  };
-  const copyString = (field: "channel" | "to" | "provider") => {
-    const value = normalizeOptionalString(raw[field]);
-    if (typeof payload[field] !== "string" && value) {
+  const copyField = (field: string, type: "boolean" | "string") => {
+    const value = type === "string" ? normalizeOptionalString(raw[field]) : raw[field];
+    if (typeof payload[field] !== type && typeof value === type) {
       payload[field] = value;
       mutated = true;
     }
   };
-  copyBoolean("allowUnsafeExternalContent");
-  copyBoolean("deliver");
-  copyString("channel");
-  copyString("to");
+  copyField("allowUnsafeExternalContent", "boolean");
+  copyField("deliver", "boolean");
+  copyField("channel", "string");
+  copyField("to", "string");
   const rawThreadId = normalizeOptionalString(raw.threadId);
   if (
     !("threadId" in payload) &&
@@ -101,8 +95,8 @@ export function copyTopLevelAgentTurnFields(raw: UnknownRecord, payload: Unknown
     payload.threadId = rawThreadId ?? raw.threadId;
     mutated = true;
   }
-  copyBoolean("bestEffortDeliver");
-  copyString("provider");
+  copyField("bestEffortDeliver", "boolean");
+  copyField("provider", "string");
 
   return mutated;
 }
@@ -166,12 +160,6 @@ export function collectLegacyOpenAICodexCronModelRoutes(
     }
   }
   return [...routes.values()];
-}
-
-function readPositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
 }
 
 function migrateLegacyOpenAICodexModelRefs(
@@ -261,7 +249,11 @@ export function migrateLegacyAgentTurnCommandPayload(payload: UnknownRecord): bo
     return false;
   }
 
-  const timeoutSeconds = readPositiveInteger(payload.timeoutSeconds) ?? parsed.timeoutSeconds;
+  const timeout = payload.timeoutSeconds;
+  const timeoutSeconds =
+    typeof timeout === "number" && Number.isFinite(timeout) && timeout > 0
+      ? Math.floor(timeout)
+      : parsed.timeoutSeconds;
   const deliveryHints: UnknownRecord = {};
   for (const key of LEGACY_DELIVERY_HINT_FIELDS) {
     if (key in payload) {

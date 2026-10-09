@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { TranscriptSessionSummary, TranscriptsGetResult } from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -43,6 +45,60 @@ const detail: TranscriptsGetResult = {
 };
 
 suite.define(() => {
+  it("returns from capture settings to the same meeting and preserves native new-tab links", async () => {
+    await suite.withPage(
+      { viewport: { width: 1440, height: 900 }, locale: "en-US" },
+      async ({ context, page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "transcripts.list": { sessions: [meeting], nextCursor: null },
+            "transcripts.get": detail,
+          },
+        });
+        const meetingUrl = `${suite.server.baseUrl}meetings?query=design&selector=${encodeURIComponent(meeting.selector)}`;
+        const capturePath =
+          "settings/communications?section=transcripts#settings-communications-meeting-capture";
+        const captureUrl = `${suite.server.baseUrl}${capturePath}`;
+        await page.goto(meetingUrl);
+        const view = page.locator("openclaw-meetings-page");
+        await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
+        const capture = view.getByRole("link", { name: "Meeting capture", exact: true });
+        expect(await capture.getAttribute("href")).toBe(`/${capturePath}`);
+        await capture.click();
+        await page.getByRole("heading", { name: "Communications", exact: true }).waitFor();
+        expect(page.url()).toBe(captureUrl);
+        await page.getByRole("button", { name: "Back to app", exact: true }).click();
+        await page.waitForURL(meetingUrl);
+        expect(page.url()).toBe(meetingUrl);
+        await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
+        expect(
+          await view.getByRole("searchbox", { name: "Search meetings", exact: true }).inputValue(),
+        ).toBe("design");
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          view,
+          [view.getByRole("heading", { name: "Design review", exact: true })],
+          { animations: "disabled" },
+        );
+        await writeFile(path.join(suite.artifactDir, "meetings-capture-return.png"), frame.png);
+        for (const activation of ["modified", "middle"] as const) {
+          const [popup] = await Promise.all([
+            context.waitForEvent("page"),
+            capture.click(
+              activation === "modified" ? { modifiers: ["ControlOrMeta"] } : { button: "middle" },
+            ),
+          ]);
+          try {
+            await popup.waitForURL(captureUrl);
+            expect(page.url()).toBe(meetingUrl);
+          } finally {
+            await popup.close();
+          }
+        }
+      },
+    );
+  });
+
   it("opens Summary by default and follows speech, interim notes, and final notes across tabs", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1000 }, timezoneId: "UTC", colorScheme: "light" },
@@ -70,6 +126,7 @@ suite.define(() => {
           nextCursor: null,
         };
         const gateway = await installMockGateway(page, {
+          heldMethods: ["transcripts.summarize"],
           methodResponses: {
             "transcripts.list": { sessions: [activeMeeting, meeting], nextCursor: null },
             "transcripts.get": initial,
@@ -185,6 +242,9 @@ suite.define(() => {
           sessions: [interim.session, meeting],
           nextCursor: null,
         });
+        await gateway.waitForRequest("transcripts.summarize");
+        await gateway.setMethodResponse("transcripts.summarize", interim);
+        await gateway.resolveDeferred("transcripts.summarize", interim);
         await reader.getByText(interim.summary!.overview, { exact: true }).waitFor();
         await expect.poll(() => row.textContent()).toContain(interim.summary!.overview);
         expect(await reader.getByText(/Summary so far/).isVisible()).toBe(true);

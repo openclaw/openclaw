@@ -6,7 +6,9 @@ import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
+import type { ReplyPayload } from "../types.js";
 import type { ReplyExecOverrides } from "./get-reply-exec-overrides.js";
+import type { TypingController } from "./typing.js";
 
 export function buildPersistedMediaImageLayout(params: {
   ctx: MsgContext;
@@ -21,49 +23,36 @@ export function buildPersistedMediaImageLayout(params: {
     ) ?? [],
   );
   const suppressedFactIndexes: number[] = [];
-  const imageFactIndexes: number[] = [];
+  const availableFactIndexes = new Set<number>();
   for (const [factIndex, fact] of params.media.entries()) {
     if (!isImageMediaFact(fact)) {
       continue;
     }
-    imageFactIndexes.push(factIndex);
     if (
       (factIndex < params.ctxMediaCount && describedAttachmentIndexes.has(factIndex)) ||
       fact.hydrationSuppressed === true
     ) {
       suppressedFactIndexes.push(factIndex);
+    } else {
+      availableFactIndexes.add(factIndex);
     }
   }
-  if (imageFactIndexes.length === 0) {
+  if (availableFactIndexes.size === 0 && suppressedFactIndexes.length === 0) {
     return undefined;
   }
-  const suppressed = new Set(suppressedFactIndexes);
-  const used = new Set<number>();
-  const unsuppressedFactCount = imageFactIndexes.filter((index) => !suppressed.has(index)).length;
-  const canInferByPosition = unsuppressedFactCount === (params.imageOrder?.length ?? 0);
+  const canInferByPosition = availableFactIndexes.size === (params.imageOrder?.length ?? 0);
   const slots = (params.imageOrder ?? []).map((kind, slotIndex) => {
     const sourceIndex = params.imageSourceIndexes?.[slotIndex];
-    const sourceFact = sourceIndex === undefined ? undefined : params.media[sourceIndex];
     const factIndex =
-      sourceIndex !== undefined
-        ? sourceFact &&
-          isImageMediaFact(sourceFact) &&
-          !suppressed.has(sourceIndex) &&
-          !used.has(sourceIndex)
-          ? sourceIndex
-          : undefined
-        : canInferByPosition
-          ? imageFactIndexes.find((index) => !suppressed.has(index) && !used.has(index))
-          : undefined;
-    if (factIndex !== undefined) {
-      used.add(factIndex);
-    }
-    return factIndex === undefined ? { kind } : { kind, factIndex };
+      sourceIndex === undefined && canInferByPosition
+        ? availableFactIndexes.values().next().value
+        : sourceIndex;
+    return factIndex !== undefined && availableFactIndexes.delete(factIndex)
+      ? { kind, factIndex }
+      : { kind };
   });
-  for (const factIndex of imageFactIndexes) {
-    if (!suppressed.has(factIndex) && !used.has(factIndex)) {
-      slots.push({ kind: "offloaded", factIndex });
-    }
+  for (const factIndex of availableFactIndexes) {
+    slots.push({ kind: "offloaded", factIndex });
   }
   return {
     slots,
@@ -193,4 +182,9 @@ export function hasReplyTargetContext(ctx: MsgContext | TemplateContext): boolea
   }
   const replyChain = ctx.ReplyChain;
   return Array.isArray(replyChain) && replyChain.length > 0;
+}
+
+export function finishReplyPreparation(typing: TypingController, createReply?: () => ReplyPayload) {
+  typing.cleanup();
+  return { kind: "reply", reply: createReply?.() } as const;
 }

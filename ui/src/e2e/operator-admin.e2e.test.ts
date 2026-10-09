@@ -426,40 +426,34 @@ suite.define(() => {
       await screenshot(page, "05-read-only-agents.png", setDefault);
 
       await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
-      await gateway.waitForRequest("agents.files.list");
-      await page.locator("openclaw-agents-page").evaluate((element) => {
-        const agentsPage = element as HTMLElement & {
-          agentFileActive: string | null;
-          agentFileContents: Record<string, string>;
-          agentFileDrafts: Record<string, string>;
-          agentFilesList: {
-            agentId: string;
-            files: Array<{ name: string; path: string; missing: boolean }>;
-            workspace: string;
-          };
-          requestUpdate: () => void;
-        };
-        agentsPage.agentFilesList = {
-          agentId: "main",
-          files: [
-            {
-              name: "AGENTS.md",
-              path: "/tmp/openclaw-e2e/workspace/AGENTS.md",
-              missing: false,
-            },
-          ],
-          workspace: "/tmp/openclaw-e2e/workspace",
-        };
-        agentsPage.agentFileActive = "AGENTS.md";
-        agentsPage.agentFileContents = { "AGENTS.md": "# Main agent\n" };
-        agentsPage.agentFileDrafts = { "AGENTS.md": "# Mutated\n" };
-        agentsPage.requestUpdate();
-      });
+      await waitForRequest(
+        gateway,
+        "agents.files.get",
+        (params) => params.agentId === "main" && params.name === "AGENTS.md",
+      );
       const fileEditor = page.locator(".agent-file-textarea");
+      await expect.poll(() => fileEditor.inputValue()).toBe("# Main agent\n");
       await expect.poll(() => fileEditor.isDisabled()).toBe(true);
+      // Bypass only the DOM disabled state to exercise the owner's permission guard.
+      await fileEditor.evaluate((element: HTMLTextAreaElement) => {
+        element.disabled = false;
+        element.value = "# Mutated\n";
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await page
+        .locator(".agent-file-actions")
+        .getByRole("button", { name: "Preview", exact: true })
+        .click();
+      await expect
+        .poll(() => page.locator(".md-preview-dialog__reader").textContent())
+        .toContain("Mutated");
+      await page.getByRole("button", { name: "Close preview", exact: true }).click();
       const fileSave = page.locator(".agent-file-actions button").filter({ hasText: "Save" });
       await expect.poll(() => fileSave.isDisabled()).toBe(true);
-      await fileSave.click({ force: true });
+      await fileSave.evaluate((element: HTMLButtonElement) => {
+        element.disabled = false;
+      });
+      await fileSave.click();
       expect(await gateway.getRequests("agents.files.set")).toHaveLength(0);
 
       await page.goto(`${suite.server.baseUrl}settings/agents/main/skills`);
@@ -478,13 +472,13 @@ suite.define(() => {
       await expect
         .poll(() => skillCard.getByRole("img", { name: /Needs Setup.*deploy-helper/ }).isVisible())
         .toBe(true);
-      expect(await page.locator(".skill-discovery wa-switch").count()).toBe(0);
+      expect(await page.locator(".skill-discovery").getByRole("switch").count()).toBe(0);
       await page.getByRole("button", { name: "Skill settings", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
       const skillDialog = page.locator("openclaw-modal-dialog", { hasText: "Deploy Helper" });
-      const globalSkillToggle = skillDialog.locator("wa-switch.settings-toggle");
-      await expect.poll(() => globalSkillToggle.getAttribute("disabled")).not.toBeNull();
+      const globalSkillToggle = skillDialog.getByRole("switch");
+      await expect.poll(() => globalSkillToggle.isDisabled()).toBe(true);
       await globalSkillToggle.click({ force: true });
       expect(await gateway.getRequests("skills.update")).toHaveLength(0);
       const install = skillDialog.getByRole("button", { name: "Install Deploy Helper" });
@@ -506,7 +500,7 @@ suite.define(() => {
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("skills.workshop.restore")).toHaveLength(0);
       expect(await gateway.getRequests("skills.workshop.archive")).toHaveLength(0);
-      const learn = page.getByRole("button", { name: "Learn from past conversations" });
+      const learn = page.getByRole("button", { name: "Learn from history" });
       await expect.poll(() => learn.isDisabled()).toBe(true);
       const creates = (await gateway.getRequests("sessions.create")).length;
       await learn.click({ force: true });
@@ -640,7 +634,7 @@ suite.define(() => {
       await page.getByRole("combobox", { name: "Fallback" }).selectOption("allowlist");
       const autoAllowSwitch = page
         .locator(".settings-row", { hasText: "Auto-allow skill CLIs" })
-        .locator("wa-switch");
+        .getByRole("switch");
       await autoAllowSwitch.click();
       await page.getByRole("textbox", { name: "Pattern" }).fill("/usr/bin/gh");
       await screenshot(
@@ -668,13 +662,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("combobox", { name: "Fallback" }).inputValue())
         .toBe("allowlist");
-      await expect
-        .poll(() =>
-          autoAllowSwitch.evaluate(
-            (element) => (element as HTMLElement & { checked: boolean }).checked,
-          ),
-        )
-        .toBe(true);
+      await expect.poll(() => autoAllowSwitch.isChecked()).toBe(true);
       await expect
         .poll(() => page.getByRole("textbox", { name: "Pattern" }).inputValue())
         .toBe("/usr/bin/gh");

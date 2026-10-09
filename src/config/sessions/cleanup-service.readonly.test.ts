@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
@@ -12,6 +13,7 @@ import {
 } from "../../state/openclaw-state-db.paths.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
 import { replaceSessionEntrySync } from "./session-accessor.entry.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const maintenance = vi.hoisted(() => ({
@@ -55,7 +57,6 @@ function readMetadata() {
 }
 
 it.each([
-  { name: "ordinary preview", fixMissing: false, diskBudget: false },
   { name: "missing transcript preview", fixMissing: true, diskBudget: false },
   { name: "over-budget preview", fixMissing: false, diskBudget: true },
 ])(
@@ -102,5 +103,56 @@ it.each([
     expect(result.appliedSummaries).toEqual([]);
     expect.soft(readMetadata()).toEqual(metadata);
     expect(fs.readFileSync(sqlitePath)).toEqual(databaseBytes);
+  },
+);
+
+it.each([false, true])(
+  "previews an explicit process-held store without creating disk state (present=%s)",
+  async (present) => {
+    const stateDir = tempDirs.make("openclaw-cleanup-incognito-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    maintenance.maxDiskBytes = null;
+    maintenance.highWaterBytes = null;
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+    if (present) {
+      for (const id of ["empty", "live"]) {
+        const scope = {
+          agentId: "main",
+          sessionKey: `agent:main:dashboard:incognito-${id}`,
+          sessionId: `incognito-${id}`,
+          storePath,
+        };
+        replaceSessionEntrySync(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: Date.now(),
+          incognito: true,
+        });
+        if (id === "live") {
+          appendTranscriptMessageSync(scope, {
+            eventId: "incognito-message",
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "Keep this memory-only turn." }],
+            },
+          });
+        }
+      }
+    }
+    const filesBefore = fs.readdirSync(stateDir, { recursive: true });
+
+    const result = await runSessionsCleanup({
+      cfg: {},
+      opts: { dryRun: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(result.previewResults[0]?.summary).toMatchObject({
+      beforeCount: present ? 2 : 0,
+      afterCount: present ? 1 : 0,
+      missing: present ? 1 : 0,
+    });
+    expect(result.appliedSummaries).toEqual([]);
+    expect(fs.existsSync(storePath)).toBe(false);
+    expect(fs.readdirSync(stateDir, { recursive: true })).toEqual(filesBefore);
   },
 );

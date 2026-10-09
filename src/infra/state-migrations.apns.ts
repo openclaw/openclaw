@@ -339,8 +339,7 @@ export async function migrateLegacyApnsRegistrations(params: {
           ],
         };
       }
-      const activePath = hasSource ? sourcePath : hasClaim ? source.claimPath : null;
-      if (!activePath) {
+      if (!hasSource && !hasClaim) {
         return { changes, warnings };
       }
 
@@ -348,7 +347,7 @@ export async function migrateLegacyApnsRegistrations(params: {
       let snapshot = await readLegacySourceSnapshot(
         stateRoot,
         params.stateDir,
-        activePath,
+        hasSource ? sourcePath : source.claimPath,
         (rawNodeId, rawRegistration) => {
           const [nodeId, registration] = parseLegacyApnsRegistration(
             rawNodeId,
@@ -364,7 +363,7 @@ export async function migrateLegacyApnsRegistrations(params: {
 
       let result: ReturnType<typeof importAndRecordReceipt>;
       try {
-        if (activePath === sourcePath) {
+        if (hasSource) {
           snapshot = await source.claim({
             snapshot,
             mismatchMessage: "legacy APNs source changed before Doctor could claim it",

@@ -37,7 +37,10 @@ public actor GatewayChannelActor {
     private let password: String?
     private let authBindingKey: SymmetricKey?
     private let session: WebSocketSessioning
-    private var backoffMs: Double = 500
+    var backoffMs: Double = 500
+    private var reconnectWait: (generation: UInt64, task: Task<Void, Never>)?
+    private var reconnectImmediately = false
+    var connectFailureBackoffWaitTask: Task<Void, Error>?
     var connectFailureBackoff = GatewayConnectFailureBackoff()
     private var shouldReconnect = true
     private nonisolated let socketAdmission = Mutex(true)
@@ -58,12 +61,22 @@ public actor GatewayChannelActor {
     var testConnectRunFinishedHandler: (@Sendable () -> Void)?
     var testConnectFailureBackoffWaitHandler: (@Sendable () async throws -> Void)?
     var testRequestResumedHandler: (@Sendable () async -> Void)?
+    var testRecoverySleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    var testNetworkPathObserved: (@Sendable (GatewayNetworkPath) -> Void)?
+    var testNetworkPathRecoveryFinished: (@Sendable () -> Void)?
     #endif
     private let connectChallengeTimeoutSeconds: Double = 6.0
     // Some networks will silently drop idle TCP/TLS flows around ~30s. The gateway tick is server->client,
     // but NATs/proxies often require outbound traffic to keep the connection alive.
     private let keepaliveIntervalSeconds: Double = 15.0
     private var watchdogTask: Task<Void, Never>?
+    private let networkPathUpdates: (@Sendable () -> AsyncStream<GatewayNetworkPath>)?
+    private var networkPathTask: Task<Void, Never>?
+    private var networkPathSettleTask: Task<Void, Never>?
+    private var networkPathProbeGeneration: UInt64?
+    private var networkPathTracker = GatewayNetworkPathTracker()
+    var networkPathSettleDuration: Duration = .seconds(1)
+    var networkPathProbeTimeout: Duration = .seconds(5)
     private var tickTask: Task<Void, Never>?
     private var keepaliveTask: Task<Void, Never>?
     private var pendingDeviceTokenRetry = false
@@ -79,6 +92,9 @@ public actor GatewayChannelActor {
     private let pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)?
     private var connectOptions: GatewayConnectOptions?
     private let disconnectHandler: (@Sendable (String, UInt64) async -> Void)?
+    /// Automatic reconnects have no caller to repair TLS trust. The owner may
+    /// repair and replace this channel, never retry on it.
+    private let reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)?
 
     public init(
         url: URL,
@@ -91,8 +107,41 @@ public actor GatewayChannelActor {
         pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
         disconnectHandler: (@Sendable (String, UInt64) async -> Void)? = nil,
-        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil)
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
+        reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)? = nil)
     {
+        self.init(
+            url: url,
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password,
+            authBindingKey: authBindingKey,
+            session: session,
+            connectSnapshotAdmissionHandler: connectSnapshotAdmissionHandler,
+            pushHandler: pushHandler,
+            connectOptions: connectOptions,
+            disconnectHandler: disconnectHandler,
+            extraHeadersProvider: extraHeadersProvider,
+            reconnectTLSFailureHandler: reconnectTLSFailureHandler,
+            networkPathUpdates: GatewayNetworkPathMonitor.systemUpdates)
+    }
+
+    init(
+        url: URL,
+        token: String?,
+        bootstrapToken: String? = nil,
+        password: String? = nil,
+        authBindingKey: SymmetricKey? = nil,
+        session: WebSocketSessionBox? = nil,
+        connectSnapshotAdmissionHandler: (@Sendable (HelloOk, UInt64) async -> Void)? = nil,
+        pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)? = nil,
+        connectOptions: GatewayConnectOptions? = nil,
+        disconnectHandler: (@Sendable (String, UInt64) async -> Void)? = nil,
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
+        reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)? = nil,
+        networkPathUpdates: (@Sendable () -> AsyncStream<GatewayNetworkPath>)?)
+    {
+        self.networkPathUpdates = networkPathUpdates
         self.url = url
         self.token = token
         self.bootstrapToken = bootstrapToken
@@ -104,6 +153,7 @@ public actor GatewayChannelActor {
         self.pushHandler = pushHandler
         self.connectOptions = connectOptions
         self.disconnectHandler = disconnectHandler
+        self.reconnectTLSFailureHandler = reconnectTLSFailureHandler
         Task { [weak self] in
             await self?.startWatchdog()
         }
@@ -150,6 +200,14 @@ public actor GatewayChannelActor {
 
         self.watchdogTask?.cancel()
         self.watchdogTask = nil
+        self.networkPathTask?.cancel()
+        self.networkPathTask = nil
+        self.networkPathSettleTask?.cancel()
+        self.networkPathSettleTask = nil
+        self.reconnectWait?.task.cancel()
+        self.reconnectWait = nil
+        self.connectFailureBackoffWaitTask?.cancel()
+        self.connectFailureBackoffWaitTask = nil
 
         self.tickTask?.cancel()
         self.tickTask = nil
@@ -170,10 +228,81 @@ public actor GatewayChannelActor {
     }
 
     private func startWatchdog() {
+        guard self.shouldReconnect else { return }
+        if let networkPathUpdates {
+            self.networkPathTask = Task { [weak self] in
+                for await path in networkPathUpdates() {
+                    guard !Task.isCancelled else { return }
+                    await self?.observeNetworkPath(path)
+                }
+            }
+        }
         self.watchdogTask?.cancel()
         self.watchdogTask = Task { [weak self] in
             guard let self else { return }
             await self.watchdogLoop()
+        }
+    }
+
+    private func observeNetworkPath(_ path: GatewayNetworkPath) {
+        #if DEBUG
+        defer { self.testNetworkPathObserved?(path) }
+        #endif
+        guard self.shouldReconnect, self.networkPathTracker.observe(path) else { return }
+        self.networkPathSettleTask?.cancel()
+        guard self.networkPathTracker.needsSettle else { return }
+        self.networkPathSettleTask = Task { [weak self] in
+            await self?.settleNetworkPath(path)
+        }
+    }
+
+    private func settleNetworkPath(_ path: GatewayNetworkPath) async {
+        do {
+            #if DEBUG
+            try await self.testRecoverySleep(self.networkPathSettleDuration)
+            #else
+            try await Task.sleep(for: self.networkPathSettleDuration)
+            #endif
+            try Task.checkCancellation()
+        } catch { return }
+        guard self.shouldReconnect, self.networkPathTracker.settle(path) else { return }
+        await self.recoverAfterNetworkPathChange(path)
+    }
+
+    private func recoverAfterNetworkPathChange(_ path: GatewayNetworkPath) async {
+        #if DEBUG
+        defer { self.testNetworkPathRecoveryFinished?() }
+        #endif
+        guard path.isSatisfied, self.shouldReconnect, !self.reconnectPausedForAuthFailure else { return }
+        if self.connected, let task = self.task {
+            let generation = self.connectionGeneration
+            guard self.networkPathProbeGeneration != generation else { return }
+            self.networkPathProbeGeneration = generation
+            defer {
+                if self.networkPathProbeGeneration == generation { self.networkPathProbeGeneration = nil }
+            }
+            do {
+                // A path change is only a hint; keep a socket that still answers its probe.
+                try await task.sendPing(timeout: self.networkPathProbeTimeout)
+            } catch {
+                guard self.shouldReconnect, !self.reconnectPausedForAuthFailure,
+                      self.isConnected(connectionGeneration: generation)
+                else { return }
+                let failure = Self.failure(9, "gateway socket unresponsive after a network change")
+                self.logger.error("gateway socket unresponsive after a network change; reconnecting")
+                await self.transitionToDisconnected(
+                    reason: failure.localizedDescription,
+                    error: failure,
+                    connectionGeneration: generation,
+                    shouldReconnect: true)
+            }
+        } else if self.automaticReconnectRequested {
+            self.backoffMs = 500
+            self.connectFailureBackoff.reset()
+            // Wake only the owned delays. connect() continues to coalesce the actual attempt.
+            self.reconnectImmediately = true
+            self.reconnectWait?.task.cancel()
+            self.connectFailureBackoffWaitTask?.cancel()
         }
     }
 
@@ -187,18 +316,9 @@ public actor GatewayChannelActor {
             do {
                 try await self.connect()
             } catch {
-                if self.shouldPauseReconnectAfterAuthFailure(error) {
-                    self.reconnectPausedForAuthFailure = true
-                    let failure = error.localizedDescription
-                    self.logger.error(
-                        """
-                        gateway watchdog reconnect paused for non-recoverable auth failure \
-                        \(failure, privacy: .public)
-                        """)
+                if await self.recordAutomaticReconnectFailure(error, context: "gateway watchdog reconnect") {
                     continue
                 }
-                let wrapped = self.wrap(error, context: "gateway watchdog reconnect")
-                self.logger.error("gateway watchdog reconnect failed \(wrapped.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -301,6 +421,7 @@ public actor GatewayChannelActor {
         try Task.checkCancellation()
         guard self.shouldReconnect else { throw CancellationError() }
         if let disconnectError { throw disconnectError }
+        self.reconnectImmediately = false
         if self.connected {
             if self.task?.state == .running { return }
             let staleGeneration = self.connectionGeneration
@@ -387,6 +508,7 @@ public actor GatewayChannelActor {
         else { throw CancellationError() }
         self.connected = true
         self.automaticReconnectRequested = false
+        self.reconnectImmediately = false
         self.reconnectPausedForAuthFailure = false
         self.backoffMs = 500
         self.connectFailureBackoff.reset()
@@ -1161,27 +1283,33 @@ extension GatewayChannelActor {
         guard self.connectionGeneration == connectionGeneration,
               self.disconnectedConnectionGeneration == connectionGeneration
         else { return }
-        let delay = self.backoffMs / 1000
-        self.backoffMs = min(self.backoffMs * 2, 30000)
-        guard await self.sleepUnlessCancelled(nanoseconds: UInt64(delay * 1_000_000_000)) else { return }
+        let delay = self.reconnectImmediately ? 0 : self.backoffMs
+        if !self.reconnectImmediately { self.backoffMs = min(self.backoffMs * 2, 30000) }
+        let wait = Task<Void, Never> {
+            #if DEBUG
+            try? await self.testRecoverySleep(.milliseconds(Int64(delay)))
+            #else
+            try? await Task.sleep(for: .milliseconds(Int64(delay)))
+            #endif
+        }
+        self.reconnectWait?.task.cancel()
+        self.reconnectWait = (connectionGeneration, wait)
+        await withTaskCancellationHandler { await wait.value } onCancel: { wait.cancel() }
+        if self.reconnectWait?.generation == connectionGeneration { self.reconnectWait = nil }
+        guard !Task.isCancelled else { return }
         guard self.shouldReconnect else { return }
         guard !self.reconnectPausedForAuthFailure else { return }
         guard self.automaticReconnectRequested else { return }
         guard self.connectionGeneration == connectionGeneration,
               self.disconnectedConnectionGeneration == connectionGeneration
         else { return }
+        self.reconnectImmediately = false
         do {
             try await self.connect()
         } catch {
-            if self.shouldPauseReconnectAfterAuthFailure(error) {
-                self.reconnectPausedForAuthFailure = true
-                let failure = error.localizedDescription
-                self.logger.error(
-                    "gateway reconnect paused for non-recoverable auth failure \(failure, privacy: .public)")
+            if await self.recordAutomaticReconnectFailure(error, context: "gateway reconnect") {
                 return
             }
-            let wrapped = self.wrap(error, context: "gateway reconnect")
-            self.logger.error("gateway reconnect failed \(wrapped.localizedDescription, privacy: .public)")
             // A pre-socket provider failure leaves this generation owning retries.
             // Once a new socket exists, its disconnect transition owns the next attempt.
             if self.connectionGeneration == connectionGeneration {
@@ -1190,6 +1318,22 @@ extension GatewayChannelActor {
                 }
             }
         }
+    }
+
+    private func recordAutomaticReconnectFailure(_ error: Error, context: String) async -> Bool {
+        if self.shouldPauseReconnectAfterAuthFailure(error) {
+            self.reconnectPausedForAuthFailure = true
+            let failure = error.localizedDescription
+            self.logger.error(
+                "\(context, privacy: .public) paused for non-recoverable auth failure \(failure, privacy: .public)")
+            return true
+        }
+        let wrapped = self.wrap(error, context: context)
+        self.logger.error("\(context, privacy: .public) failed \(wrapped.localizedDescription, privacy: .public)")
+        if let tlsError = wrapped as? GatewayTLSValidationError {
+            await self.reconnectTLSFailureHandler?(tlsError)
+        }
+        return false
     }
 
     private func shouldRetryWithStoredDeviceToken(

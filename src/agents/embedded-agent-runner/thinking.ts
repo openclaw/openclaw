@@ -215,9 +215,11 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
   return "valid";
 }
 
-function shouldRecoverAnthropicThinkingError(
+function beginAnthropicThinkingRecovery(
   error: unknown,
   sessionMeta: RecoverySessionMeta,
+  stage: "request rejected" | "stream error" | "error during stream",
+  yieldedOutput = false,
 ): boolean {
   // Provider detail survives genericization in different carriers across the
   // Anthropic SDK, failover wrapping, and terminal stream messages.
@@ -229,11 +231,26 @@ function shouldRecoverAnthropicThinkingError(
     current.errorBody,
     current.message,
   ]);
-  return candidates.some(
-    (candidate) =>
-      typeof candidate === "string" &&
-      shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta),
+  if (
+    !candidates.some(
+      (candidate) =>
+        typeof candidate === "string" &&
+        shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta),
+    )
+  ) {
+    return false;
+  }
+  if (yieldedOutput) {
+    log.warn(
+      `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
+    );
+    return false;
+  }
+  sessionMeta.recoveredAnthropicThinking = true;
+  log.warn(
+    `[session-recovery] Anthropic thinking ${stage}; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
   );
+  return true;
 }
 
 function shouldRecoverAnthropicThinkingErrorMessage(
@@ -274,10 +291,7 @@ async function notifyRecoveredAnthropicThinking(
 }
 
 function isSuccessfulRecoveryRetryResult(message: AssistantMessage | undefined): boolean {
-  if (!message) {
-    return false;
-  }
-  return message.stopReason !== "error" && message.stopReason !== "aborted";
+  return Boolean(message && message.stopReason !== "error" && message.stopReason !== "aborted");
 }
 
 function wrapRetryStreamWithRecoveryNotification(
@@ -323,14 +337,10 @@ function settleRecoveryStream(
       () => undefined,
     );
   let producerCompleted = false;
-  void getEventStreamCompletion(stream)?.then(
-    () => {
-      producerCompleted = true;
-    },
-    () => {
-      producerCompleted = true;
-    },
-  );
+  const markProducerCompleted = () => {
+    producerCompleted = true;
+  };
+  void getEventStreamCompletion(stream)?.then(markProducerCompleted, markProducerCompleted);
   // A partial-only consumer can close without waiting for ordinary provider work.
   // Completed producers may still be scheduling their admitted repair notification.
   return wrapStreamObjectSettlement(
@@ -367,22 +377,10 @@ async function pumpStreamWithRecovery(
 ): Promise<AssistantMessage> {
   const { sessionMeta, retry, notify } = recovery;
   let yieldedOutput = false;
-  const recover = (error: unknown, stage: "stream error" | "error during stream") => {
-    if (!shouldRecoverAnthropicThinkingError(error, sessionMeta)) {
-      return undefined;
-    }
-    if (yieldedOutput) {
-      log.warn(
-        `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
-      );
-      return undefined;
-    }
-    sessionMeta.recoveredAnthropicThinking = true;
-    log.warn(
-      `[session-recovery] Anthropic thinking ${stage}; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
-    );
-    return retryStreamWithoutThinking(outer, retry, notify);
-  };
+  const recover = (error: unknown, stage: "stream error" | "error during stream") =>
+    beginAnthropicThinkingRecovery(error, sessionMeta, stage, yieldedOutput)
+      ? retryStreamWithoutThinking(outer, retry, notify)
+      : undefined;
   try {
     return await runPluginStreamConsumer(stream, async () => {
       const resolved = await stream;
@@ -463,13 +461,9 @@ export function wrapAnthropicStreamWithRecovery(
         stream.then(
           (resolved) => createRecoveryStream(resolved, recovery),
           (error: unknown) => {
-            if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
+            if (!beginAnthropicThinkingRecovery(error, requestMeta, "request rejected")) {
               throw error;
             }
-            requestMeta.recoveredAnthropicThinking = true;
-            log.warn(
-              `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
-            );
             return wrapRetryStreamWithRecoveryNotification(retry(), recovery);
           },
         ),

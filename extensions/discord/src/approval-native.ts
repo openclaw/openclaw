@@ -4,6 +4,7 @@ import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
   resolveApprovalRequestSessionConversation,
+  type ExecApprovalSessionTarget,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -33,11 +34,7 @@ function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "gro
   // DM session keys use the `direct` peer kind in the normalized form
   // (`agent:<id>:discord[:account]:direct:<userId>`); legacy keys may still use
   // `dm`. Treat both as the same logical kind for downstream comparisons.
-  const match = sessionKey.match(/discord:(?:[^:]+:)?(channel|group|dm|direct):/);
-  if (!match) {
-    return null;
-  }
-  const raw = match[1];
+  const raw = sessionKey.match(/discord:(?:[^:]+:)?(channel|group|dm|direct):/)?.[1];
   if (raw === "direct") {
     return "dm";
   }
@@ -76,6 +73,27 @@ function createDiscordOriginTargetResolver() {
       channel: "discord",
       bundledFallback: false,
     });
+  const resolveSessionOrigin = (
+    request: Parameters<typeof resolveConversation>[0],
+    sessionTarget?: ExecApprovalSessionTarget,
+  ) => {
+    const sessionConversation = resolveConversation(request);
+    const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
+    if (sessionKind === "dm") {
+      return null;
+    }
+    const to = normalizeDiscordOriginChannelId(
+      sessionTarget ? sessionTarget.to : sessionConversation?.id,
+    );
+    return to
+      ? {
+          to,
+          threadId:
+            (sessionTarget ? normalizeDiscordThreadId(sessionTarget.threadId) : undefined) ??
+            normalizeDiscordThreadId(sessionConversation?.threadId),
+        }
+      : null;
+  };
   return createChannelNativeOriginTargetResolver({
     channel: "discord",
     shouldHandleRequest: shouldHandleCapabilityRequest,
@@ -98,36 +116,8 @@ function createDiscordOriginTargetResolver() {
         ? { to: turnSourceTo, threadId }
         : null;
     },
-    resolveSessionTarget: (sessionTarget, request) => {
-      const sessionConversation = resolveConversation(request);
-      const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
-      if (sessionKind === "dm") {
-        return null;
-      }
-      const targetTo = normalizeDiscordOriginChannelId(sessionTarget.to);
-      return targetTo
-        ? {
-            to: targetTo,
-            threadId:
-              normalizeDiscordThreadId(sessionTarget.threadId) ??
-              normalizeDiscordThreadId(sessionConversation?.threadId),
-          }
-        : null;
-    },
-    resolveFallbackTarget: (request) => {
-      const sessionConversation = resolveConversation(request);
-      const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
-      if (sessionKind === "dm") {
-        return null;
-      }
-      const fallbackChannelId = normalizeDiscordOriginChannelId(sessionConversation?.id);
-      return fallbackChannelId
-        ? {
-            to: fallbackChannelId,
-            threadId: normalizeDiscordThreadId(sessionConversation?.threadId),
-          }
-        : null;
-    },
+    resolveSessionTarget: (sessionTarget, request) => resolveSessionOrigin(request, sessionTarget),
+    resolveFallbackTarget: (request) => resolveSessionOrigin(request),
   });
 }
 

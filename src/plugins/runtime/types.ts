@@ -223,6 +223,7 @@ export type PluginRuntime = PluginRuntimeCore & {
     resolveWorkspaceAuthority: (params: {
       config: OpenClawConfig;
       agentId?: string;
+      storePath?: string;
       confinedToolNames?: readonly string[];
       requiredToolNames?: readonly string[];
       modelProvider?: string;

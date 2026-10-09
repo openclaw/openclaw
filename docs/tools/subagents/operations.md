@@ -74,6 +74,11 @@ processing. An already-admitted replacement run can finish refreshing a deferred
 child result before shutdown. The refresh remains tracked until capture and
 persistence finish; it does not admit a new run.
 
+Completion waits retire with their original registry database during shutdown.
+Late cleanup recovery leaves retained state for the next Gateway instead of
+retrying against a closed store. Failed writes with an unknown outcome still
+report an error and remain fenced until recovery reads the stored state.
+
 After a Gateway restart, the parent owns continuation of the user's task.
 Interrupted sub-agents are finalized through their normal completion path instead
 of automatically relaunched. Their results tell the parent that execution was
@@ -89,7 +94,10 @@ does not authorize automatic relaunch of unrelated interrupted child work.
 
 Recovery retires superseded requester-transfer generations before restoring the
 remaining claim. The current generation keeps its completion custody; obsolete
-transfers do not retry indefinitely. Transient persistence failures still retry.
+transfers do not retry indefinitely. Registry hydration and startup transfer each
+run once per attempt. A failed hydration logs its error and can be retried by the
+next registry access; an incomplete startup transfer remains recorded for the
+next activation or restart. Recovery does not keep a separate retry timer.
 
 Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
 prevented the shutdown marker from being written. For a hard kill, the child
@@ -128,13 +136,14 @@ When required registration has an unknown outcome or retained registry state
 forbids deleting the child session, a Gateway-hosted ordinary spawn's error keeps
 the child's session and run identifiers. If the first cancellation attempt also
 fails, the error reports unconfirmed termination and whether Gateway cleanup was
-scheduled. The Gateway retains the child's admission slot while retrying and
-rechecks the exact run owner before each attempt. If database admission retires
-while that child still runs, cancellation stops but its slot stays reserved until
-the child controller retires or Gateway shutdown takes over. The child session
-stays intact. Provisional session rollback, collector FIFO cleanup, and local
-embedded cleanup remain joined. Inspect the retained child before retrying the
-spawn.
+scheduled. The Gateway makes at most one tracked follow-up cancellation attempt,
+rechecking the exact run owner before dispatch. If termination still cannot be
+confirmed, it logs a warning and keeps the child's admission slot until the
+child controller retires or Gateway shutdown takes over. The child session stays
+intact. Provisional cleanup runs once; a failed collector launch keeps its FIFO
+slot when its failure cannot be settled, until shutdown or restart recovery.
+Cleanup already in progress remains joined. Inspect the retained child and
+cleanup error before retrying the spawn.
 
 <Note>
 If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` /

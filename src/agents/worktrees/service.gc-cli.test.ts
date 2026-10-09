@@ -216,8 +216,7 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   setRuntimeConfigSnapshot({}, {});
   const ownerPolicy: WorktreeCleanupOwnerPolicy = {
-    shouldProtectOwner: (_kind, id) => id === "active-owner",
-    shouldRemoveOwner: () => false,
+    readOwnerState: (_kind, id) => (id === "active-owner" ? "active" : "idle"),
   };
   let collected: ManagedWorktreeGcResult | undefined;
   vi.spyOn(ManagedWorktreeService.prototype, "gc").mockImplementation(async (params) => {
@@ -298,8 +297,7 @@ it("preserves a recent orphan when its owner becomes live during cleanup", async
   await fs.rm(gitdir, { recursive: true });
   const service = new ManagedWorktreeService({ env, now: () => now });
   const result = await service.gc({
-    shouldProtectOwner: () => false,
-    shouldRemoveOwner: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
+    readOwnerState: vi.fn().mockReturnValueOnce("retired").mockReturnValue("idle"),
   });
   expect(result).toMatchObject({ removed: [], orphansRetired: 0, outcome: "deferred" });
   expect(getRegistryWorktree(env, record!.id)?.removedAt).toBeUndefined();

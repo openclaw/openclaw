@@ -35,8 +35,7 @@ extension SettingsProTab {
                         .font(OpenClawType.subheadSemiBold)
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(OpenClawBrand.accent)
+                .openClawProminentButton()
             }
         }
     }

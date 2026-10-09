@@ -2,7 +2,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
-import { icons } from "../../../components/icons.ts";
 import { scrollState } from "../../../components/scroll-state.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
@@ -14,12 +13,12 @@ import {
   generateAttachmentId,
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
-  releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
 import { admitAttachmentFiles, chatAttachmentBatchBytes } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
 import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
-import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
+import { renderAttachmentRemove, renderCompactAttachmentFile } from "./chat-attachment-file.ts";
 import { dataImageClipboardFile } from "./chat-attachment-image.ts";
 import {
   ChatAttachmentReadLifecycle,
@@ -27,7 +26,7 @@ import {
   readChatAttachmentFile,
 } from "./chat-attachment-reads.ts";
 import { encodeTextAsDataUrl } from "./chat-attachment-text.ts";
-import { renderComposerPastedText } from "./chat-composer-pasted-text.ts";
+import { renderComposerPastedText } from "./chat-composer-pasted-text.tsx";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { renderChatSelectionAnnotations } from "./chat-selection-annotations.ts";
 
@@ -64,10 +63,6 @@ function isEditableDropTarget(event: DragEvent): boolean {
     return !editable.disabled && !editable.readOnly;
   }
   return editable instanceof HTMLElement && editable.isContentEditable;
-}
-
-function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {
-  return props.getAttachments?.() ?? props.attachments ?? [];
 }
 
 /** Decoded bytes already committed to the next send: ready attachments plus in-flight reads. */
@@ -289,19 +284,6 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
   };
 }
 
-function removeBrowserAnnotationAttachment(
-  attachment: ChatAttachment,
-  props: ChatAttachmentControlsProps,
-): void {
-  if (props.onRemoveAttachment) {
-    props.onRemoveAttachment(attachment);
-    return;
-  }
-  const next = currentAttachments(props).filter((candidate) => candidate.id !== attachment.id);
-  releaseChatAttachmentPayload(attachment.id);
-  props.onAttachmentsChange?.(next);
-}
-
 function renderAttachmentImage(
   attachment: ChatAttachment,
   alt: string,
@@ -371,17 +353,15 @@ function renderBrowserAnnotationAttachment(
           <span>${regionLabel}</span>
         </span>
       </div>
-      <openclaw-tooltip .content=${removeLabel}>
-        <button
-          class="chat-attachment-remove chat-browser-annotation-card__remove"
-          type="button"
-          aria-label=${removeLabel}
-          ?disabled=${props.disabled}
-          @click=${() => removeBrowserAnnotationAttachment(attachment, props)}
-        >
-          ${icons.x}
-        </button>
-      </openclaw-tooltip>
+      ${renderAttachmentRemove(
+        removeLabel,
+        props.disabled,
+        () =>
+          props.onRemoveAttachment
+            ? props.onRemoveAttachment(attachment)
+            : removeDraftAttachment(attachment, props),
+        "chat-attachment-remove chat-browser-annotation-card__remove",
+      )}
     </div>
   `;
 }
@@ -479,22 +459,10 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                         style=${styleMap({ transform: entry.progress === undefined ? undefined : `scaleX(${entry.progress})` })}
                       ></span
                     ></span>
-                    <openclaw-tooltip .content=${removeLabel}>
-                      <button
-                        class="chat-attachment-remove"
-                        type="button"
-                        aria-label=${removeLabel}
-                        ?disabled=${props.disabled}
-                        @click=${() => {
-                          props.attachmentReads?.remove(entry);
-                          const next = currentAttachments(props).filter((a) => a.id !== att.id);
-                          releaseChatAttachmentPayload(att.id);
-                          props.onAttachmentsChange?.(next);
-                        }}
-                      >
-                        ${icons.x}
-                      </button>
-                    </openclaw-tooltip>
+                    ${renderAttachmentRemove(removeLabel, props.disabled, () => {
+                      props.attachmentReads?.remove(entry);
+                      removeDraftAttachment(att, props);
+                    })}
                   </div>
                 `;
         },

@@ -27,12 +27,11 @@ import {
   supersedeReplyRunByRunId,
   type ReplyOperation,
   waitForReplyOperationOwnerSettlement,
-  waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
-import { getAttachedBackend } from "../../auto-reply/reply/reply-run-registry.state.js";
-import { getRuntimeConfig } from "../../config/io.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  getAttachedBackend,
+  isReplyOperationAbortable,
+} from "../../auto-reply/reply/reply-run-registry.state.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -56,10 +55,19 @@ import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/d
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveSessionAgentId } from "../agent-scope.js";
+import { settlesWithin } from "../../shared/settle-within.js";
 import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
+import {
+  notifyEmbeddedRunEnded,
+  waitForCurrentEmbeddedAgentRunEnd,
+  waitForEmbeddedAgentRunEnd,
+} from "./active-run-projections.js";
+import {
+  persistForceClearedEmbeddedRunTerminalState,
+  tryLoadForceClearSessionSnapshot,
+} from "./force-clear-session-state.js";
 import {
   createEmbeddedMessageInjectionQueue,
   prepareEmbeddedInjectionAuthority,
@@ -84,6 +92,7 @@ import {
   setActiveEmbeddedRunSessionIndexes,
   resolveActiveEmbeddedRunRecoveryBlocker,
   type ActiveEmbeddedRunSnapshot,
+  type AbortAndDrainEmbeddedAgentRunResult,
   type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
   type EmbeddedRunCompletionClaim,
@@ -103,6 +112,7 @@ import {
   clearActiveRunSessionIndex,
   normalizeSessionFileRegistryKey,
 } from "./runs.session-index.js";
+export { isEmbeddedAgentRunActive, waitForEmbeddedAgentRunEnd } from "./active-run-projections.js";
 
 export type {
   EmbeddedAgentQueueHandle,
@@ -179,36 +189,6 @@ function clearEmbeddedRunAbandonment(params: {
   }
 }
 
-function markEmbeddedRunAbandoned(params: {
-  sessionId: string;
-  runId?: string;
-  sessionKey?: string;
-  sessionFile?: string;
-  reason: AbandonedEmbeddedRun["reason"];
-}): void {
-  const sessionId = params.sessionId.trim();
-  if (!sessionId) {
-    return;
-  }
-  clearEmbeddedRunAbandonment({ ...params, sessionId });
-  const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
-  const abandonedRun: AbandonedEmbeddedRun = {
-    sessionId,
-    ...(params.runId?.trim() ? { runId: params.runId.trim() } : {}),
-    abandonedAtMs: Date.now(),
-    reason: params.reason,
-    ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
-    ...(normalizedSessionFile ? { sessionFile: normalizedSessionFile } : {}),
-  };
-  ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.set(sessionId, abandonedRun);
-  if (abandonedRun.sessionKey) {
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(abandonedRun.sessionKey, sessionId);
-  }
-  if (abandonedRun.sessionFile) {
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(abandonedRun.sessionFile, sessionId);
-  }
-}
-
 export function markActiveEmbeddedRunAbandoned(params: {
   sessionId: string;
   handle: EmbeddedAgentQueueHandle;
@@ -220,7 +200,26 @@ export function markActiveEmbeddedRunAbandoned(params: {
   if (!sessionId || ACTIVE_EMBEDDED_RUNS.get(sessionId) !== params.handle) {
     return false;
   }
-  markEmbeddedRunAbandoned({ ...params, runId: params.handle.runId });
+  const abandonedParams = { ...params, runId: params.handle.runId };
+  clearEmbeddedRunAbandonment({ ...abandonedParams, sessionId });
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(abandonedParams.sessionFile);
+  const abandonedRun: AbandonedEmbeddedRun = {
+    sessionId,
+    ...(abandonedParams.runId?.trim() ? { runId: abandonedParams.runId.trim() } : {}),
+    abandonedAtMs: Date.now(),
+    reason: abandonedParams.reason,
+    ...(abandonedParams.sessionKey?.trim()
+      ? { sessionKey: abandonedParams.sessionKey.trim() }
+      : {}),
+    ...(normalizedSessionFile ? { sessionFile: normalizedSessionFile } : {}),
+  };
+  ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.set(sessionId, abandonedRun);
+  if (abandonedRun.sessionKey) {
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(abandonedRun.sessionKey, sessionId);
+  }
+  if (abandonedRun.sessionFile) {
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(abandonedRun.sessionFile, sessionId);
+  }
   return true;
 }
 
@@ -874,11 +873,6 @@ function logActiveRunCheck(sessionId: string, active: boolean, label: string): b
   return active;
 }
 
-export function isEmbeddedAgentRunActive(sessionId: string): boolean {
-  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId);
-  return logActiveRunCheck(sessionId, active, "run active check");
-}
-
 export function prepareEmbeddedAgentRunCompletionClaim(sessionId: string, runId: string) {
   const { promise: registered, resolve: settleRegistration } = createDeferredCore<
     EmbeddedRunCompletionRegistration | undefined
@@ -1028,10 +1022,6 @@ function resolveEmbeddedRunProgressState(
   return replyInProgress ? "queued" : undefined;
 }
 
-export function isEmbeddedAgentRunInProgress(sessionId: string): boolean {
-  return resolveEmbeddedAgentRunProgressState(sessionId) !== undefined;
-}
-
 export type EmbeddedReplyActivity = Pick<ReplyOperation, "phase" | "lastActivityAtMs"> & {
   /** Terminal outcome committed; only delivery/finalization remains. */
   terminalOutcomeCommitted: boolean;
@@ -1094,12 +1084,13 @@ export type ActiveEmbeddedRunOwner = {
   runId: string;
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   startedAtMs?: number;
   abort: () => boolean;
 };
 
 function projectActiveEmbeddedRunOwner(
-  registration: { sessionId: string; sessionKey?: string },
+  registration: { sessionId: string; sessionKey?: string; agentId?: string },
   handle: EmbeddedAgentQueueHandle,
 ): ActiveEmbeddedRunOwner | undefined {
   const runId = handle.runId;
@@ -1110,6 +1101,7 @@ function projectActiveEmbeddedRunOwner(
     runId,
     sessionId: registration.sessionId,
     ...(registration.sessionKey ? { sessionKey: registration.sessionKey } : {}),
+    ...(registration.agentId ? { agentId: registration.agentId } : {}),
     ...(handle.startedAtMs === undefined ? {} : { startedAtMs: handle.startedAtMs }),
     // A recovered run ID is correlation only. Recheck the captured owner before
     // Stop so a stale UI action cannot abort replacement work in the session.
@@ -1144,6 +1136,35 @@ export function resolveActiveEmbeddedRunOwner(
   const registration = handle ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) : undefined;
   return handle && registration ? projectActiveEmbeddedRunOwner(registration, handle) : undefined;
 }
+
+/** Lifecycle drains retain the exact handle, including compaction without a run ID. */
+export function captureEmbeddedRunDrainTarget(sessionId: string, owner: SessionProgressOwner) {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const registration = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+  if (!handle || !registration || !matchesSessionProgressOwner(owner, registration)) {
+    return undefined;
+  }
+  const waiting = new AbortController();
+  const ended = waitForCurrentEmbeddedAgentRunEnd(sessionId, null, handle, waiting.signal);
+  const isActive = () =>
+    !waiting.signal.aborted &&
+    ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle &&
+    ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) === registration;
+  return {
+    sessionId,
+    agentId: registration.agentId,
+    sessionKey: registration.sessionKey,
+    isActive,
+    abort: () => isActive() && abortEmbeddedAgentRun(sessionId),
+    waitForEnd: async (timeoutMs: number | null) =>
+      (timeoutMs === null ||
+        (await settlesWithin(ended, resolveTimerTimeoutMs(timeoutMs, 100, 100)))) &&
+      (await ended),
+    release: () => waiting.abort(),
+  };
+}
+
+export type EmbeddedRunDrainTarget = NonNullable<ReturnType<typeof captureEmbeddedRunDrainTarget>>;
 
 function resolveRegisteredEmbeddedRunByRunId(runId: string) {
   const normalizedRunId = runId.trim();
@@ -1183,78 +1204,6 @@ export function getActiveEmbeddedRunSnapshot(
   return ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(sessionId);
 }
 
-function waitForCurrentEmbeddedAgentRunEnd(
-  sessionId: string,
-  timeoutMs: number | null,
-  handle?: EmbeddedAgentQueueHandle,
-): Promise<boolean> {
-  const isHandleActive = () =>
-    handle ? ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle : ACTIVE_EMBEDDED_RUNS.has(sessionId);
-  if (!isHandleActive()) {
-    return handle ? Promise.resolve(true) : waitForReplyRunEndBySessionId(sessionId, timeoutMs);
-  }
-  const timeoutLabel = timeoutMs === null ? "none" : String(timeoutMs);
-  diag.debug(`waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutLabel}`);
-  return new Promise((resolve) => {
-    const waiters = EMBEDDED_RUN_WAITERS.get(sessionId) ?? new Set();
-    const waiter: EmbeddedRunWaiter = {
-      resolve,
-      handle,
-    };
-    const removeWaiter = () => {
-      waiters.delete(waiter);
-      if (waiters.size === 0) {
-        EMBEDDED_RUN_WAITERS.delete(sessionId);
-      }
-    };
-    if (timeoutMs !== null) {
-      waiter.timer = setTimeout(
-        () => {
-          removeWaiter();
-          diag.warn(`wait timeout: sessionId=${sessionId} timeoutMs=${timeoutMs}`);
-          resolve(false);
-        },
-        resolveTimerTimeoutMs(timeoutMs, 100, 100),
-      );
-    }
-    waiters.add(waiter);
-    EMBEDDED_RUN_WAITERS.set(sessionId, waiters);
-    if (!isHandleActive()) {
-      removeWaiter();
-      if (waiter.timer) {
-        clearTimeout(waiter.timer);
-      }
-      resolve(true);
-    }
-  });
-}
-
-export async function waitForEmbeddedAgentRunEnd(
-  sessionId: string,
-  timeoutMs: number | null = 15_000,
-): Promise<boolean> {
-  if (!sessionId) {
-    return true;
-  }
-  const deadline = timeoutMs === null ? undefined : Date.now() + timeoutMs;
-  while (isEmbeddedAgentRunActive(sessionId)) {
-    const remainingMs = deadline === undefined ? null : deadline - Date.now();
-    if (
-      (remainingMs !== null && remainingMs <= 0) ||
-      !(await waitForCurrentEmbeddedAgentRunEnd(sessionId, remainingMs))
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export type AbortAndDrainEmbeddedAgentRunResult = {
-  aborted: boolean;
-  drained: boolean;
-  forceCleared: boolean;
-};
-
 export async function abortAndDrainEmbeddedAgentRun(params: {
   sessionId: string;
   sessionKey?: string;
@@ -1262,6 +1211,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   forceClear?: boolean;
   reason?: string;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
+  const isStuckRecovery = params.reason === "stuck_recovery";
   const settleMs = params.settleMs ?? 15_000;
   const settleDeadline = Date.now() + settleMs;
   const embeddedRunHandle = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
@@ -1270,12 +1220,17 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(embeddedRunHandle)?.agentId
     : undefined;
   const replyOperation = resolveActiveReplyOperationForSessionId(params.sessionId);
-  if (
-    params.reason === "stuck_recovery" &&
-    replyOperation &&
-    hasCommittedReplyOperationOutcome(replyOperation)
-  ) {
+  if (isStuckRecovery && replyOperation && hasCommittedReplyOperationOutcome(replyOperation)) {
     return { aborted: false, drained: false, forceCleared: false };
+  }
+  if (
+    isStuckRecovery &&
+    embeddedRunHandle &&
+    (!replyOperation || isReplyOperationAbortable(replyOperation)) &&
+    isEmbeddedRunHandleAbortable(params.sessionId, embeddedRunHandle) &&
+    embeddedRunHandle.recoverStalledModelCall?.() === true
+  ) {
+    return { aborted: true, drained: false, forceCleared: false, recoveringModelAttempt: true };
   }
   const persistenceSnapshot =
     params.forceClear === true && params.sessionKey
@@ -1286,37 +1241,19 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
             (replyOperation ? getAttachedBackend(replyOperation)?.runId : undefined),
         )
       : undefined;
-  const staleExpiryBarrier = params.reason === "stuck_recovery" ? createDeferredCore() : undefined;
-  // Recovery is a staleness expiry: stamp run_stalled on the reply operation
-  // BEFORE any handle abort, or the run loop's abort handler re-enters
-  // abortByUser and misattributes the watchdog kill to the user.
+  const staleExpiryBarrier = isStuckRecovery ? createDeferredCore() : undefined;
+  // Terminal recovery stamps expiry before cancellation can re-enter user abort.
   const expiredReplyRun =
-    params.reason === "stuck_recovery" &&
+    isStuckRecovery &&
     expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery", {
       afterClearBarrier: staleExpiryBarrier?.promise,
       followupAdmissionBarrierTimeout: settleMs + 1_000,
     });
   const stampedStaleReplyRun =
-    params.reason === "stuck_recovery" && replyOperation?.staleExpiryReason === "stuck_recovery";
-  const waitForExpiredOwnerSettlement = async () => {
-    if (!stampedStaleReplyRun || !replyOperation) {
-      return true;
-    }
-    const settled = await waitForReplyOperationOwnerSettlement(
-      replyOperation,
-      Math.max(100, settleDeadline - Date.now()),
-    );
-    if (!settled) {
-      diag.warn(
-        `stuck recovery: reply owner settlement timed out sessionId=${params.sessionId} settleMs=${settleMs}`,
-      );
-    }
-    return settled;
-  };
+    isStuckRecovery && replyOperation?.staleExpiryReason === "stuck_recovery";
   try {
     if (expiredReplyRun && !ACTIVE_EMBEDDED_RUNS.has(params.sessionId)) {
-      // Let the command lane observe synchronous reply completion before recovery
-      // decides whether to reset it, but keep all owners on the shared drain path.
+      // Let lane completion run before terminal recovery decides whether to reset.
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -1326,13 +1263,21 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
       aborted || stampedStaleReplyRun
         ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs)
         : false;
-    const ownerSettled = await waitForExpiredOwnerSettlement();
-    const drained = embeddedDrained && ownerSettled;
-    // A retained cancel request can complete asynchronously after expire()
-    // returns. Count that exact owner settlement as the accepted abort.
-    if (!aborted && stampedStaleReplyRun && drained) {
-      aborted = true;
+    const ownerSettled =
+      !stampedStaleReplyRun ||
+      !replyOperation ||
+      (await waitForReplyOperationOwnerSettlement(
+        replyOperation,
+        Math.max(100, settleDeadline - Date.now()),
+      ));
+    if (!ownerSettled) {
+      diag.warn(
+        `stuck recovery: reply owner settlement timed out sessionId=${params.sessionId} settleMs=${settleMs}`,
+      );
     }
+    const drained = embeddedDrained && ownerSettled;
+    // Count the exact settled stale owner as the accepted abort.
+    aborted ||= stampedStaleReplyRun && drained;
     const forceCleared =
       params.forceClear === true &&
       ((!expiredReplyRun && stampedStaleReplyRun && !ownerSettled) || !aborted || !drained)
@@ -1345,136 +1290,24 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
           )
         : false;
     if (forceCleared && params.sessionKey && persistenceSnapshot) {
-      await persistForceClearedEmbeddedRunTerminalState({
-        ...persistenceSnapshot,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-      });
+      await persistForceClearedEmbeddedRunTerminalState(
+        {
+          ...persistenceSnapshot,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+        },
+        (sessionId, sessionKey) =>
+          ACTIVE_EMBEDDED_RUNS.has(sessionId) ||
+          ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.has(sessionKey) ||
+          isReplyRunActiveForSessionId(sessionId) ||
+          resolveActiveReplyRunSessionId(sessionKey) !== undefined,
+      );
     }
     return { aborted, drained, forceCleared };
   } finally {
     // Queue drains registered on the stale owner must not start while its
     // backend can still claim the same session and requeue the adopted turn.
     staleExpiryBarrier?.resolve();
-  }
-}
-
-type ForceClearSessionSnapshot = {
-  agentId: string;
-  lifecycleRunId?: string;
-  startedAt?: number;
-  storePath: string;
-  updatedAt: number;
-};
-
-function tryLoadForceClearSessionSnapshot(
-  sessionKey: string,
-  preparedAgentId?: string,
-  runId?: string,
-): ForceClearSessionSnapshot | undefined {
-  try {
-    const cfg = getRuntimeConfig();
-    const agentId = resolveSessionAgentId({ config: cfg, sessionKey, agentId: preparedAgentId });
-    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-    const entry = loadSessionEntry({ agentId, sessionKey, storePath });
-    if (
-      !entry ||
-      entry.status !== undefined ||
-      (runId !== undefined && entry.lifecycleRunId !== runId)
-    ) {
-      return undefined;
-    }
-    return {
-      agentId,
-      lifecycleRunId: entry.lifecycleRunId,
-      ...(entry.startedAt === undefined ? {} : { startedAt: entry.startedAt }),
-      storePath,
-      updatedAt: entry.updatedAt,
-    };
-  } catch (err) {
-    diag.warn(
-      `load force-clear session snapshot failed: sessionKey=${sessionKey} error=${String(err)}`,
-    );
-    return undefined;
-  }
-}
-
-/** Persists terminal state when a forced registry clear cannot emit normal lifecycle. */
-async function persistForceClearedEmbeddedRunTerminalState(
-  params: ForceClearSessionSnapshot & { sessionId: string; sessionKey: string },
-): Promise<void> {
-  try {
-    await patchSessionEntryCore(
-      {
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
-      (entry) => {
-        // A replacement can reuse the session id; bind this patch to both owners' exact snapshot.
-        if (
-          ACTIVE_EMBEDDED_RUNS.has(params.sessionId) ||
-          ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.has(params.sessionKey) ||
-          isReplyRunActiveForSessionId(params.sessionId) ||
-          resolveActiveReplyRunSessionId(params.sessionKey) !== undefined ||
-          entry.sessionId !== params.sessionId ||
-          entry.status !== undefined ||
-          entry.lifecycleRunId !== params.lifecycleRunId ||
-          entry.updatedAt !== params.updatedAt ||
-          entry.startedAt !== params.startedAt
-        ) {
-          return null;
-        }
-        const endedAt = Date.now();
-        return {
-          status: "killed",
-          abortedLastRun: true,
-          lifecycleRunId: undefined,
-          endedAt,
-          updatedAt: endedAt,
-        };
-      },
-      {
-        skipMaintenance: true,
-        takeCacheOwnership: true,
-        requireWriteSuccess: false,
-      },
-    );
-  } catch (err) {
-    // Registry ownership is already gone; preserve the completed recovery result.
-    diag.warn(
-      `persist force-cleared terminal state failed: sessionKey=${params.sessionKey} error=${String(err)}`,
-    );
-  }
-}
-
-function notifyEmbeddedRunEnded(
-  sessionId: string,
-  endedHandle: EmbeddedAgentQueueHandle,
-  aborted = false,
-) {
-  notifyGatewayWorkMetricsChanged();
-  const waiters = EMBEDDED_RUN_WAITERS.get(sessionId);
-  if (!waiters || waiters.size === 0) {
-    return;
-  }
-  const sessionIdle = !ACTIVE_EMBEDDED_RUNS.has(sessionId);
-  diag.debug(`notifying waiters: sessionId=${sessionId} waiterCount=${waiters.size}`);
-  for (const waiter of waiters) {
-    if (aborted && !waiter.settleOnAbort) {
-      continue;
-    }
-    if (waiter.handle ? waiter.handle !== endedHandle : !sessionIdle) {
-      continue;
-    }
-    waiters.delete(waiter);
-    if (waiter.timer) {
-      clearTimeout(waiter.timer);
-    }
-    waiter.resolve(true);
-  }
-  if (waiters.size === 0) {
-    EMBEDDED_RUN_WAITERS.delete(sessionId);
   }
 }
 

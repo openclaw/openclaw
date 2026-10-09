@@ -69,13 +69,10 @@ fn linux_global_shortcuts_supported(
 pub fn global_shortcuts_supported() -> bool {
     #[cfg(target_os = "linux")]
     {
-        let session_type = std::env::var("XDG_SESSION_TYPE").ok();
-        let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
-        let display = std::env::var("DISPLAY").ok();
         linux_global_shortcuts_supported(
-            session_type.as_deref(),
-            wayland_display.as_deref(),
-            display.as_deref(),
+            std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+            std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+            std::env::var("DISPLAY").ok().as_deref(),
         )
     }
     #[cfg(not(target_os = "linux"))]
@@ -594,15 +591,14 @@ fn toggle_autostart(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {
     } else {
         manager.disable()
     };
-    match result {
-        Ok(()) => {
-            let _ = item.set_checked(next);
-        }
+    let checked = match result {
+        Ok(()) => next,
         Err(error) => {
             eprintln!("Could not update autostart state: {error}");
-            let _ = item.set_checked(enabled);
+            enabled
         }
-    }
+    };
+    let _ = item.set_checked(checked);
 }
 
 #[cfg(test)]

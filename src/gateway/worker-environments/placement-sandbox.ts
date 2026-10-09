@@ -8,6 +8,7 @@ import type { SandboxConfig, SandboxContext } from "../../agents/sandbox/types.j
 import { resolveSessionSkillResourceMounts } from "../../agents/session-placement-skill-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { resolveWorkerSshSandboxSettings } from "./ssh.js";
 
@@ -66,12 +67,8 @@ export async function createRemoteExecPlacementSandbox(params: {
   }
   const environment = params.environments.get(placement.environmentId);
   if (
-    !environment ||
-    environment.state !== "attached" ||
+    !isWorkerEnvironmentAttachedTo(environment, placement) ||
     environment.environmentId !== placement.environmentId ||
-    environment.ownerEpoch !== placement.activeOwnerEpoch ||
-    environment.attachedSessionIds.length !== 1 ||
-    environment.attachedSessionIds[0] !== placement.sessionId ||
     !environment.leaseId ||
     Boolean(environment.nodeDeviceId) === Boolean(environment.sshEndpoint)
   ) {
@@ -83,14 +80,14 @@ export async function createRemoteExecPlacementSandbox(params: {
   const assertCurrentEnvironment = () => {
     const current = params.environments.get(environment.environmentId);
     if (
-      current?.state !== "attached" ||
+      !isWorkerEnvironmentAttachedTo(current, {
+        sessionId: placement.sessionId,
+        activeOwnerEpoch: environment.ownerEpoch,
+      }) ||
       current.environmentId !== environment.environmentId ||
-      current.ownerEpoch !== environment.ownerEpoch ||
       current.leaseId !== environment.leaseId ||
       current.nodeDeviceId !== environment.nodeDeviceId ||
-      !isDeepStrictEqual(current.sshEndpoint, environment.sshEndpoint) ||
-      current.attachedSessionIds.length !== 1 ||
-      current.attachedSessionIds[0] !== placement.sessionId
+      !isDeepStrictEqual(current.sshEndpoint, environment.sshEndpoint)
     ) {
       throw new Error(`Remote-exec placement ${placement.sessionId} lost its exact environment`);
     }

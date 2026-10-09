@@ -33,6 +33,7 @@ import {
 } from "./config-cli-path.js";
 import type { ConfigSetDryRunInputMode } from "./config-set-dryrun.js";
 import {
+  decodeConfigMutationInput,
   parseBatchSource,
   parseConfigMutationJson5,
   readConfigMutationFileSync,
@@ -434,7 +435,6 @@ async function readStdinText(): Promise<string> {
       "--stdin refuses to read from an interactive terminal; pipe input or use --file <path>.",
     );
   }
-  process.stdin.setEncoding("utf8");
   const bytes = await readByteStreamWithLimit(process.stdin, {
     maxBytes: CONFIG_PATCH_STDIN_MAX_BYTES,
     onOverflow: ({ maxBytes }) =>
@@ -442,7 +442,7 @@ async function readStdinText(): Promise<string> {
         `--stdin input exceeds ${maxBytes} bytes; use --file <path> for larger patches.`,
       ),
   });
-  return bytes.toString("utf8");
+  return decodeConfigMutationInput(bytes, "--stdin");
 }
 
 export function buildUnsetOperation(

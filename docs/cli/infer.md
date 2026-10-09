@@ -6,7 +6,7 @@ read_when:
 title: "Inference CLI"
 ---
 
-`openclaw infer` is the canonical headless surface for provider-backed inference. It exposes capability families (`model`, `image`, `audio`, `tts`, `video`, `web`, `embedding`), not raw gateway RPC names or agent tool ids. `openclaw capability ...` is an alias for the same command tree.
+`openclaw infer` is the main headless command for provider-backed inference. It exposes capability families (`model`, `image`, `audio`, `tts`, `video`, `web`, `embedding`), not raw gateway RPC names or agent tool ids. `openclaw capability ...` is an alias for the same command tree.
 
 Reasons to prefer it over a one-off provider wrapper:
 
@@ -112,6 +112,7 @@ shell-completion metadata.
   an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
 - Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
+- Model runs load the catalog for case correction only when an explicit model override contains uppercase characters. Runs using the configured default or a lowercase model ref skip that catalog lookup.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
 - `model run --gateway` exercises Gateway routing, saved auth, provider selection, and the embedded runtime, but stays a raw model check: no prior session transcript, bootstrap/AGENTS context, tools, or bundled MCP servers.
 - `model run --gateway --model <provider/model>` requires a trusted-operator gateway credential, because it asks the Gateway to run a one-off provider/model override.
@@ -155,7 +156,8 @@ Notes:
 - `model run --file` attaches image content directly to the single user message. Common formats (PNG, JPEG, WebP) work when MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called. Use `infer image describe` instead when you want OpenClaw's image-model routing and fallbacks rather than a direct multimodal-model check.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
 - `model run --prompt` must contain non-whitespace text; empty prompts are rejected before any provider or Gateway call.
-- Local `model run` exits non-zero when the provider returns no text output, so unreachable providers and empty completions do not look like successful checks.
+- Local `model run` exits non-zero for empty output or a failed/aborted response, even when partial text was received. These runs do not emit a successful JSON envelope.
+- `model run --gateway` also exits non-zero when the Gateway reports a failed, timed-out, or cancelled run, preserving its error detail instead of wrapping the reply in a successful JSON envelope.
 - When a completed response contains only reasoning and no final text, local `model run` reports that it returned reasoning but no text output, and notes when it stopped at the output token limit. Failed or aborted responses keep the generic no-text error with any provider error detail. Reasoning content is not printed as the answer.
 - Use `model run --gateway` to test Gateway routing or agent-runtime setup while keeping the model input raw. Use [`openclaw agent`](/cli/agent) or a chat surface for full agent context, tools, memory, and session transcript.
 - `--thinking adaptive` maps to the completion-runtime level `medium`; `--thinking max` maps to `max` for OpenAI models that support the native max effort, otherwise `xhigh`.
@@ -349,7 +351,7 @@ Read https://docs.openclaw.ai/cli/infer, then create a skill that routes my comm
 Focus on model runs, image generation, video generation, audio transcription, TTS, web search, and embeddings.
 ```
 
-A good infer-based skill maps common user intents to the right subcommand, includes a few canonical examples per workflow, prefers `openclaw infer ...` over lower-level alternatives, and does not re-document the entire infer surface in the skill body.
+A good infer-based skill maps common user intents to the right subcommand, includes a few standard examples per workflow, prefers `openclaw infer ...` over lower-level alternatives, and does not re-document the entire infer surface in the skill body.
 
 ## Related
 

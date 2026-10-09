@@ -39,13 +39,13 @@ export type MemoryIndexTaskResult =
 
 const retrieval = new WorkerTaskPool<MemorySearchWorkerInput, MemorySearchWorkerOutput>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),
-  maxWorkers: 1,
+  workerClass: "reader",
   sharedCompute: true,
 });
 // Background chunk preparation must not occupy the foreground retrieval worker.
 const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.index),
-  maxWorkers: 1,
+  workerClass: "compute",
   sharedCompute: true,
   maxPendingBytes: MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES,
 });
@@ -109,7 +109,6 @@ export async function runMemoryOriginRead<Kind extends MemoryOriginReadInput["ki
       "origin-rows": "origin rows",
       "session-tombstones": "tombstone rows",
       "origin-exists": "origin existence",
-      "origin-index-keys": "indexed origin keys",
     }[request.kind],
   );
 }
@@ -122,6 +121,34 @@ export async function prewarmMemorySearchWorker(): Promise<void> {
 export async function runMemoryIndexState(target: MemoryReadTarget, signal?: AbortSignal) {
   const result = await runRetrieval({ ...target, kind: "index-state" }, { signal }, "index state");
   return result.state;
+}
+
+export async function runMemoryDatabaseFacts(databasePath: string, agentId: string) {
+  const result = await runRetrieval(
+    { databasePath, agentId, kind: "index-facts" },
+    {},
+    "index facts",
+  );
+  return result.facts;
+}
+
+export async function runMemoryVectorLoad(
+  target: { agentId?: string; path?: string } | undefined,
+  extensionPath?: string,
+) {
+  if (!target?.agentId || !target.path) {
+    throw new Error("Memory vector inspection requires its captured database target");
+  }
+  const result = await runRetrieval(
+    { agentId: target.agentId, databasePath: target.path, kind: "vector-load", extensionPath },
+    {},
+    "vector capability",
+  );
+  const loaded = result.result;
+  if (!loaded.ok || !loaded.extensionPath) {
+    throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+  }
+  return { extensionPath: loaded.extensionPath, retiredLegacy: false };
 }
 
 export async function runMemoryRecallMetadata(
@@ -192,12 +219,7 @@ export async function runMemoryKeywordSearch(
     { ...target, kind: "keyword", query, includeIndexState },
     {
       signal,
-      inputBytes:
-        2 *
-        (query.body.query.length +
-          (query.body.rankingQuery?.length ?? 0) +
-          query.path.query.length +
-          (query.path.exactPathQuery?.length ?? 0)),
+      inputBytes: 2 * (query.body.query.length + query.path.query.length),
     },
     "keyword",
   );
@@ -212,7 +234,9 @@ export async function runMemoryVectorFallback(
     { ...target, kind: "vector", query },
     {
       signal,
-      inputBytes: query.queryVec.length * 8,
+      inputBytes:
+        query.queryVec.length * 8 +
+        (query.candidateIds?.reduce((bytes, id) => bytes + id.length * 2, 0) ?? 0),
     },
     "vector",
   );

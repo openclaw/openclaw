@@ -1,11 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import {
   buildAcpDatabaseSessionKey,
   getAcpSessionKysely,
-  selectAcpSessionRowForStoreEntry,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
 import type { AcpSessionRow } from "./session-meta-read.types.js";
@@ -48,6 +48,7 @@ export function applyAcpSessionMutation(
   const initialKey = buildAcpDatabaseSessionKey(input.storageSessionKey, input.agentId);
   const finalKey = buildAcpDatabaseSessionKey(input.sessionKey, input.agentId);
   const keys = new Set<string>();
+  let written: AcpSessionRow | undefined;
   if (input.decision.kind === "clear") {
     keys.add(initialKey);
     keys.add(finalKey);
@@ -55,15 +56,18 @@ export function applyAcpSessionMutation(
     if (!input.entry) {
       throw new Error("ACP metadata publication lost its canonical entry");
     }
-    upsertAcpSessionMetaRow(
-      db,
-      bindAcpSessionMeta({
-        sessionKey: finalKey,
-        sessionId: input.entry.sessionId,
-        lifecycleRevision: input.entry.lifecycleRevision,
-        meta: input.decision.meta,
-        updatedAt: input.entry.updatedAt,
-      }),
+    written = expectDefined(
+      upsertAcpSessionMetaRow(
+        db,
+        bindAcpSessionMeta({
+          sessionKey: finalKey,
+          sessionId: input.entry.sessionId,
+          lifecycleRevision: input.entry.lifecycleRevision,
+          meta: input.decision.meta,
+          updatedAt: input.entry.updatedAt,
+        }),
+      ),
+      "committed ACP metadata",
     );
     if (initialKey !== finalKey) {
       keys.add(initialKey);
@@ -81,12 +85,11 @@ export function applyAcpSessionMutation(
       getAcpSessionKysely(db).deleteFrom("acp_sessions").where("session_key", "=", key),
     );
   }
-  const row = selectAcpSessionRowForStoreEntry(db, input.sessionKey, input.agentId, input.entry);
   return {
     kind: "acp",
     sessionId: input.entry?.sessionId,
     lifecycleRevision: input.entry?.lifecycleRevision ?? null,
     sessionStartedAt: input.entry?.sessionStartedAt,
-    acp: row ? rowToAcpSessionMeta(row) : null,
+    acp: written ? rowToAcpSessionMeta(written) : null,
   };
 }

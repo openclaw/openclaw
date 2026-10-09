@@ -409,6 +409,11 @@ struct NavigationState {
 }
 
 impl NavigationState {
+    #[cfg(target_os = "linux")]
+    fn remote_presentation_is_current(&self) -> bool {
+        self.remote_dashboard && self.remote_presentation_generation == Some(self.watch_generation)
+    }
+
     fn remote_page_is_current(&self, generation: u64) -> bool {
         self.remote_dashboard
             && self.watch_generation == generation
@@ -522,12 +527,9 @@ impl NavigationState {
             return false;
         }
         let mut current_base = current_url.clone();
-        let mut local_base = local_url.clone();
         current_base.set_query(None);
         current_base.set_fragment(None);
-        local_base.set_query(None);
-        local_base.set_fragment(None);
-        current_base == local_base
+        current_base == *local_url
             && current_url
                 .query_pairs()
                 .find(|(key, _)| key == "mode")
@@ -575,11 +577,7 @@ impl NavigationState {
             // A failed replacement is not health evidence for the committed page.
             // Once publication changes its generation, the old handle cannot mask errors.
             #[cfg(target_os = "linux")]
-            if self.remote_dashboard
-                && self
-                    .remote_presentation_generation
-                    .is_some_and(|generation| generation == self.watch_generation)
-            {
+            if self.remote_presentation_is_current() {
                 return false;
             }
         }
@@ -817,7 +815,7 @@ impl DesktopState {
         let cli = match cli {
             Ok(cli) => cli,
             Err(CliError::Missing) => {
-                return self.show_missing_cli(app, explicit_local, None);
+                return self.show_cli_recovery(app, CliError::Missing, explicit_local, None);
             }
             Err(error) => return Err(error.to_string()),
         };
@@ -1369,11 +1367,8 @@ impl DesktopState {
         } else {
             #[cfg(target_os = "linux")]
             let remote_url = navigation
-                .remote_presentation_generation
-                .filter(|generation| {
-                    navigation.remote_dashboard && *generation == navigation.watch_generation
-                })
-                .map(|_| {
+                .remote_presentation_is_current()
+                .then(|| {
                     main_window(app)?.url().map_err(|_| {
                         "Could not retain the current dashboard. Try again.".to_string()
                     })
@@ -1436,29 +1431,21 @@ impl DesktopState {
             SettingsReturnTarget::SavedGateway => {
                 gateway_windows::restore_selected_main(app)?;
             }
-            SettingsReturnTarget::Local(url) => {
+            SettingsReturnTarget::Local(url) | SettingsReturnTarget::Remote(url) => {
+                if matches!(previous.target, SettingsReturnTarget::Remote(_)) {
+                    #[cfg(target_os = "linux")]
+                    if !navigation.remote_presentation_is_current() {
+                        return Err(
+                            "The previous dashboard is unavailable. Retry or edit the connection."
+                                .to_string(),
+                        );
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    return Err("The previous dashboard is unavailable.".to_string());
+                }
                 main_window(app)?
                     .navigate(url)
                     .map_err(|_| "Could not return to the dashboard. Try again.".to_string())?;
-            }
-            #[cfg(target_os = "linux")]
-            SettingsReturnTarget::Remote(url) => {
-                navigation
-                    .remote_presentation_generation
-                    .filter(|generation| {
-                        navigation.remote_dashboard && *generation == navigation.watch_generation
-                    })
-                    .ok_or_else(|| {
-                        "The previous dashboard is unavailable. Retry or edit the connection."
-                            .to_string()
-                    })?;
-                main_window(app)?
-                    .navigate(url)
-                    .map_err(|_| "Could not return to the dashboard. Try again.".to_string())?;
-            }
-            #[cfg(not(target_os = "linux"))]
-            SettingsReturnTarget::Remote(_) => {
-                return Err("The previous dashboard is unavailable.".to_string());
             }
         }
         let monitor = navigation.finish_settings_return();
@@ -1732,12 +1719,9 @@ impl DesktopState {
 
     pub(crate) fn main_window_has_local_url(&self, url: &Url) -> bool {
         let mut current_url = url.clone();
-        let mut local_url = self.inner.local_url.clone();
         current_url.set_query(None);
         current_url.set_fragment(None);
-        local_url.set_query(None);
-        local_url.set_fragment(None);
-        current_url == local_url
+        current_url == self.inner.local_url
     }
 
     pub(crate) fn main_window_has_connection_settings_url(&self, url: &Url) -> bool {
@@ -1758,33 +1742,28 @@ impl DesktopState {
         url
     }
 
-    fn show_missing_cli(
+    fn show_cli_recovery(
         &self,
         app: &AppHandle,
+        error: CliError,
         force: bool,
         expected_generation: Option<u64>,
     ) -> Result<GatewaySnapshot, String> {
-        let snapshot = GatewaySnapshot::missing_cli();
-        let navigation = self.show_local(app, "missingCli", force, expected_generation);
-        if !local_recovery_owns_gateway(&navigation) {
-            return Ok(snapshot);
-        }
-        app.state::<gateway_ws::GatewayClient>()
-            .clear_configuration(app);
-        self.update_tray(&snapshot);
-        navigation.map(|_| snapshot)
-    }
-
-    fn show_cli_recovery_error(&self, app: &AppHandle, generation: u64, error: CliError) {
         let mut snapshot = GatewaySnapshot::missing_cli();
-        snapshot.status = "CLI unavailable".to_string();
-        snapshot.detail = Some(error.to_string());
-        let navigation = self.show_local(app, "error", false, Some(generation));
+        let mode = if matches!(error, CliError::Missing) {
+            "missingCli"
+        } else {
+            snapshot.status = "CLI unavailable".to_string();
+            snapshot.detail = Some(error.to_string());
+            "error"
+        };
+        let navigation = self.show_local(app, mode, force, expected_generation);
         if local_recovery_owns_gateway(&navigation) {
             app.state::<gateway_ws::GatewayClient>()
                 .clear_configuration(app);
             self.update_tray(&snapshot);
         }
+        navigation.map(|_| snapshot)
     }
 
     fn poll_pending_approvals(&self, app: &AppHandle, cli: &OpenClawCli, generation: u64) {
@@ -2046,11 +2025,8 @@ impl DesktopState {
                         match state.resolve_cli() {
                             Ok(discovered) => cli = discovered,
                             Err(error) => {
-                                if matches!(error, CliError::Missing) {
-                                    let _ = state.show_missing_cli(&app, false, Some(generation));
-                                } else {
-                                    state.show_cli_recovery_error(&app, generation, error);
-                                }
+                                let _ =
+                                    state.show_cli_recovery(&app, error, false, Some(generation));
                                 return;
                             }
                         }

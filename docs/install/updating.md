@@ -135,6 +135,10 @@ the handoff, the candidate retains exact file and parent-directory identities;
 later replacement still stops the update. Lease read failures report their
 underlying cause instead of a parent-binding mismatch.
 
+Post-install Doctor also accepts older updaters, including `2026.8.2`, that do not
+provide an update run ID. Its commands retain invocation-specific custody without
+requiring an environment-variable workaround.
+
 Managed-service inspection is best effort. If the service manager is unavailable,
 including Linux hosts without systemd, the update continues and records a warning.
 It leaves unverified service definitions unchanged and skips their automatic
@@ -219,7 +223,8 @@ using the same installation owner, then retry the Control UI update.
 After package replacement, compatibility config reads from older updaters run
 in a fresh process using the updated package and its dependencies. This also
 applies to updates driven by 2026.9.4. If an optional read fails, the updater
-prints `candidate-config-read-failed` and leaves the service definition unchanged.
+prints `candidate-config-read-failed` with the reader's error or exit reason and
+leaves the service definition unchanged. The reader's stderr is not echoed.
 Reads follow the restored package after a rollback. Inspect the reported problem
 with the updated CLI after the update.
 Node and Bun readers run only one child per read. An attempted nested reader
@@ -282,8 +287,16 @@ selection described above apply only when the updater driving the update
 contains this fix. Installing a newer candidate cannot change that first hop.
 
 Pending package-publication recovery in either the CLI or selected service
-installation blocks writable preparation. Follow the package recovery command
-reported by the update before retrying; Doctor does not clear those artifacts.
+installation is checked before writable preparation. The updater settles eligible
+lost-lease recovery automatically; other unfinished operations still require the
+reported recovery command. Doctor does not clear those artifacts.
+
+During an uninterrupted package update, the freshly installed private candidate
+is checked by directory identity, package version, and launchers instead of
+repeated full-tree scans. Content changes inside that private candidate during
+publication are not detected. Its full fingerprint is retained for recovery;
+resumed publication and repair still verify package contents. This optimization
+applies when the installed updater contains it; older updaters keep their checks.
 
 If a pnpm-owned install fails with `IO error: not a terminal`, the installed
 updater may be triggering an interactive pnpm build-approval prompt while
@@ -451,6 +464,12 @@ verification run only after all file copies succeed. Canonical state and recover
 retain their existing durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
+Runtime retention looks for hoisted dependencies within the package manager's
+owning installation. Missing optional peers do not cause it to copy unrelated
+ancestor installations. Explicitly linked dependencies retain their own resolution.
+This improvement applies after the newer updater is installed; it cannot shorten
+the retention phase already running in an older updater.
+
 Database rehearsal also avoids a second full backup of each private snapshot.
 Update schema inspection and rehearsal use SQLite online backup with a pinned
 read transaction, so a busy Gateway can keep writing while the copy includes
@@ -505,6 +524,13 @@ package publication, and `retire` removes only its recorded obsolete objects.
 These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
 
+On FreeBSD, `repair` and `retire` read process identity through the recorded
+installation's own `@openclaw/proc-safe` dependency and its FreeBSD platform
+addon: the live package, or the copy the operation retains beside it during
+publication. Helpers written by older
+updaters cannot repair or retire on FreeBSD; `status` still reports the
+operation.
+
 Bun recovery requires a supported Bun runtime with WAL-reset-safe SQLite and can
 run without Node installed. The installed updater controls the first upgrade:
 older releases may omit the recovery command on Bun or refuse a Bun recovery
@@ -515,22 +541,134 @@ Retirement records removal of the disposable directory before recording the
 helper's final unlink intent. The helper is then removed. The bounded last
 receipt remains in the control directory and is readable through
 `openclaw update status --json` as `packageActivation`, even after helper removal.
-A completed receipt is replaced only when the next update is admitted through
-the same original executor store; it is not authority to mutate an installation.
+A completed receipt is replaced only by a newly admitted update under current
+ownership; it is not authority to mutate an installation. Historical filesystem
+or executor-store identities do not have to match today's identities. Reboots,
+remounts, or removal of already-retained evidence do not reopen a closed operation.
+Reading a completed receipt does not rewrite it.
+A new update archives the completed receipt before preparing its own operation,
+preserving the journal and any leftover helpers or recovery directories as evidence.
 
-On Linux, a filesystem remount can change device numbers without moving files.
-Update admission reconciles this change for completed receipts when the recorded
-inodes, installation path, and ownership still match. It refreshes verified
-identities while preserving the original journal format and completion intent,
-so older CLI versions can still read the completed receipt. The warning
-`filesystem device id changed; receipt identities refreshed` reports the repair
-without adding a new persisted intent. Active recovery operations and replaced
-files retain their existing identity checks.
+Explicit repair preserves settled evidence, including the entire control journal,
+inside the operation's retained recovery directory. The completed journal leaves
+the active admission path, so an older updater does not need to understand a newer
+settlement reason. Ordinary successful retirement retains the last receipt until the next update
+archives it.
+Explicit repair verifies an installed candidate under current executor ownership,
+even when the old lease store disappeared or was replaced. It does not execute
+the old helper, so a changed or missing helper and changed retained directories
+are preserved as evidence rather than required as proof of the live package.
+An unfinished rollback cannot be settled merely because its lease or installation
+was replaced.
 
-Missing, legacy or identity-mismatched recovery artifacts block the next mutable
-update. They are not silently migrated or deleted. Preserve them and use their
-original recovery owner; do not recreate the journal or remove them to bypass
-the refusal.
+`openclaw update` uses the same settlement before admission
+when the recorded lease database is missing or its identity has changed and the
+live installation is still the recorded previous or candidate package. Candidate
+content and launchers must pass verification. Settlement preserves recovery
+evidence, reports a warning, and does not restart the Gateway or install a package.
+`--dry-run` verifies and reports the planned settlement without changing the
+journal, lease database, or recovery evidence. Other pending operations still
+require `openclaw update repair` or the recorded package recovery command. The lease database stays at its existing location.
+
+After the transaction verifies its selected installation, cleanup failures are
+warnings. Changed old package trees, old helpers, and unexpected backup contents
+are preserved, not restored or deleted. The updater durably closes their recovery
+operation and attempts to archive the evidence. If completed evidence cannot be
+archived, a later update retains it and uses the ordinary package-swap path without
+standalone publication recovery. Its warning names that limitation.
+
+These rules do not mark an unverified publication as a successful update. Missing,
+legacy, corrupt, or identity-mismatched **unfinished** recovery artifacts still
+require their recovery owner. Live ownership conflicts, changed selected packages
+or launchers, and pending restoration remain refusals. Preserve those artifacts;
+do not recreate the journal or remove them to bypass recovery.
+
+These admission and cleanup fixes must be present in the updater executing them.
+A newer candidate cannot run before an already-blocked older updater downloads it.
+The candidate's dependency inventory can, however, avoid modifying old recovery
+artifacts during an update that has already passed admission.
+
+### Recover an unfinished publication after a remount
+
+An older updater can reject an unfinished journal before downloading a fix when
+filesystem device numbers change after a reboot or remount. A separately installed
+OpenClaw version containing this fix provides a settlement-only `repair` path:
+
+```bash
+node /path/to/recovery-openclaw/dist/package-update-activation-recovery.mjs \
+  --anchor '/absolute/path/to/.openclaw.package-activation-<key>' \
+  --operation '<recorded-operation-id>' repair
+```
+
+Use the original anchor and operation ID with a supported external Node or Bun
+runtime. Keep other updaters and package managers stopped. Ordinary `status` and
+update admission remain strict for unfinished identity-mismatched journals.
+
+This path accepts only a pending publish acknowledgement with no recorded launcher
+publications, where the candidate is already installed and its staging path is
+absent. It requires consistent device-number changes with matching object inodes,
+the original intact helper and retained previous generation, a matching full
+candidate-tree fingerprint, valid package inventories and manifest, and unchanged
+launchers. Device projection applies only to digest verification: historical
+identities in the journal are not rewritten. Version or inode matches alone do
+not qualify; changed content, unsafe journal permissions or links, active update
+ownership, and unfinished rollback remain refusals.
+
+Under fresh executor ownership, repair records
+`publication-settled-external-change` and preserves the entire journal and recovery
+evidence in the reported archive. Removing that closed receipt from the active
+admission path lets the older updater continue without interpreting a new receipt
+kind. If archival fails while the active receipt remains, resolve the reported
+error and rerun the same command. If the helper reports an unconfirmed archive
+after moving the control directory, preserve and inspect the reported archive;
+the original command no longer has an active journal to reopen. The helper does
+not republish or roll back a package, delete retained generations, or restart or
+verify the Gateway. It does not execute the original helper. Other unfinished
+layouts still require their original recovery owner.
+
+### Recover a completed receipt with an older updater
+
+An installed 2026.9.8 or 2026.9.9 updater can reject a completed `anchor-retired`
+receipt before downloading a fix when saved filesystem device numbers change.
+Use a separately installed OpenClaw version containing the completed-receipt
+recovery fix. Its standalone helper can archive completed history for the original
+installation while that installation's Gateway keeps running:
+
+```bash
+node /path/to/recovery-openclaw/dist/package-update-activation-recovery.mjs \
+  --anchor '/absolute/path/to/.openclaw.package-activation-<key>' \
+  --operation '<recorded-operation-id>' status
+node /path/to/recovery-openclaw/dist/package-update-activation-recovery.mjs \
+  --anchor '/absolute/path/to/.openclaw.package-activation-<key>' \
+  --operation '<recorded-operation-id>' retire
+```
+
+Use the anchor and operation ID from the original journal, with a supported
+external Node or Bun runtime. Keep other updaters and package managers stopped.
+`status` must report `complete`; it does not modify the receipt. `retire` acquires
+fresh update ownership, verifies that the inspected completed receipt is still
+current, and moves its control directory into the printed `.superseded-<id>`
+archive. It preserves the journal bytes and saved identities, installed package,
+launchers, and application state. It does not run Doctor or plugin migrations.
+After successful archival, retry `openclaw update` using the original installation.
+
+If archival fails and the active receipt remains, the command exits unsuccessfully
+and names the next step. Preserve both the receipt and any existing archive while
+resolving that error. An unfinished, foreign, or invalid operation still requires
+its original recovery owner; the independent helper cannot authorize publication
+or rollback for it. Do not rewrite identities or delete recovery artifacts.
+
+### Unfinished publication and rollback
+
+For an external-helper operation stuck at `prepared`, `publishing`, or
+`publication-complete` whose live package already serves the candidate, run
+`openclaw update repair` from an independent terminal. Repair verifies the
+installed candidate's dist content inventory, manifest, launchers,
+and current update ownership before settling the operation. It archives the
+remaining helper and retained package evidence, including a changed previous
+tree, without restoring or deleting that tree. Failed verification leaves
+recovery armed and blocks the next update. Older updater versions without this
+settlement path still require their original recovery owner.
 
 SQLite recovery and rollback custody verify file identity, size, and content.
 Timestamp-only changes are accepted after verifying identical bytes; replaced
@@ -597,6 +735,13 @@ their existing behavior.
 Version-bound runtime plugins converge to the base release cohort when the
 core is a correction release (for example, `YYYY.M.P-2` uses plugin
 `YYYY.M.P`).
+`openclaw plugins update` uses the same host-matching targets. Known-incompatible
+official runtime versions, such as Codex releases before 2026.9.7, are reported
+as unavailable before they can register or serve turns. Compatible versions
+remain loadable even when they are older than the host. Run
+`openclaw update repair`, or `openclaw plugins update codex`, then restart the
+Gateway. Newer explicit pins and independently versioned plugins retain their
+existing compatibility behavior.
 Catalog installs created by current OpenClaw versions retain that default
 intent. Verified OpenClaw-owned packages recorded at an exact OpenClaw release
 no newer than core resume their catalog's default selector after a successful

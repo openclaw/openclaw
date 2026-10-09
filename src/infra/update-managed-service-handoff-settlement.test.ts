@@ -33,9 +33,9 @@ afterEach(() => {
   vi.resetModules();
 });
 
-// A real helper can exit 143 while its detached updater remains alive. Keep an
-// independent fixture socket open so helper exit cannot masquerade as updater
-// cleanup. No operator service or installation is used.
+// Keep an independent fixture socket open so helper exit cannot masquerade as
+// updater cleanup, including when termination arrives during a pending write.
+// No operator service or installation is used.
 it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as const)(
   "requires physical helper settlement at the public replacement join (%s)",
   async (outcome) => {
@@ -52,6 +52,7 @@ it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as 
         'if (process.argv[2] !== "update") process.exit(0);',
         'const socket = require("node:net").connect(' + JSON.stringify(socketPath) + ");",
         'socket.once("connect", () => socket.write(String(process.pid)));',
+        'process.on("SIGTERM", () => socket.write("interrupted"));',
         'socket.once("data", () => {',
         "process.stdout.write(JSON.stringify(" +
           JSON.stringify({
@@ -129,24 +130,23 @@ it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as 
       });
       expect(settled).toBe(false);
       if (outcome === "SIGTERM") {
+        const interrupted = once(updater, "data");
         process.kill(started.pid, "SIGTERM");
-        const observed = await result;
+        const observed = await Promise.race([interrupted, result]);
+        expect(observed).toEqual([Buffer.from("interrupted")]);
+        expect(settled).toBe(false);
+        expect(isPidAlive(started.pid)).toBe(true);
         expect(isPidAlive(updaterPid)).toBe(true);
         expect(getFileLockProcessStartTime(updaterPid)).toBe(updaterStart);
-        expect(observed).toBeInstanceOf(Error);
-        expect(String(observed)).toContain("settlement could not be confirmed");
-        await expect(waitForSystemServiceUpdateHandoffs()).rejects.toThrow(
-          "settlement could not be confirmed",
-        );
-      } else {
-        updater.write("finish");
-        expect(await result).toBe("settled");
-        expect(isPidAlive(updaterPid)).toBe(false);
-        expect(waitForSystemServiceUpdateHandoffs()).toBeUndefined();
-        expect(await fs.readFile(started.logPath, "utf8")).toContain(
-          "managed update helper completed code=" + (outcome === "failed" ? 7 : 0),
-        );
       }
+      updater.write("finish");
+      expect(await result).toBe("settled");
+      expect(isPidAlive(updaterPid)).toBe(false);
+      expect(waitForSystemServiceUpdateHandoffs()).toBeUndefined();
+      expect(await fs.readFile(started.logPath, "utf8")).toContain(
+        "managed update helper completed code=" +
+          (outcome === "SIGTERM" ? 143 : outcome === "failed" ? 7 : 0),
+      );
     } finally {
       // Captured start identities prevent test cleanup from signalling reused PIDs.
       if (

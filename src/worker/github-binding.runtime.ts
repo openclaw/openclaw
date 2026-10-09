@@ -1,9 +1,13 @@
+import os from "node:os";
 import path from "node:path";
 import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 import type { WorkerHeartbeatResult } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { CLEARED_GITHUB_CREDENTIALS } from "../agents/github-host.js";
 import {
+  AGENT_GIT_CONFIG_PARAMETERS,
   managedGitHubIdentityEnvironment,
+} from "../agents/github-tool-identity-env.js";
+import {
   removeManagedGitHubProfile,
   writeManagedGitHubProfileFiles,
 } from "../agents/github-tool-identity.js";
@@ -150,7 +154,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
     ],
   });
   const hostIdentityEnv = { ...localIdentityEnv, GH_HOST: githubHost };
-  if (process.platform === "win32") {
+  if (os.platform() === "win32") {
     const permissions = await inspectPathPermissions(profileDir);
     if (
       !permissions.ok ||
@@ -205,5 +209,6 @@ export async function prepareWorkerGitHubEnvironment(params: {
     excludedStoreNames: [],
     credentialScrubEnv: { ...CLEARED_GITHUB_CREDENTIALS },
     localIdentityEnv: hostIdentityEnv,
+    localGitConfigParameters: AGENT_GIT_CONFIG_PARAMETERS,
   };
 }

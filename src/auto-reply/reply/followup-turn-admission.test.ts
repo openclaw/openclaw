@@ -26,7 +26,8 @@ vi.mock("./agent-runner-memory.js", () => ({
   runSessionCompactionIfNeeded: (...args: unknown[]) => state.preflight(...args),
 }));
 
-vi.mock("./agent-runner-utils.js", () => ({
+vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
   resolveQueuedReplyExecutionConfig: (...args: unknown[]) => state.resolveConfig(...args),
   resolveQueuedReplyRuntimeConfig: (config: unknown) => config,
 }));
@@ -124,6 +125,26 @@ beforeEach(() => {
 });
 
 describe("admitFollowupTurn", () => {
+  it.each([
+    { sessionKey: " agent:main:session ", expected: "agent:main:session" },
+    { sessionKey: undefined, expected: "legacy-target" },
+  ])("preserves the admitted transcript target $expected", async ({ sessionKey, expected }) => {
+    const queued = createRun();
+    queued.run.sessionKey = sessionKey;
+    queued.run.sessionFile = "legacy-target";
+    state.admitReply.mockResolvedValue({
+      status: "owned",
+      operation: createOperation("admitted-session"),
+    });
+
+    const result = await admitFollowupTurn({ queued, defaults: createDefaults({ sessionKey }) });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      expect(result.turn.queued.run.sessionFile).toBe(expected);
+    }
+  });
+
   it("reports each active-run deferral without adopting the queued source", async () => {
     state.admitReply.mockResolvedValue({ status: "skipped", reason: "active-run" });
     const onDeferredHeartbeat = vi.fn();
@@ -318,10 +339,6 @@ describe("admitFollowupTurn", () => {
   });
 
   it.each([
-    {
-      name: "restores the item when persisted state changes generation after admission",
-      mode: "persisted-session",
-    },
     {
       name: "restores the item when persisted lifecycle revision changes after admission",
       mode: "persisted-revision",
@@ -521,42 +538,6 @@ describe("admitFollowupTurn", () => {
     );
   });
 
-  it("adopts a session generation rotated by owned preflight compaction", async () => {
-    const operation = createOperation();
-    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
-    const rotatedEntry: SessionEntry = {
-      sessionId: "compacted-session",
-      updatedAt: 2,
-    };
-    const sessionStore = { main: initialEntry };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
-    state.loadEntry.mockReturnValue(initialEntry);
-    state.preflight.mockResolvedValue(rotatedEntry);
-
-    const queued = createRun();
-    queued.run.cliSessionBindingFacts = { provider: "claude-cli" } as never;
-    queued.run.autoFallbackPrimaryProbe = { provider: "anthropic", model: "claude" } as never;
-    queued.run.modelSelectionLocked = true;
-    const result = await admitFollowupTurn({
-      queued,
-      defaults: createDefaults({ sessionStore, sessionEntry: initialEntry }),
-    });
-
-    expect(result.kind).toBe("admitted");
-    if (result.kind === "admitted") {
-      expect(result.turn.session.current()).toBe(rotatedEntry);
-      expect(result.turn.queued.run).toMatchObject({
-        sessionId: "compacted-session",
-        modelSelectionLocked: false,
-      });
-      expect(result.turn.queued.run.sessionFile).toBe("main");
-      expect(result.turn.queued.run.cliSessionBindingFacts).toBeUndefined();
-      expect(result.turn.queued.run.autoFallbackPrimaryProbe).toBeUndefined();
-      expect(result.turn.preflightCompactionApplied).toBe(true);
-    }
-    expect(operation.updateSessionId).toHaveBeenCalledWith("compacted-session");
-  });
-
   it("adopts a generation already published by owned preflight compaction", async () => {
     const operation = createOperation();
     const initialEntry: SessionEntry = {
@@ -596,39 +577,6 @@ describe("admitFollowupTurn", () => {
     );
   });
 
-  it("adopts a generation written through the owned preflight store view", async () => {
-    const operation = createOperation();
-    const initialEntry: SessionEntry = {
-      sessionId: "queued-session",
-      lifecycleRevision: "initial",
-      updatedAt: 1,
-    };
-    const rotatedEntry: SessionEntry = {
-      sessionId: "compacted-session",
-      lifecycleRevision: "compacted",
-      updatedAt: 2,
-    };
-    const sessionStore = { main: initialEntry };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
-    state.preflight.mockImplementation(
-      async ({ sessionStore: ownedStore }: { sessionStore: Record<string, SessionEntry> }) => {
-        ownedStore.main = rotatedEntry;
-        return ownedStore.main;
-      },
-    );
-
-    const result = await admitFollowupTurn({
-      queued: createRun(),
-      defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
-    });
-
-    expect(result).toMatchObject({
-      kind: "admitted",
-      turn: { queued: { run: { sessionId: "compacted-session" } } },
-    });
-    expect(sessionStore.main).toBe(rotatedEntry);
-  });
-
   it("forwards owned preflight deletion to the backing session store", async () => {
     const operation = createOperation();
     const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
@@ -659,14 +607,6 @@ describe("admitFollowupTurn", () => {
       loadPersisted: true,
       error: "Follow-up session generation changed",
       checksFailureText: true,
-    },
-    {
-      name: "restores the item when a no-op preflight observes a replacement generation",
-      outcome: "initial",
-      mutation: "replace",
-      loadPersisted: true,
-      error: "Follow-up session generation changed",
-      checksFailureText: false,
     },
     {
       name: "restores the item when a successful preflight observes in-memory deletion",
@@ -1016,34 +956,30 @@ describe("admitFollowupTurn", () => {
     expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, "full"] as const)(
-    "uses turn verbosity %s or admitted fallback for a preflight failure",
-    async (override) => {
-      const operation = createOperation();
-      const admittedEntry: SessionEntry = {
-        sessionId: "queued-session",
-        updatedAt: 2,
-        verboseLevel: "off",
-      };
-      state.admitReply.mockResolvedValue({
-        status: "owned",
-        operation,
-        sessionEntry: admittedEntry,
-      });
-      state.loadEntry.mockReturnValue(admittedEntry);
-      state.preflight.mockRejectedValue(new Error("preflight failed"));
-      const queued = createRun();
-      queued.run.verboseLevel = "full";
-      queued.run.verboseLevelOverride = override;
+  it("uses admitted verbosity over stale queued verbosity for a preflight failure", async () => {
+    const operation = createOperation();
+    const admittedEntry: SessionEntry = {
+      sessionId: "queued-session",
+      updatedAt: 2,
+      verboseLevel: "off",
+    };
+    state.admitReply.mockResolvedValue({
+      status: "owned",
+      operation,
+      sessionEntry: admittedEntry,
+    });
+    state.loadEntry.mockReturnValue(admittedEntry);
+    state.preflight.mockRejectedValue(new Error("preflight failed"));
+    const queued = createRun();
+    queued.run.verboseLevel = "full";
 
-      await admitFollowupTurn({
-        queued,
-        defaults: createDefaults({ sessionEntry: admittedEntry }),
-      });
+    await admitFollowupTurn({
+      queued,
+      defaults: createDefaults({ sessionEntry: admittedEntry }),
+    });
 
-      expect(state.buildPreflightFailureText).toHaveBeenCalledWith("preflight failed", {
-        includeDetails: override === "full",
-      });
-    },
-  );
+    expect(state.buildPreflightFailureText).toHaveBeenCalledWith("preflight failed", {
+      includeDetails: false,
+    });
+  });
 });

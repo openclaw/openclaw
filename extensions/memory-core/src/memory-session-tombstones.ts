@@ -6,10 +6,6 @@ import {
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
-type TombstoneDatabase = {
-  memory_session_tombstones: { session_id: string; agent_id: string };
-};
-
 export function ensureMemorySessionTombstones(db: DatabaseSync): void {
   if (tableExists(db, "memory_session_tombstones")) {
     return;
@@ -33,7 +29,7 @@ export function hasMemorySessionTombstone(
   return (
     executeSqliteQuerySync(
       db,
-      getNodeSqliteKysely<TombstoneDatabase>(db)
+      getNodeSqliteKysely<MemoryOriginDatabase>(db)
         .selectFrom("memory_session_tombstones")
         .select("session_id")
         .where("agent_id", "=", agentId)

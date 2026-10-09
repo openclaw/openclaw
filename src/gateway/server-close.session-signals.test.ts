@@ -1,11 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -28,25 +29,13 @@ it("joins an accepted creation signal across the close prelude before closing it
     const server = await fixture.start(port);
     const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    const recording = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        run(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (command.type === "sessionState.record") {
-                  recordingEntered.resolve();
-                  await releaseRecording.promise;
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-      );
+    const recording = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "sessionState.record") {
+        recordingEntered.resolve();
+        await releaseRecording.promise;
+      }
+      return scope.execute(command, executeOptions);
+    });
     restoreRecording = () => recording.mockRestore();
     const dispatchOptions = {
       client: createSyntheticPluginRuntimeClient({

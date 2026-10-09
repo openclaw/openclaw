@@ -17,17 +17,12 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { workerProtocolObject } from "./protocol-record.js";
 import type { WorkerConnectionEndpoint } from "./worker-connection-endpoint.js";
 
-const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
-  "credential-replaced",
-  "owner-epoch-mismatch",
-]);
-
 export type WorkerFencedReason = "credential-replaced" | "owner-epoch-mismatch";
 
 export function isFencedCloseReason(
   reason: WorkerProtocolCloseReason,
 ): reason is WorkerFencedReason {
-  return FENCED_CLOSE_REASONS.has(reason);
+  return reason === "credential-replaced" || reason === "owner-epoch-mismatch";
 }
 
 export type WorkerConnectionState =

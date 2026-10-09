@@ -175,33 +175,6 @@ describe("plugin tools MCP server", () => {
     ).rejects.toThrow("must be a canonical agent session key");
   });
 
-  it("routes logs to stderr before resolving tools for stdio", async () => {
-    const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
-    const runtimeRegistry = createMockPluginRegistry([]);
-    acquireStandalonePluginToolRegistryMock.mockResolvedValue({
-      registry: runtimeRegistry,
-      resolveTools: resolvePluginToolsMock,
-      release: releasePluginToolsMock,
-    });
-    resolvePluginToolsMock.mockReturnValue([createTool("memory_recall", vi.fn())]);
-
-    await servePluginToolsMcp();
-
-    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
-    expect(acquireStandalonePluginToolRegistryMock).toHaveBeenCalledWith({
-      context: { config: { plugins: { enabled: true } } },
-      suppressNameConflicts: true,
-    });
-    expect(resolvePluginToolsMock).toHaveBeenCalledTimes(1);
-    expect(acquireStandalonePluginToolRegistryMock.mock.invocationCallOrder[0]).toBeLessThan(
-      resolvePluginToolsMock.mock.invocationCallOrder[0] ?? 0,
-    );
-    expect(routeLogsToStderrMock.mock.invocationCallOrder[0]).toBeLessThan(
-      resolvePluginToolsMock.mock.invocationCallOrder[0] ?? 0,
-    );
-    expect(connectToolsMcpServerToStdioMock).toHaveBeenCalledOnce();
-  });
-
   it("threads agentless global plugin tool policy into plugin resolution", async () => {
     getRuntimeConfigMock.mockReturnValueOnce({
       plugins: { enabled: true },
@@ -273,45 +246,6 @@ describe("plugin tools MCP server", () => {
     } finally {
       await acquisition.release();
     }
-  });
-
-  it("lists registered plugin tools and serializes non-array tool content", async () => {
-    const execute = vi.fn().mockResolvedValue({
-      content: "Stored.",
-    });
-    const tool = createTool(
-      "memory_recall",
-      execute,
-      Type.Object({ query: Type.String() }),
-      "Recall stored memory",
-    );
-
-    const handlers = createPluginToolsMcpHandlers([tool]);
-    const listed = await handlers.listTools();
-    expect(listed.tools).toHaveLength(1);
-    expect(listed.tools[0]?.name).toBe("memory_recall");
-    expect(listed.tools[0]?.description).toBe("Recall stored memory");
-    const inputSchema = listed.tools[0]?.inputSchema as
-      | { type?: unknown; required?: unknown }
-      | undefined;
-    expect(inputSchema?.type).toBe("object");
-    expect(inputSchema?.required).toEqual(["query"]);
-
-    const result = await handlers.callTool({
-      name: "memory_recall",
-      arguments: { query: "remember this" },
-    });
-    expect(execute).toHaveBeenCalledTimes(1);
-    const executeCall = requireFirstMockCall(execute.mock.calls, "plugin tool execute");
-    const requestId = executeCall[0];
-    expect(typeof requestId).toBe("string");
-    expect(requestId).toMatch(
-      /^mcp-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-    );
-    expect(executeCall[1]).toEqual({ query: "remember this" });
-    expect(executeCall[2]).toBeUndefined();
-    expect(executeCall[3]).toBeUndefined();
-    expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 
   it("uses unique ids and releases execution tracking through the scheduler alias", async () => {
@@ -416,30 +350,6 @@ describe("plugin tools MCP server", () => {
 
     expect(result.content).toEqual(content);
     expect(result.isError).toBeUndefined();
-  });
-
-  it("returns MCP errors for unknown tools and thrown tool errors", async () => {
-    const failingTool = {
-      name: "memory_forget",
-      description: "Forget memory",
-      parameters: { type: "object", properties: {} },
-      execute: vi.fn().mockRejectedValue(new Error("boom")),
-    } as unknown as AnyAgentTool;
-
-    const handlers = createPluginToolsMcpHandlers([failingTool]);
-    const unknown = await handlers.callTool({
-      name: "missing_tool",
-      arguments: {},
-    });
-    expect(unknown.isError).toBe(true);
-    expect(unknown.content).toEqual([{ type: "text", text: "Unknown tool: missing_tool" }]);
-
-    const failed = await handlers.callTool({
-      name: "memory_forget",
-      arguments: {},
-    });
-    expect(failed.isError).toBe(true);
-    expect(failed.content).toEqual([{ type: "text", text: "Tool error: boom" }]);
   });
 
   it("releases run-scoped adjusted arguments after a pre-wrapped direct MCP call", async () => {

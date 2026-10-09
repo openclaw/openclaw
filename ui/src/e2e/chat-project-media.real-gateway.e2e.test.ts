@@ -70,7 +70,7 @@ suite.define(() => {
         JSON.stringify(params),
         "--json",
       ]);
-      expect(result.code, result.stderr).toBe(0);
+      expect(result.code, result.stderr || result.stdout).toBe(0);
       return JSON.parse(result.stdout) as Record<string, unknown>;
     };
     const projectRoot = owner.state.path("project");
@@ -101,6 +101,7 @@ suite.define(() => {
       agentId: "main",
       projectId: project.id,
       worktree: true,
+      worktreeBaseRef: "main",
       worktreeName: "image-preview-proof",
       permissionMode: "workspace",
       label: "Synthetic image preview proof",

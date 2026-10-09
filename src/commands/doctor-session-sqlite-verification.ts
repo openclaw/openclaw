@@ -3,10 +3,8 @@ import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
-import {
-  attachSessionEntrySnapshots,
-  sessionEntrySnapshotColumns,
-} from "../config/sessions/session-entry-snapshots.js";
+import { attachSessionEntrySnapshots } from "../config/sessions/session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumns } from "../config/sessions/session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -245,6 +243,8 @@ function validateLegacySessionRecord(
   env: NodeJS.ProcessEnv,
 ): void {
   const beforeArchive = purpose === "before-archive";
+  const hasIssue = (code: string) =>
+    report.issues.some((issue) => issue.code === code && issue.sessionKey === record.sessionKey);
   const recordIssue = (code: string, message: string) =>
     report.issues.push({ code, message, sessionKey: record.sessionKey });
   // Import preserves aliases until canonical repair; standalone validation compares canonical keys.
@@ -269,13 +269,7 @@ function validateLegacySessionRecord(
     return;
   }
   // A proven canonical owner permits protected archival, not certification of conflicting bytes.
-  if (
-    beforeArchive &&
-    record.preserveCurrentSession &&
-    report.issues.some(
-      (issue) => issue.code === "legacy_import_deferred" && issue.sessionKey === record.sessionKey,
-    )
-  ) {
+  if (beforeArchive && record.preserveCurrentSession && hasIssue("legacy_import_deferred")) {
     return;
   }
   if (!beforeArchive) {
@@ -290,11 +284,7 @@ function validateLegacySessionRecord(
     return;
   }
   if (result.status !== "ok") {
-    if (
-      !report.issues.some(
-        (issue) => issue.code === "transcript_malformed" && issue.sessionKey === record.sessionKey,
-      )
-    ) {
+    if (!hasIssue("transcript_malformed")) {
       recordIssue("transcript_malformed", result.message);
     }
     return;

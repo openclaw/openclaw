@@ -16,9 +16,19 @@ export {
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
 export {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  readSqliteDatabasePendingWriteToken,
+  readSqliteDatabaseWriteTokenForPath,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
+export { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+export { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+export {
   assertTransactionUsable,
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
+  runSqliteSingleStatementSync,
 } from "../infra/sqlite-transaction.js";
 export type {
   SqliteWorkerBackend,
@@ -28,3 +38,4 @@ export type {
 export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 export { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 export { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+export { ensureOpenClawAgentStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";

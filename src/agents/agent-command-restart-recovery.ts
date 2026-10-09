@@ -7,6 +7,11 @@ import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidenceResult,
 } from "../config/sessions/restart-recovery-types.js";
+import {
+  bindPreparedSessionSourceAssertion,
+  prepareSessionSourceScope,
+  releaseSessionSourceAuthorities,
+} from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
@@ -466,13 +471,13 @@ export function prepareCommandHarnessCompletionRecovery(params: {
 }
 
 /** Called after the caller has recorded the committed entry for failure cleanup. */
-export function bindCommandHarnessCompletionAssertion(params: {
+export async function bindCommandHarnessCompletionAssertion(params: {
   claim?: HarnessCompletionRecovery;
   persisted?: SessionEntry;
   sessionKey: string;
   storePath?: string;
   opts: AgentCommandOpts;
-}): AgentCommandOpts {
+}): Promise<{ opts: AgentCommandOpts; source?: { release(): Promise<void> } }> {
   const { claim, persisted, sessionKey, storePath, opts } = params;
   if (
     claim &&
@@ -483,7 +488,7 @@ export function bindCommandHarnessCompletionAssertion(params: {
     throw createSessionWorkStartChangedError(sessionKey);
   }
   if (!claim || !storePath) {
-    return opts;
+    return { opts };
   }
   const guarded = {
     ...opts,
@@ -496,6 +501,26 @@ export function bindCommandHarnessCompletionAssertion(params: {
       { recoveryReference: opts.assertSourceCurrent?.recoveryReference },
     ),
   };
-  guarded.assertSourceCurrent();
-  return guarded;
+  // A resumed run needs its exact source prepared before the first assertion.
+  const prepared = await prepareSessionSourceScope(guarded.assertSourceCurrent);
+  if (!prepared) {
+    guarded.assertSourceCurrent();
+    return { opts: guarded };
+  }
+  const source = bindPreparedSessionSourceAssertion(guarded.assertSourceCurrent, prepared);
+  try {
+    source();
+    return {
+      opts: {
+        ...guarded,
+        assertSourceCurrent: Object.assign(source, {
+          recoveryReference: guarded.assertSourceCurrent.recoveryReference,
+        }),
+      },
+      source,
+    };
+  } catch (error) {
+    await releaseSessionSourceAuthorities([source], [error]);
+    throw error;
+  }
 }

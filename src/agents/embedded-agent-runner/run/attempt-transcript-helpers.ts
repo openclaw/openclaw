@@ -6,6 +6,10 @@ import {
   patchSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { readSessionEntryInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import {
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../../config/sessions/session-source-authority.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -75,7 +79,7 @@ export async function normalizeCompactionRecoveryTranscriptTail(params: {
 // Applies quota-resume TTL maintenance to only the active attempt session.
 export async function loadAttemptSessionEntryAfterQuotaMaintenance(
   params: { agentId: string; storePath: string; sessionKey: string },
-  assertCurrent: () => void,
+  assertCurrent: SessionSourceAssertion,
 ): Promise<ConfigSessionEntry | undefined> {
   const entry = await readSessionEntryInWorker(params, assertCurrent);
   assertCurrent();
@@ -97,7 +101,7 @@ export async function loadAttemptSessionEntryAfterQuotaMaintenance(
     {
       skipMaintenance: true,
       takeCacheOwnership: true,
-      assertCommitAllowed: assertCurrent,
+      ...sessionEntryCommitGuardOptions(assertCurrent),
     },
   );
   assertCurrent();
@@ -128,10 +132,6 @@ export async function resolveAttemptTrajectorySessionFile(params: {
   ).sessionKey;
 }
 
-type ExistingAttemptTranscriptState = {
-  hasBootstrapTranscriptState: boolean;
-};
-
 export async function resolveExistingAttemptTranscriptState(params: {
   agentId: string;
   config?: OpenClawConfig;
@@ -140,7 +140,7 @@ export async function resolveExistingAttemptTranscriptState(params: {
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
-}): Promise<ExistingAttemptTranscriptState> {
+}) {
   // The supplied manager owns this transcript; a borrowed durable identity is not its history.
   if (params.sessionManager) {
     return {

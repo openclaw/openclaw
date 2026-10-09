@@ -15,6 +15,9 @@ export function preparedSyntheticAuthProviderScope(
   if (scoped.has("openai")) {
     scoped.add("codex");
   }
+  if (scoped.has("anthropic")) {
+    scoped.add("claude-cli");
+  }
   return scoped;
 }
 

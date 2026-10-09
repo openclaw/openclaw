@@ -211,7 +211,6 @@ import {
   isSnackRecallPrompt,
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
-import { createQaMockScenarioStateStore } from "./scenario-state.js";
 import type { QaMockOpenAiServerOptions } from "./server-options.js";
 import {
   createQaSessionIdentityResolver,
@@ -347,25 +346,14 @@ function resolveCompactionSummaryFaultMode(params: {
     return "none";
   }
   const emptyMarker = QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.exec(params.allInputText)?.[0];
-  const reasoningMarker = QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(
-    params.allInputText,
-  )?.[0];
-  const selected = emptyMarker
-    ? {
-        key: emptyMarker,
-        mode: "empty-output-once" as const,
-      }
-    : reasoningMarker
-      ? {
-          key: reasoningMarker,
-          mode: "reasoning-only-output-once" as const,
-        }
-      : undefined;
-  if (!selected?.key || params.servedFaultMarkers.has(selected.key)) {
+  const marker =
+    emptyMarker ??
+    QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(params.allInputText)?.[0];
+  if (!marker || params.servedFaultMarkers.has(marker)) {
     return "none";
   }
-  params.servedFaultMarkers.add(selected.key);
-  return selected.mode;
+  params.servedFaultMarkers.add(marker);
+  return emptyMarker ? "empty-output-once" : "reasoning-only-output-once";
 }
 
 function buildMemoryGetArgs(result: Record<string, unknown>) {
@@ -465,9 +453,9 @@ async function buildResponsesPayload(
   scenarioState: MockScenarioState,
   options: {
     subagentTurn: ReturnType<typeof resolveMockSubagentTurn>;
-    waitForTerminalRequesterSettled?: (caseName: string, childSessionKey: string) => Promise<void>;
-    requestKind?: MockOpenAiRequestKind;
-    compactionSummaryFaultMode?: MockCompactionSummaryFaultMode;
+    waitForTerminalRequesterSettled: (caseName: string, childSessionKey: string) => Promise<void>;
+    requestKind: MockOpenAiRequestKind;
+    compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   },
 ) {
   const model = typeof body.model === "string" ? body.model : "";
@@ -519,8 +507,7 @@ async function buildResponsesPayload(
     QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
     hasCompactionRetryDurableContext ||
     allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER);
-  const requestKind = options.requestKind ?? classifyMockOpenAiRequest(input, body);
-  if (requestKind === "compaction-summary") {
+  if (options.requestKind === "compaction-summary") {
     if (options.compactionSummaryFaultMode === "empty-output-once") {
       return buildAssistantEvents("");
     }
@@ -874,7 +861,7 @@ async function buildResponsesPayload(
   if (privateWorker) {
     const childSessionKey = resolveQaChildSessionKey(input, body);
     if (privateWorker === "first" && childSessionKey) {
-      await options.waitForTerminalRequesterSettled?.("private", childSessionKey);
+      await options.waitForTerminalRequesterSettled("private", childSessionKey);
     }
     return buildAssistantEvents(
       privateWorker === "first"
@@ -962,7 +949,7 @@ async function buildResponsesPayload(
   const terminalWorkerCase = terminalTurn?.kind === "worker" ? terminalTurn.caseName : undefined;
   if (terminalWorkerCase) {
     const childSessionKey = resolveQaChildSessionKey(input, body);
-    if (options.waitForTerminalRequesterSettled && childSessionKey) {
+    if (childSessionKey) {
       await options.waitForTerminalRequesterSettled(terminalWorkerCase, childSessionKey);
     }
   }
@@ -2005,7 +1992,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     params?.repeatedRequestStalledResponsePauseMs ?? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS;
   const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
   const servedCompactionSummaryFaultMarkers = new Set<string>();
-  const scenarioStateFor = createQaMockScenarioStateStore();
+  const scenarioStates = new Map<string, MockScenarioState>();
   const requestLog = createMockOpenAiRequestLog();
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
@@ -2035,7 +2022,19 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     const prompt = extractLastUserText(input);
     const allInputText = extractAllRequestTexts(input, body);
     const sessionId = sessionIdentity.resolve(request, normalized);
-    const scenarioState = scenarioStateFor(sessionId);
+    // Transport identity survives prompt edits, provider switches, and cache boundaries.
+    const scenarioState = scenarioStates.get(sessionId ?? "") ?? {
+      anthropicThinkingErrorScenarioKeys: new Set<string>(),
+      compactionOverflowInjected: false,
+      compactionRetryActive: false,
+      subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
+      subagentFanoutPhase: 0,
+      subagentHandoffSpawned: false,
+      repeatedRequestRecoveryAttempts: 0,
+      stalledTurnRecoveryAttempts: 0,
+      toolLoopReadAttempts: 0,
+    };
+    scenarioStates.set(sessionId ?? "", scenarioState);
     const compactionSummaryFaultMode = resolveCompactionSummaryFaultMode({
       allInputText,
       requestKind,

@@ -24,6 +24,7 @@ import type { FollowupQueueDisposition, QueuedFollowupReplyDelivery } from "./qu
 import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import type { SessionEventExecution } from "./session-event-contract.js";
 
 export type ReplySessionBinding = {
   sessionKey?: string;
@@ -42,6 +43,8 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Producer callbacks follow this occurrence through queueing and delivery. */
+  internalEventExecution?: SessionEventExecution;
   /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
   queuedFollowupAbortSignal?: AbortSignal;
   /** Host-minted original operator authority; never restored from session metadata. */
@@ -93,6 +96,8 @@ type InternalReplySessionOptions = {
   queueModeOverride?: QueueMode;
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
   replyOperation?: ReplyOperation;
+  /** Return true only when the caller accepts settlement custody for this exact operation. */
+  onReplyOperationOwned?: (operation: ReplyOperation) => boolean | void;
   skillOverrides?: SessionToolOverrides["skills"];
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
 };
@@ -137,15 +142,12 @@ export function shouldBridgeCliPreambleEvents(opts: InternalGetReplyOptions | un
   return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;
 }
 
-/** Reply resolver signature used by dispatchers and tests for dependency injection. */
-export type GetReplyFromConfig = (
+type ReplyResolver<Options extends GetReplyOptions> = (
   ctx: MsgContext,
-  opts?: GetReplyOptions,
+  opts?: Options,
   configOverride?: OpenClawConfig,
 ) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
 
-export type InternalGetReplyFromConfig = (
-  ctx: MsgContext,
-  opts?: InternalGetReplyOptions,
-  configOverride?: OpenClawConfig,
-) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
+/** Reply resolver signature used by dispatchers and tests for dependency injection. */
+export type GetReplyFromConfig = ReplyResolver<GetReplyOptions>;
+export type InternalGetReplyFromConfig = ReplyResolver<InternalGetReplyOptions>;

@@ -1,5 +1,6 @@
 // Gateway node event types.
 // Defines the narrowed context and event envelope for node-originated handlers.
+import type { NodePairingGeneration } from "../infra/device-pairing.js";
 import type { NodeRegistry } from "./node-registry.js";
 import type { NodePresenceActivityUpdate } from "./node-registry.presence.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -51,4 +52,14 @@ export type NodeEventHandleResult = {
   event: string;
   handled: boolean;
   reason?: string;
+};
+
+export type NodeEventHandlerOptions = {
+  connId?: string;
+  deviceId?: string;
+  pairingGeneration?: NodePairingGeneration;
+  presenceAllowed?: boolean;
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
+  resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
+  assertApnsRegistrationCurrent?: () => void;
 };

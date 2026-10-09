@@ -1,30 +1,84 @@
-import {
-  mergeCombinedSessionStore,
-  prepareCombinedSessionStore,
-  type GatewaySessionStoreOptions,
-} from "../../config/sessions/combined-store-gateway.js";
+import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { loadOpenIncognitoSessionStores } from "../../config/sessions/combined-store-gateway.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import type { SessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import type { withIncognitoSessionStoreEntries } from "../../config/sessions/session-incognito-binding.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
+import { prepareSessionRowSelection } from "../session-utils-list.js";
 
 export type IncognitoStores = Parameters<Parameters<typeof withIncognitoSessionStoreEntries>[0]>[0];
 
+export function readMemoryProjectStores(binding: SessionActorStorageBinding) {
+  binding.actor.assertReadable();
+  const root = path.resolve(binding.path, "../../../..");
+  return memorySessionActorOwners
+    .list()
+    .filter((owner) => path.resolve(owner.path, "../../../..") === root)
+    .map((owner) => ({
+      agentId: owner.agentId,
+      storePath: owner.path,
+      entries: owner
+        .listSessions(binding.authority)
+        .flatMap(({ target, entry, members }) =>
+          entry ? [{ sessionKey: target.sessionKey, entry, members }] : [],
+        ),
+    }));
+}
+
+/** Only changed disclosure authority retires a prepared private project listing. */
+export function assertMemoryProjectStoresCurrent(
+  binding: SessionActorStorageBinding,
+  stores: ReturnType<typeof readMemoryProjectStores>,
+): void {
+  const current = readMemoryProjectStores(binding);
+  for (const store of stores) {
+    const entries = current.find((candidate) => candidate.storePath === store.storePath);
+    for (const selected of store.entries) {
+      const latest = entries?.entries.find(
+        (candidate) => candidate.sessionKey === selected.sessionKey,
+      );
+      const fields = ["sessionId", "lifecycleRevision", "createdActor", "visibility"] as const;
+      if (
+        !latest ||
+        fields.some((field) => !isDeepStrictEqual(selected.entry[field], latest.entry[field])) ||
+        !isDeepStrictEqual(selected.members, latest.members)
+      ) {
+        throw new Error("Project access changed while preparing the listing. Retry the request.");
+      }
+    }
+  }
+}
+
 export function loadProjectSessionStore(
-  cfg: Parameters<typeof loadCombinedSessionStoreForGatewayCore>[0],
-  options: GatewaySessionStoreOptions & {
-    loadEntries: NonNullable<GatewaySessionStoreOptions["loadEntries"]>;
-  },
+  projection: SessionRowProjection,
   incognitoStores?: IncognitoStores,
 ) {
-  if (!incognitoStores) {
-    return loadCombinedSessionStoreForGatewayCore(cfg, options);
-  }
-  const prepared = prepareCombinedSessionStore(cfg, { ...options, includeIncognito: false });
-  prepared.targets = { ...prepared.targets, incognitoTargets: incognitoStores };
-  return mergeCombinedSessionStore(
-    cfg,
-    options,
-    prepared,
-    (target) => options.loadEntries(target, prepared.projection),
-    (target) => incognitoStores.find((store) => store.storePath === target.storePath)!.entries,
+  const selection = prepareSessionRowSelection(
+    projection,
+    {},
+    { metadataPrepared: true, ordered: true },
   );
+  const paths = projection.state.scope({}).paths;
+  // Stable locale-equal recency ties retain physical-store and SQLite binary key order.
+  const entries = selection.entries
+    .map(([key, entry]) => ({
+      key,
+      entry,
+      keyBytes: Buffer.from(key),
+      order: paths.get(selection.getTarget(key)!.storeTarget.storePath)!,
+    }))
+    .toSorted(
+      (left, right) => left.order - right.order || Buffer.compare(left.keyBytes, right.keyBytes),
+    );
+  const store = Object.fromEntries(entries.map(({ key, entry }) => [key, entry]));
+  for (const source of incognitoStores ?? loadOpenIncognitoSessionStores()) {
+    for (const { sessionKey, entry } of source.entries) {
+      if (isIncognitoSessionKey(sessionKey) && entry.incognito === true) {
+        store[sessionKey] = entry;
+      }
+    }
+  }
+  return store;
 }

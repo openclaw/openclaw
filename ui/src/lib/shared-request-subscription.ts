@@ -15,10 +15,7 @@ export async function subscribeToSharedRequest<T, Subscriber extends object>(
     if (!signal) {
       return await pending.promise;
     }
-    let rejectAbort: (reason: unknown) => void = () => undefined;
-    const aborted = new Promise<never>((_resolve, reject) => {
-      rejectAbort = reject;
-    });
+    const { promise: aborted, reject: rejectAbort } = Promise.withResolvers<never>();
     onAbort = () => {
       pending.subscribers.delete(subscriber);
       if (pending.subscribers.size === 0) {

@@ -284,7 +284,7 @@ describe("ManagedWorktreeService failure diagnostics", () => {
   it.each([
     { name: "long evidence inside the existing window", oldEvidenceVisible: true },
     { name: "evidence outside the existing newline window", oldEvidenceVisible: false },
-  ])("preserves retry authority for $name", async ({ oldEvidenceVisible }) => {
+  ])("preserves failed checkout evidence for $name", async ({ oldEvidenceVisible }) => {
     await git(path.join(root, "remote.git"), "symbolic-ref", "HEAD", "refs/heads/main");
     await git(repo, "remote", "set-head", "origin", "-a");
     const name = "retry-evidence";
@@ -309,17 +309,9 @@ describe("ManagedWorktreeService failure diagnostics", () => {
       return result;
     });
 
-    if (oldEvidenceVisible) {
-      const created = await service.create({ repoRoot: repo, name });
-      expect(checkoutFailed).toBe(true);
-      expect(created.baseRef).toBe("HEAD");
-      expect(await git(created.path, "branch", "--show-current")).toBe(branch);
-      expect(await service.listRegistryRecords()).toEqual([created]);
-    } else {
-      await expect(service.create({ repoRoot: repo, name })).rejects.toThrow("checkout failed");
-      expect(checkoutFailed).toBe(true);
-      expect(await service.listRegistryRecords()).toEqual([]);
-    }
+    await expect(service.create({ repoRoot: repo, name })).rejects.toThrow("checkout failed");
+    expect(checkoutFailed).toBe(true);
+    expect(await service.listRegistryRecords()).toEqual([]);
     expect(allocatedPath).toBeDefined();
     expect(await git(repo, "worktree", "list", "--porcelain")).toContain(allocatedPath);
     expect(await git(allocatedPath!, "branch", "--show-current")).toBe(branch);
@@ -472,7 +464,6 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
         bodyMs: 1_700,
         finalizeMs: 300,
         preparationMs: 200,
-        packRepairMs: 0,
         snapshotMs: 400,
         checkoutRemovalMs: 500,
         bodyFinalizeMs: 600,
@@ -540,7 +531,6 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
       bodyMs: 1_500,
       finalizeMs: 0,
       preparationMs: 0,
-      packRepairMs: 0,
       snapshotMs: 1_300,
       bodyFinalizeMs: 200,
       callbackEntered: true,

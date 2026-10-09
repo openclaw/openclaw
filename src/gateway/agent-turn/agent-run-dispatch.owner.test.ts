@@ -98,30 +98,34 @@ describe("Gateway dispatch run ownership", () => {
     return { f, owner, dispatch };
   }
 
-  it.each(["command", "commentary-media"] as const)(
-    "joins a captured terminal save when %s startup fails before its delivery hook",
+  it.each(["command", "command-cleanup", "media"] as const)(
+    "joins a captured terminal save with the %s producer failure",
     async (startup) => {
       const { entry, params } = createDispatch(true);
       const finishCommand = createDeferred();
       const saving = createDeferred();
       const finishSave = createDeferred();
-      const failStartup = async () => {
+      const failure = new Error("Synthetic startup failure");
+      const failStartup = async (options?: AgentCommandOpts) => {
         await finishCommand.promise;
-        throw new Error("Synthetic startup failure");
+        if (startup === "command-cleanup") {
+          await options?.beforeTerminalDelivery?.(undefined, failure);
+        }
+        throw failure;
       };
-      if (startup === "command") {
+      if (startup !== "media") {
         mocks.agentCommand.mockImplementationOnce(failStartup);
       }
       const { emitFinal } = params.io;
       const completion = dispatchAgentRunFromGateway({
         ...params,
-        loadCommentaryMedia: startup === "commentary-media" ? failStartup : undefined,
+        loadMedia: startup === "media" ? failStartup : undefined,
       });
       try {
         const producer = entry.resolveTerminalProducer?.();
         expect(
           producer?.handoff(async (producerCompleted) => {
-            await producerCompleted;
+            expect(await producerCompleted).toBe(failure);
             saving.resolve();
             await finishSave.promise;
           }),
@@ -134,7 +138,7 @@ describe("Gateway dispatch run ownership", () => {
         await completion;
         expect(emitFinal).toHaveBeenCalledOnce();
         expect(params.cleanupAbortController).toHaveBeenCalledOnce();
-        expect(mocks.agentCommand).toHaveBeenCalledTimes(startup === "command" ? 1 : 0);
+        expect(mocks.agentCommand).toHaveBeenCalledTimes(startup === "media" ? 0 : 1);
         expect(entry.resolveTerminalProducer?.()).toBeUndefined();
       } finally {
         finishCommand.resolve();

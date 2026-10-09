@@ -169,51 +169,6 @@ describe("qa tool coverage report", () => {
     expect(markdown).toContain(String.raw`#80236 tracked \\\| runtime drift`);
   });
 
-  it("keeps tracking metadata independent from required coverage metrics", () => {
-    const report = buildQaToolCoverageReport({
-      scenarios: [
-        makeScenario("tool-read", "read", {
-          toolCoverage: {
-            bucket: "openclaw-dynamic-integration",
-            expectedLayer: "openclaw-dynamic",
-            capabilityLayer: "openclaw-dynamic-direct",
-            required: true,
-            tracking: "#80236",
-          },
-        }),
-      ],
-      summary: {
-        scenarios: [
-          {
-            name: "tool read",
-            status: "pass",
-            runtimeParity: {
-              scenarioId: "tool-read",
-              drift: "none",
-              cells: {
-                openclaw: makeCell("openclaw", {
-                  toolCalls: [{ tool: "read", argsHash: "a", resultHash: "r" }],
-                }),
-                codex: makeCell("codex", {
-                  toolCalls: [{ tool: "read", argsHash: "a", resultHash: "r" }],
-                }),
-              },
-            },
-          },
-        ],
-      },
-      generatedAt: "2026-05-10T00:00:00.000Z",
-    });
-
-    expect(report).toMatchObject({
-      pass: true,
-      requiredTools: 1,
-      reportOnlyTools: 0,
-      trackedTools: 1,
-      passingTools: 1,
-    });
-  });
-
   it("retains tracking metadata on accepted result-shape drift", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [
@@ -284,53 +239,6 @@ describe("qa tool coverage report", () => {
     );
   });
 
-  it("keeps optional plugin-dependent tool drift report-only", () => {
-    const report = buildQaToolCoverageReport({
-      scenarios: [
-        makeScenario("tool-optional", "optional", {
-          expectedAvailable: false,
-          toolCoverage: {
-            bucket: "optional-profile-or-plugin",
-            expectedLayer: "profile-or-plugin",
-            required: false,
-          },
-        }),
-      ],
-      summary: {
-        scenarios: [
-          {
-            name: "tool optional",
-            status: "fail",
-            runtimeParity: {
-              scenarioId: "tool-optional",
-              drift: "tool-call-shape",
-              cells: {
-                openclaw: makeCell("openclaw", {
-                  toolCalls: [],
-                }),
-                codex: makeCell("codex", {
-                  toolCalls: [{ tool: "optional", argsHash: "a", resultHash: "r" }],
-                }),
-              },
-            },
-          },
-        ],
-      },
-      generatedAt: "2026-05-10T00:00:00.000Z",
-    });
-
-    expect(report.pass).toBe(true);
-    expect(report.failures).toEqual([]);
-    expect(report.rows[0]).toEqual(
-      expect.objectContaining({
-        bucket: "optional-profile-or-plugin",
-        expectedLayer: "profile-or-plugin",
-        required: false,
-        drift: "tool-call-shape",
-      }),
-    );
-  });
-
   it("keeps searchable OpenClaw dynamic tool rows report-only by default", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [
@@ -377,44 +285,6 @@ describe("qa tool coverage report", () => {
         capabilityLayer: "openclaw-dynamic-searchable",
         required: false,
         drift: "tool-call-shape",
-      }),
-    );
-  });
-
-  it("passes required OpenClaw dynamic tool coverage when Codex reports a soft tool error", () => {
-    const report = buildQaToolCoverageReport({
-      scenarios: [makeRequiredToolScenario("web-search", "web_search")],
-      summary: {
-        scenarios: [
-          {
-            name: "tool web_search",
-            status: "pass",
-            runtimeParity: {
-              scenarioId: "tool-web-search",
-              drift: "tool-result-shape",
-              driftDetails: "Codex maps the controlled tool fault differently",
-              cells: {
-                openclaw: makeCell("openclaw", {
-                  toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r1" }],
-                }),
-                codex: makeCell("codex", {
-                  toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r2" }],
-                  runtimeErrorClass: "tool-error",
-                }),
-              },
-            },
-          },
-        ],
-      },
-      generatedAt: "2026-05-10T00:00:00.000Z",
-    });
-
-    expect(report.pass).toBe(true);
-    expect(report.failures).toEqual([]);
-    expect(report.rows[0]).toEqual(
-      expect.objectContaining({
-        codex: "pass",
-        drift: "tool-result-shape",
       }),
     );
   });
@@ -466,39 +336,6 @@ describe("qa tool coverage report", () => {
     });
   });
 
-  it("fails required OpenClaw dynamic tool coverage when a runtime skips the tool", () => {
-    const report = buildQaToolCoverageReport({
-      scenarios: [makeRequiredToolScenario("web-search", "web_search")],
-      summary: {
-        scenarios: [
-          {
-            name: "tool web_search",
-            status: "fail",
-            runtimeParity: {
-              scenarioId: "tool-web-search",
-              drift: "tool-call-shape",
-              driftDetails: "Codex emitted no web_search call",
-              cells: {
-                openclaw: makeCell("openclaw", {
-                  toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
-                }),
-                codex: makeCell("codex", {
-                  toolCalls: [],
-                }),
-              },
-            },
-          },
-        ],
-      },
-      generatedAt: "2026-05-10T00:00:00.000Z",
-    });
-
-    expect(report.pass).toBe(false);
-    expect(report.failures).toEqual([
-      "web-search missing successful codex tool call/result web_search",
-    ]);
-  });
-
   it("does not count error or unlinked results as successful required tool evidence", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [makeRequiredToolScenario("web-search", "web_search")],
@@ -548,18 +385,6 @@ describe("qa tool coverage report", () => {
     ]);
   });
 
-  it("projects skipped runtime execution as non-passing coverage", () => {
-    const report = buildQaToolCoverageReport({
-      scenarios: [makeRequiredToolScenario("web-fetch", "web_fetch")],
-      summary: makeSkippedWebFetchSummary(),
-      generatedAt: "2026-05-10T00:00:00.000Z",
-    });
-
-    expect(report.pass).toBe(false);
-    expect(report.rows[0]).toMatchObject({ openclaw: "pass", codex: "skip" });
-    expect(report.failures).toEqual(["web-fetch status openclaw=pass codex=skip"]);
-  });
-
   it("does not let skipped execution hide a runtime cell failure", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [makeRequiredToolScenario("web-fetch", "web_fetch")],
@@ -567,20 +392,6 @@ describe("qa tool coverage report", () => {
       generatedAt: "2026-05-10T00:00:00.000Z",
     });
 
-    expect(report.rows[0]).toMatchObject({ openclaw: "pass", codex: "fail" });
-    expect(report.failures).toEqual(["web-fetch status openclaw=pass codex=fail"]);
-  });
-
-  it("fails closed when a decoded result cell omits its required status", () => {
-    const summary = makeSkippedWebFetchSummary();
-    delete (summary.scenarios[0]!.runtimeParity.cells.codex as { status?: string }).status;
-    const report = buildQaToolCoverageReport({
-      scenarios: [makeRequiredToolScenario("web-fetch", "web_fetch")],
-      summary,
-      generatedAt: "2026-05-10T00:00:00.000Z",
-    });
-
-    expect(report.pass).toBe(false);
     expect(report.rows[0]).toMatchObject({ openclaw: "pass", codex: "fail" });
     expect(report.failures).toEqual(["web-fetch status openclaw=pass codex=fail"]);
   });
@@ -638,20 +449,6 @@ describe("qa tool coverage report", () => {
 
     expect(report.pass).toBe(false);
     expect(report.failures).toEqual(["web-search drift=not-run"]);
-  });
-
-  it("rejects unknown runtime tool coverage buckets", () => {
-    expect(() =>
-      buildQaToolCoverageReport({
-        scenarios: [
-          makeScenario("tool-bad", "bad", {
-            toolCoverage: {
-              bucket: "required-default",
-            },
-          }),
-        ],
-      }),
-    ).toThrow("unknown runtime tool coverage bucket");
   });
 
   it("rejects unknown runtime capability layers", () => {

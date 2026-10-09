@@ -222,17 +222,31 @@ function matchUneditedTemplateArrayItems(
   return undefined;
 }
 
-function matchAuthoredTemplateArrayItems(params: EnvRefArrays): Map<number, number> {
+function matchAuthoredTemplateArrayItems(
+  params: EnvRefArrays,
+  kind: "substitution" | "escaped",
+  claimedIncomingIndexes?: ReadonlySet<number>,
+): Map<number, number> {
   const templateIndexes = params.parsed.flatMap((item, index) =>
-    containsAuthoredUnescapedEnvTemplate(item) ? [index] : [],
+    (
+      kind === "substitution"
+        ? containsAuthoredUnescapedEnvTemplate(item)
+        : containsAuthoredEscapedEnvTemplate(item) && !containsAuthoredUnescapedEnvTemplate(item)
+    )
+      ? [index]
+      : [],
   );
-  const uneditedMatches = matchUneditedTemplateArrayItems(params, templateIndexes);
+  const uneditedMatches = matchUneditedTemplateArrayItems(
+    params,
+    templateIndexes,
+    claimedIncomingIndexes,
+  );
   if (uneditedMatches) {
     return uneditedMatches;
   }
 
   const matches = new Map<number, number>();
-  const usedIncomingIndexes = new Set<number>();
+  const usedIncomingIndexes = new Set(claimedIncomingIndexes);
   const addMatch = (parsedIndex: number, incomingIndex: number) => {
     if (usedIncomingIndexes.has(incomingIndex)) {
       throw new EnvRefArrayMutationError();
@@ -243,12 +257,51 @@ function matchAuthoredTemplateArrayItems(params: EnvRefArrays): Map<number, numb
   for (const parsedIndex of templateIndexes) {
     const parsedItem = params.parsed[parsedIndex];
     const stableIdentity = resolveStableArrayIdentityMatch({ ...params, parsedIndex });
-    if (stableIdentity.kind !== "none") {
-      if (stableIdentity.kind === "invalid") {
-        throw new EnvRefArrayMutationError();
-      }
+    if (stableIdentity.kind === "match") {
       addMatch(parsedIndex, stableIdentity.incomingIndex);
       continue;
+    }
+    if (kind === "escaped") {
+      const resolvedItem = params.resolved[parsedIndex];
+      const incomingMatches = params.incoming.flatMap((item, incomingIndex) =>
+        !usedIncomingIndexes.has(incomingIndex) && isDeepStrictEqual(item, resolvedItem)
+          ? [incomingIndex]
+          : [],
+      );
+      const authoredMatches = templateIndexes.filter((index) =>
+        isDeepStrictEqual(params.resolved[index], resolvedItem),
+      );
+      const authoredRepresentationsAreIdentical = authoredMatches.every((index) =>
+        isDeepStrictEqual(params.parsed[index], parsedItem),
+      );
+      if (
+        incomingMatches.length > 0 &&
+        incomingMatches.length <= authoredMatches.length &&
+        authoredRepresentationsAreIdentical
+      ) {
+        const sameIndexMatch = incomingMatches.includes(parsedIndex)
+          ? parsedIndex
+          : incomingMatches[0];
+        addMatch(parsedIndex, expectDefined(sameIndexMatch, "env preserve same index match"));
+        continue;
+      }
+      if (incomingMatches.length > 0) {
+        throw new EnvRefArrayMutationError();
+      }
+
+      if (
+        (isPlainObject(parsedItem) || Array.isArray(parsedItem)) &&
+        stableIdentity.kind === "none" &&
+        parsedIndex < params.incoming.length &&
+        !usedIncomingIndexes.has(parsedIndex) &&
+        canMatchEditedArrayItemAtSameIndex({ ...params, parsedIndex })
+      ) {
+        addMatch(parsedIndex, parsedIndex);
+      }
+      continue;
+    }
+    if (stableIdentity.kind === "invalid") {
+      throw new EnvRefArrayMutationError();
     }
 
     if (
@@ -303,80 +356,6 @@ function matchAuthoredTemplateArrayItems(params: EnvRefArrays): Map<number, numb
       throw new EnvRefArrayMutationError();
     }
     if (parsedIndex < params.incoming.length) {
-      addMatch(parsedIndex, parsedIndex);
-    }
-  }
-  return matches;
-}
-
-function matchAuthoredEscapedTemplateArrayItems(
-  params: EnvRefArrays & { usedIncomingIndexes: Set<number> },
-): Map<number, number> {
-  const escapedTemplateIndexes = params.parsed.flatMap((item, index) =>
-    containsAuthoredEscapedEnvTemplate(item) && !containsAuthoredUnescapedEnvTemplate(item)
-      ? [index]
-      : [],
-  );
-  const uneditedMatches = matchUneditedTemplateArrayItems(
-    params,
-    escapedTemplateIndexes,
-    params.usedIncomingIndexes,
-  );
-  if (uneditedMatches) {
-    return uneditedMatches;
-  }
-  const matches = new Map<number, number>();
-  const usedIncomingIndexes = new Set(params.usedIncomingIndexes);
-  const addMatch = (parsedIndex: number, incomingIndex: number) => {
-    if (usedIncomingIndexes.has(incomingIndex)) {
-      throw new EnvRefArrayMutationError();
-    }
-    matches.set(parsedIndex, incomingIndex);
-    usedIncomingIndexes.add(incomingIndex);
-  };
-
-  for (const parsedIndex of escapedTemplateIndexes) {
-    const parsedItem = params.parsed[parsedIndex];
-    const stableIdentity = resolveStableArrayIdentityMatch({ ...params, parsedIndex });
-    if (stableIdentity.kind === "match") {
-      addMatch(parsedIndex, stableIdentity.incomingIndex);
-      continue;
-    }
-
-    const resolvedItem = params.resolved[parsedIndex];
-    const incomingMatches = params.incoming.flatMap((item, incomingIndex) =>
-      !usedIncomingIndexes.has(incomingIndex) && isDeepStrictEqual(item, resolvedItem)
-        ? [incomingIndex]
-        : [],
-    );
-    const authoredMatches = escapedTemplateIndexes.filter((index) =>
-      isDeepStrictEqual(params.resolved[index], resolvedItem),
-    );
-    const authoredRepresentationsAreIdentical = authoredMatches.every((index) =>
-      isDeepStrictEqual(params.parsed[index], parsedItem),
-    );
-    if (
-      incomingMatches.length > 0 &&
-      incomingMatches.length <= authoredMatches.length &&
-      authoredRepresentationsAreIdentical
-    ) {
-      const sameIndexMatch = incomingMatches.includes(parsedIndex)
-        ? parsedIndex
-        : incomingMatches[0];
-      addMatch(parsedIndex, expectDefined(sameIndexMatch, "env preserve same index match"));
-      continue;
-    }
-    if (incomingMatches.length > 0) {
-      throw new EnvRefArrayMutationError();
-    }
-
-    if (
-      (isPlainObject(parsedItem) || Array.isArray(parsedItem)) &&
-      stableIdentity.kind === "none" &&
-      parsedIndex < params.incoming.length &&
-      !usedIncomingIndexes.has(parsedIndex) &&
-      canMatchEditedArrayItemAtSameIndex({ ...params, parsedIndex })
-    ) {
       addMatch(parsedIndex, parsedIndex);
     }
   }
@@ -453,13 +432,13 @@ export function restoreEnvVarRefsFromResolved(
     }
     // Keep same-name real/escaped scalar reorders fail-closed: a raw `${VAR}`
     // is indistinguishable from a moved escaped literal or a newly active ref.
-    const unescapedMatches = matchAuthoredTemplateArrayItems({ incoming, parsed, resolved });
-    const escapedMatches = matchAuthoredEscapedTemplateArrayItems({
-      incoming,
-      parsed,
-      resolved,
-      usedIncomingIndexes: new Set(unescapedMatches.values()),
-    });
+    const arrays = { incoming, parsed, resolved };
+    const unescapedMatches = matchAuthoredTemplateArrayItems(arrays, "substitution");
+    const escapedMatches = matchAuthoredTemplateArrayItems(
+      arrays,
+      "escaped",
+      new Set(unescapedMatches.values()),
+    );
     const matches = new Map([...unescapedMatches, ...escapedMatches]);
     const next = [...incoming];
     const matchedIncomingIndexes = new Set(matches.values());

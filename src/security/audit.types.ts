@@ -1,7 +1,5 @@
-/** Severity levels emitted by security audit checks. */
 type SecurityAuditSeverity = "info" | "warn" | "critical";
 
-/** One actionable or informational security audit finding. */
 export type SecurityAuditFinding = {
   checkId: string;
   severity: SecurityAuditSeverity;
@@ -10,21 +8,18 @@ export type SecurityAuditFinding = {
   remediation?: string;
 };
 
-/** Finding intentionally hidden by a configured audit suppression. */
 export type SecurityAuditSuppressedFinding = SecurityAuditFinding & {
   suppression: {
     reason?: string;
   };
 };
 
-/** Count summary grouped by audit severity. */
 export type SecurityAuditSummary = {
   critical: number;
   warn: number;
   info: number;
 };
 
-/** Complete security audit report returned by CLI/runtime callers. */
 export type SecurityAuditReport = {
   ts: number;
   summary: SecurityAuditSummary;

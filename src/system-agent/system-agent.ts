@@ -5,6 +5,10 @@ import type { SystemAgentAssistantPlanner } from "./assistant.js";
 import { resolveSystemAgentOperation } from "./dialogue.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import {
+  requireSystemAgentInferenceRoute,
+  requireSystemAgentPersistentApplyInference,
+} from "./inference-guard.js";
+import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation,
@@ -18,7 +22,6 @@ import {
 } from "./overview.js";
 import {
   hasCurrentSystemAgentOwnerPluginArtifacts,
-  resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
 
@@ -52,47 +55,6 @@ export type RunSystemAgentOptions = {
 /** User-supplied command options before the inference gate binds the run. */
 export type SystemAgentCommandOptions = Omit<RunSystemAgentOptions, "verifiedInference">;
 
-async function requireVerifiedInference(opts: RunSystemAgentOptions): Promise<void> {
-  if (!opts.verifiedInference) {
-    throw new SystemAgentInferenceUnavailableError("conversation");
-  }
-  try {
-    const route = await resolveSystemAgentVerifiedInferenceRoute(opts.verifiedInference, opts.deps);
-    if (route) {
-      return;
-    }
-  } catch (error) {
-    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
-  }
-  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
-}
-
-async function requirePersistentApplyInference(
-  opts: RunSystemAgentOptions,
-  runtime: RuntimeEnv,
-): Promise<void> {
-  if (!opts.verifiedInference) {
-    throw new SystemAgentInferenceUnavailableError("conversation");
-  }
-  try {
-    const { resolvePersistentApplyInference } = await import("./setup-inference.js");
-    const route = await resolvePersistentApplyInference({
-      binding: opts.verifiedInference,
-      runtime,
-      deps: opts.deps,
-    });
-    if (route) {
-      return;
-    }
-  } catch (error) {
-    if (error instanceof SystemAgentInferenceUnavailableError) {
-      throw error;
-    }
-    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
-  }
-  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
-}
-
 async function runOneShot(
   operation: SystemAgentOperation,
   runtime: RuntimeEnv,
@@ -103,10 +65,18 @@ async function runOneShot(
   }
   // The planner may take long enough for the verified route to change. Never
   // apply its result under a different inference owner.
-  await requireVerifiedInference(opts);
+  await requireSystemAgentInferenceRoute(opts.verifiedInference, opts.deps, "conversation");
   const approved = opts.yes === true || !isPersistentSystemAgentOperation(operation);
   if (approved && isPersistentSystemAgentOperation(operation)) {
-    await requirePersistentApplyInference(opts, runtime);
+    await requireSystemAgentPersistentApplyInference(
+      { binding: opts.verifiedInference, runtime, deps: opts.deps },
+      (failures) => {
+        if (failures[0] instanceof SystemAgentInferenceUnavailableError) {
+          throw failures[0];
+        }
+        throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
+      },
+    );
   }
   await executeSystemAgentOperation(operation, runtime, {
     approved,
@@ -186,7 +156,11 @@ async function runBoundSystemAgent(
   boundOpts: RunSystemAgentOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  await requireVerifiedInference(boundOpts);
+  await requireSystemAgentInferenceRoute(
+    boundOpts.verifiedInference,
+    boundOpts.deps,
+    "conversation",
+  );
   if (boundOpts.json) {
     const overview = await (boundOpts.loadOverview ?? loadSystemAgentOverview)();
     writeRuntimeJson(runtime, overview);

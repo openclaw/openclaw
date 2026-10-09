@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const CHUNK_WRITE_TABLES = [
@@ -33,8 +36,11 @@ describe("memory chunk publication", () => {
       await fs.writeFile(
         memoryPath,
         [
+          "# Preferences",
+          "## Project notes",
           "- Oversized alpha entry. <!-- trigger: oversized alpha --> <!-- importance: 8 --> <!-- project: alpha-key -->",
           `  ${"alpha-fragment-body ".repeat(400)}`,
+          "# Scoped beta rule. <!-- project: beta-key --> <!-- trigger: scoped beta --> <!-- importance: 9 -->",
           "- Global neighbor. <!-- trigger: global neighbor -->",
         ].join("\n"),
       );
@@ -71,6 +77,10 @@ describe("memory chunk publication", () => {
           .all();
         const fragments = rows.filter((row) => row.triggers === "oversized alpha");
         expect(fragments.length).toBeGreaterThanOrEqual(2);
+        expect(rows.some((row) => row.text === "# Preferences")).toBe(false);
+        expect(fragments[0]?.text).toMatch(
+          /^# Preferences\n## Project notes\n- Oversized alpha entry\./,
+        );
         expect(
           fragments.every(
             (row) =>
@@ -78,9 +88,23 @@ describe("memory chunk publication", () => {
           ),
         ).toBe(true);
         expect(rows.find((row) => row.triggers === "global neighbor")).toMatchObject({
+          text: "- Global neighbor.",
           projectKey: null,
           importance: null,
         });
+        expect(rows.find((row) => row.triggers === "scoped beta")).toMatchObject({
+          text: "# Scoped beta rule.",
+          projectKey: "beta-key",
+          importance: 9,
+        });
+        expect(await manager.listTriggerCandidates({ activeProjectKeys: [] })).toEqual([
+          expect.objectContaining({ snippet: "- Global neighbor." }),
+        ]);
+        expect(await manager.listTriggerCandidates({ activeProjectKeys: ["beta-key"] })).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ snippet: "# Scoped beta rule.", projectKey: "beta-key" }),
+          ]),
+        );
         expect(preparedTables).toEqual([]);
 
         await fs.writeFile(memoryPath, "");
@@ -130,7 +154,7 @@ describe("memory chunk publication", () => {
         expect(before[1]?.some((row) => String(row.text).includes("Alpha memory line."))).toBe(
           true,
         );
-        db.exec(`
+        memoryIndexFixtureWriter(manager).exec(`
           CREATE TRIGGER fail_chunk_publication
           AFTER INSERT ON ${failedTable}
           BEGIN
@@ -158,7 +182,7 @@ describe("memory chunk publication", () => {
         expect(retainedCache).toHaveLength(cacheBefore.length + 1);
         const completedRequests = fixture.provider.embedBatchCalls;
 
-        db.exec("DROP TRIGGER fail_chunk_publication");
+        memoryIndexFixtureWriter(manager).exec("DROP TRIGGER fail_chunk_publication");
         await manager.sync({ reason: "retry" });
         expect(fixture.provider.embedBatchCalls).toBe(completedRequests);
         expect(cacheSnapshot()).toEqual(retainedCache);

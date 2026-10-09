@@ -215,7 +215,7 @@ async function readSessionDataFromIdentity(params: {
     ? rawEntries.map((entry) => {
         const node = tree.byId.get(entry.id);
         return node && entry.parentId !== node.parentId
-          ? ({ ...entry, parentId: node.parentId } as AgentSessionEntry)
+          ? { ...entry, parentId: node.parentId }
           : entry;
       })
     : rawEntries;

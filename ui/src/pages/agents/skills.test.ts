@@ -1,27 +1,42 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
-import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { clearAgentSkillFilter, nextAgentSkillAllowlist } from "./skills.ts";
+import type { SkillStatusReport } from "../../api/types.ts";
+import {
+  createRuntimeConfigCapability,
+  type RuntimeConfigCapability,
+} from "../../lib/config/runtime-config-capability.ts";
+import { createSkill } from "../skills/view.test-support.ts";
+import { clearAgentSkillFilter, createAgentSkillActions } from "./skills.ts";
 
-describe("nextAgentSkillAllowlist", () => {
+describe("createAgentSkillActions", () => {
   it("snapshots reported skills without learned Workshop skills on the first toggle", () => {
-    const report = {
-      agentId: "main",
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
       skills: [
-        { name: "github", source: "openclaw-bundled" },
-        { name: "weather", source: "openclaw-managed" },
-        { name: "actual-budget-operations", source: "openclaw-workshop" },
-      ] as SkillStatusEntry[],
-    } as SkillStatusReport;
+        createSkill({ name: "github", source: "openclaw-bundled" }),
+        createSkill({ name: "weather", source: "openclaw-managed" }),
+        createSkill({ name: "actual-budget-operations", source: "openclaw-workshop" }),
+      ],
+    };
+    const runtimeConfig = createRuntimeConfigCapability({
+      snapshot: { client: null, phase: "offline", sessionKey: "main" },
+      subscribe: () => () => undefined,
+    });
 
-    expect(
-      nextAgentSkillAllowlist({
-        configured: undefined,
-        report,
-        skillName: "weather",
-        enabled: false,
-      }),
-    ).toEqual(["github"]);
+    try {
+      const actions = createAgentSkillActions({
+        getRuntimeConfig: () => runtimeConfig,
+        getReport: () => report,
+        canUpdate: () => true,
+      });
+      actions.onToggle("main", "weather", false);
+
+      expect(runtimeConfig.state.configForm).toEqual({
+        agents: { entries: { main: { skills: ["github"] } } },
+      });
+    } finally {
+      runtimeConfig.dispose();
+    }
   });
 });
 

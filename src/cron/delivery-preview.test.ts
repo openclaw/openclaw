@@ -57,7 +57,7 @@ describe("resolveCronDeliveryPreview", () => {
       expect.objectContaining({ dryRun: true }),
     );
     expect(preview.detail).toBe(
-      "resolved from last, session agent:avery:telegram:direct:direct-123",
+      "commits to the destination conversation; sends one external notification",
     );
   });
 
@@ -174,7 +174,9 @@ describe("resolveCronDeliveryPreview", () => {
 
     expect(preview).toEqual({
       label: "announce -> last",
-      detail: "last -> no route, will fail-closed: Channel plugin unavailable",
+      detail: expect.stringContaining(
+        "last -> no route, will fail-closed: Channel plugin unavailable",
+      ),
     });
   });
 

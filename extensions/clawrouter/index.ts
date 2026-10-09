@@ -243,9 +243,11 @@ export default defineSingleProviderPluginEntry({
       inspectToolSchemas: (ctx) => resolveToolFamily(ctx.modelId ?? "").inspectToolSchemas(ctx),
       isModernModelRef: () => true,
       resolveUsageAuth: async (ctx) => {
-        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          envDirect: [ctx.env[ENV_VAR]],
-        });
+        const apiKey = (
+          await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+            envDirect: [ctx.env[ENV_VAR]],
+          })
+        )?.[0];
         return apiKey ? { token: apiKey } : null;
       },
       fetchUsageSnapshot: async (ctx) =>

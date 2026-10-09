@@ -421,44 +421,72 @@ it.each([
   ]);
 });
 
-it("caps nested output once, preserves literal text, and removes private media", () => {
-  const text = " \n[[reply_to_current]] <tag>\r\n" + "x".repeat(20_000) + "  \n";
-  const metadata = {
-    id: "nested-output",
-    toolOutput: { source: "execution", modelInput: "unverified" },
-  };
-  const result = { type: "toolResult", toolCallId: "nested-call", toolName: "exec", isError: true };
-  const message = {
-    role: "assistant",
-    __openclaw: metadata,
-    content: [
-      {
-        ...result,
-        text,
-        content: [
-          { type: "text", text },
-          { type: "image", data: "aW1hZ2U=", path: "/private/image.png" },
-        ],
-      },
-    ],
-  };
-  const original = structuredClone(message);
-  expect(sanitizeChatHistoryMessages([message], 32)).toEqual([
-    {
+it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
+  "caps nested output once, preserves literal text, and removes private media (%j)",
+  (options) => {
+    const text = " \n[[reply_to_current]] <tag>\r\n" + "x".repeat(20_000) + "  \n";
+    const metadata = {
+      id: "nested-output",
+      toolOutput: { source: "execution", modelInput: "unverified" },
+    };
+    const result = {
+      type: "toolResult",
+      toolCallId: "nested-call",
+      toolName: "exec",
+      isError: true,
+    };
+    const message = {
       role: "assistant",
-      __openclaw: { ...metadata, truncated: true, reason: "display-cap" },
+      __openclaw: metadata,
       content: [
         {
           ...result,
+          text,
           content: [
-            { type: "text", text: text.slice(0, 32) },
-            { type: "image", omitted: true, bytes: 5 },
+            { type: "text", text },
+            { type: "image", data: "aW1hZ2U=", path: "/private/image.png" },
           ],
         },
       ],
-    },
-  ]);
-  expect(message).toEqual(original);
+    };
+    const original = structuredClone(message);
+    expect(sanitizeChatHistoryMessages([message], options.maxChars, options)).toEqual([
+      {
+        role: "assistant",
+        __openclaw: { ...metadata, truncated: true, reason: "display-cap" },
+        content: [
+          {
+            ...result,
+            content: [
+              { type: "text", text: text.slice(0, 32) },
+              { type: "image", omitted: true, bytes: 5 },
+            ],
+          },
+        ],
+      },
+    ]);
+    expect(message).toEqual(original);
+  },
+);
+
+it("retains complete structured tool previews and tool arguments under a smaller text cap", () => {
+  const text = JSON.stringify({
+    kind: "canvas",
+    view: { id: "preview", title: "x".repeat(3_000) },
+  });
+  const call = { type: "toolCall", id: "structured", name: "exec", arguments: { input: text } };
+  const result = {
+    type: "toolResult",
+    toolCallId: "structured",
+    content: [{ type: "text", text }],
+  };
+  const messages = [
+    { role: "toolResult", content: result.content },
+    { role: "assistant", content: [call, result] },
+  ];
+  expect(sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 })).toEqual(
+    messages,
+  );
 });
 
 const user = { role: "user", content: "hello", __openclaw: { seq: 1 } };

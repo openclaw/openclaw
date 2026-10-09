@@ -73,20 +73,9 @@ export function resolveCodexCliHomePath(codexHome?: string, env: NodeJS.ProcessE
   }
 }
 
-function codexAuthJsonUsesChatGptTokens(data: Record<string, unknown>): boolean {
+function readCodexAuthMode(data: Record<string, unknown>): string {
   const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
-  if (authMode) {
-    return authMode === "chatgpt" || authMode === "chatgptauthtokens";
-  }
-  return typeof data.OPENAI_API_KEY !== "string";
-}
-
-function codexAuthJsonUsesApiKey(data: Record<string, unknown>): boolean {
-  const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
-  if (authMode) {
-    return authMode === "apikey" || authMode === "api_key";
-  }
-  return typeof data.OPENAI_API_KEY === "string";
+  return authMode || (typeof data.OPENAI_API_KEY === "string" ? "api_key" : "chatgpt");
 }
 
 function readFileMtimeMs(filePath: string): number | null {
@@ -212,7 +201,7 @@ function parseCodexOauthCredential(
   data: Record<string, unknown>,
   fallbackExpiry: number | undefined,
 ): CodexCliCredential | null {
-  if (!codexAuthJsonUsesChatGptTokens(data)) {
+  if (!["chatgpt", "chatgptauthtokens"].includes(readCodexAuthMode(data))) {
     return null;
   }
   const tokens = data.tokens as Record<string, unknown> | undefined;
@@ -243,7 +232,7 @@ function parseCodexOauthCredential(
 function parseCodexApiKeyCredential(
   data: Record<string, unknown>,
 ): CodexCliApiKeyCredential | null {
-  if (!codexAuthJsonUsesApiKey(data)) {
+  if (!["apikey", "api_key"].includes(readCodexAuthMode(data))) {
     return null;
   }
   const key = typeof data.OPENAI_API_KEY === "string" ? data.OPENAI_API_KEY.trim() : "";

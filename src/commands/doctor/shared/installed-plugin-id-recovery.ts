@@ -49,8 +49,12 @@ async function resolveInstalledPluginIdOwners(config: OpenClawConfig, env: NodeJ
       }
     }
     const eligibleOwners = new Map<string, InstalledPluginIdOwner>();
+    const candidateOwners = new Map<string, string>();
     for (const [legacyId, owners] of claimants) {
       const plugin = owners[0];
+      if (plugin) {
+        candidateOwners.set(legacyId, plugin.id);
+      }
       if (
         owners.length !== 1 ||
         !plugin ||
@@ -92,13 +96,6 @@ async function resolveInstalledPluginIdOwners(config: OpenClawConfig, env: NodeJ
         packageHash: installed.packageJson?.hash,
         record: structuredClone(record),
       });
-    }
-    const candidateOwners = new Map<string, string>();
-    for (const [legacyId, owners] of claimants) {
-      const owner = owners[0];
-      if (owner) {
-        candidateOwners.set(legacyId, owner.id);
-      }
     }
     // A selected local shadow can hide the installed manifest's claims. Catalog
     // evidence preserves that old config; it never grants migration authority.

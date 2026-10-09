@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
@@ -30,9 +31,10 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
-  completeWorkerLaunchDescriptor,
+  parseWorkerLaunchDescriptor,
   parseWorkerLaunchPlan,
   type WorkerLaunchPlan,
 } from "../../worker/launch-descriptor.js";
@@ -63,9 +65,11 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("worker turn execution", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
   afterEach(resetGlobalHookRunner);
 
   it.each([
@@ -491,6 +495,7 @@ describe("worker turn execution", () => {
       const entered = createDeferred();
       const release = createDeferred();
       const open = SessionManager.openAsync.bind(SessionManager);
+      let placementSql: ReturnType<typeof observeHostDataSql> | undefined;
       const hydration = vi
         .spyOn(SessionManager, "openAsync")
         .mockImplementationOnce(async (...args) => {
@@ -507,10 +512,20 @@ describe("worker turn execution", () => {
           expect(manager.getPersistedEntries()).toEqual(before);
           entered.resolve();
           await release.promise;
+          if (change === "current") {
+            placementSql = observeHostDataSql();
+          }
           return manager;
         });
       const deliberateStop = new WorkerRunnerCapacityError();
       const acquireTurnCredential = vi.fn(async () => {
+        if (placementSql) {
+          expect(
+            placementSql.queries.filter((sql) => sql.includes("worker_session_placements")),
+          ).toEqual([]);
+          placementSql.restore();
+          placementSql = undefined;
+        }
         throw deliberateStop;
       });
       const startTunnel = vi.fn();
@@ -586,6 +601,7 @@ describe("worker turn execution", () => {
         release.resolve();
         await operation;
         hydration.mockRestore();
+        placementSql?.restore();
         input.preparedRunAdmission.close();
       }
     },
@@ -801,9 +817,12 @@ describe("worker turn execution", () => {
       let descriptor: WorkerLaunchPlan | undefined;
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
         descriptor = roundTripWorkerLaunchDescriptor(
-          completeWorkerLaunchDescriptor(plan, {
-            kind: "unix",
-            socketPath: "/tmp/worker-approval.sock",
+          parseWorkerLaunchDescriptor({
+            ...plan,
+            connectionEndpoint: {
+              kind: "unix",
+              socketPath: "/tmp/worker-approval.sock",
+            },
           }),
         );
         throw new WorkerRunnerCapacityError();

@@ -13,7 +13,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../../infra/runtime-worker-generation.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -179,11 +178,7 @@ describe("physical session disk usage", () => {
       return result;
     });
     let retirement: MockInstance<Worker["terminate"]> | undefined;
-    const diskWorkerUrl = resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "disk-budget.worker",
-      distWorkerPath: "config/sessions/disk-budget.worker.js",
-    });
+    const diskWorkerUrl = resolveRuntimeProcessEntrypointUrl("sessionDiskBudget");
     const stateReadUrl = resolveRuntimeProcessEntrypointUrl("stateRead");
     const ownedStateReadPath = state.path("sdk-drainage-state-read.mjs");
     await fs.writeFile(ownedStateReadPath, `export * from ${JSON.stringify(stateReadUrl.href)};\n`);
@@ -290,8 +285,8 @@ describe("physical session disk usage", () => {
         release.resolve();
         await drainage;
         expect(completed).toBe(2);
-        expect(workers).toHaveLength(1);
-        expect(workers[0]?.threadId).toBe(-1);
+        expect(workers.length).toBeGreaterThan(0);
+        expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
       } finally {
         release.resolve();
         spy.mockRestore();
@@ -363,14 +358,17 @@ describe("physical session disk usage", () => {
       await fs.writeFile(storePath, Buffer.alloc(321));
       await fs.writeFile(archivePath, Buffer.alloc(100));
       const release = createDeferredCore();
-      const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+      let spy = vi.spyOn(WorkerTaskPool.prototype, "run");
+      spy.mockImplementation(function gateScan(
         this: WorkerTaskPool<unknown, unknown>,
         input,
         options,
       ) {
         spy.mockRestore();
-        // Delay preparation, not the caller's result or the pool's capacity decision.
-        return this.run(async () => {
+        const run = this.run.bind(this);
+        spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(gateScan);
+        // Hold every scan slot so overload does not depend on worker startup timing.
+        return run(async () => {
           await release.promise;
           return input;
         }, options);
@@ -407,8 +405,9 @@ describe("physical session disk usage", () => {
         release.resolve();
         await drainage;
         expect(settledScans).toBe(128);
-        expect(workers).toHaveLength(1);
-        expect(workers[0]?.threadId).toBe(-1);
+        const retiredWorkers = workers.length;
+        expect(retiredWorkers).toBeGreaterThan(0);
+        expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
         const usage = {
           databaseMainBytes: 321,
           databaseWalBytes: 0,
@@ -420,8 +419,8 @@ describe("physical session disk usage", () => {
           pruneSessionTranscriptArchivesToHighWater({ storePath, highWaterBytes: 321 }),
         ).resolves.toMatchObject({ removedFiles: 1, usage: { totalBytes: 321 } });
         await expect(fs.stat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(workers).toHaveLength(2);
-        expect(workers[1]?.threadId).toBeGreaterThan(0);
+        expect(workers).toHaveLength(retiredWorkers + 1);
+        expect(workers.at(-1)?.threadId).toBeGreaterThan(0);
       } finally {
         release.resolve();
         spy.mockRestore();

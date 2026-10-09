@@ -110,14 +110,15 @@ export function createAppleFmStream(native: Pick<AppleFmNative, "run">): StreamF
         }
         for (const call of result.toolCalls) {
           const toolCall = { type: "toolCall" as const, ...call };
+          const streamingCall = { ...toolCall, partialJson: JSON.stringify(call.arguments) };
           const contentIndex = message.content.length;
           message.content.push(toolCall);
           stream.push({ type: "toolcall_start", contentIndex, partial: message });
           stream.push({
             type: "toolcall_delta",
             contentIndex,
-            delta: JSON.stringify(call.arguments),
-            partial: message,
+            delta: streamingCall.partialJson,
+            partial: { ...message, content: [...message.content.slice(0, -1), streamingCall] },
           });
           stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: message });
         }

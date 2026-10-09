@@ -98,6 +98,7 @@ beforeAll(async () => {
     openAiChatCompletionsEnabled: true,
     openResponsesEnabled: true,
     getGatewayRequestContext: () => context,
+    httpRequestLifetime: context,
   };
   proxyListener = await reserveTestPortListener({
     offsets: [0],

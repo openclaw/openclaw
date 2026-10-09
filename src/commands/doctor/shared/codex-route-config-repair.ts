@@ -80,21 +80,16 @@ function rewriteAgentModelRefs(
   const context = { ...params, agent: params.agent };
   for (const key of AGENT_MODEL_CONFIG_KEYS) {
     const start = params.hits.length;
+    const rewrite =
+      key === "model" ? rewriteModelConfigSlot : rewriteModelConfigSlotIfCanonicalCodexRuntime;
+    rewrite({
+      ...context,
+      container: params.agent,
+      key,
+      path: `${params.path}.${key}`,
+    });
     if (key === "model") {
-      rewriteModelConfigSlot({
-        ...context,
-        container: params.agent,
-        key,
-        path: `${params.path}.${key}`,
-      });
       preserveCodexRuntimePolicyForHits(context, start);
-    } else {
-      rewriteModelConfigSlotIfCanonicalCodexRuntime({
-        ...context,
-        container: params.agent,
-        key,
-        path: `${params.path}.${key}`,
-      });
     }
   }
   rewriteStringModelSlotIfCanonicalCodexRuntime({
@@ -141,13 +136,10 @@ export function rewriteConfigModelRefs(params: {
   const nextConfig = structuredClone(params.cfg);
   const hits: CodexRouteHit[] = [];
   const runtimePolicyChanges: string[] = [];
-  const unsupportedCompactionChanges: string[] = [];
-  unsupportedCompactionChanges.push(
-    ...maybeMigrateLegacyLosslessCompactionConfig({
-      cfg: nextConfig,
-      env: params.env,
-    }),
-  );
+  const unsupportedCompactionChanges = maybeMigrateLegacyLosslessCompactionConfig({
+    cfg: nextConfig,
+    env: params.env,
+  });
   const preservedLegacyLosslessCompactionPaths = new Set(
     collectLegacyLosslessCompactionConfigs({
       cfg: nextConfig,

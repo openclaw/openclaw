@@ -40,9 +40,24 @@ export function observeSessionMaintenanceCompletion(
   const ageObserver = vi
     .spyOn(reclamationRun, "runSqliteSessionReclamation")
     .mockImplementation(async (params) => {
-      const result = await reclaim(params);
+      let consumed: SessionEntryMaintenancePlan | undefined;
+      const consume = params.consumeReadOnlyMaintenancePlan;
+      const result = await reclaim({
+        ...params,
+        ...(consume
+          ? {
+              consumeReadOnlyMaintenancePlan(read, assertCurrent) {
+                consume(read, assertCurrent);
+                consumed = read.value;
+              },
+            }
+          : {}),
+      });
       if (params.plan.databaseOptions.path !== databasePath) {
         return result;
+      }
+      if (result.kind === "maintenance-plan" && consumed && accept(consumed)) {
+        completed.resolve(consumed);
       }
       if (result.kind === "maintenance-plan") {
         const plan = result.value;
@@ -54,7 +69,6 @@ export function observeSessionMaintenanceCompletion(
             : undefined;
       } else if (
         params.plan.kind === "maintenance-age" &&
-        params.plan.expected &&
         result.kind === "maintenance-age" &&
         emptyPlan &&
         accept(emptyPlan)

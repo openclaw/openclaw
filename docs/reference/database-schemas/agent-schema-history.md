@@ -41,6 +41,8 @@ backup and its matching build, not just reinstalling the older package.
 | 22      | Exact transcript FTS row ownership for session-local deletion and reconciliation ([#153834](https://github.com/openclaw/openclaw/pull/153834))                                                                                                         | `v2026.9.6`  |
 | 23      | Selective transcript compression, binary memory embeddings, and stable memory full-text index identities                                                                                                                                               | `v2026.9.6`  |
 | 24      | Canonical session hot facts separated from keyed diff, skills, and system-prompt snapshots                                                                                                                                                             | `v2026.9.7`  |
+| 25      | Canonical writers validate their own rows; offline import and repair explicitly queue admission work instead of per-write invalidation triggers                                                                                                        | `Unreleased` |
+| 26      | Portable query columns for session maintenance, transcript navigation discriminators, and context-engine outbox state                                                                                                                                  | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -60,6 +62,74 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### JSON predicate columns
+
+Agent schema **26** promotes query fields from canonical JSON into `TEXT` and
+`INTEGER` columns. Session nodes record the session start time and whether optional
+history references are present. Transcript events record navigation type, custom
+type, display visibility, message role, and the last type/custom-type member used
+by legacy navigation; a validity flag preserves the existing malformed-input path.
+The context-engine turn outbox records its payload state. Shared TypeScript
+derivations populate these fields in the same statement as each JSON write.
+The session actor uses the same session derivation.
+
+The migration classifies every existing row once in its owning agent database's
+transaction, preserving canonical JSON and compressed transcript bytes. SQLite
+classification retains first-member JSON lookup and last-member legacy navigation
+semantics. Optional outbox tables remain absent until first use. Fresh and
+incognito databases start at schema 26. Later opens reuse admitted schema facts;
+runtime predicates do not fall back to JSON or re-run the backfill.
+
+The [accepted design](https://github.com/openclaw/openclaw/issues/169254) keeps
+predicate types portable and uses the same derivations for future engine adapters.
+PostgreSQL bootstrap DDL is generated from the canonical schema; an engine that
+supports this database must provide each forward migration under the same version.
+Size-limiting JSON projections and current writer-authority checks keep their
+existing owners and semantics.
+
+Schema 25 and older builds refuse schema 26. Rollback requires restoring the
+verified pre-migration backup with its matching build; never lower either version
+marker. Update-time Doctor retains its private rehearsal and verified backup
+requirements for older update drivers. First-upgrade cost scales with retained
+rows in each agent database and the number of databases on a host; implementation
+proof records both measurements.
+
+### Canonical writer validation
+
+Agent schema **25** retires the three `entry_valid` reset triggers and the nine
+node, window, and main-key canonical-validation triggers. The canonical session
+writer validates its serialized row before persisting it and writes the final
+validity value directly. Ordinary writes leave no pending validation marker and
+need no post-write row reread or validity update.
+
+`session_canonical_validation_pending` remains a derived admission queue.
+Offline imports, Doctor repairs, and main-key policy changes explicitly queue
+affected keys and revoke the canonical receipt. Gateway startup applies policy
+changes before readiness; external imports and repairs require exclusive
+maintenance custody while the Gateway is stopped. Other processes cannot write
+session tables alongside the Gateway. Live-authority checks remain with the
+existing effect and transaction owners.
+
+Doctor retains its backed-up orphan-window repair for both schemas 24 and 25
+before migration or the full migration backup. It validates the exact historical
+schema and removes only windows without a logical node, preserving their original
+history in the repair backup. Older media migrations use the same historical
+schema owner as the database upgrader.
+
+The migration checks the previous schema before retiring its triggers, seeds
+every existing node, and clears the persisted canonical receipt in the same
+transaction as both version markers. Admission then validates imported rows,
+including rows whose old pending table was empty. Invalid rows still require
+Doctor repair. Failed publication rolls back the trigger retirement, pending
+work, receipt change, and schema markers together. The migration preserves
+canonical session and transcript payloads; retention, permissions, and durability
+are unchanged.
+
+Schema 24 and older builds refuse schema 25. Binary rollback requires restoring
+the verified pre-upgrade backup with its matching older build and loses later
+writes; manually lowering version markers is unsupported. Published updaters use
+the existing [schema migration handoff](/reference/database-schemas/versioning#schema-bumps-and-older-updaters).
 
 ### Session hot facts and snapshots
 

@@ -9,6 +9,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createNativeSessionBindingAuthority } from "../agents/harness/native-session/binding-authority.js";
 import { recordChannelFeedbackEvent } from "../channels/feedback-reflection.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -30,18 +31,25 @@ import {
 } from "../config/sessions/transcript-write-context.js";
 import { createGatewayMetadataCloseFixture } from "../gateway/server-close.metadata.test-support.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { buildConversationRef } from "../routing/conversation-ref.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withCodexSessionTranscriptMirrorWriteLock } from "./codex-session-transcript-runtime.js";
+import {
+  withCodexSessionTranscriptMirrorWrite,
+  withCodexSessionTranscriptMirrorWriteLock,
+} from "./codex-session-transcript-runtime.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
   composeSessionTranscriptWriteAssertion,
+  withSessionTranscriptWrite,
   withSessionTranscriptWriteLock,
+  type SessionTranscriptWriteLockContext,
 } from "./session-transcript-runtime.js";
 
 async function seed(env: NodeJS.ProcessEnv, locator: "physical" | "logical" = "physical") {
@@ -106,11 +114,11 @@ it.each([false, true])(
           })
         : undefined;
       const expected = { ...message, custom: prepared ? "prepared value" : "stored value" };
-      const result = await withSessionTranscriptWriteLock(scope, (locked) =>
+      const result = await withSessionTranscriptWrite(scope, (locked) =>
         locked.appendMessage({
           eventId: "custom-json",
           message,
-          prepareMessageAfterIdempotencyCheckAsync: prepare,
+          ...(prepare ? { preparation: { prepareMessage: prepare } } : {}),
         }),
       );
       expect(result).toMatchObject({ appended: true, message: expected });
@@ -118,8 +126,11 @@ it.each([false, true])(
         expect.objectContaining({ id: "custom-json", message: expected }),
       );
       await expect(
-        withSessionTranscriptWriteLock(scope, (locked) =>
-          locked.appendMessage({ message, prepareMessageAfterIdempotencyCheckAsync: prepare }),
+        withSessionTranscriptWrite(scope, (locked) =>
+          locked.appendMessage({
+            message,
+            ...(prepare ? { preparation: { prepareMessage: prepare } } : {}),
+          }),
         ),
       ).resolves.toMatchObject({ appended: false, message: expected });
     });
@@ -132,39 +143,48 @@ it("rechecks the Codex prepared guard at the worker commit grant", async () => {
     let current = true;
     let inCommit = false;
     let checkedCommit = false;
-    const create = admission.createSqliteWorkerOperationAdmission;
-    using _ = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((authorize, attachment) =>
-        create((request, grant) => {
-          const publication = isRecord(request.facts) ? request.facts.publication : undefined;
-          inCommit =
-            request.stage === "commit" &&
-            isRecord(publication) &&
-            publication.kind === "session-entry-patch-committed";
-          if (inCommit) {
-            current = false;
-          }
-          try {
-            authorize(request, grant);
-          } finally {
-            inCommit = false;
-          }
-        }, attachment),
-      );
-    const guard = composeSessionTranscriptWriteAssertion([], () => {
-      checkedCommit ||= inCommit;
-      if (!current) {
-        throw new Error("Codex write authority revoked");
+    using _ = probe.admission(admission, (request, grant, authorize) => {
+      const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+      inCommit =
+        request.stage === "commit" &&
+        isRecord(publication) &&
+        publication.kind === "session-entry-patch-committed";
+      if (inCommit) {
+        current = false;
+      }
+      try {
+        authorize(request, grant);
+      } finally {
+        inCommit = false;
       }
     });
+    const source = createNativeSessionBindingAuthority(
+      [
+        {
+          read: scope,
+          sessionId: scope.sessionId,
+          createSupersededError: () => new Error("Codex lineage superseded"),
+        },
+      ],
+      () => {},
+    );
+    const guard = composeSessionTranscriptWriteAssertion(
+      [source.assertLegacyCurrent],
+      (assertSources) => {
+        assertSources();
+        checkedCommit ||= inCommit;
+        if (!current) {
+          throw new Error("Codex write authority revoked");
+        }
+      },
+    );
     const sql = observeHostDataSql();
     try {
       await expect(
-        withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
+        withCodexSessionTranscriptMirrorWrite(scope, (locked) =>
           locked.appendMessageWithMessageSequence({
             message: { role: "assistant", content: "revoked" },
-            beforeFreshMessageCommit: guard,
+            preparation: { source: guard },
           }),
         ),
       ).rejects.toThrow("Codex write authority revoked");
@@ -178,7 +198,7 @@ it("rechecks the Codex prepared guard at the worker commit grant", async () => {
 });
 
 it.each(["physical", "logical"] as const)(
-  "retains the prepared owner's %s target binding for a locked write",
+  "retains the prepared owner's %s target binding for writes and facts queries",
   async (locator) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const scope = await seed(env, locator);
@@ -192,6 +212,48 @@ it.each(["physical", "logical"] as const)(
         ),
       ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
       expect(messageIds(other)).toEqual([]);
+      await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        eventId: "captured-facts",
+        message: { role: "assistant", content: "captured target", idempotencyKey: "captured" },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        ...other,
+        eventId: "foreign-facts",
+        message: { role: "assistant", content: "foreign target", idempotencyKey: "foreign" },
+      });
+      const query = {
+        idempotencyKeys: ["captured", "foreign"],
+        scope: { ...other, path: openOpenClawAgentDatabase(other).path },
+        sessionKey: other.sessionKey,
+        sessionId: other.sessionId,
+      };
+      await withCodexSessionTranscriptMirrorWrite(scope, async (transcript) => {
+        const facts = await transcript.readMessageFacts(query);
+        expect(
+          [...facts.existingIdempotencyKeys],
+          "Facts queries must retain their captured transcript target",
+        ).toEqual(["captured"]);
+        expect(facts.messagesByIdempotencyKey.get("captured")).toMatchObject({
+          content: "captured target",
+        });
+        expect(facts.anchorsByIdempotencyKey.get("captured")).toMatchObject({
+          entryId: "captured-facts",
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+        });
+      });
+      let retainedFacts: SessionTranscriptWriteLockContext["readMessageFacts"] | undefined;
+      await withSessionTranscriptWrite(scope, async (transcript) => {
+        retainedFacts = transcript.readMessageFacts;
+        const facts = await transcript.readMessageFacts(query);
+        expect([...facts.existingIdempotencyKeys]).toEqual(["captured"]);
+        expect(facts.messagesByIdempotencyKey.get("captured")).toMatchObject({
+          content: "captured target",
+        });
+      });
+      assert(retainedFacts);
+      await expect(retainedFacts(query)).rejects.toThrow("Transcript write context is closed");
     });
   },
 );
@@ -344,11 +406,11 @@ it.each([
       const options = {
         eventId: "prepared-grant",
         message,
-        beforeFreshMessageCommit,
+        preparation: { source: beforeFreshMessageCommit },
       };
       const sql = observeHostDataSql();
       try {
-        const operation = withSessionTranscriptWriteLock(scope, (locked) =>
+        const operation = withSessionTranscriptWrite(scope, (locked) =>
           locked.appendMessage(options),
         );
         if (stale && !replay) {
@@ -362,6 +424,126 @@ it.each([
         sql.restore();
       }
       expect(messageIds(scope)).toEqual(stale && !replay ? [] : ["prepared-grant"]);
+    });
+  },
+);
+
+it.each(["owned", "fresh"] as const)(
+  "accepts worker conversation matches before checking %s locked authority",
+  async (authorityKind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const scope = await seed(env);
+      const conversationRef = buildConversationRef({
+        channel: "reef",
+        accountId: "default",
+        kind: "direct",
+        peerId: "locked-unbound",
+      });
+      let inSourceGrant = false;
+      let checkedSourceGrant = false;
+      let acceptedMatches: readonly number[] | undefined;
+      const prepared = await withSessionEntryReadOnlyInWorker(
+        scope,
+        () => {},
+        async (read, owner) => {
+          assert(read.ok && read.value);
+          const captured = captureSessionEntryCurrentRead(scope, owner);
+          assert(captured.kind === "file");
+          return {
+            assertCurrent() {
+              captured.assertSourceCurrent();
+              if (inSourceGrant && acceptedMatches) {
+                expect(acceptedMatches).toEqual([1]);
+                checkedSourceGrant = true;
+              }
+            },
+            checks: [
+              {
+                predicate: {
+                  source: captured.source,
+                  sessionKey: captured.source.sessionKey,
+                  fields: ["sessionId"],
+                  expected: read.value,
+                  conversationAlternatives: [
+                    [{ conversationRef, sessionKey: scope.sessionKey }],
+                    [{ conversationRef, sessionKey: null }],
+                  ],
+                },
+                acceptConversationMatches(matches: readonly number[]) {
+                  acceptedMatches = matches;
+                  return [...matches];
+                },
+                refuse() {
+                  throw new Error("Locked conversation source changed");
+                },
+              },
+            ],
+          } satisfies PreparedSessionSourceAuthority;
+        },
+      );
+      const create = admission.createSqliteWorkerOperationAdmission;
+      using _ = vi
+        .spyOn(admission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((authorize, attachment) =>
+          create((request, grant) => {
+            const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+            inSourceGrant =
+              request.stage === "transaction" &&
+              isRecord(publication) &&
+              publication.kind === "session-transcript-lock-source" &&
+              publication.fresh === (authorityKind === "fresh");
+            if (inSourceGrant) {
+              acceptedMatches = undefined;
+              checkedSourceGrant = false;
+            }
+            try {
+              authorize(request, () => {
+                if (inSourceGrant) {
+                  expect(acceptedMatches).toEqual([1]);
+                  expect(checkedSourceGrant).toBe(true);
+                }
+                return grant();
+              });
+            } finally {
+              inSourceGrant = false;
+            }
+          }, attachment),
+        );
+      let sourcePrepared = false;
+      const guard: SessionSourceAssertion = Object.assign(
+        () => {
+          if (sourcePrepared) {
+            throw new Error("Locked source used its native callback after preparation");
+          }
+          prepared.assertCurrent();
+        },
+        {
+          prepareSessionSource: async () => {
+            sourcePrepared = true;
+            return prepared;
+          },
+        },
+      );
+      const write = () =>
+        withSessionTranscriptWriteLock(scope, (locked) =>
+          locked.appendMessage({
+            eventId: "matched-source",
+            message: { role: "assistant", content: "authorized conversation" },
+            ...(authorityKind === "fresh" ? { beforeFreshMessageCommit: guard } : {}),
+          }),
+        );
+      const sql = observeHostDataSql();
+      try {
+        await (authorityKind === "owned"
+          ? withSessionTranscriptWriteAssertion(scope, guard, write)
+          : write());
+        expect(checkedSourceGrant).toBe(true);
+        expect(acceptedMatches).toEqual([1]);
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      expect(messageIds(scope)).toEqual(["matched-source"]);
     });
   },
 );
@@ -567,112 +749,131 @@ it("retains a committed append but suppresses queued publication when its callba
   });
 });
 
-it("settles two unawaited worker appends FIFO across the real Gateway close prelude", async ({
-  signal,
-}) => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-locked-append-close");
-  const entered = createDeferred();
-  const release = createDeferred();
-  const prelude = createDeferred();
-  const accepted: Promise<unknown>[] = [];
-  let writing: Promise<unknown> | undefined;
-  let closing: Promise<void> | undefined;
-  try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = fixture.kernels.get(port);
-    assert(kernel);
-    const scope = await seed(fixture.state.env);
-    const database = openOpenClawAgentDatabase(scope);
-    const order: string[] = [];
-    let checkedAfterAbort = false;
-    const assertCurrent = composeSessionTranscriptWriteAssertion([], () => {
-      expect(database.db.isOpen).toBe(true);
-      checkedAfterAbort ||= kernel.scheduler.signal.aborted;
-    });
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    kernel.scheduler.schedule({
-      id: "accepted-locked-append",
-      delayMs: 0,
-      async run() {
-        writing = withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
-          withSessionTranscriptWriteLock(scope, (locked) => {
-            accepted.push(
-              locked
-                .appendMessage({
-                  eventId: "first",
-                  message: { role: "assistant", content: "first" },
-                  prepareMessageAfterIdempotencyCheckAsync: async (message) => {
-                    entered.resolve();
-                    await release.promise;
-                    return message;
-                  },
-                })
-                .then((result) => {
-                  order.push("first");
-                  return result;
-                }),
-            );
-            accepted.push(
-              locked
-                .appendMessage({
-                  eventId: "second",
-                  message: { role: "assistant", content: "second" },
-                })
-                .then((result) => {
-                  order.push("second");
-                  return result;
-                }),
-            );
-            return "callback returned";
-          }),
-        );
-        expect(await writing).toBe("callback returned");
-        expect(database.db.isOpen).toBe(true);
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    vi.useRealTimers();
-    assert(writing);
-    await withinTest(
-      awaitGateBeforeSettlement(entered.promise, writing, "Lock was not admitted"),
-      signal,
-    );
-    kernel.scheduler.signal.addEventListener("abort", () => prelude.resolve(), { once: true });
-    closing = server.close({ reason: "accepted locked append close proof" });
-    await withinTest(
-      awaitGateBeforeSettlement(prelude.promise, closing, "Gateway skipped close prelude"),
-      signal,
-    );
-    expect(kernel.scheduler.signal.aborted).toBe(true);
-    expect(order).toEqual([]);
-    expect(database.db.isOpen).toBe(true);
-    release.resolve();
-    await withinTest(Promise.all([writing, closing, ...accepted]), signal);
-    expect(checkedAfterAbort).toBe(true);
-    expect(order).toEqual(["first", "second"]);
-    expect(database.db.isOpen).toBe(false);
-    const reopened = new DatabaseSync(database.path, { readOnly: true });
+it.for(["worker", "native"] as const)(
+  "settles two unawaited %s appends FIFO across the real Gateway close prelude",
+  async (kind, { signal }) => {
+    const fixture = await createGatewayMetadataCloseFixture(`gateway-${kind}-locked-close`);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const prelude = createDeferred();
+    const accepted: Promise<unknown>[] = [];
+    let writing: Promise<unknown> | undefined;
+    let closing: Promise<void> | undefined;
+    let retained: SessionTranscriptWriteLockContext | undefined;
     try {
-      const rows = reopened
-        .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
-        .all(scope.sessionId);
-      expect(
-        rows.map((row) => {
-          assert(typeof row.event_json === "string");
-          return JSON.parse(row.event_json).id;
-        }),
-      ).toEqual([scope.sessionId, "first", "second"]);
+      const port = await fixture.reservePort();
+      const server = await fixture.start(port);
+      const kernel = fixture.kernels.get(port);
+      assert(kernel);
+      const scope = await seed(fixture.state.env);
+      const database = openOpenClawAgentDatabase(scope);
+      const order: string[] = [];
+      let checkedAfterAbort = false;
+      const assertCurrent = () => {
+        expect(database.db.isOpen).toBe(true);
+        checkedAfterAbort ||= kernel.scheduler.signal.aborted;
+      };
+      // Opaque released SDK authority retains the native adapter; prepared authority uses the worker.
+      const authority =
+        kind === "native"
+          ? assertCurrent
+          : composeSessionTranscriptWriteAssertion([], assertCurrent);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      kernel.scheduler.schedule({
+        id: "accepted-locked-append",
+        delayMs: 0,
+        async run() {
+          writing = withSessionTranscriptWriteAssertion(scope, authority, () =>
+            withSessionTranscriptWriteLock(scope, (locked) => {
+              retained = locked;
+              const prepareFirst = async (message: unknown) => {
+                if (kind === "native") {
+                  expect(database.db.isTransaction).toBe(false);
+                }
+                entered.resolve();
+                await release.promise;
+                return message;
+              };
+              for (const eventId of ["first", "second"]) {
+                accepted.push(
+                  locked
+                    .appendMessage({
+                      eventId,
+                      message: { role: "assistant", content: eventId },
+                      prepareMessageAfterIdempotencyCheckAsync:
+                        eventId === "first" ? prepareFirst : undefined,
+                      ...(kind === "native"
+                        ? {
+                            beforeFreshMessageCommit: () => {
+                              expect(database.db.isTransaction).toBe(true);
+                              order.push(eventId);
+                            },
+                          }
+                        : {}),
+                    })
+                    .then((result) => {
+                      if (kind === "worker") {
+                        order.push(eventId);
+                      }
+                      return result;
+                    }),
+                );
+              }
+              return "callback returned";
+            }),
+          );
+          expect(await writing).toBe("callback returned");
+          expect(database.db.isOpen).toBe(true);
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+      assert(writing);
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, writing, "Lock was not admitted"),
+        signal,
+      );
+      kernel.scheduler.signal.addEventListener("abort", () => prelude.resolve(), { once: true });
+      closing = server.close({ reason: "accepted locked append close proof" });
+      await withinTest(
+        awaitGateBeforeSettlement(prelude.promise, closing, "Gateway skipped close prelude"),
+        signal,
+      );
+      expect(kernel.scheduler.signal.aborted).toBe(true);
+      assert(retained);
+      await expect(retained.publishUpdate()).rejects.toThrow("context is closed");
+      await expect(retained.readEvents()).rejects.toThrow("context is closed");
+      expect(order).toEqual([]);
+      expect(database.db.isOpen).toBe(true);
+      release.resolve();
+      await withinTest(Promise.all([writing, closing, ...accepted]), signal);
+      if (kind === "worker") {
+        expect(checkedAfterAbort).toBe(true);
+      }
+      expect(order).toEqual(["first", "second"]);
+      expect(database.db.isOpen).toBe(false);
+      const reopened = new DatabaseSync(database.path, { readOnly: true });
+      try {
+        const rows = reopened
+          .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
+          .all(scope.sessionId);
+        expect(
+          rows.map((row) => {
+            assert(typeof row.event_json === "string");
+            return JSON.parse(row.event_json).id;
+          }),
+        ).toEqual([scope.sessionId, "first", "second"]);
+      } finally {
+        reopened.close();
+      }
     } finally {
-      reopened.close();
+      vi.useRealTimers();
+      release.resolve();
+      await Promise.allSettled([writing, closing, ...accepted]);
+      await fixture.cleanup();
     }
-  } finally {
-    vi.useRealTimers();
-    release.resolve();
-    await Promise.allSettled([writing, closing, ...accepted]);
-    await fixture.cleanup();
-  }
-});
+  },
+);
 
 it.each(["live", "revoked", "foreign"] as const)(
   "retains logical mirror writer binding (%s)",

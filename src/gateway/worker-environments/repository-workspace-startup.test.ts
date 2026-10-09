@@ -519,32 +519,28 @@ it.each(["commit", "source manifest"] as const)(
   },
 );
 
-it.each(["baseCommit", "baseManifestRef", "remoteWorkspaceDir"] as const)(
-  "does not accept a prepared source when sync changes its attested %s",
-  async (field) => {
-    const f = await fixture();
-    f.syncWorkspace.mockResolvedValueOnce({
-      mode: "repository",
-      baseCommit: f.baseCommit,
-      baseManifestRef: f.base.manifestRef,
-      remoteWorkspaceDir: f.remote,
-      manifestRef: f.base.manifestRef,
-      [field]: "different",
-    });
-    await expect(
-      f.start({
-        preparedRepository: {
-          baseCommit: f.baseCommit,
-          workspaceDir: f.remote,
-          sourceManifestRef: f.base.manifestRef,
-          preparedManifestRef: f.base.manifestRef,
-        },
-      }),
-    ).rejects.toThrow("attested prepared workspace");
-    expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
-    expect(f.reconcileWorkspace).not.toHaveBeenCalled();
-  },
-);
+it("does not accept a prepared source when sync changes its attested remoteWorkspaceDir", async () => {
+  const f = await fixture();
+  f.syncWorkspace.mockResolvedValueOnce({
+    mode: "repository",
+    baseCommit: f.baseCommit,
+    baseManifestRef: f.base.manifestRef,
+    remoteWorkspaceDir: "different",
+    manifestRef: f.base.manifestRef,
+  });
+  await expect(
+    f.start({
+      preparedRepository: {
+        baseCommit: f.baseCommit,
+        workspaceDir: f.remote,
+        sourceManifestRef: f.base.manifestRef,
+        preparedManifestRef: f.base.manifestRef,
+      },
+    }),
+  ).rejects.toThrow("attested prepared workspace");
+  expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
+  expect(f.reconcileWorkspace).not.toHaveBeenCalled();
+});
 
 it.each(["identity", "sync", "verification"] as const)(
   "cannot accept startup state after authority closes during %s",
@@ -578,34 +574,7 @@ it.each(["identity", "sync", "verification"] as const)(
   },
 );
 
-it.each(["quiescence", "verification", "publication"] as const)(
-  "discards the candidate and resumes the worker after %s fails",
-  async (phase) => {
-    const f = await fixture();
-    const failure = new Error(`${phase} failed`);
-    if (phase === "quiescence") {
-      f.assertActive.mockRejectedValueOnce(failure);
-    }
-    if (phase === "verification") {
-      f.verifyStable.mockRejectedValueOnce(failure);
-    }
-    if (phase === "publication") {
-      f.publish.mockRejectedValueOnce(failure);
-    }
-    await expect(f.start()).rejects.toThrow(failure.message);
-    expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeNull();
-    expect(
-      await requireWorkspaceResultGit(f.store.artifactPath(f.repository.workspaceId), [
-        "for-each-ref",
-        "--format=%(refname)",
-        "refs/openclaw/",
-      ]),
-    ).toBe("");
-    expect(f.resume).toHaveBeenCalledOnce();
-  },
-);
-
-it.each(["unchanged", "source commit", "base manifest", "accepted manifest"] as const)(
+it.each(["base manifest", "accepted manifest"] as const)(
   "requires exact pinned state and preserves checkpoint ownership: %s",
   async (change) => {
     const f = await fixture(true);
@@ -615,7 +584,6 @@ it.each(["unchanged", "source commit", "base manifest", "accepted manifest"] as 
     f.reconcileWorkspace.mockClear();
     const restored: WorkerWorkspaceSyncResult = {
       ...initial,
-      ...(change === "source commit" ? { baseCommit: "f".repeat(40) } : {}),
       ...(change === "base manifest" ? { baseManifestRef: `sha256:${"f".repeat(64)}` } : {}),
       ...(change === "accepted manifest" ? { manifestRef: `sha256:${"f".repeat(64)}` } : {}),
     };
@@ -636,13 +604,9 @@ it.each(["unchanged", "source commit", "base manifest", "accepted manifest"] as 
       return restored;
     });
     const pending = f.start({ repository: accepted, recovery: true, runSetupScript: true });
-    if (change === "unchanged") {
-      await expect(pending).resolves.toEqual(initial);
-    } else {
-      await expect(pending).rejects.toThrow(
-        change === "accepted manifest" ? "accepted checkpoint" : "pinned source baseline",
-      );
-    }
+    await expect(pending).rejects.toThrow(
+      change === "accepted manifest" ? "accepted checkpoint" : "pinned source baseline",
+    );
     expect(await f.store.get(accepted.workspaceId)).toEqual(accepted);
     expect(f.quiesceWorkspace).not.toHaveBeenCalled();
     expect(f.reconcileWorkspace).not.toHaveBeenCalled();

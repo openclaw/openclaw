@@ -4,6 +4,7 @@ import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { sleepWithAbort } from "@openclaw/retry";
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
+import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
@@ -18,8 +19,15 @@ import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
 } from "../infra/sqlite-snapshot-source.js";
+import { isUpdateRehearsalPrivateDatabase } from "../infra/update-rehearsal-paths.js";
+import { getChildLogger } from "../logging/logger.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  artifactPreservingReads,
+  isArtifactPreservingStateRead,
+  withArtifactPreservingStateReads,
+} from "./artifact-preserving-state-reads.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   openClawStateDatabaseCache,
@@ -66,10 +74,10 @@ import type {
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 
-const artifactPreservingReads = resolveGlobalSingleton(
-  Symbol.for("openclaw.artifactPreservingStateReads"),
-  () => new AsyncLocalStorage<boolean>(),
-);
+export {
+  isArtifactPreservingStateRead,
+  withArtifactPreservingStateReads,
+} from "./artifact-preserving-state-reads.js";
 
 const disposableStateReads = resolveGlobalSingleton(
   Symbol.for("openclaw.disposableStateReads"),
@@ -154,6 +162,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     const releaseSource = retainSnapshotTempDirectory(
       prepared.cleanupRoot ?? path.dirname(prepared.location),
     );
+    let readSucceeded = false;
     const snapshot = Object.assign(
       createRetainedReadScope(pathname, admission.identity, async () => {
         releaseSource();
@@ -163,6 +172,20 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
             return;
           }
         } catch (error) {
+          if (
+            readSucceeded &&
+            !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources &&
+            error instanceof SqliteSnapshotCleanupError &&
+            hasErrnoCode(error.cause, "EBUSY")
+          ) {
+            // Logical close can precede native release on Bun Windows. The
+            // snapshot registry keeps these private bytes for later cleanup.
+            getChildLogger({ subsystem: "infra/sqlite-snapshot" }).warn(
+              { path: prepared.cleanupRoot, errorCode: "EBUSY" },
+              "Discovery snapshot cleanup deferred until native SQLite resources are released.",
+            );
+            return;
+          }
           cause = error;
         }
         throw new SqliteSnapshotCleanupError(
@@ -188,7 +211,9 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
         controller.signal.throwIfAborted();
         assertHostAdmission();
         admission.assertCurrent();
-        return await operation();
+        const result = await operation();
+        readSucceeded = true;
+        return result;
       });
     } finally {
       callerSignal?.removeEventListener("abort", closeFromCaller);
@@ -217,18 +242,10 @@ export async function withDisposableOpenClawStateReads<T>(
 
 function requiresArtifactPreservingSnapshot(pathname: string): boolean {
   return (
-    isArtifactPreservingStateRead() &&
+    isArtifactPreservingStateRead("shared", pathname) &&
+    !isUpdateRehearsalPrivateDatabase(pathname, process.env) &&
     !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname)
   );
-}
-
-/** Admission scopes every nested reader without changing normal live-read semantics. */
-export function withArtifactPreservingStateReads<T>(operation: () => T): T {
-  return artifactPreservingReads.run(true, operation);
-}
-
-export function isArtifactPreservingStateRead(): boolean {
-  return artifactPreservingReads.getStore() === true;
 }
 
 type ScopedRead = ReturnType<typeof openOpenClawStateReadOnlyLocation>;
@@ -307,6 +324,13 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
       reused: true,
       value: withOpenClawStateReadOnlyLocation(operation, pathname, snapshot.location),
     };
+  }
+  if (
+    isArtifactPreservingStateRead("agent", pathname) &&
+    (requiresArtifactPreservingSnapshot(pathname) ||
+      isUpdateRehearsalPrivateDatabase(pathname, process.env))
+  ) {
+    return { reused: false };
   }
   return withCachedOpenClawStateDatabaseReadOnly(
     operation,
@@ -460,6 +484,7 @@ function startRetainedOpenClawStateRead(
     mapError,
     preferIndependentWarmRead,
     onChunk,
+    onChunkAsync,
   }: OpenClawStateReadOptions,
 ): OpenClawStateReadCompletion {
   const currentRead = current || live;
@@ -496,6 +521,7 @@ function startRetainedOpenClawStateRead(
       preserveArtifacts,
       preferIndependentWarmRead,
       onChunk,
+      onChunkAsync,
       controller,
       signal: readSignal,
       receipt,

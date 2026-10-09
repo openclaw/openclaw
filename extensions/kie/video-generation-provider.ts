@@ -2,7 +2,7 @@ import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -127,7 +127,7 @@ export function buildKieVideoGenerationProvider(): VideoGenerationProvider {
     defaultModel: DEFAULT_KIE_VIDEO_MODEL,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models,
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "kie", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "kie", ...ctx }),
     capabilities: kieVideoCapabilities(findKieVideoFamily(DEFAULT_KIE_VIDEO_MODEL)),
     catalogByModel: Object.fromEntries(
       models.map((model) => {

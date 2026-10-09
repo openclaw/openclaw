@@ -11,6 +11,7 @@ import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { truncateUtf16WithEllipsis as truncateText } from "../../shared/text-truncate.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { isAcpTagVisible, resolveAcpProjectionSettings } from "./acp-stream-settings.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -101,7 +102,8 @@ export function createAcpReplyProjector(params: {
   accountId?: string;
 }) {
   const settings = resolveAcpProjectionSettings(params.cfg);
-  const hiddenBoundarySeparator = settings.deliveryMode === "live" ? " " : "\n\n";
+  const isLive = settings.deliveryMode === "live";
+  const hiddenBoundarySeparator = isLive ? " " : "\n\n";
   const streaming = resolveEffectiveBlockStreamingConfig({
     cfg: params.cfg,
     provider: params.provider,
@@ -111,13 +113,17 @@ export function createAcpReplyProjector(params: {
   });
   const blockReplyPipeline = createBlockReplyPipeline({
     onBlockReply: async (payload) => {
-      await params.deliver("block", payload);
+      // The chunker emits disjoint pieces, not replacement snapshots.
+      await params.deliver(
+        "block",
+        copyReplyPayloadMetadata(payload, { ...payload, textMode: "delta" }),
+      );
     },
     timeoutMs: ACP_BLOCK_REPLY_TIMEOUT_MS,
-    coalescing: settings.deliveryMode === "live" ? undefined : streaming.coalescing,
+    coalescing: isLive ? undefined : streaming.coalescing,
   });
   const chunker = new EmbeddedBlockChunker(
-    settings.deliveryMode === "live" ? { ...streaming.chunking, minChars: 1 } : streaming.chunking,
+    isLive ? { ...streaming.chunking, minChars: 1 } : streaming.chunking,
   );
   const filterConversationContext = createVerifiedConversationContextStreamFilter(
     params.getConversationContext,
@@ -131,16 +137,12 @@ export function createAcpReplyProjector(params: {
   let lastUsageTuple: string | undefined;
   let lastVisibleOutputTail: string | undefined;
   let pendingHiddenBoundary = false;
-  let liveBufferText = "";
-  let finalOnlyOutputText = "";
+  let bufferedText = "";
   let liveIdleTimer: NodeJS.Timeout | undefined;
   const pendingToolDeliveries: BufferedToolDelivery[] = [];
   const toolLifecycleById = new Map<string, ToolLifecycleState>();
 
   const clearLiveIdleTimer = () => {
-    if (!liveIdleTimer) {
-      return;
-    }
     clearTimeout(liveIdleTimer);
     liveIdleTimer = undefined;
   };
@@ -155,37 +157,37 @@ export function createAcpReplyProjector(params: {
   };
 
   const flushLiveBuffer = (idle = false) => {
-    if (settings.deliveryMode !== "live" || !liveBufferText) {
+    if (!bufferedText) {
       return;
     }
-    if (idle && !shouldFlushLiveBufferOnIdle(liveBufferText)) {
+    if (idle && !shouldFlushLiveBufferOnIdle(bufferedText)) {
       return;
     }
-    const text = liveBufferText;
-    liveBufferText = "";
+    const text = bufferedText;
+    bufferedText = "";
     chunker.append(text);
     drainChunker();
   };
 
   const scheduleLiveIdleFlush = () => {
-    if (settings.deliveryMode !== "live" || !liveBufferText) {
+    if (!bufferedText) {
       return;
     }
     clearLiveIdleTimer();
     liveIdleTimer = setTimeout(() => {
       flushLiveBuffer(true);
-      if (liveBufferText) {
+      if (bufferedText) {
         scheduleLiveIdleFlush();
       }
     }, liveIdleFlushMs);
   };
 
   const flush = async (): Promise<void> => {
-    if (settings.deliveryMode === "live") {
+    if (isLive) {
       clearLiveIdleTimer();
       flushLiveBuffer();
-    }
-    if (settings.deliveryMode === "final_only") {
+      drainChunker();
+    } else {
       if (await params.shouldSendToolSummaries()) {
         for (const entry of pendingToolDeliveries.splice(0)) {
           await params.deliver("tool", entry.payload, entry.meta);
@@ -193,18 +195,16 @@ export function createAcpReplyProjector(params: {
       } else {
         pendingToolDeliveries.length = 0;
       }
-      if (finalOnlyOutputText.trim().length > 0) {
-        const text = finalOnlyOutputText;
-        finalOnlyOutputText = "";
+      if (bufferedText.trim().length > 0) {
+        const text = bufferedText;
+        bufferedText = "";
         await params.deliver("final", { text });
       }
-    } else {
-      drainChunker();
     }
     await blockReplyPipeline.flush({ force: true });
   };
   const deliverTool = async (text: string, meta?: AcpDispatchDeliveryMeta) => {
-    if (settings.deliveryMode === "final_only") {
+    if (!isLive) {
       pendingToolDeliveries.push({ payload: { text }, ...(meta ? { meta } : {}) });
     } else {
       await flush();
@@ -281,7 +281,7 @@ export function createAcpReplyProjector(params: {
       allowEdit: Boolean(toolCallId && event.tag === "tool_call_update"),
     };
     await deliverTool(toolSummary, deliveryMeta);
-    if (settings.deliveryMode === "final_only") {
+    if (!isLive) {
       markHiddenToolBoundary(event);
     }
     lastToolHash = hash;
@@ -330,16 +330,14 @@ export function createAcpReplyProjector(params: {
         emittedOutputChars += accepted.length;
         const safeText = filterConversationContext(accepted);
         lastVisibleOutputTail = safeText.slice(-1) || lastVisibleOutputTail;
-        if (settings.deliveryMode === "live") {
-          liveBufferText += safeText;
-          if (shouldFlushLiveBufferOnBoundary(liveBufferText)) {
+        bufferedText += safeText;
+        if (isLive) {
+          if (shouldFlushLiveBufferOnBoundary(bufferedText)) {
             clearLiveIdleTimer();
             flushLiveBuffer();
           } else {
             scheduleLiveIdleFlush();
           }
-        } else {
-          finalOnlyOutputText += safeText;
         }
       }
       if (accepted.length < text.length) {

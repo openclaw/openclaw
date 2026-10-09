@@ -7,7 +7,7 @@ import {
   createIsolatedRegressionJob,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import {
   runWithOwnedSessionTranscriptWrite,
@@ -32,7 +32,6 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { CommandLane } from "../../process/lanes.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { isCronJobActive } from "../active-jobs.js";
@@ -44,7 +43,7 @@ import {
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { remove, update } from "./ops-mutations.js";
-import { enqueueRun, run } from "./ops-run.js";
+import { enqueueRun, run, waitForManualRun } from "./ops-run.js";
 import type { CronEvent } from "./state.js";
 import { ensureLoaded } from "./store.js";
 import { onTimer } from "./timer.test-support.js";
@@ -74,8 +73,6 @@ describe("cron service ops regressions", () => {
   it("transfers queued manual runs out of the released request root", async () => {
     vi.useRealTimers();
     resetGatewayWorkAdmission();
-    clearCommandLane(CommandLane.Cron);
-    setCommandLaneConcurrency(CommandLane.Cron, 1);
 
     const childLane = "cron-manual-admission-child";
     clearCommandLane(childLane);
@@ -124,14 +121,14 @@ describe("cron service ops regressions", () => {
 
       enterRunner.resolve();
       await finished.promise;
-      await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
+      await Promise.all(state.queuedManualRuns.values());
       expect(terminalEvent).toMatchObject({ status: "ok" });
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
       requestRoot?.release();
       enterRunner.resolve();
+      await Promise.allSettled(state.queuedManualRuns.values());
       clearCommandLane(childLane);
-      clearCommandLane(CommandLane.Cron);
       resetGatewayWorkAdmission();
     }
   });
@@ -139,7 +136,6 @@ describe("cron service ops regressions", () => {
   it("runs a manual run queued from an agent turn outside that turn's transcript lifecycle", async () => {
     vi.useRealTimers();
     resetGatewayWorkAdmission();
-    clearCommandLane(CommandLane.Cron);
     const store = opsRegressionFixtures.makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const job = createDueIsolatedJob({
@@ -187,7 +183,7 @@ describe("cron service ops regressions", () => {
       expect(reportWrites).toEqual(["report"]);
     } finally {
       callerTurnEnded.resolve();
-      clearCommandLane(CommandLane.Cron);
+      await Promise.allSettled(state.queuedManualRuns.values());
       resetGatewayWorkAdmission();
     }
   });
@@ -245,10 +241,8 @@ describe("cron service ops regressions", () => {
     }
   });
 
-  it("keeps an acknowledged manual reservation ahead of a later timer tick", async () => {
+  it("keeps an acknowledged manual run ahead of a later timer tick", async ({ signal }) => {
     vi.useRealTimers();
-    clearCommandLane(CommandLane.Cron);
-    setCommandLaneConcurrency(CommandLane.Cron, 1);
 
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.now() - 1;
@@ -261,14 +255,6 @@ describe("cron service ops regressions", () => {
       state: { nextRunAtMs: dueAt },
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-    const blockerStarted = createDeferred();
-    const releaseBlocker = createDeferred();
-    const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
-      blockerStarted.resolve();
-      return await releaseBlocker.promise;
-    });
-    await blockerStarted.promise;
 
     let resolveRun:
       | ((value: { status: "ok" | "error" | "skipped"; summary?: string; error?: string }) => void)
@@ -301,29 +287,29 @@ describe("cron service ops regressions", () => {
       },
     });
 
-    const ack = await enqueueRun(state, job.id, "force");
-    const runId = expectQueuedRunAck(ack);
+    try {
+      const ack = await enqueueRun(state, job.id, "force");
+      const runId = expectQueuedRunAck(ack);
+      await withinTest(started.promise, signal);
 
-    await onTimer(state);
-    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      await onTimer(state);
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
-    releaseBlocker.resolve();
-    await blocker;
-    await started.promise;
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-
-    resolveRun?.({ status: "ok", summary: "done" });
-    await finished.promise;
-    await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
-    expect(events.filter((event) => event.action === "finished")).toEqual([
-      expect.objectContaining({
-        jobId: job.id,
-        action: "finished",
-        status: "ok",
-        runId,
-      }),
-    ]);
-    clearCommandLane(CommandLane.Cron);
+      resolveRun?.({ status: "ok", summary: "done" });
+      await withinTest(finished.promise, signal);
+      await expect(waitForManualRun(state, runId, 5_000, signal)).resolves.toBe(true);
+      expect(events.filter((event) => event.action === "finished")).toEqual([
+        expect.objectContaining({
+          jobId: job.id,
+          action: "finished",
+          status: "ok",
+          runId,
+        }),
+      ]);
+    } finally {
+      resolveRun?.({ status: "ok", summary: "done" });
+      await Promise.allSettled(state.queuedManualRuns.values());
+    }
   });
 
   it("manual due runs honor retry backoff while force can run the preserved occurrence", async () => {
@@ -607,8 +593,6 @@ describe("cron service ops regressions", () => {
 
   it("keeps a queued quiet schedule event separate from its one terminal event", async () => {
     vi.useRealTimers();
-    clearCommandLane(CommandLane.Cron);
-    setCommandLaneConcurrency(CommandLane.Cron, 1);
 
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:02.000Z");
@@ -649,7 +633,7 @@ describe("cron service ops regressions", () => {
       const ack = await enqueueRun(state, job.id, "due");
       const runId = expectQueuedRunAck(ack);
       await terminal.promise;
-      await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
+      await expect(waitForManualRun(state, runId, 5_000)).resolves.toBe(true);
 
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
       expect(events.map((event) => event.action)).toEqual(["started", "scheduled", "finished"]);
@@ -662,7 +646,7 @@ describe("cron service ops regressions", () => {
         }),
       ]);
     } finally {
-      clearCommandLane(CommandLane.Cron);
+      await Promise.allSettled(state.queuedManualRuns.values());
     }
   });
 
@@ -689,8 +673,6 @@ describe("cron service ops regressions", () => {
     },
   ])("aborts and records a queued isolated job when it is $mutation", async (testCase) => {
     vi.useRealTimers();
-    clearCommandLane(CommandLane.Cron);
-    setCommandLaneConcurrency(CommandLane.Cron, 1);
 
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:04.000Z");
@@ -740,7 +722,7 @@ describe("cron service ops regressions", () => {
       expect(abortSignal.aborted).toBe(true);
       expect(abortSignal.reason).toBe(testCase.reason);
       await providerExited.promise;
-      await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
+      await expect(waitForManualRun(state, runId, 5_000)).resolves.toBe(true);
 
       const terminalEvents = events.filter(
         (evt) => evt.action === "finished" && evt.runId === runId,
@@ -784,8 +766,7 @@ describe("cron service ops regressions", () => {
       }
     } finally {
       releaseProvider.resolve();
-      await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
-      clearCommandLane(CommandLane.Cron);
+      await Promise.allSettled(state.queuedManualRuns.values());
     }
   });
 

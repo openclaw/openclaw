@@ -349,6 +349,11 @@ enabled.
 latency, and request fields such as method, URL, timeout, proxy, and policy)
 uses `debug` by default. Responses with a non-2xx status or at least one second
 of elapsed time remain at `info`, and transport failures remain warnings.
+`[model-fetch]` and `[responses]` report caller-signaled `AbortError` as `aborted`
+at `debug` (or `info` with the targeted flags), rather than as provider failures.
+The requesting layer owns the final cancellation or timeout outcome; an SDK can
+also abort its fetch when its own deadline expires. Explicit `TimeoutError`
+reasons and failures without a caller abort remain warnings.
 Elapsed time includes local-service preparation and waiting for response headers,
 but excludes streaming the response body. The targeted debug flags above promote
 start and fast successful response metadata to `info` when troubleshooting.
@@ -382,6 +387,24 @@ Talk lifecycle log records also flow to diagnostics-otel log export when
 OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
+
+### Chat-send startup
+
+The Gateway logs `slow chat send` when acknowledgement or startup takes at least
+one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
+agent execution starts. `replyInitialization` covers inbound dispatch through
+session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
+preparation belong to `preparation`, before the first model request.
+
+`detail.*` fields attribute those intervals using the existing reply and agent
+preparation spans, without enabling timeline file logging. They include session
+binding, cold transcript hydration, writer admission, snapshot reads, and commit,
+alongside workspace, Git baseline, hooks, and embedded preparation when used.
+`reply.session.writer` includes both queue waiting and `reply.session.initialize`;
+their difference indicates the writer wait. Parent and child spans overlap and
+must not be summed. Unfinished spans stop at the startup boundary; later model
+and tool latency does not extend them. Structured `chat.send.detail.*` phase
+events use the same durations when diagnostics are enabled.
 
 ### Embedded attempt preparation
 
@@ -1009,6 +1032,22 @@ capturing raw prompt or response content:
 
 These fields are available to diagnostic snapshots, model-call plugin hooks, and
 OTEL model-call spans/metrics when diagnostics export is enabled.
+
+Prompt-cache drop warnings include `requestGapMs` (start-to-start time since the
+session's previous request) and `promptTokens` when reported by the provider.
+`providerPrefix` compares final encoded request segments against the last request
+with usable cache-read usage: system instructions, tools, history messages, and
+other request parameters. It names the first differing segment or `prefix-match`
+when the previous prefix is unchanged. A match does not prove provider cache
+availability or retention. Unsupported transports and missing baselines report
+`unavailable`.
+
+Only hashes are retained, within the existing 512-entry diagnostic tracker.
+History comparison keeps the first 512 message hashes and one remaining-tail
+hash. A changed tail reports `message-tail:512`; a growing or shrinking tail
+reports `unverified-after:512` because its earlier prefix cannot be verified.
+Background sessions sharing a provider cache key keep separate diagnostic
+baselines. No prompt content or digest values appear in these warnings.
 
 ### Console styles
 

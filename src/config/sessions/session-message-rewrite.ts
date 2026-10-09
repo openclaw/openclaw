@@ -6,6 +6,7 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
+  type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
@@ -14,11 +15,13 @@ import {
 } from "./session-accessor.sqlite-transcript-message-rewrite.js";
 import type { SessionTranscriptAccessScope } from "./session-accessor.types.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
+import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { executeSessionMessageRewriteOperation } from "./session-message-rewrite-domain.js";
 import type {
   SessionMessageRewriteCommitted,
   SessionMessageRewriteSelection,
-} from "./session-message-rewrite.worker.js";
+} from "./session-transcript-mutation.types.js";
 import type { SessionLifecycleRevisionExpectation } from "./session-transcript-turn-lifecycle.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
@@ -29,19 +32,59 @@ import {
 
 /** Bundled pure preparation; opaque public callbacks retain their transaction-local adapter. */
 async function rewritePreparedTranscriptMessage<T>(params: {
-  scope: SessionTranscriptAccessScope;
+  scope: ResolvedTranscriptScope;
   target: SessionMessageRewriteSelection["target"];
   expectedEntry?: SessionMessageRewriteSelection["expectedEntry"];
   prepare(message: unknown): T | undefined;
   assertCurrent?: () => void;
 }): Promise<{ generation: string; messageId: string; message: T } | null> {
-  const scope = captureLifecycleDatabaseScope(resolveSqliteTranscriptScope(params.scope));
+  const scope = captureLifecycleDatabaseScope(params.scope);
   const database = { ...toDatabaseOptions(scope), path: scope.path };
   const selection = structuredClone({
     scope,
     target: params.target,
     expectedEntry: params.expectedEntry,
   });
+  const incognito = captureIncognitoSessionOperation({ ...scope, storePath: scope.path });
+  if (incognito) {
+    const { actor } = incognito;
+    const authority = {
+      assertCurrent() {
+        incognito.authority.assertCurrent();
+        params.assertCurrent?.();
+      },
+    };
+    const input = {
+      sessionKey: scope.sessionKey,
+      sessionId: scope.sessionId,
+      fence: {},
+      target: selection.target,
+      expectedEntry: selection.expectedEntry,
+    };
+    return actor.sessions.withSharedState(async () => {
+      const expected = await actor.sessions.transcript(
+        authority,
+        {
+          type: "session.rewrite.prepare",
+          input,
+        },
+        incognito.admissionSignal,
+      );
+      authority.assertCurrent();
+      if (!expected) {
+        return null;
+      }
+      const message = params.prepare(expected.event.message);
+      authority.assertCurrent();
+      incognito.admissionSignal?.throwIfAborted();
+      const { result } = await actor.sessions.transcript(authority, {
+        type: "session.rewrite.commit",
+        input: { ...input, expected, message },
+      });
+      // SAFETY: This invocation's typed preparer is the only source of the replacement message.
+      return result as { generation: string; messageId: string; message: T } | null;
+    });
+  }
   return await runSessionEntryWorkerOperation<
     SessionMessageRewriteCommitted,
     { generation: string; messageId: string; message: T } | null
@@ -97,9 +140,11 @@ export async function rewritePreparedTranscriptMessageAtAnchor<T>(
     "assertCurrent" | "expectedEntry"
   > & { active?: "exact" | "sequence"; assertNativeCurrent?: () => void } = {},
 ) {
+  const scope = resolveSqliteTranscriptScope(anchor);
   if (
     !isMainThread ||
-    !supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolveSqliteTranscriptScope(anchor)))
+    (!captureIncognitoSessionOperation(anchor) &&
+      !supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(scope)))
   ) {
     // Process-held incognito and native maintenance retain their current transaction owner.
     return rewriteTranscriptMessageAtAnchor(anchor, (message) => {
@@ -120,7 +165,7 @@ export async function rewritePreparedTranscriptMessageAtAnchor<T>(
   }
   return rewritePreparedTranscriptMessage({
     ...options,
-    scope: anchor,
+    scope,
     target: { kind: "anchor", anchor, active: options.active },
     prepare,
   });
@@ -128,17 +173,21 @@ export async function rewritePreparedTranscriptMessageAtAnchor<T>(
 
 export async function rewritePreparedAssistantTranscriptMessageForRun(params: {
   scope: SessionTranscriptAccessScope & SessionTranscriptWriteScope;
+  readSource?: SessionEntryReadSource;
   runId: string;
   expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
   rewriteMessage(message: Record<string, unknown>): Record<string, unknown>;
 }): Promise<{ messageId: string } | null> {
+  const resolved = resolveSqliteTranscriptScope(params.scope, params.readSource);
   if (
     !isMainThread ||
-    !supportsOpenClawAgentDatabaseExecution(
-      toDatabaseOptions(resolveSqliteTranscriptScope(params.scope)),
-    )
+    (!captureIncognitoSessionOperation(params.scope) &&
+      !supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved)))
   ) {
-    return rewriteAssistantTranscriptMessageForRun(params);
+    return rewriteAssistantTranscriptMessageForRun(
+      params,
+      params.readSource ? resolved : undefined,
+    );
   }
   const scope = withOwnedSessionTranscriptWriterFence({
     ...params.scope,
@@ -151,7 +200,7 @@ export async function rewritePreparedAssistantTranscriptMessageForRun(params: {
     throw new SessionTranscriptWriterClaimReboundError();
   }
   const result = await rewritePreparedTranscriptMessage({
-    scope,
+    scope: resolved,
     target: { kind: "terminal-assistant", runId: params.runId },
     expectedEntry: {
       lifecycleRevision: params.expectedLifecycleRevision ?? null,

@@ -1,13 +1,26 @@
 // Tests Dockerfile metadata and expected install commands.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { access, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { isMap, parseAllDocuments } from "yaml";
 import { collectPackageDistImportErrors } from "../scripts/lib/package-dist-imports.mjs";
+import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "./test-utils/node-process.js";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -16,9 +29,55 @@ const dockerComposePath = join(repoRoot, "docker-compose.yml");
 const dockerInstallDocsPath = join(repoRoot, "docs/install/docker.md");
 const composeSetupScriptPath = join(repoRoot, "scripts/e2e/compose-setup.sh");
 const dockerSetupDockerfilePaths = ["Dockerfile", "scripts/docker/sandbox/Dockerfile"] as const;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
+}
+
+async function stageDockerManifestCopies(params: { body: string; fixture: string; stage: string }) {
+  const stageRoot = join(params.fixture, params.stage);
+  const body = params.body.replaceAll("${OPENCLAW_BUNDLED_PLUGIN_DIR}", BUNDLED_PLUGIN_ROOT_DIR);
+  for (const [, from, inputs, destination] of body.matchAll(
+    /^COPY (?:--from=(\S+) )?(.+) (\S+)$/gm,
+  )) {
+    if (!inputs || !destination) {
+      throw new Error("Docker manifest COPY inputs are missing");
+    }
+    const sourceRoot = from ? join(params.fixture, from) : repoRoot;
+    const destinationRoot = destination.startsWith("/")
+      ? join(stageRoot, destination)
+      : join(stageRoot, "app", destination);
+    for (const input of inputs.split(/\s+/)) {
+      const source = join(sourceRoot, input);
+      const sourceStat = await stat(source);
+      const target =
+        !sourceStat.isDirectory() && destination.endsWith("/")
+          ? join(destinationRoot, basename(input))
+          : destinationRoot;
+      await mkdir(dirname(target), { recursive: true });
+      if (from || sourceStat.isFile()) {
+        await cp(source, target, { recursive: true });
+        continue;
+      }
+      await mkdir(target, { recursive: true });
+      // The extraction stage reads only direct workspace manifests, not their source trees.
+      for (const entry of await readdir(source, { withFileTypes: true })) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        for (const file of await readdir(join(source, entry.name))) {
+          if (file !== "package.json" && file !== "openclaw.plugin.json") {
+            continue;
+          }
+          const manifestTarget = join(target, entry.name, file);
+          await mkdir(dirname(manifestTarget), { recursive: true });
+          await cp(join(source, entry.name, file), manifestTarget);
+        }
+      }
+    }
+  }
+  return stageRoot;
 }
 
 function resolveOptionalAptPackages(dockerfile: string, env: NodeJS.ProcessEnv): string {
@@ -207,12 +266,11 @@ describe("Dockerfile", () => {
     expect(workspaceDepsEnd).toBeGreaterThan(workspaceDepsStart);
 
     const workspaceDeps = dockerfile.slice(workspaceDepsStart, workspaceDepsEnd);
-    const extractionIndex = workspaceDeps.indexOf(
-      'RUN mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}"',
-    );
+    const extractionIndex = workspaceDeps.indexOf("RUN mkdir -p /out/");
     const inputCopies = [
       "COPY scripts/lib/docker-plugin-selection.mjs /tmp/docker-plugin-selection.mjs",
       "COPY packages /tmp/packages",
+      "COPY examples /tmp/examples",
       "COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}",
     ];
 
@@ -239,18 +297,23 @@ describe("Dockerfile", () => {
     const extensionManifestIndex = dockerfile.indexOf(
       "COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/",
     );
+    const exampleManifestIndex = dockerfile.indexOf(
+      "COPY --from=workspace-deps /out/examples/ ./examples/",
+    );
 
     expect(postinstallIndex).toBeGreaterThan(-1);
     expect(prepareIndex).toBeGreaterThan(-1);
     expect(distImportHelperIndex).toBeGreaterThan(-1);
     expect(packageManifestIndex).toBeGreaterThan(-1);
     expect(extensionManifestIndex).toBeGreaterThan(-1);
+    expect(exampleManifestIndex).toBeGreaterThan(-1);
     expect(dockerfile).toContain("for manifest in /tmp/packages/*/package.json");
     expect(dockerfile).toContain(
       'node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS"',
     );
-    expect(dockerfile).toContain("done < /tmp/openclaw-workspace-plugin-dirs");
-    expect(dockerfile).toContain(`if [ -f "$ext_dir/package.json" ]; then`);
+    expect(dockerfile).toContain("/tmp/examples/*/package.json");
+    expect(dockerfile).toContain('"/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}"/*/package.json');
+    expect(dockerfile).toContain('[ -f "$manifest" ] || continue');
     expect(dockerfile).toContain(
       "COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs",
     );
@@ -259,7 +322,77 @@ describe("Dockerfile", () => {
     expect(distImportHelperIndex).toBeLessThan(installIndex);
     expect(packageManifestIndex).toBeLessThan(installIndex);
     expect(extensionManifestIndex).toBeLessThan(installIndex);
+    expect(exampleManifestIndex).toBeLessThan(installIndex);
   });
+
+  it.runIf(process.platform !== "win32").each(["", "matrix"])(
+    "stages every locked workspace manifest while retaining optional plugin selection: %j",
+    async (selection) => {
+      const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+      const stages = new Map(
+        [...dockerfile.matchAll(/^FROM \S+ AS (\S+)\n([\s\S]*?)(?=^FROM |(?![\s\S]))/gm)].map(
+          ([, name, body]) => [name, body],
+        ),
+      );
+      const workspaceBody = stages.get("workspace-deps");
+      const dependencyBody = stages.get("dependency-inputs");
+      if (!workspaceBody || !dependencyBody) {
+        throw new Error("Docker dependency input stages are missing");
+      }
+      const fixture = tempDirs.make("openclaw-docker-workspace-manifests-");
+      const workspaceRoot = await stageDockerManifestCopies({
+        body: workspaceBody,
+        fixture,
+        stage: "workspace-deps",
+      });
+      const extraction = [...workspaceBody.matchAll(/^RUN (.+)$/gm)]
+        .map(([, command]) => command)
+        .join("\n")
+        .replace(/\/(tmp|out)(?=\/|["\s]|$)/g, `${workspaceRoot}/$1`);
+      expect(extraction).not.toBe("");
+      execFileSync("/bin/sh", ["-eu", "-c", extraction], {
+        env: {
+          PATH: process.env.PATH,
+          OPENCLAW_EXTENSIONS: selection,
+          OPENCLAW_BUNDLED_PLUGIN_DIR: BUNDLED_PLUGIN_ROOT_DIR,
+        },
+      });
+      const inputsRoot = await stageDockerManifestCopies({
+        body: dependencyBody,
+        fixture,
+        stage: "dependency-inputs",
+      });
+      const appRoot = join(inputsRoot, "app");
+      const documents = parseAllDocuments(await readFile(join(appRoot, "pnpm-lock.yaml"), "utf8"));
+      expect(documents.flatMap((document) => document.errors)).toEqual([]);
+      const importers = documents.at(-1)?.get("importers", true);
+      if (!isMap(importers)) {
+        throw new Error("Application pnpm lockfile importers are missing");
+      }
+      expect(importers.items.length).toBeGreaterThan(1);
+      for (const importer of importers.items) {
+        const manifest = join(String(importer.key), "package.json");
+        expect(
+          await readFile(join(appRoot, manifest)).catch(() => null),
+          `Docker dependency inputs are missing ${manifest}`,
+        ).toEqual(await readFile(join(repoRoot, manifest)));
+      }
+
+      const selected = await readFile(
+        join(inputsRoot, "tmp/openclaw-selected-plugin-dirs"),
+        "utf8",
+      );
+      expect(selected).toBe(selection ? `${selection}\n` : "");
+      const installed = (
+        await readFile(join(inputsRoot, "tmp/openclaw-workspace-plugin-dirs"), "utf8")
+      )
+        .trim()
+        .split("\n");
+      expect(installed).toContain("telegram");
+      expect(installed).not.toContain("facetime");
+      expect(installed.includes("matrix")).toBe(selection === "matrix");
+    },
+  );
 
   it("keeps validated plugin selection outside the build-context copy destination", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");

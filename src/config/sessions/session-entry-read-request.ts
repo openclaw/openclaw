@@ -20,10 +20,19 @@ import {
 /** Ordinary and ordered readers capture the same selection and ancillary facts. */
 export function captureSessionEntryWorkerRequest(input: SessionEntryWorkerRead) {
   const selection: SessionExactEntriesWorkerSelection = input.selection
-    ? { selection: input.selection, projection: input.projection }
+    ? input.projection === "list"
+      ? { selection: input.selection, projection: input.projection }
+      : { selection: input.selection, projection: input.projection }
     : { sessionKeys: [...new Set(input.sessionKeys)], projection: input.projection };
   return {
     ...selection,
+    expectedIdentity: input.preparedSource
+      ? {
+          key: `file:${input.preparedSource.databaseIdentity}` as const,
+          canonicalPath: input.preparedSource.path,
+          birthtime: input.preparedSource.databaseBirthtime,
+        }
+      : undefined,
     snapshotFields: input.snapshotFields,
     lifecycleSessionKey: input.lifecycleSessionKey,
     includeMembers: input.includeMembers,

@@ -6,12 +6,15 @@ import type {
   SessionTranscriptWriteScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-projection-read.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type {
   PreparedSessionTranscriptHydration,
   SessionTranscriptReadSnapshot,
 } from "./session-history-read.types.js";
+import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 export type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
@@ -80,6 +83,8 @@ export type SessionTranscriptHydrationWorkerInput = {
   afterSeq?: number;
   includeEventJson?: boolean;
   limits?: { maxBytes: number; maxEvents: number };
+  transcript?: SessionEntryCohortRequest["transcript"];
+  preparedEntry?: SessionTranscriptAnchorEntry;
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
@@ -113,3 +118,37 @@ export type SessionTranscriptHydrationWorkerRequest =
   | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptRecentActiveEventsWorkerInput
   | SessionTranscriptLatestActiveMessageWorkerInput;
+
+export type SessionTranscriptHydrationWorkerValues = {
+  "transcript-hydration": SessionTranscriptHydrationWorkerResult;
+  "transcript-maintenance": SessionTranscriptMaintenanceFacts;
+  "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
+  "recent-active-events": { kind: "recent-active-events"; events: TranscriptEvent[] };
+  "latest-active-message": {
+    kind: "latest-active-message";
+    message: SessionTranscriptMessageEvent | undefined;
+  };
+};
+
+export type SessionTranscriptHydrationReaders = {
+  readTranscript: (
+    input: Omit<SessionTranscriptHydrationWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<PreparedSessionTranscriptHydration>;
+  readCurrentTurnEntry: (
+    input: Omit<SessionTranscriptCurrentTurnEntryWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<SessionTranscriptCurrentTurnEntryRead>;
+  readMaintenance: (
+    input: Omit<SessionTranscriptMaintenanceWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<SessionTranscriptMaintenanceFacts>;
+  readRecentActiveEvents: (
+    input: Omit<SessionTranscriptRecentActiveEventsWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<TranscriptEvent[]>;
+  readLatestActiveMessage: (
+    input: Omit<SessionTranscriptLatestActiveMessageWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<SessionTranscriptMessageEvent | undefined>;
+};

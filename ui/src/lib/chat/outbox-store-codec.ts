@@ -75,11 +75,10 @@ export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueI
   );
 }
 
-function normalizeChatAttachment(value: unknown): ChatAttachment | null {
-  if (!isRecord(value)) {
+function normalizeChatAttachment(entry: unknown): ChatAttachment | null {
+  if (!isRecord(entry)) {
     return null;
   }
-  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const mimeType = normalizeOptionalString(entry.mimeType);
   if (!id || !mimeType) {
@@ -107,11 +106,10 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
   return restored;
 }
 
-export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
-  if (!isRecord(value)) {
+export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
+  if (!isRecord(entry)) {
     return null;
   }
-  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const text = typeof entry.text === "string" ? entry.text : "";
   const createdAt = asFiniteNumber(entry.createdAt) ?? Date.now();
@@ -283,11 +281,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   return item;
 }
 
-export function normalizeStoredSession(value: unknown): StoredComposerSession | null {
-  if (!isRecord(value)) {
+export function normalizeStoredSession(entry: unknown): StoredComposerSession | null {
+  if (!isRecord(entry)) {
     return null;
   }
-  const entry = value;
   const draft = typeof entry.draft === "string" ? entry.draft : undefined;
   const draftMentions = draft ? readHumanMentions(draft, entry.draftMentions) : undefined;
   if (entry.goalMode !== undefined && !isChatGoalDraftMode(entry.goalMode)) {

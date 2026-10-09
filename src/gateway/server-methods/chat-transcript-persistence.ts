@@ -6,11 +6,15 @@ import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
-  patchSessionEntryCore,
   publishTranscriptUpdate,
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import {
+  applySessionEntryOperation,
+  applySessionEntryTargetOperation,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { rewritePreparedAssistantTranscriptMessageForRun } from "../../config/sessions/session-message-rewrite.js";
 import { withPreparedTranscriptCorrection } from "../../config/sessions/session-transcript-correction.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
@@ -365,23 +369,35 @@ export async function persistAbortedPartial(params: {
 
 async function touchAssistantTranscriptSessionEntry(
   scope: SessionTranscriptWriteScope,
+  readSource?: CapturedSessionEntryReadSource,
 ): Promise<void> {
   if (!scope.storePath || !scope.sessionKey || !scope.sessionId) {
     return;
   }
   const transcriptMarkerUpdatedAt = Date.now();
-  await patchSessionEntryCore(
-    {
-      storePath: scope.storePath,
-      sessionKey: scope.sessionKey,
-      ...(scope.agentId ? { agentId: scope.agentId } : {}),
-    },
-    (current) =>
-      current.sessionId === scope.sessionId ? { updatedAt: transcriptMarkerUpdatedAt } : null,
-    {
-      skipMaintenance: true,
-    },
-  );
+  const target = {
+    storePath: scope.storePath,
+    sessionKey: scope.sessionKey,
+    ...(scope.agentId ? { agentId: scope.agentId } : {}),
+  };
+  const operation = {
+    kind: "fields" as const,
+    expected: { sessionId: scope.sessionId },
+    patch: { updatedAt: transcriptMarkerUpdatedAt },
+  };
+  if (readSource) {
+    await applySessionEntryTargetOperation(
+      {
+        ...target,
+        readSource,
+        target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+      },
+      operation,
+      { skipMaintenance: true },
+    );
+  } else {
+    await applySessionEntryOperation(target, operation, { skipMaintenance: true });
+  }
 }
 
 export async function rewriteSourceReplyTranscriptMirrors(params: {
@@ -546,9 +562,11 @@ export async function enrichAssistantTranscriptMediaForRun(params: {
   runId: string;
   expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
   scope: ResolvedAssistantTranscriptScope;
+  readSource?: CapturedSessionEntryReadSource;
 }): Promise<{ messageId: string } | null> {
   return await rewritePreparedAssistantTranscriptMessageForRun({
     scope: params.scope,
+    readSource: params.readSource,
     runId: params.runId,
     expectedLifecycleRevision: params.expectedLifecycleRevision,
     rewriteMessage: (message) => ({
@@ -567,13 +585,16 @@ export async function enrichAssistantTranscriptMediaForRun(params: {
 
 export async function publishAssistantTranscriptRewrite(params: {
   scope: SessionTranscriptWriteScope;
+  readSource?: CapturedSessionEntryReadSource;
   rewritten: readonly { messageId: string }[];
 }): Promise<void> {
   if (params.rewritten.length === 0) {
     return;
   }
-  await touchAssistantTranscriptSessionEntry(params.scope);
-  await publishTranscriptUpdate(params.scope, {
-    messageId: params.rewritten.at(-1)?.messageId,
-  });
+  await touchAssistantTranscriptSessionEntry(params.scope, params.readSource);
+  await publishTranscriptUpdate(
+    params.scope,
+    { messageId: params.rewritten.at(-1)?.messageId },
+    params.readSource,
+  );
 }

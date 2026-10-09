@@ -102,19 +102,13 @@ const formatProbeLine = (
   }
 
   const elapsedMs = typeof record.elapsedMs === "number" ? record.elapsedMs : null;
-  const bot = asNullableRecord(record.bot);
-  const botUsername = bot && typeof bot.username === "string" ? bot.username : null;
   const webhook = asNullableRecord(record.webhook);
   const webhookUrl = webhook && typeof webhook.url === "string" ? webhook.url : null;
   const usernames = new Set<string>();
-  if (botUsername) {
-    usernames.add(botUsername);
-  }
-  for (const account of accounts ?? []) {
-    const accountProbe = asNullableRecord(account.probe);
-    const accountBot = accountProbe ? asNullableRecord(accountProbe.bot) : null;
-    if (accountBot && typeof accountBot.username === "string" && accountBot.username) {
-      usernames.add(accountBot.username);
+  for (const candidate of [probe, ...(accounts ?? []).map((account) => account.probe)]) {
+    const bot = asNullableRecord(asNullableRecord(candidate)?.bot);
+    if (bot && typeof bot.username === "string" && bot.username) {
+      usernames.add(bot.username);
     }
   }
 

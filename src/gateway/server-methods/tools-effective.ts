@@ -35,6 +35,10 @@ import {
 } from "../../agents/tools-effective-mcp-inventory.js";
 import { resolveReplyToMode } from "../../auto-reply/reply/reply-threading.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/config.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionEntry,
+} from "../../config/sessions/session-incognito-binding.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { logDebug, logWarn } from "../../logger.js";
@@ -49,7 +53,9 @@ import {
 } from "../../utils/delivery-context.read.js";
 import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadGatewaySessionEntryReadOnly, resolveSessionModelRef } from "../session-utils.js";
+import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
+import { resolveSessionModelRef, type loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -426,17 +432,19 @@ async function projectMcpCatalog(params: {
   }
 }
 
-function resolveTrustedToolsEffectiveContext(params: {
-  sessionKey: string;
-  requestedAgentId?: string;
-  respond: RespondFn;
-}) {
+function resolveTrustedToolsEffectiveContext(
+  params: {
+    sessionKey: string;
+    requestedAgentId?: string;
+    respond: RespondFn;
+  },
+  loaded: Pick<
+    ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+    "entry" | "canonicalKey" | "cfg"
+  >,
+) {
   // The effective tools request is read-only but security-sensitive. Derive
   // routing/account/model context from the persisted session, not client params.
-  const loaded = loadGatewaySessionEntryReadOnly(
-    params.sessionKey,
-    params.requestedAgentId ? { agentId: params.requestedAgentId } : undefined,
-  );
   if (!loaded.entry) {
     params.respond(
       false,
@@ -527,7 +535,8 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
   "tools.effective": defineValidatedGatewayHandler(
     "tools.effective",
     validateToolsEffectiveParams,
-    async ({ params, respond, context }) => {
+    async (options) => {
+      const { params, respond, context } = options;
       const cfg = context.getRuntimeConfig();
       const knownAgents = listAgentIds(cfg);
       const requestedAgentId = normalizeOptionalString(params.agentId);
@@ -544,16 +553,54 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
         respond(false, undefined, sessionOwner.error);
         return;
       }
-      const trustedContext = resolveTrustedToolsEffectiveContext({
-        sessionKey: params.sessionKey,
-        requestedAgentId: sessionOwner.agentId,
-        respond,
-      });
-      if (!trustedContext) {
-        return;
-      }
+      const authority = readGatewayRequestMutationAuthority(options);
+      const consume = async (
+        loaded: Pick<
+          ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+          "entry" | "canonicalKey" | "cfg"
+        >,
+        assertSourceCurrent: () => void,
+      ) => {
+        const trustedContext = resolveTrustedToolsEffectiveContext(
+          {
+            sessionKey: params.sessionKey,
+            requestedAgentId: sessionOwner.agentId,
+            respond,
+          },
+          loaded,
+        );
+        if (!trustedContext) {
+          return;
+        }
+        const inventory = await resolveReadOnlyToolsEffectiveInventory(trustedContext);
+        authority.assertCurrent();
+        assertSourceCurrent();
+        respond(true, inventory, undefined);
+      };
       try {
-        respond(true, await resolveReadOnlyToolsEffectiveInventory(trustedContext), undefined);
+        const binding = captureIncognitoSessionSource({
+          agentId: sessionOwner.agentId,
+          sessionKey: params.sessionKey,
+        });
+        if (binding) {
+          await withIncognitoSessionEntry(
+            binding,
+            params.sessionKey,
+            authority.assertCurrent,
+            (entry, assertCurrent) =>
+              consume({ cfg, canonicalKey: params.sessionKey, entry }, assertCurrent),
+          );
+        } else {
+          await withGatewaySessionEntryReadOnly(
+            {
+              cfg,
+              key: params.sessionKey,
+              agentId: sessionOwner.agentId,
+              assertActive: authority.assertCurrent,
+            },
+            consume,
+          );
+        }
       } catch (err) {
         respond(
           false,

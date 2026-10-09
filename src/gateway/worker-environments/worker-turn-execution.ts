@@ -24,6 +24,7 @@ import { requireCurrentWorkerTurnEnvironment, StaleWorkerBuildError } from "./ad
 import { workerInferencePlacement } from "./inference-placement.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
+import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
 import {
   bindWorkerTurnCapabilities,
   bindWorkerTurnGitHubGrant,
@@ -70,6 +71,7 @@ import {
 export async function executeWorkerTurn(
   params: Omit<Parameters<typeof executeRemoteExecTurn>[0], "environments" | "runLocal"> & {
     environments: WorkerTurnEnvironmentService;
+    assertRunCurrent: () => void;
     onTerminal: () => void;
   },
 ) {
@@ -84,7 +86,7 @@ export async function executeWorkerTurn(
     },
     { pluginGeneration: input.pluginGeneration, abortSignal: input.abortSignal },
   );
-  params.assertRunCurrent?.();
+  params.assertRunCurrent();
   input.abortSignal?.throwIfAborted();
   const turn = { ...input, config: preparedRuntime.snapshot.config };
   const modelRef = assertSupportedTurn(turn);
@@ -122,7 +124,7 @@ export async function executeWorkerTurn(
     }
   }
   await recoverWorkspaceBeforeTurn({ ...params, signal: turn.abortSignal });
-  params.assertRunCurrent?.();
+  params.assertRunCurrent();
   turn.abortSignal?.throwIfAborted();
   // Cancellation stops this turn waiting, not the shared account lookup.
   const githubPublicationAvailable = await raceNodeWorkerOperation(
@@ -134,16 +136,13 @@ export async function executeWorkerTurn(
     }),
     turn.abortSignal,
   );
-  params.assertRunCurrent?.();
+  params.assertRunCurrent();
   turn.abortSignal?.throwIfAborted();
 
   const startedAt = Date.now();
   await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration, backend });
-  params.assertRunCurrent?.();
+  params.assertRunCurrent();
   turn.abortSignal?.throwIfAborted();
-  if (!params.placements.validateTurnClaim(params.turnClaim)) {
-    throw new Error("Worker turn claim is no longer current");
-  }
   turn.onExecutionPhase?.({ phase: "runner_entered", backend });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
   const recorder = turn.userTurnTranscriptRecorder;
@@ -155,8 +154,6 @@ export async function executeWorkerTurn(
       signal: turn.abortSignal,
       assertRunCurrent: params.assertRunCurrent,
       isBlocked: () => blocked,
-      placements: params.placements,
-      turnClaim: params.turnClaim,
     });
   assertContextCurrent();
   if (recorder?.hasRuntimePersistencePending()) {
@@ -210,7 +207,7 @@ export async function executeWorkerTurn(
   const { manager, history, userMessageAlreadyPersisted } = context;
   let baseLeafId = context.baseLeafId;
 
-  const { model, reasoning, transcriptPolicy } = await prepareWorkerTurnModel({
+  const { model, reasoning, transcriptPolicy, inference } = await prepareWorkerTurnModel({
     target: transcriptTarget,
     modelRef,
     runtimeSnapshot: preparedRuntime.snapshot,
@@ -334,12 +331,7 @@ export async function executeWorkerTurn(
         assertActive();
         signal.throwIfAborted();
         const current = params.environments.get(placement.environmentId);
-        return (
-          current?.state === "attached" &&
-          current.ownerEpoch === placement.activeOwnerEpoch &&
-          current.attachedSessionIds.length === 1 &&
-          current.attachedSessionIds[0] === placement.sessionId
-        );
+        return isWorkerEnvironmentAttachedTo(current, placement);
       } catch {
         return false;
       }
@@ -386,6 +378,8 @@ export async function executeWorkerTurn(
           params.environments.createGatewayTools?.({
             identity,
             inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
+            inheritedToolDenylist: capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny,
+            delegatedToolPolicyActive: Boolean(capabilityProfile.policy.delegatedToolPolicy),
             skillWorkshop,
             portalAvailable,
             prepareTools: (adapters) =>
@@ -429,6 +423,7 @@ export async function executeWorkerTurn(
     bindWorkerTurnCapabilities(params.placements, params.turnClaim, {
       toolSurface: toolRuntime,
       prepareReplyMedia,
+      inference,
     });
     const connectionIdentity = {
       ...toolIdentity,

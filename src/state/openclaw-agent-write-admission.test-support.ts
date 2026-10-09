@@ -1,4 +1,4 @@
-import { SQLITE_SESSION_WRITER_QUEUES } from "./openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "./openclaw-agent-write-admission-state.js";
 
 /** Joins accepted writes without cancelling queued followers. Stop their producers first. */
 export async function drainOpenClawAgentWriteQueuesForTest(

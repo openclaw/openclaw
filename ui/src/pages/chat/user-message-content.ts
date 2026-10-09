@@ -24,55 +24,6 @@ type UserChatMessageContentBlock = {
   };
 };
 
-function buildUserChatMessageContentBlocks(
-  message: string,
-  attachments?: readonly ChatAttachment[],
-  retention?: "available" | "complete",
-): UserChatMessageContentBlock[] | null {
-  const blocks: UserChatMessageContentBlock[] = [];
-  const text = message.trim();
-  if (text) {
-    blocks.push({ type: "text", text });
-  }
-  for (const attachment of attachments ?? []) {
-    // Retained content owns inline bytes before outbox cleanup releases Blob URLs.
-    // Initial prompts allow available previews; delivered turns require every byte.
-    const dataUrl = retention ? getChatAttachmentDataUrl(attachment) : undefined;
-    if (retention === "complete" && !dataUrl) {
-      return null;
-    }
-    const previewUrl = dataUrl || getChatAttachmentPreviewUrl(attachment);
-    if (!previewUrl) {
-      continue;
-    }
-    if (attachment.mimeType.startsWith("image/")) {
-      blocks.push({
-        type: "image",
-        url: previewUrl,
-        ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
-        source: { type: "url", url: previewUrl },
-      });
-      continue;
-    }
-    const normalizedMimeType = attachment.mimeType.trim().toLowerCase();
-    const isVideo =
-      normalizedMimeType.startsWith("video/") ||
-      ((normalizedMimeType === "" || normalizedMimeType === "application/octet-stream") &&
-        hasVideoMediaFileExtension(attachment.fileName ?? ""));
-    blocks.push({
-      type: "attachment",
-      attachment: {
-        url: previewUrl,
-        kind: attachment.mimeType.startsWith("audio/") ? "audio" : isVideo ? "video" : "document",
-        label: attachment.fileName?.trim() || "Attached file",
-        mimeType: attachment.mimeType,
-        ...(attachment.origin ? { origin: attachment.origin } : {}),
-      },
-    });
-  }
-  return blocks;
-}
-
 type LocalUserMessageInput = {
   workContext?: ChatWorkContext;
   attachments?: readonly ChatAttachment[];
@@ -120,8 +71,49 @@ export function buildLocalUserMessage(
   input: LocalUserMessageInput,
   retention?: "available" | "complete",
 ): LocalUserMessage | null {
-  const content = buildUserChatMessageContentBlocks(input.text, input.attachments, retention);
-  if (!content?.length) {
+  const { text: message, attachments } = input;
+  const content: UserChatMessageContentBlock[] = [];
+  const text = message.trim();
+  if (text) {
+    content.push({ type: "text", text });
+  }
+  for (const attachment of attachments ?? []) {
+    // Retained content owns inline bytes before outbox cleanup releases Blob URLs.
+    // Initial prompts allow available previews; delivered turns require every byte.
+    const dataUrl = retention ? getChatAttachmentDataUrl(attachment) : undefined;
+    if (retention === "complete" && !dataUrl) {
+      return null;
+    }
+    const previewUrl = dataUrl || getChatAttachmentPreviewUrl(attachment);
+    if (!previewUrl) {
+      continue;
+    }
+    if (attachment.mimeType.startsWith("image/")) {
+      content.push({
+        type: "image",
+        url: previewUrl,
+        ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
+        source: { type: "url", url: previewUrl },
+      });
+      continue;
+    }
+    const normalizedMimeType = attachment.mimeType.trim().toLowerCase();
+    const isVideo =
+      normalizedMimeType.startsWith("video/") ||
+      ((normalizedMimeType === "" || normalizedMimeType === "application/octet-stream") &&
+        hasVideoMediaFileExtension(attachment.fileName ?? ""));
+    content.push({
+      type: "attachment",
+      attachment: {
+        url: previewUrl,
+        kind: attachment.mimeType.startsWith("audio/") ? "audio" : isVideo ? "video" : "document",
+        label: attachment.fileName?.trim() || "Attached file",
+        mimeType: attachment.mimeType,
+        ...(attachment.origin ? { origin: attachment.origin } : {}),
+      },
+    });
+  }
+  if (!content.length) {
     return null;
   }
   const { mentions } = trimHumanMentions(input.text, input.mentions);

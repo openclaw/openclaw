@@ -384,12 +384,14 @@ describe("reply run control ownership", () => {
       const owner = resolveActiveReplyRunOwnerForSignal(controller.signal);
       const persistence = createDeferred();
       const delivery = createDeferred();
+      const producerError = new Error("Producer rejected its partial reply");
       const started = vi.fn();
       let handoff: Promise<void> | undefined;
       try {
         expect(
           owner?.handoff((producerCompleted) => {
-            handoff = producerCompleted.then(async () => {
+            handoff = producerCompleted.then(async (error) => {
+              expect(error).toBe(producerError);
               started();
               await persistence.promise;
             });
@@ -401,6 +403,8 @@ describe("reply run control ownership", () => {
         if (forcedClear) {
           expect(forceClearReplyOperation(operation)).toBe(true);
         }
+        operation.fail("run_failed", producerError);
+        operation.fail("run_failed", new Error("Later cleanup failure"));
         await Promise.resolve();
         expect(started).not.toHaveBeenCalled();
         expect(() => createTestReplyOperation({ sessionKey })).toThrow();

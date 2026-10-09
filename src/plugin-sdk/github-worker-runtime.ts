@@ -1,8 +1,6 @@
 /** Focused composition seam for process-scoped GitHub credentials on managed workers. */
-export {
-  managedGitHubIdentityEnvironment,
-  writeManagedGitHubProfileFiles,
-} from "../agents/github-tool-identity.js";
+export { managedGitHubIdentityEnvironment } from "../agents/github-tool-identity-env.js";
+export { writeManagedGitHubProfileFiles } from "../agents/github-tool-identity.js";
 export {
   prepareWorkerGitHubBinding,
   prepareWorkerGitHubBindingGrant,

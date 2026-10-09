@@ -1,5 +1,4 @@
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
@@ -49,7 +48,6 @@ type CronRunTimeout = { timeoutMs: number; reason: string };
 type CronCoreRunOptions = {
   runId?: string;
   activeJobMarker?: CronActiveJobMarker;
-  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   streamBatch?: string;
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
@@ -255,6 +253,11 @@ async function executeJobCoreWithTimeoutUnfinalized(
     const result: CronCoreRunOutcome = {
       status: "error",
       error,
+      // A timeout raised by this service-owned watchdog is authoritative even
+      // when the interrupted main-session heartbeat has no model attribution.
+      ...(interruption !== "cancelled" && {
+        errorClassification: { kind: "reason", reason: "timeout" },
+      }),
       // The abort race must retain attribution already reported by the runner.
       ...(execution && {
         provider: execution.provider,
@@ -269,13 +272,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
     };
     return withPrimaryWebhookInterruption({ job, result, error: deliveryError });
   };
-  const reservation = opts?.runReceipt ? state.queuedRunReservationsByJobId.get(job.id) : undefined;
-  if (
-    !isCronActiveJobMarkerCurrent(opts?.activeJobMarker) ||
-    (opts?.runReceipt &&
-      (reservation?.runReceipt.receiptId !== opts.runReceipt.receiptId ||
-        reservation.lifecycleGeneration !== state.lifecycleGeneration))
-  ) {
+  if (!isCronActiveJobMarkerCurrent(opts?.activeJobMarker)) {
     runAbortController.abort("Gateway restarting.");
     return await createInterruptionOutcome("cancelled");
   }
@@ -339,7 +336,6 @@ async function executeJobCoreWithTimeoutUnfinalized(
     const coreOptions: ExecuteJobCoreOptions = {
       deliveryAttemptFence,
       activeJobMarker: opts?.activeJobMarker,
-      owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       streamBatch: opts?.streamBatch,
       streamScheduleKey: opts?.streamScheduleKey,
       streamSourceIdentity: opts?.streamSourceIdentity,

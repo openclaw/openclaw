@@ -31,10 +31,11 @@ import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { throwIfAborted } from "./abort.js";
-import type {
-  MessageActionInput,
-  MessageActionResult,
-  ResolvedActionContext,
+import {
+  messageActionRequesterMediaContext,
+  type MessageActionInput,
+  type MessageActionResult,
+  type ResolvedActionContext,
 } from "./message-action-contracts.js";
 import {
   applyMessageCrossContextMarker,
@@ -185,11 +186,14 @@ export async function buildMessagePayload(params: {
   message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text), {
     resolveProtectedRanges: findCodeRegions,
   });
-  if (message || !hasPresentation) {
-    actionParams.message = message;
-  } else {
-    delete actionParams.message;
-  }
+  const updateActionMessage = () => {
+    if (message || !hasPresentation) {
+      actionParams.message = message;
+    } else {
+      delete actionParams.message;
+    }
+  };
+  updateActionMessage();
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;
   }
@@ -258,11 +262,7 @@ export async function buildMessagePayload(params: {
   ) {
     throw new Error("send requires text or media or location");
   }
-  if (message || !hasPresentation) {
-    actionParams.message = message;
-  } else {
-    delete actionParams.message;
-  }
+  updateActionMessage();
   const gifPlayback = readBooleanParam(actionParams, "gifPlayback") ?? false;
   const forceDocument =
     readBooleanParam(actionParams, "forceDocument") ??
@@ -484,14 +484,9 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       cfg,
       agentId,
       mediaSources: sendPayload.mediaUrls,
-      workspaceMediaAccess: input.workspaceMediaAccess,
-      sessionKey: input.sessionKey,
+      ...messageActionRequesterMediaContext(input),
       messageProvider: input.sessionKey ? undefined : channel,
       accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
-      requesterSenderId: input.requesterSenderId,
-      requesterSenderName: input.requesterSenderName,
-      requesterSenderUsername: input.requesterSenderUsername,
-      requesterSenderE164: input.requesterSenderE164,
     });
 
   // Required queue persistence is itself an ownership decision: neither the

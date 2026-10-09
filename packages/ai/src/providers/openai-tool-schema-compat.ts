@@ -1,130 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
-import { SCHEMA_ARRAY_KEYS, SCHEMA_MAP_KEYS, SCHEMA_OBJECT_KEYS } from "./schema-walk.js";
-
-// Annotation-only keywords whose null values can be dropped without changing
-// what the schema accepts; null constraint keywords must stay so projection
-// quarantines the tool instead of widening it.
-const OPENAI_NULLABLE_ANNOTATION_KEYS = new Set([
-  "default",
-  "description",
-  "examples",
-  "format",
-  "title",
-]);
-
-const OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS = new Set(
-  [...SCHEMA_OBJECT_KEYS, ...SCHEMA_ARRAY_KEYS].toSorted(),
-);
-
-function normalizeOpenAIStrictCompatSchemaMap(schema: unknown): unknown {
-  if (!isRecord(schema)) {
-    return schema;
-  }
-
-  let changed = false;
-  // Schema names are literal data; indexed writes would invoke __proto__'s setter.
-  const normalized = Object.fromEntries<unknown>(
-    Object.entries(schema).map(([key, value]) => {
-      const next = normalizeOpenAIStrictCompatSchemaRecursive(value);
-      changed ||= next !== value;
-      return [key, next];
-    }),
-  );
-  return changed ? normalized : schema;
-}
-
-function normalizeOpenAIStrictCompatSchemaRecursive(
-  schema: unknown,
-  promoteEmptyObject = false,
-): unknown {
-  if (Array.isArray(schema)) {
-    let changed = false;
-    const normalized = schema.map((entry) => {
-      const next = normalizeOpenAIStrictCompatSchemaRecursive(entry);
-      changed ||= next !== entry;
-      return next;
-    });
-    return changed ? normalized : schema;
-  }
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-
-  const record = schema as Record<string, unknown>;
-  let changed = false;
-  let hadNullType = false;
-  const entries = Object.entries(record).flatMap(([key, value]): Array<[string, unknown]> => {
-    // Repair only null-valued entries that carry no constraint semantics.
-    // Null constraints stay invalid so projection quarantines the tool.
-    if (value === null && (OPENAI_NULLABLE_ANNOTATION_KEYS.has(key) || key === "type")) {
-      hadNullType ||= key === "type";
-      changed = true;
-      return [];
-    }
-    const next = SCHEMA_MAP_KEYS.has(key)
-      ? normalizeOpenAIStrictCompatSchemaMap(value)
-      : OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS.has(key)
-        ? normalizeOpenAIStrictCompatSchemaRecursive(value)
-        : value;
-    changed ||= next !== value;
-    return [[key, next]];
-  });
-  const normalized = Object.fromEntries<unknown>(entries);
-
-  if (Object.keys(normalized).length === 0) {
-    if (!promoteEmptyObject) {
-      return schema;
-    }
-    return {
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-    };
-  }
-
-  const hasObjectShapeHints =
-    (normalized.properties &&
-      typeof normalized.properties === "object" &&
-      !Array.isArray(normalized.properties)) ||
-    Array.isArray(normalized.required);
-  const hasArrayShapeHints = "items" in normalized;
-  if (!("type" in normalized) && hasObjectShapeHints !== hasArrayShapeHints) {
-    normalized.type = hasObjectShapeHints ? "object" : "array";
-    changed = true;
-  } else if (hadNullType && !("type" in normalized)) {
-    // Without an unambiguous shape, retain the invalid type so projection
-    // rejects the tool instead of widening it to an unconstrained schema.
-    normalized.type = null;
-  }
-  if (normalized.type === "object" && !("properties" in normalized)) {
-    normalized.properties = {};
-    changed = true;
-  }
-
-  const hasEmptyProperties =
-    isRecord(normalized.properties) && Object.keys(normalized.properties).length === 0;
-
-  if (normalized.type === "object" && !Array.isArray(normalized.required) && hasEmptyProperties) {
-    normalized.required = [];
-    changed = true;
-  }
-  if (
-    normalized.type === "object" &&
-    hasEmptyProperties &&
-    !("additionalProperties" in normalized)
-  ) {
-    normalized.additionalProperties = false;
-    changed = true;
-  }
-
-  return changed ? normalized : schema;
-}
+import { SCHEMA_MAP_KEYS, SCHEMA_NESTED_KEYS } from "./schema-walk.js";
+import { truncateToolSchemaDepth, wasToolSchemaTruncated } from "./tool-schema-depth.js";
+import { normalizeToolSchema } from "./tool-schema-normalization.js";
 
 /** Repairs recoverable OpenAI tool-schema shapes before canonical normalization. */
 export function normalizeOpenAIStrictCompatSchema(schema: unknown): TSchema {
-  return normalizeOpenAIStrictCompatSchemaRecursive(schema, true) as TSchema;
+  return normalizeToolSchema(schema, "compat") as TSchema;
 }
 
 /**
@@ -154,12 +36,23 @@ export function findOpenAIStrictSchemaViolations(
   path: string,
   options?: { requireObjectRoot?: boolean },
 ): string[] {
+  const bounded = truncateToolSchemaDepth(schema);
+  return wasToolSchemaTruncated(bounded)
+    ? [`${path}.depth`]
+    : collectStrictSchemaViolations(bounded, path, options);
+}
+
+function collectStrictSchemaViolations(
+  schema: unknown,
+  path: string,
+  options?: { requireObjectRoot?: boolean },
+): string[] {
   if (Array.isArray(schema)) {
     if (options?.requireObjectRoot) {
       return [`${path}.type`];
     }
     return schema.flatMap((item, index) =>
-      findOpenAIStrictSchemaViolations(item, `${path}[${index}]`),
+      collectStrictSchemaViolations(item, `${path}[${index}]`),
     );
   }
   if (!schema || typeof schema !== "object") {
@@ -209,15 +102,15 @@ export function findOpenAIStrictSchemaViolations(
       continue;
     }
     for (const [entryKey, value] of Object.entries(schemaMap)) {
-      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}.${entryKey}`));
+      violations.push(...collectStrictSchemaViolations(value, `${path}.${key}.${entryKey}`));
     }
   }
   // Only recurse through JSON Schema applicators. Annotation payloads such as
   // examples/default may contain arbitrary objects that are not schemas.
-  for (const key of OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS) {
+  for (const key of SCHEMA_NESTED_KEYS) {
     const value = record[key];
     if (value && typeof value === "object") {
-      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}`));
+      violations.push(...collectStrictSchemaViolations(value, `${path}.${key}`));
     }
   }
 

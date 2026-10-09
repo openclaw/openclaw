@@ -264,7 +264,7 @@ describe("ensureAgentWorkspace", () => {
     const marker = `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n${new Date().toISOString()}\n`;
     await fs.writeFile(attestationPath, marker);
 
-    await expect(ensureWorkspace()).rejects.toThrow(/run openclaw doctor --fix/u);
+    await expect(ensureWorkspace()).rejects.toThrow(/Run openclaw doctor --fix/u);
 
     expect(await fs.readFile(attestationPath, "utf-8")).toBe(marker);
     expect((await readWorkspaceStateSnapshot(tempDir)).setupExists).toBe(true);
@@ -290,6 +290,25 @@ describe("ensureAgentWorkspace", () => {
     await ensureWorkspace();
     await expectCompletedWithoutBootstrap(tempDir);
     await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+  });
+
+  it("does not read setup state for an absent bootstrap file and refreshes after a setup wait", async () => {
+    const actual = workspaceState.readWorkspaceStateSnapshot;
+    const read = vi.spyOn(workspaceState, "readWorkspaceStateSnapshot");
+    try {
+      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+      expect(read).not.toHaveBeenCalled();
+      await writeWorkspaceFile(DEFAULT_BOOTSTRAP_FILENAME, "# Bootstrap\n");
+      read.mockImplementationOnce(async (...args) => {
+        const snapshot = await actual(...args);
+        await fs.unlink(workspacePath(DEFAULT_BOOTSTRAP_FILENAME));
+        return snapshot;
+      });
+      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("propagates a transient profile read after the retry budget is exhausted", async () => {

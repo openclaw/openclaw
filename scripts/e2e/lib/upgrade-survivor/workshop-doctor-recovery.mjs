@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { isMainThread } from "node:worker_threads";
+import { findInstalledPackageRoot, readDatabase } from "./observations.mjs";
 import {
   assertWorkshopProposalsRetired,
   captureWorkshopLegacyState,
@@ -94,31 +95,29 @@ export function captureWorkshopCandidate(tarball, artifactRoot, candidateVersion
 }
 
 function hasMalformedWorkshopIndex(filename) {
-  const database = new DatabaseSync(filename, { readOnly: true });
-  try {
-    database.prepare("SELECT review_id FROM skill_workshop_collection_reviews LIMIT 1").get();
-    return false;
-  } catch (error) {
-    if (!(error instanceof Error)) {
+  return readDatabase(filename, (database) => {
+    try {
+      database.prepare("SELECT review_id FROM skill_workshop_collection_reviews LIMIT 1").get();
+      return false;
+    } catch (error) {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      if (error.message.includes("malformed database schema") && error.message.includes(INDEX)) {
+        return true;
+      }
+      // Candidate Doctor retires the table that carries the malformed index.
+      if (error.message.includes("no such table: skill_workshop_collection_reviews")) {
+        return false;
+      }
       throw error;
     }
-    if (error.message.includes("malformed database schema") && error.message.includes(INDEX)) {
-      return true;
-    }
-    // Candidate Doctor retires the table that carries the malformed index.
-    if (error.message.includes("no such table: skill_workshop_collection_reviews")) {
-      return false;
-    }
-    throw error;
-  } finally {
-    database.close();
-  }
+  });
 }
 
 function inspectMalformedState(filename) {
   assert(hasMalformedWorkshopIndex(filename), "Legacy Workshop fixture is not malformed");
-  const database = new DatabaseSync(filename, { readOnly: true });
-  try {
+  return readDatabase(filename, (database) => {
     database.enableDefensive?.(false);
     database.exec("PRAGMA writable_schema = ON;");
     const catalog = database
@@ -153,9 +152,7 @@ function inspectMalformedState(filename) {
       rootpage: index.rootpage,
       stateSha256: digest.digest("hex"),
     };
-  } finally {
-    database.close();
-  }
+  });
 }
 
 export function seedWorkshopIndex(stateDir, artifactRoot, stage) {
@@ -194,8 +191,7 @@ export function seedWorkshopIndex(stateDir, artifactRoot, stage) {
 }
 
 function inspectPhysicalState(filename) {
-  const database = new DatabaseSync(filename, { readOnly: true });
-  try {
+  return readDatabase(filename, (database) => {
     return {
       findings: database
         .prepare("PRAGMA integrity_check(2147483647)")
@@ -210,9 +206,7 @@ function inspectPhysicalState(filename) {
         .all()
         .map((row) => Object.assign({}, row)),
     };
-  } finally {
-    database.close();
-  }
+  });
 }
 
 function seedPhysicalIndex(stateDir, artifactRoot, stage) {
@@ -460,14 +454,9 @@ function observeProcess() {
   }
   let identity = null;
   try {
-    let directory = path.dirname(fs.realpathSync(process.argv[1]));
-    // Installed CLI entrypoints are at the package root or inside dist.
-    for (let depth = 0; depth < 3; depth++, directory = path.dirname(directory)) {
-      const manifest = path.join(directory, "package.json");
-      if (fs.existsSync(manifest) && readJson(manifest).name === "openclaw") {
-        identity = installedIdentity(directory);
-        break;
-      }
+    const root = findInstalledPackageRoot(path.dirname(fs.realpathSync(process.argv[1])), 3);
+    if (root) {
+      identity = installedIdentity(root);
     }
   } catch {
     // Missing identity rejects the evidence without changing the observed CLI.
@@ -601,8 +590,7 @@ function normalizeOutput(text) {
 }
 
 function assertRepairedState(stateDir, retired) {
-  const database = new DatabaseSync(databasePath(stateDir), { readOnly: true });
-  try {
+  readDatabase(databasePath(stateDir), (database) => {
     assert.equal(
       database.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(INDEX),
       undefined,
@@ -628,9 +616,7 @@ function assertRepairedState(stateDir, retired) {
         .map((row) => row.integrity_check),
       ["ok"],
     );
-  } finally {
-    database.close();
-  }
+  });
 }
 
 export function assertWorkshopUpdateRefusal(

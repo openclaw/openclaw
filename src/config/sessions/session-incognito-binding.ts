@@ -1,12 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
-import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
+import {
+  IncognitoSessionMissingError,
+  IncognitoSessionSyncAccessError,
+} from "../../state/incognito-session-error.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
+  resolveExplicitIncognitoAgentSqliteTarget,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseIncognitoAuthority } from "../../state/openclaw-agent-execution-contract.js";
@@ -27,6 +32,15 @@ export type IncognitoSessionBinding = Readonly<{
   admissionSignal?: AbortSignal;
 }>;
 
+type AbsentIncognitoSessionBinding = Readonly<{
+  kind: "absent";
+  agentId: string;
+  path: string;
+  env: NodeJS.ProcessEnv;
+  assertCurrent(): void;
+  admissionSignal?: AbortSignal;
+}>;
+
 type IncognitoSessionTarget = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
@@ -36,41 +50,63 @@ type IncognitoSessionTarget = {
 
 const bindings = resolveGlobalSingleton(
   Symbol.for("openclaw.incognitoSessionBinding"),
-  () => new AsyncLocalStorage<IncognitoSessionBinding>(),
+  () => new AsyncLocalStorage<IncognitoSessionBinding | AbsentIncognitoSessionBinding>(),
 );
 
 /** Capture before yielding; a retained binding must never adopt a successor actor. */
 export function captureIncognitoSessionBinding(
   target?: IncognitoSessionTarget,
 ): IncognitoSessionBinding | undefined {
+  const source = captureIncognitoSessionSource(target);
+  if (source && "kind" in source) {
+    throw new IncognitoSessionMissingError();
+  }
+  return source;
+}
+
+/** Explicit actor absence differs from an unbound native call and from an ended handle. */
+export function captureIncognitoSessionSource(
+  target?: IncognitoSessionTarget,
+): IncognitoSessionBinding | AbsentIncognitoSessionBinding | undefined {
   const binding = bindings.getStore();
+  if (!binding) {
+    return undefined;
+  }
+  const owner = "kind" in binding ? binding : binding.actor;
   const exactPath = Boolean(
-    binding && target?.storePath && path.resolve(target.storePath) === binding.actor.path,
+    owner && target?.storePath && path.resolve(target.storePath) === owner.path,
   );
+  const explicitTarget =
+    binding && target?.storePath
+      ? resolveExplicitIncognitoAgentSqliteTarget(target.storePath, target)
+      : undefined;
   if (
-    !binding ||
-    (target &&
-      !isIncognitoSessionKey(target.sessionKey) &&
-      !exactPath &&
-      !(
-        target.storePath &&
-        isIncognitoOpenClawAgentSqlitePath(target.storePath, {
-          ...target,
-          agentId: target.agentId ?? binding.actor.agentId,
-        })
-      ))
+    target &&
+    !isIncognitoSessionKey(target.sessionKey) &&
+    !exactPath &&
+    !explicitTarget &&
+    !(
+      target.storePath &&
+      isIncognitoOpenClawAgentSqlitePath(target.storePath, {
+        ...target,
+        agentId: target.agentId ?? owner.agentId,
+      })
+    )
   ) {
     return undefined;
   }
-  binding.actor.assertCurrent();
+  owner.assertCurrent();
+  if ("kind" in binding) {
+    binding.admissionSignal?.throwIfAborted();
+  }
   if (target) {
     if (
       exactPath &&
-      (!target.agentId || target.agentId === binding.actor.agentId) &&
+      (!target.agentId || target.agentId === owner.agentId) &&
       (!target.sessionKey ||
         (target.env === undefined &&
           isIncognitoSessionKey(target.sessionKey) &&
-          resolveAgentIdFromSessionKey(target.sessionKey) === binding.actor.agentId))
+          resolveAgentIdFromSessionKey(target.sessionKey) === owner.agentId))
     ) {
       // Exact captured paths survive environment changes; an explicit environment still resolves below.
       return binding;
@@ -78,13 +114,13 @@ export function captureIncognitoSessionBinding(
     const options = toDatabaseOptions(
       resolveSqliteScope({
         ...target,
-        env: target.env ?? { OPENCLAW_STATE_DIR: path.resolve(binding.actor.path, "../../../..") },
+        env: target.env ?? { OPENCLAW_STATE_DIR: path.resolve(owner.path, "../../../..") },
         sessionKey: target.sessionKey ?? "",
       }),
     );
     if (
-      options.agentId !== binding.actor.agentId ||
-      resolveOpenClawAgentSqlitePath(options) !== binding.actor.path
+      options.agentId !== owner.agentId ||
+      resolveOpenClawAgentSqlitePath(options) !== owner.path
     ) {
       throw new Error("Session target belongs to another incognito actor");
     }
@@ -291,8 +327,8 @@ export async function withAcquiredIncognitoSessionBinding<T>(
 export function publishIncognitoSessionEntry(
   actor: IncognitoSessionActor,
   sessionKey: string,
-  previous: SessionEntry | undefined,
-  entry: SessionEntry,
+  previous: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined,
+  entry: SessionEntry | undefined,
 ): void {
   const change: SessionRowChange = {
     agentId: actor.agentId,
@@ -310,14 +346,42 @@ export function publishIncognitoSessionEntry(
     actor.agentId,
     actor.identity.incarnation,
     new Map(previous ? [[sessionKey, previous]] : []),
-    new Map([[sessionKey, entry]]),
+    new Map(entry ? [[sessionKey, entry]] : []),
   );
 }
 
 export function withIncognitoSessionBinding<T>(
-  binding: IncognitoSessionBinding,
+  binding:
+    | IncognitoSessionBinding
+    | {
+        kind: "absent";
+        agentId: string;
+        env: NodeJS.ProcessEnv;
+        authority: IncognitoSessionAuthority;
+        admissionSignal?: AbortSignal;
+      },
   operation: () => T,
 ): T {
+  if ("kind" in binding) {
+    const absence = captureOpenClawAgentDatabaseExecution.captureIncognitoAbsence(binding, {
+      assertCurrent() {
+        binding.admissionSignal?.throwIfAborted();
+        binding.authority.assertCurrent();
+      },
+    });
+    try {
+      const result = bindings.run({ ...binding, ...absence }, operation);
+      if (isPromiseLike(result)) {
+        void Promise.resolve(result).then(absence.release, absence.release);
+      } else {
+        absence.release();
+      }
+      return result;
+    } catch (error) {
+      absence.release();
+      throw error;
+    }
+  }
   return bindings.run(binding, operation);
 }
 
@@ -339,17 +403,28 @@ export function withIncognitoSessionActor<T>(
 
 /** Keep one actor read and its authority alive through its asynchronous consumer. */
 export function withIncognitoSessionEntry<T>(
-  binding: IncognitoSessionBinding,
+  binding: IncognitoSessionBinding | AbsentIncognitoSessionBinding,
   sessionKey: string,
   assertCallerCurrent: () => void,
   consume: (entry: SessionEntry | undefined, assertCurrent: () => void) => Promise<T>,
 ): Promise<T> {
-  const { actor, admissionSignal } = binding;
   const assertCurrent = () => {
     assertCallerCurrent();
-    admissionSignal?.throwIfAborted();
-    actor.assertReadable();
+    binding.admissionSignal?.throwIfAborted();
+    if ("kind" in binding) {
+      binding.assertCurrent();
+    } else {
+      binding.actor.assertReadable();
+    }
   };
+  if ("kind" in binding) {
+    assertCurrent();
+    return consume(undefined, assertCurrent).then((result) => {
+      assertCurrent();
+      return result;
+    });
+  }
+  const { actor, admissionSignal } = binding;
   let assertSnapshot = assertCurrent;
   return actor.sessions
     .withSharedState(async () => {

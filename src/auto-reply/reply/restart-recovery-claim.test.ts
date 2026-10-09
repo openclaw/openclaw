@@ -1,6 +1,5 @@
-import assert from "node:assert/strict";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -16,10 +15,9 @@ import {
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as entryPatch from "../../config/sessions/session-entry-patch.js";
-import { SqliteSessionMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import * as placementContext from "../../gateway/session-worker-placement-context.js";
@@ -28,29 +26,52 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import { isAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
+import {
+  isAgentRunStaleLifecycleError,
+  isRestartRecoveryClaimChangedError,
+} from "../../infra/agent-lifecycle-error.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
-import { createReplyOperation } from "./reply-run-registry.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
+import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type ClaimControllerParams = Parameters<typeof createReplyRestartRecoveryClaimController>[0];
 
 function createController(
-  params: Pick<ClaimControllerParams, "getEntry" | "getSessionId" | "setEntry"> &
+  params: Pick<
+    ClaimControllerParams,
+    "getEntry" | "getSessionId" | "setEntry" | "sessionKey" | "storePath"
+  > &
     Partial<ClaimControllerParams>,
+  operation?: ReplyOperation,
 ) {
-  return createReplyRestartRecoveryClaimController({
+  if (!params.sessionKey || !params.storePath) {
+    throw new Error("Recovery fixture requires a stored session");
+  }
+  const actor = createReplyRecoveryActorFixture({
+    agentId: params.agentId ?? "main",
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    getSessionId: params.getSessionId,
+    operation,
+  });
+  const controller = createReplyRestartRecoveryClaimController({
     agentId: "main",
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
     isRestartAbort: () => false,
     resolveDeliveryContext: () => undefined,
     ...params,
+    acquireSessionActor: () => actor.acquireSessionActor(),
+  });
+  return Object.assign(controller, {
+    acquireSessionActor: () => actor.acquireSessionActor(),
+    [Symbol.asyncDispose]: () => actor[Symbol.asyncDispose](),
   });
 }
 
@@ -87,6 +108,7 @@ async function createTrackedClaim(
     scope,
     current: () => entry,
     read: () => loadSessionEntry(scope),
+    [Symbol.asyncDispose]: () => controller[Symbol.asyncDispose](),
   };
 }
 
@@ -141,7 +163,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       const before = loadSessionEntry(scope);
       const write = vi.spyOn(sessionAccessor, "updateSessionEntry");
       try {
-        const controller = createController({
+        await using controller = createController({
           ...scope,
           admissionRunId: "source-less-run",
           lifecycleGeneration: getAgentEventLifecycleGeneration(),
@@ -191,7 +213,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
           target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
           updateMode: "none",
         });
-        const controller = createController({
+        await using controller = createController({
           ...scope,
           admissionRunId: "source-less-run",
           executionRunId,
@@ -315,11 +337,12 @@ describe("createReplyRestartRecoveryClaimController", () => {
         retarget: () => {
           sessionId = "successor-session";
         },
+        [Symbol.asyncDispose]: () => controller[Symbol.asyncDispose](),
       };
     }
 
     it("leaves staged worker input with placement admission without caller-thread SQL", async () => {
-      const fixture = await createPlacementAdmission();
+      await using fixture = await createPlacementAdmission();
       const hostSql = observeHostDataSql();
       try {
         expect(fixture.service.getMany([fixture.entry.sessionId]).size).toBe(1);
@@ -339,7 +362,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     });
 
     it("refuses an unavailable placement observation instead of reading synchronously", async () => {
-      const fixture = await createPlacementAdmission();
+      await using fixture = await createPlacementAdmission();
       fixture.context.workerSessionPlacementService = {
         getMany: (ids) => fixture.service.getMany(ids),
       };
@@ -364,7 +387,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       "pending-input-persisted",
       "terminal-source",
     ] as const)("revalidates %s while placement preparation is pending", async (change) => {
-      const fixture = await createPlacementAdmission();
+      await using fixture = await createPlacementAdmission();
       const prepared = createDeferred();
       const resume = createDeferred();
       const prepare = fixture.service.prepareRuntimeRefresh.bind(fixture.service);
@@ -454,13 +477,16 @@ describe("createReplyRestartRecoveryClaimController", () => {
         resetTriggered: false,
       });
       const setEntry = vi.fn();
-      const controller = createController({
-        ...scope,
-        admissionRunId: "recovery-run",
-        getEntry: () => entry,
-        getSessionId: () => operation.sessionId,
-        setEntry,
-      });
+      await using controller = createController(
+        {
+          ...scope,
+          admissionRunId: "recovery-run",
+          getEntry: () => entry,
+          getSessionId: () => operation.sessionId,
+          setEntry,
+        },
+        operation,
+      );
       const admission = controller.admitUserTurn();
       const outcome = admission.then(
         () => undefined,
@@ -498,10 +524,11 @@ describe("createReplyRestartRecoveryClaimController", () => {
       const ops = { agentId: "ops", storePath, sessionKey };
       await replaceSessionEntry(main, { sessionId: "main-session", updatedAt: 1 });
       const mainBefore = loadSessionEntry(main);
-      const { controller } = await createTrackedClaim(
+      await using fixture = await createTrackedClaim(
         { sessionId: "ops-session", restartRecoveryDeliveryRunId: "ops-recovery" },
         { ...ops, admissionRunId: "ops-recovery" },
       );
+      const { controller } = fixture;
       await expect(controller.admitUserTurn()).resolves.toBe("admitted");
       const hostSql = observeHostDataSql();
       try {
@@ -540,7 +567,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       accountId: "default",
       threadId: "thread",
     };
-    const { controller, read } = await createTrackedClaim(
+    await using fixture = await createTrackedClaim(
       {
         abortedLastRun: false,
         lifecycleRunId: "recovery-run",
@@ -559,6 +586,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
         sourceTurnId: "source-turn",
       },
     );
+    const { controller, read } = fixture;
 
     await expect(controller.admitUserTurn()).resolves.toBe("admitted");
     const persisted = read();
@@ -574,7 +602,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
   });
 
   it("adopts and settles acknowledged input through hook checkpoints without caller-thread SQL", async () => {
-    const fixture = await createAcknowledgedClaim();
+    await using fixture = await createAcknowledgedClaim();
     const persistApproved = vi.spyOn(fixture.recorder, "persistApproved");
     const sql = observeHostDataSql();
     try {
@@ -618,64 +646,192 @@ describe("createReplyRestartRecoveryClaimController", () => {
     ]);
   });
 
-  it("preserves a foreign source claim that changes after acknowledged-input adoption preparation", async () => {
-    const fixture = await createAcknowledgedClaim();
-    const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.scope.storePath, {
-      agentId: fixture.scope.agentId,
-    }).path;
-    const foreign = new DatabaseSync(databasePath);
-    const patch = entryPatch.patchSessionEntryInWorker;
-    const intervened = vi.fn();
-    const spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
-      if (
-        params.selection.kind !== "target" ||
-        params.selection.target.canonicalKey !== fixture.scope.sessionKey
-      ) {
-        return patch(params);
+  it.each([
+    { stage: "admission", change: "metadata" },
+    { stage: "admission", change: "source-claim" },
+    { stage: "cleanup", change: "metadata" },
+    { stage: "cleanup", change: "source-claim" },
+  ] as const)(
+    "preserves in-process $change changes across the $stage writer",
+    async ({ stage, change }) => {
+      await using fixture = await createAcknowledgedClaim();
+      if (stage === "cleanup") {
+        await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
       }
-      return patch({
-        ...params,
-        async prepare(snapshot) {
-          const prepared = await params.prepare(snapshot);
-          assert(prepared);
-          foreign
-            .prepare(
-              `UPDATE session_nodes SET entry_json =
-               json_set(entry_json, '$.restartRecoveryDeliverySourceRunId', 'foreign-source')
-               WHERE session_key = ?`,
-            )
-            .run(fixture.scope.sessionKey);
-          intervened();
-          return prepared;
-        },
-      });
-    });
-    try {
-      await expect(fixture.controller.admitUserTurn(fixture.recorder)).rejects.toBeInstanceOf(
-        SqliteSessionMutationConflictError,
+      const replace = () => {
+        replaceSessionEntrySync(fixture.scope, {
+          ...fixture.read()!,
+          ...(change === "metadata"
+            ? { model: "concurrent-model" }
+            : { restartRecoveryDeliverySourceRunId: "concurrent-source" }),
+        });
+      };
+      const { actor } = expectDefined(
+        await fixture.controller.acquireSessionActor(),
+        "durable recovery actor",
       );
-      expect(intervened).toHaveBeenCalledOnce();
-      expect(
-        foreign
-          .prepare(
-            `SELECT status,
-              json_extract(entry_json, '$.restartRecoveryDeliveryRunId') AS runId,
-              json_extract(entry_json, '$.restartRecoveryDeliverySourceRunId') AS sourceRunId,
-              json_extract(entry_json, '$.restartRecoveryDeliveryRequestFingerprint') AS fingerprint
-             FROM session_nodes WHERE session_key = ?`,
-          )
-          .get(fixture.scope.sessionKey),
-      ).toEqual({
-        status: null,
-        runId: "recovery-run",
-        sourceRunId: "foreign-source",
-        fingerprint: "acknowledged-fingerprint",
+      const adopt = actor.adoptRun.bind(actor);
+      const patch = entryPatch.patchSessionEntryInWorker;
+      const spy =
+        stage === "admission"
+          ? vi.spyOn(actor, "adoptRun").mockImplementationOnce((...args) => {
+              replace();
+              return adopt(...args);
+            })
+          : vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementationOnce((params) => {
+              replace();
+              return patch(params);
+            });
+      try {
+        const outcome = await (
+          stage === "cleanup"
+            ? fixture.controller.clear()
+            : fixture.controller.admitUserTurn(fixture.recorder)
+        ).catch((error: unknown) => error);
+        if (change === "metadata") {
+          expect(outcome).toBe(stage === "cleanup" ? undefined : "admitted");
+          expect(fixture.current().model).toBe("concurrent-model");
+        } else if (stage === "admission") {
+          expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+        } else {
+          expect(outcome).toBeUndefined();
+        }
+        expect(spy).toHaveBeenCalled();
+        const persisted = fixture.read();
+        expect(persisted?.status).toBeUndefined();
+        expect(persisted?.restartRecoveryDeliveryRunId).toBe(
+          stage === "cleanup" && change === "metadata" ? undefined : "recovery-run",
+        );
+        expect(persisted?.restartRecoveryDeliverySourceRunId).toBe(
+          change === "source-claim"
+            ? "concurrent-source"
+            : stage === "cleanup"
+              ? undefined
+              : fixture.sourceTurnId,
+        );
+        expect(persisted?.restartRecoveryDeliveryRequestFingerprint).toBe(
+          stage === "admission" && change === "source-claim"
+            ? "acknowledged-fingerprint"
+            : undefined,
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["transaction", "commit"] as const)(
+    "preserves lifecycle refusal at the actor %s boundary without writing the hook checkpoint",
+    async (boundary) => {
+      await using fixture = await createAcknowledgedClaim();
+      await fixture.controller.admitUserTurn(fixture.recorder);
+      const before = fixture.read();
+      const { actor } = expectDefined(
+        await fixture.controller.acquireSessionActor(),
+        "durable recovery actor",
+      );
+      const adopt = actor.adoptRun.bind(actor);
+      let revoked = false;
+      const spy = vi.spyOn(actor, "adoptRun").mockImplementationOnce((input, authority, observer) =>
+        adopt(
+          input,
+          {
+            ...authority,
+            authorize(stage, facts, publication) {
+              if (stage === boundary && !revoked) {
+                revoked = true;
+                rotateAgentEventLifecycleGeneration();
+              }
+              authority.authorize(stage, facts, publication);
+            },
+          },
+          observer,
+        ),
+      );
+      try {
+        const failure = await fixture.controller
+          .beginBeforeAgentReply()
+          .catch((error: unknown) => error);
+        expect(revoked).toBe(true);
+        expect(isAgentRunStaleLifecycleError(failure)).toBe(true);
+        expect(fixture.read()).toEqual(before);
+        expect(fixture.current()).toEqual(before);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["begin", "handled-reply", "unhandled"] as const)(
+    "rejects a stale lifecycle before the %s hook checkpoint",
+    async (checkpoint) => {
+      await using fixture = await createAcknowledgedClaim();
+      await fixture.controller.admitUserTurn(fixture.recorder);
+      if (checkpoint !== "begin") {
+        await fixture.controller.beginBeforeAgentReply();
+      }
+      const original = structuredClone(fixture.current());
+      await replaceSessionEntry(fixture.scope, {
+        ...original,
+        lifecycleRevision: "successor-generation",
       });
-    } finally {
-      spy.mockRestore();
-      foreign.close();
-    }
-  });
+      const successor = fixture.read();
+
+      await expect(
+        checkpoint === "begin"
+          ? fixture.controller.beginBeforeAgentReply()
+          : fixture.controller.checkpointBeforeAgentReply(
+              checkpoint === "unhandled"
+                ? { state: undefined }
+                : {
+                    state: "handled-reply",
+                    pendingFinalDelivery: {
+                      text: "Hook-owned reply",
+                      intentId: "hook-intent",
+                      deliveries: [{ id: "hook-delivery", state: "prepared" }],
+                    },
+                  },
+            ),
+      ).rejects.toThrow("restart recovery claim changed");
+      expect(fixture.current()).toEqual(original);
+      expect(fixture.read()).toEqual(successor);
+      expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+    },
+  );
+
+  it.each(["session", "lifecycle"] as const)(
+    "does not install a replacement %s after refused claim cleanup",
+    async (replacement) => {
+      await using fixture = await createAcknowledgedClaim();
+      await fixture.controller.admitUserTurn(fixture.recorder);
+      const original = structuredClone(fixture.current());
+      const successor = {
+        ...original,
+        ...(replacement === "session" ? { sessionId: "successor-session" } : {}),
+        lifecycleRevision: "successor-generation",
+      };
+      const patch = entryPatch.patchSessionEntryInWorker;
+      let storedSuccessor: InternalSessionEntry | undefined;
+      const spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
+        // The released synchronous writer can replace the row after host admission.
+        replaceSessionEntrySync(fixture.scope, successor);
+        storedSuccessor = structuredClone(fixture.read());
+        return patch(params);
+      });
+      try {
+        await fixture.controller.clear();
+        expect(spy).toHaveBeenCalledOnce();
+        expect(fixture.current()).toEqual(original);
+        expect(storedSuccessor).toMatchObject({
+          sessionId: successor.sessionId,
+          lifecycleRevision: successor.lifecycleRevision,
+        });
+        expect(fixture.read()).toEqual(storedSuccessor);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
 
   it("retargets durable user-turn admission to the prepared reply session", async () => {
     const storePath = path.join(tempDirs.make("openclaw-reply-admission-"), "sessions.json");
@@ -695,7 +851,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       updateMode: "none",
     });
     const persistApproved = vi.spyOn(recorder, "persistApproved");
-    const controller = createController({
+    await using controller = createController({
       getEntry: () => entry,
       getSessionId: () => sessionId,
       resolveUserTurnTarget: (target) => ({
@@ -798,7 +954,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
           return persist(options);
         });
       }
-      const controller = createController({
+      await using controller = createController({
         getEntry: () => entry,
         getSessionId: () => sessionId,
         resolveDeliveryContext: () => deliveryContext,

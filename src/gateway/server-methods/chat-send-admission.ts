@@ -3,10 +3,7 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
-import {
-  createAgentRunRestartAbortError,
-  isAgentRunDirectAbortReason,
-} from "../../agents/run-termination.js";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import {
   isReplyRunAbortableForSignal,
   replyRunRegistry,
@@ -82,7 +79,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
   const {
     clientRunId,
-    pendingChatSendKey,
     storePath,
     entry,
     sessionKey,
@@ -106,8 +102,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   const pendingReservation = createPendingChatSendReservationAccess({
     context,
     client,
-    key: pendingChatSendKey,
-    runId: clientRunId,
     attemptId: pendingAttemptId,
     request,
     session,
@@ -380,14 +374,12 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let retainedRequestConflict: ReturnType<typeof resolveChatSendRequestConflict>;
   try {
     gatewayWorkAdmission = await beginSessionWorkAdmission({
+      agentId,
       scope: storePath,
+      isSettling: () => admittedRunAbort?.entry?.terminalOutcomeObserved === true,
       identities: [sessionKey, backingSessionId],
       storeWriterIdentities: [sessionKey, session.sessionTarget.storeKey],
-      assertAllowed: () =>
-        consumeChatSendCurrent(params, () => {
-          assertSessionTargetCurrent();
-          assertChatSendExclusiveAdmission(request, session);
-        }),
+      assertAllowed: assertSessionTargetCurrent,
       revalidateAllowed: async () => {
         if (!restartSafeRequest) {
           return commitChatWorkAdmission(null);
@@ -406,7 +398,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         return commitChatWorkAdmission(acpMeta ?? null);
       },
       onInterrupt: (reason) => {
-        const stopReason = isAgentRunDirectAbortReason(reason) ? "rpc" : "restart";
+        const stopReason = isAgentRunRestartAbortReason(reason) ? "restart" : "rpc";
         if (!admittedRunAbort) {
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
             abortPendingChatSend(stopReason);
@@ -416,9 +408,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           if (admittedRunAbort.entry) {
             admittedRunAbort.entry.abortStopReason = stopReason;
           }
-          admittedRunAbort.controller.abort(
-            stopReason === "rpc" ? reason : createAgentRunRestartAbortError(),
-          );
+          admittedRunAbort.controller.abort(reason);
         }
       },
     });
@@ -692,6 +682,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       retainGatewayWorkAdmission: retainedWork.retain,
       settleTerminal: retainedWork.settleTerminal,
       withInputCommitPublication: retainedWork.withInputCommitPublication,
+      acquireInputActor: () => retainedWork.acquireInputActor(),
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
       assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,
       assertWorkAdmissionCurrent: () => {

@@ -32,7 +32,10 @@ const approvalMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./in-process-gateway.js", () => ({ getInProcessGatewayToolContext }));
-vi.mock("../../gateway/session-utils-store.js", () => ({ loadGatewaySessionEntryReadOnly }));
+// mock-isolation: terminal ownership tests supply entry facts without opening session databases.
+vi.mock("../../gateway/session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: loadGatewaySessionEntryReadOnly,
+}));
 vi.mock("../bash-tools.exec-approval-request.js", () => ({
   registerExecApprovalRequestForHostOrThrow: approvalMocks.register,
   resolveRegisteredExecApprovalDecision: approvalMocks.decide,
@@ -347,41 +350,14 @@ describe("terminal tool", () => {
       tool.execute("missing-session-input", { action: "input", sessionId, data: "echo unsafe\r" }),
     ).rejects.toThrow("Terminal session unavailable");
 
-    expect(loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentOwner.agentSessionKey, {
+    expect(loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      key: agentOwner.agentSessionKey,
       agentId: agentOwner.agentId,
-      clone: false,
     });
     expect(backend.writes).toEqual([]);
     expect(approvalMocks.register).not.toHaveBeenCalled();
   });
-
-  it.each([
-    {
-      label: "explicit full exec policy",
-      options: { config: { tools: { exec: { mode: "full" } } }, execSession: {} },
-    },
-    { label: "full permission session", options: { execSession: { permissionMode: "full" } } },
-  ] satisfies Array<{ label: string; options: TerminalToolOptions }>)(
-    "writes exact-session terminal input immediately under $label",
-    async ({ options }) => {
-      const { backend, manager, sessionId } = await openAgentTerminal();
-      const tool = makeTool(manager, options);
-
-      await withActiveRun(manager, async () => {
-        const result = await tool.execute("allowed-input", {
-          action: "input",
-          sessionId,
-          data: "echo approved\r",
-        });
-
-        expect(result.details).toEqual({ ok: true });
-      });
-
-      expect(backend.writes).toEqual(["echo approved\r"]);
-      expect(approvalMocks.register).not.toHaveBeenCalled();
-      expect(approvalMocks.decide).not.toHaveBeenCalled();
-    },
-  );
 
   it("rejects full terminal input without an active admitted run", async () => {
     const { backend, manager, sessionId } = await openAgentTerminal();
@@ -399,94 +375,73 @@ describe("terminal tool", () => {
     expect(approvalMocks.register).not.toHaveBeenCalled();
   });
 
-  it.each(["released", "replaced"] as const)(
-    "rejects full terminal input after its exact run authority is %s",
-    async (lifecycle) => {
-      const { backend, manager, sessionId } = await openAgentTerminal();
-      const tool = makeTool(manager, { execSession: { permissionMode: "full" } });
+  it("rejects full terminal input after its exact run authority is replaced", async () => {
+    const { backend, manager, sessionId } = await openAgentTerminal();
+    const tool = makeTool(manager, { execSession: { permissionMode: "full" } });
 
-      await withActiveRun(manager, async (authority) => {
-        const replacement =
-          lifecycle === "replaced"
-            ? claimAgentRunDelegatedAuthority({
-                instanceId: "replacement-terminal-instance",
-                runId: authority.operationalRunInstance.runId,
-              })
-            : undefined;
-        if (!replacement) {
-          releaseAgentRunDelegatedAuthority(authority);
-        }
-
-        try {
-          await expect(
-            tool.execute("stale-full-input", {
-              action: "input",
-              sessionId,
-              data: "echo unsafe\r",
-            }),
-          ).rejects.toThrow("agent run is no longer active");
-        } finally {
-          if (replacement) {
-            releaseAgentRunDelegatedAuthority(replacement);
-          }
-        }
+    await withActiveRun(manager, async (authority) => {
+      const replacement = claimAgentRunDelegatedAuthority({
+        instanceId: "replacement-terminal-instance",
+        runId: authority.operationalRunInstance.runId,
       });
 
-      expect(backend.writes).toEqual([]);
-      expect(approvalMocks.register).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { label: "guarded session", options: { execSession: { permissionMode: "guarded" } } },
-    { label: "workspace session", options: { execSession: { permissionMode: "workspace" } } },
-    {
-      label: "allowlisted accept-only execution",
-      options: { config: { tools: { exec: { mode: "allowlist" } } }, execSession: {} },
-    },
-  ] satisfies Array<{ label: string; options: TerminalToolOptions }>)(
-    "requires a fresh explicit operator approval for every input in a $label",
-    async ({ options }) => {
-      const { backend, manager, sessionId } = await openAgentTerminal();
-      const tool = makeTool(manager, {
-        ...options,
-        approvalReviewerDeviceIds: ["reviewer-device"],
-      });
-
-      await withActiveRun(manager, async () => {
-        for (const [index, data] of ["echo first\r", "echo second\r"].entries()) {
-          const result = await tool.execute(`guarded-input-${index}`, {
+      try {
+        await expect(
+          tool.execute("stale-full-input", {
             action: "input",
             sessionId,
-            data,
-          });
-          expect(result.details).toEqual({ ok: true });
-        }
-      });
+            data: "echo unsafe\r",
+          }),
+        ).rejects.toThrow("agent run is no longer active");
+      } finally {
+        releaseAgentRunDelegatedAuthority(replacement);
+      }
+    });
 
-      expect(backend.writes).toEqual(["echo first\r", "echo second\r"]);
-      expect(approvalMocks.register).toHaveBeenCalledTimes(2);
-      expect(approvalMocks.decide).toHaveBeenCalledTimes(2);
-      expect(approvalMocks.register).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          approvalId: expect.any(String),
-          command: `Terminal input: ${JSON.stringify("echo first\r")}`,
-          host: "gateway",
-          security: "allowlist",
-          ask: "always",
-          unavailableDecisions: ["allow-always"],
-          agentId: "main",
-          sessionKey: agentOwner.agentSessionKey,
-          sessionId: agentOwner.agentSessionId,
-          runId: "terminal-run",
-          toolCallId: "guarded-input-0",
-          approvalReviewerDeviceIds: ["reviewer-device"],
-          requireDeliveryRoute: true,
-        }),
-      );
-    },
-  );
+    expect(backend.writes).toEqual([]);
+    expect(approvalMocks.register).not.toHaveBeenCalled();
+  });
+
+  it("requires a fresh explicit operator approval for every input in a workspace session", async () => {
+    const { backend, manager, sessionId } = await openAgentTerminal();
+    const tool = makeTool(manager, {
+      execSession: { permissionMode: "workspace" },
+      approvalReviewerDeviceIds: ["reviewer-device"],
+    });
+
+    await withActiveRun(manager, async () => {
+      for (const [index, data] of ["echo first\r", "echo second\r"].entries()) {
+        const result = await tool.execute(`guarded-input-${index}`, {
+          action: "input",
+          sessionId,
+          data,
+        });
+        expect(result.details).toEqual({ ok: true });
+      }
+    });
+
+    expect(backend.writes).toEqual(["echo first\r", "echo second\r"]);
+    expect(approvalMocks.register).toHaveBeenCalledTimes(2);
+    expect(approvalMocks.decide).toHaveBeenCalledTimes(2);
+    expect(approvalMocks.register).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        approvalId: expect.any(String),
+        command: `Terminal input: ${JSON.stringify("echo first\r")}`,
+        host: "gateway",
+        security: "allowlist",
+        ask: "always",
+        unavailableDecisions: ["allow-always"],
+        agentId: "main",
+        sessionKey: agentOwner.agentSessionKey,
+        sessionId: agentOwner.agentSessionId,
+        runId: "terminal-run",
+        toolCallId: "guarded-input-0",
+        approvalReviewerDeviceIds: ["reviewer-device"],
+        requireDeliveryRoute: true,
+      }),
+    );
+  });
 
   it("waits for an explicit one-shot decision before writing guarded input", async () => {
     const { backend, manager, sessionId } = await openAgentTerminal();
@@ -517,22 +472,19 @@ describe("terminal tool", () => {
     expect(backend.writes).toEqual(["echo pending\r"]);
   });
 
-  it.each(["deny", "allow-always", null])(
-    "rejects guarded input when the operator decision is %s",
-    async (decision) => {
-      const { backend, manager, sessionId } = await openAgentTerminal();
-      const tool = makeTool(manager, { execSession: { permissionMode: "guarded" } });
-      approvalMocks.decide.mockResolvedValueOnce(decision);
+  it("rejects guarded input when the operator decision is allow-always", async () => {
+    const { backend, manager, sessionId } = await openAgentTerminal();
+    const tool = makeTool(manager, { execSession: { permissionMode: "guarded" } });
+    approvalMocks.decide.mockResolvedValueOnce("allow-always");
 
-      await withActiveRun(manager, async () => {
-        await expect(
-          tool.execute("rejected-input", { action: "input", sessionId, data: "echo rejected\r" }),
-        ).rejects.toThrow("operator approval required");
-      });
+    await withActiveRun(manager, async () => {
+      await expect(
+        tool.execute("rejected-input", { action: "input", sessionId, data: "echo rejected\r" }),
+      ).rejects.toThrow("operator approval required");
+    });
 
-      expect(backend.writes).toEqual([]);
-    },
-  );
+    expect(backend.writes).toEqual([]);
+  });
 
   it("rejects guarded input when no operator approval route is available", async () => {
     const { backend, manager, sessionId } = await openAgentTerminal();

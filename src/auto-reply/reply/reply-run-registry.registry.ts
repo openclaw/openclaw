@@ -87,13 +87,15 @@ export function resolveReplyOperationsForSession(params: ReplyOperationSessionTa
 
 export async function waitForReplyOperationOwnerSettlement(
   operation: ReplyOperation,
-  timeoutMs: number,
+  timeoutMs: number | null,
 ): Promise<boolean> {
   const settlement = operation.ownerSettlement;
   if (!settlement) {
     return true;
   }
-  return settlesWithin(settlement, resolveTimerTimeoutMs(timeoutMs, 100, 100));
+  return timeoutMs === null
+    ? settlement.then(() => true)
+    : settlesWithin(settlement, resolveTimerTimeoutMs(timeoutMs, 100, 100));
 }
 
 export function expireStaleReplyRunBySessionId(
@@ -133,18 +135,15 @@ function allowsDirectMessageInjectionOwner(sessionKey: string): boolean {
   );
 }
 
+function getReplyRun(sessionKey: string): ReplyOperation | undefined {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  return normalizedSessionKey ? replyRunState.activeRunsByKey.get(normalizedSessionKey) : undefined;
+}
+
 export const replyRunRegistry: ReplyRunRegistry = {
   begin: createReplyOperation,
-  get(sessionKey) {
-    const normalizedSessionKey = normalizeOptionalString(sessionKey);
-    return normalizedSessionKey
-      ? replyRunState.activeRunsByKey.get(normalizedSessionKey)
-      : undefined;
-  },
-  isActive(sessionKey) {
-    const normalizedSessionKey = normalizeOptionalString(sessionKey);
-    return Boolean(normalizedSessionKey && replyRunState.activeRunsByKey.has(normalizedSessionKey));
-  },
+  get: getReplyRun,
+  isActive: (sessionKey) => getReplyRun(sessionKey) !== undefined,
   bindSourceTurnId(operation, sourceTurnId) {
     // Durable admission can finish after reset has replaced this operation.
     if (
@@ -216,51 +215,33 @@ export const replyRunRegistry: ReplyRunRegistry = {
       return Promise.resolve(false);
     }
     return new Promise((resolve) => {
-      const waiters = replyRunState.waitersByKey.get(normalizedSessionKey) ?? new Set();
-      let abortHandler: (() => void) | undefined;
-      let settled = false;
-      const waiter: ReplyRunWaiter = {
-        finish: (ended) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          waiters.delete(waiter);
-          if (waiters.size === 0) {
-            replyRunState.waitersByKey.delete(normalizedSessionKey);
-          }
-          if (waiter.timer) {
-            clearTimeout(waiter.timer);
-          }
-          if (abortHandler) {
-            opts?.signal?.removeEventListener("abort", abortHandler);
-          }
-          resolve(ended);
-        },
+      const waiters =
+        replyRunState.waitersByKey.get(normalizedSessionKey) ?? new Set<ReplyRunWaiter>();
+      const abortHandler = () => waiter(false);
+      let timer: NodeJS.Timeout | undefined;
+      const waiter: ReplyRunWaiter = (ended) => {
+        if (!waiters.delete(waiter)) {
+          return;
+        }
+        if (waiters.size === 0) {
+          replyRunState.waitersByKey.delete(normalizedSessionKey);
+        }
+        clearTimeout(timer);
+        opts?.signal?.removeEventListener("abort", abortHandler);
+        resolve(ended);
       };
       if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-        waiter.timer = setTimeout(
-          () => waiter.finish(false),
-          resolveTimerTimeoutMs(timeoutMs, 100, 100),
-        );
+        timer = setTimeout(() => waiter(false), resolveTimerTimeoutMs(timeoutMs, 100, 100));
       }
-      if (opts?.signal) {
-        abortHandler = () => waiter.finish(false);
-        opts.signal.addEventListener("abort", abortHandler, { once: true });
-      }
+      opts?.signal?.addEventListener("abort", abortHandler, { once: true });
       waiters.add(waiter);
       replyRunState.waitersByKey.set(normalizedSessionKey, waiters);
       if (!replyRunState.activeRunsByKey.has(normalizedSessionKey)) {
-        waiter.finish(true);
+        waiter(true);
       }
     });
   },
-  resolveSessionId(sessionKey) {
-    const normalizedSessionKey = normalizeOptionalString(sessionKey);
-    return normalizedSessionKey
-      ? replyRunState.activeSessionIdsByKey.get(normalizedSessionKey)
-      : undefined;
-  },
+  resolveSessionId: (sessionKey) => getReplyRun(sessionKey)?.sessionId,
 };
 
 /** Abort and await only the captured operation; a same-key successor is never rediscovered. */
@@ -488,11 +469,11 @@ export function getActiveReplyRunCount(): number {
 }
 
 export function listActiveReplyRunSessionIds(): string[] {
-  return [...replyRunState.activeSessionIdsByKey.values()];
+  return Array.from(replyRunState.activeRunsByKey.values(), (operation) => operation.sessionId);
 }
 
 export function listActiveReplyRunSessionKeys(): string[] {
-  return [...replyRunState.activeSessionIdsByKey.keys()];
+  return [...replyRunState.activeRunsByKey.keys()];
 }
 
 function evictPriorLifecycleReplyRuns(): void {
@@ -514,30 +495,10 @@ function evictPriorLifecycleReplyRuns(): void {
       continue;
     }
     const evict = evictReplyOperationByOperation.get(operation);
-    if (evict) {
-      if (attempt(evict)) {
-        continue;
-      }
-    } else {
-      // Pre-generation hot-loaded operations have no retained callback, but their
-      // public method still closes over the module instance that owns the backend.
-      attempt(() => {
-        if (!operation.abortForRestart()) {
-          throw new Error(`Stale reply operation was not abortable: ${operation.key}`);
-        }
-      });
-      // Admission stays occupied until the old closure clears it. If abort
-      // synchronously clears and replaces the slot, its captured stateCleared
-      // makes this completion idempotent instead of erasing the replacement.
-      attempt(() => operation.complete());
+    if (evict && attempt(evict)) {
+      continue;
     }
-    attempt(() => {
-      clearReplyRunState({
-        sessionKey: operation.key,
-        sessionId: operation.sessionId,
-        operation,
-      });
-    });
+    attempt(() => clearReplyRunState(operation));
   }
   if (errors.length > 0) {
     throw new AggregateError(errors, "Failed to abort stale reply runs");
@@ -548,23 +509,21 @@ registerAgentEventLifecycleRotationHandler("reply-runs", evictPriorLifecycleRepl
 
 const replyRunRegistryTestApi = {
   resetReplyRunRegistry(): void {
-    for (const [sessionKey, sessionId] of replyRunState.activeSessionIdsByKey) {
+    for (const [sessionKey, operation] of replyRunState.activeRunsByKey) {
       markDiagnosticRunProgress({
         sessionKey,
-        sessionId,
+        sessionId: operation.sessionId,
         reason: "reply_operation:registry_reset",
       });
     }
     replyRunState.activeRunsByKey.clear();
-    replyRunState.activeSessionIdsByKey.clear();
     replyRunState.activeKeysBySessionId.clear();
     replyRunState.waitKeysBySessionId.clear();
     replyRunState.sourceTurnByKey.clear();
-    replyRunState.completionObservationsByKey?.clear();
     replyRunSettle.resetReplyRunSettleTimersForTesting();
     for (const waiters of replyRunState.waitersByKey.values()) {
       for (const waiter of waiters) {
-        waiter.finish(false);
+        waiter(false);
       }
     }
     replyRunState.waitersByKey.clear();

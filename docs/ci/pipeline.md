@@ -233,12 +233,15 @@ test-project planner to find their owners. The runtime owner admits only qualifi
 configs, exact files, and partitions; ambiguous selections retain Node. No tests
 are removed from the selected inventory.
 
-The complete CLI and embedded-agent-run leaf configs also support Bun. Their
-existing pools, exclusions, and worker limits remain in effect. CLI-process and
-other agent owners keep their separate qualification policies. Dual validation
-runs each complete selected owner on Node before Bun in the same worker slot.
+The complete agents-support, CLI, embedded-agent-run, and gateway-methods leaf
+configs also support Bun. Their existing pools, exclusions, and worker limits
+remain in effect. CLI-process and other agent and Gateway owners keep their
+separate qualification policies. Agents-support and gateway-methods include
+overrides use Bun only for canonical owner patterns or literal files proven to
+belong to that owner; broad or uncertain patterns keep the complete Node
+selection. Dual validation runs each complete selected owner on Node before Bun
+in the same worker slot.
 
-Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`),
 OpenAI realtime worker messaging (`extensions/openai/realtime-quicksilver-peer-worker.test.ts`),
 plugin CommonJS interoperability (`src/plugins/plugin-module-generation.interop.test.ts`),
 plugin SDK alias boundaries (`src/plugins/sdk-alias.test.ts`),
@@ -337,14 +340,20 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `42bd1d282ad16189ff71789ddbf81fa89dcd9d3a` with WebKit
-`cb8d6f202b5a396caa204ee1bb75d78175aa841a` in prerelease
-`openclaw-v1.4.3-20261008-42bd1d282a-webkit-cb8d6f202b`.
-WebKit is unchanged from the previous `fc53bf8c0f` pin. This build defers full
-`node:vm` bytecode generation until payload reuse, returns integral heap-sampling
-byte sizes, and releases inspector snapshot metadata when sessions close.
-It retains the previous worker heap-cap, module-resolution, test-deadline,
-GC cadence, and idle-worker fixes. The release publishes the four Darwin/Linux targets;
+The pinned build pairs Bun `65d94e7156da4b6aca649dac5f19b8294b757570` with WebKit
+`01f208ae7a87661e7503f514c946a37bc76ad1d1` in prerelease
+`openclaw-v1.4.3-20261010-65d94e7156-webkit-01f208ae7a`.
+This build shares source buffers on `node:vm` cache hits, refactors module
+resolution, aligns TLS teardown with Node, fixes subprocess retirement, and
+enforces Node-compatible process and Worker heap limits. It fixes N-API cleanup
+and external strings across Workers, releases Worker-local event-name state,
+and skips the preliminary full collection at Worker shutdown. WebKit fixes
+stale VM-entry storage initialization, uses a two-pointer VMEntryScope, and
+fixes Linux foreign-stack suspension deadlocks.
+It retains deferred VM bytecode generation, integral heap-sampling byte sizes,
+inspector snapshot cleanup, and the previous worker heap-cap, module-resolution,
+test-deadline, GC cadence, and idle-worker fixes. The release publishes the four
+Darwin/Linux targets; Darwin executables are Developer ID signed and notarized.
 Windows publication remains gated on signing.
 
 The build adds an adaptive, bounded `node:vm` compilation cache for large module
@@ -665,8 +674,10 @@ If the PR head changes before or during evaluation, the obsolete run stops
 successfully without publishing approval for the replacement commit. The new
 head's automatic event owns its evaluation. Closing an unmerged PR, making it a
 draft, or changing its target also stops the obsolete evaluation successfully.
-Identity and permission changes and real evaluation errors still fail; a lifecycle
-change does not hide an earlier guard error.
+GitHub disabling maintainer edits as a PR closes does not prevent this clean stop
+or completion of merged review evidence. Permission changes on open PRs, other
+identity changes, and real evaluation errors still fail; a lifecycle change does
+not hide an earlier guard error. Cleanup and merge admission retain strict checks.
 
 A merge of the scheduled revision lets the security evaluation finish, including
 when enforcement starts after the merge. Both guards retain their findings in
@@ -704,8 +715,12 @@ HTTP `500`, `502`, `503`, and `504` responses and recognized connection failures
 use one-, two-, and four-second delays, sharing the three-restart limit and job
 deadline with rate-limit recovery. GitHub may have accepted the failed write, so
 the review rereads current PR, approval, role, and CI data instead of replaying an
-old decision. This recovery applies only to commit-status publication; other
-uncertain writes, cancellation, and write request timeouts remain errors.
+old decision. During enforcement, the same bounded recovery handles transient
+sticky-notice creation and update failures. Each restart rereads comments and
+updates an existing owned notice if GitHub accepted the earlier write, rather
+than blindly posting another comment. Required approval remains required.
+Automatic lockfile cleanup, other uncertain writes, cancellation, and write
+request timeouts remain outside this publication recovery.
 
 Separately, read-only `GET` and `HEAD` requests retry HTTP `500`, `502`, `503`,
 and `504` responses and recognized transient connection failures before headers
@@ -812,6 +827,7 @@ activity does not reevaluate the guards or change their statuses. Command mentio
 in prose, quotes, or code fences are not approval comments. The workflow filters
 ordinary comments before allocating a runner; a command mention can start the
 lightweight resolver, which validates the syntax before scheduling review.
+GitHub still records skipped workflow runs for ordinary comments.
 Both guards share one review job, and comment events do not rerun the test suite.
 Evaluation uses trusted repository code and GitHub metadata without
 executing contributor code or comment text.
@@ -1007,6 +1023,11 @@ package and plugin metadata, explicit schema and build metadata inputs, and
 the compiler's recorded source files. Editing an unrelated CI script does not
 rebuild declarations. Resolution topology still participates in the cache key,
 and an unresolved generator import stops the build instead of trusting a cache.
+Full builds finish isolated plugin runtime and source-asset generation before
+capturing declaration inputs. Runtime cleanup preserves canonical declarations
+while discarding their staging-only `dist-runtime` copies, which postbuild
+recreates. Retained cache inputs therefore do not depend on leftover plugin
+artifacts from an earlier build; package output changes still invalidate them.
 
 Local `pnpm build:ci-artifacts` uses the same memory admission as full and package
 builds. The orchestrator passes the resolved heap budget to every child process,
@@ -1022,15 +1043,6 @@ remains the explicit operator override for attempting a different budget.
 sizes. Budget violations do not prevent artifact generation. The separate
 `control-ui-performance` job enforces the budgets without blocking other jobs
 from building or testing the same source.
-
-The report counts retained identity bytes: asset-manifest entries minus `.br`/`.gz`
-sidecars, which the Gateway keeps for already-open tabs after an update. The limit
-is 48 MiB, half the 96 MiB retention budget in
-`src/gateway/control-ui-asset-manifest.ts`, so the current and previous builds
-stay retained. Like the other size limits, it fails locally and warns in GitHub
-Actions; `--base-dist` reports the delta. Exceeding it means shrinking retained
-assets (locale catalogs are the largest share) or deliberately changing the
-retention budget.
 
 Startup CSS has a 45 KiB advisory target and a 50 KiB hard ceiling. Growth below
 1 KiB passes; an increase of 1 KiB or more in either startup CSS or the largest

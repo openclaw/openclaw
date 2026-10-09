@@ -56,6 +56,18 @@ export function createMatrixSetupWizardProxy(
   };
 }
 
+export const finishMatrixSetupAfterConfigWrite: NonNullable<
+  ChannelSetupWizardAdapter["afterConfigWritten"]
+> = async ({ previousCfg, cfg, accountId, runtime }) => {
+  const { runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js");
+  await runMatrixSetupBootstrapAfterConfigWrite({
+    previousCfg: previousCfg as CoreConfig,
+    cfg: cfg as CoreConfig,
+    accountId,
+    runtime,
+  });
+};
+
 export const matrixSetupAdapter: ChannelSetupAdapter = {
   singleAccountKeysToMove,
   namedAccountPromotionKeys,
@@ -84,15 +96,7 @@ export const matrixSetupAdapter: ChannelSetupAdapter = {
       accountId,
       input,
     }),
-  afterAccountConfigWritten: async ({ previousCfg, cfg, accountId, runtime }) => {
-    const { runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js");
-    await runMatrixSetupBootstrapAfterConfigWrite({
-      previousCfg: previousCfg as CoreConfig,
-      cfg: cfg as CoreConfig,
-      accountId,
-      runtime,
-    });
-  },
+  afterAccountConfigWritten: finishMatrixSetupAfterConfigWrite,
 };
 
 export const matrixSetupContract = defineChannelSetupContract({

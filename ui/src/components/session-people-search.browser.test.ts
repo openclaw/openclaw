@@ -2,7 +2,7 @@ import { html, render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { renderChatSessionSharing } from "../pages/chat/components/chat-session-sharing.ts";
-import { mountMenu } from "../test-helpers/session-menu.ts";
+import { menuItem, mountMenu } from "../test-helpers/session-menu.ts";
 import {
   createSessionOwnerMenuHarness,
   sessionOwnerProfiles,
@@ -34,19 +34,11 @@ it.each(
       );
       root = await mountMenu({ context, onAction, compact: surface === "compact assignment" });
       await shown;
-      const groups = [
-        ...root.querySelectorAll<HTMLElement>(
-          ":scope > wa-dropdown > wa-dropdown-item:not([disabled])",
-        ),
-      ];
-      const assignment = groups.findIndex(
-        (item) => item.querySelector(".session-menu__text")?.textContent?.trim() === "Assign to…",
-      );
-      expect(assignment).toBeGreaterThanOrEqual(0);
       await expect.element(page.getByText("Assign to…", { exact: true })).toBeVisible();
+      const assignment = menuItem(root, "Assign to…");
       // A resting pointer opens the submenu first; Enter on its owner must not select a row.
-      await userEvent.hover(groups[assignment]!);
-      groups[assignment]!.focus();
+      await userEvent.hover(assignment);
+      assignment.focus();
       await userEvent.keyboard("{Enter}");
     } else {
       root = document.createElement("div");
