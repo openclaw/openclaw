@@ -44,7 +44,7 @@ it("LIVE: a terminal restart-safe admission marks the Control UI session unread"
           maxConcurrent: 1,
           model: { primary: "openai/gpt-4o-mini", fallbacks: [] },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
       messages: { queue: { mode: "followup", debounceMsByChannel: { webchat: 0 } } },
       models: { mode: "replace", providers: {} },
