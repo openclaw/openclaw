@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 
-export const standaloneKinds = {
+const standaloneKinds = {
   "catalog-page.worker.js": "catalog",
   "code-mode.worker.js": "codeMode",
   "compaction-planning.worker.js": "compaction",
