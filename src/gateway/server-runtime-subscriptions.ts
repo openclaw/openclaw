@@ -324,18 +324,13 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
             getSessionRowProjection: params.getSessionRowProjection,
             loadGatewaySessionLifecycleSnapshotForEvent: (key, options) => {
               // Tool progress must not wait for optional row enrichment before reply capture.
-              if (
-                !options?.ownerEvent &&
-                params.getSessionRowProjection?.()?.needsMaterialization
-              ) {
-                return { row: null };
-              }
               const owner = options?.ownerEvent
                 ? eventRowOwners.get(options.ownerEvent)
                 : undefined;
               if (
-                options?.ownerEvent &&
-                (!owner?.record || !owner.projection.isCurrent(owner.record))
+                options?.ownerEvent
+                  ? !owner?.record || !owner.projection.isCurrent(owner.record)
+                  : params.getSessionRowProjection?.()?.needsMaterialization
               ) {
                 return { row: null };
               }
