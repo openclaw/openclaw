@@ -183,14 +183,25 @@ function normalizeDashboardSessionTitle(raw: string): string | null {
   for (const match of title.matchAll(quotes)) {
     const character = match[0];
     const index = match.index;
-    if (
-      /['’]/u.test(character) &&
-      /[\p{L}\p{M}\p{N}]$/u.test(title.slice(0, index)) &&
-      /^[\p{L}\p{M}\p{N}]/u.test(title.slice(index + 1))
-    ) {
-      continue;
-    }
     const opening = pending.at(-1);
+    const before = title.slice(0, index);
+    const after = title.slice(index + 1);
+    if (/['’]/u.test(character) && /[\p{L}\p{M}\p{N}]$/u.test(before)) {
+      if (/^[\p{L}\p{M}\p{N}]/u.test(after)) {
+        continue;
+      }
+      if (/^\s/u.test(after) || (/s$/iu.test(before) && /^["'`„“”«»‘’]*$/u.test(after))) {
+        // Look past contractions before treating a possessive as a wrapper's closer.
+        const nextDelimiter = /‘|(?<![\p{L}\p{M}\p{N}])['’]|['’](?![\p{L}\p{M}\p{N}])/u.exec(after);
+        if (
+          opening?.close !== character ||
+          (nextDelimiter?.[0] === character &&
+            !/^[\p{L}\p{M}\p{N}]/u.test(after.slice(nextDelimiter.index + 1)))
+        ) {
+          continue;
+        }
+      }
+    }
     if (opening?.close === character) {
       pending.pop();
       removed.delete(opening.index);
