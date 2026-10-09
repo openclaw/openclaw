@@ -214,6 +214,7 @@ The Control UI **System busyness** overlay and `diagnostics.lanes` report this w
 ## Troubleshooting
 
 - If commands seem stuck, enable verbose logs and look for "queued for ...ms" lines to confirm the queue is draining.
+- In `lane wait exceeded`, `activeAhead` counts active tasks when the entry was queued; `activeNow` counts them immediately before it starts. `activeAhead=1 activeNow=0` can mean the preceding task just finished, even after a long wait. It does not establish a leaked slot. Admission failures and completed tasks release their slots and drain queued successors even when diagnostics throw; `lane task diagnostics failed after settlement` identifies a task whose completion logging failed after its caller settled.
 - Codex app-server runs that accept a turn and then stop emitting progress are interrupted by the Codex adapter so the active session lane can release instead of waiting for the outer run timeout.
 - When diagnostics are enabled, sessions that remain in `processing` past the built-in warning threshold with no observed reply, tool, status, block, or ACP progress are classified by current activity:
   - Active work with recent progress logs as `session.long_running`. Owned silent model calls also stay `session.long_running` until the built-in abort threshold so slow or non-streaming providers are not reported as stalled too early.
