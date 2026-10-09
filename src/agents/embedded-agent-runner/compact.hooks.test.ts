@@ -1258,7 +1258,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         vi.mocked(buildEmbeddedExtensionFactories).mockImplementation(({ model }) => {
           setSafeguardRuntime(sessionManager, {
             model,
-            contextWindowTokens: 128_000,
             recentTurnsPreserve: 0,
             qualityGuardEnabled: true,
             qualityGuardMaxRetries: scenario === "corrective 408" ? 1 : 0,

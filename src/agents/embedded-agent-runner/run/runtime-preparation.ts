@@ -98,9 +98,6 @@ export async function prepareEmbeddedRunRuntime(input: {
       pinnedHarnessId,
     });
   let resolvedRuntimeModel = resolveEffectiveModel(model);
-  const buildContextTokenMeta = (contextTokens: number | undefined): { contextTokens?: number } =>
-    contextTokens === undefined ? {} : { contextTokens };
-  let outerContextTokenMeta = buildContextTokenMeta(resolvedRuntimeModel.contextTokenBudget);
   const models: EmbeddedRunAuthState["models"] = {
     runtime: model,
     effective: resolvedRuntimeModel.effectiveModel,
@@ -125,7 +122,6 @@ export async function prepareEmbeddedRunRuntime(input: {
         : resolveEffectiveModel(resolvedModel);
     models.runtime = resolvedModel;
     models.effective = resolvedRuntimeModel.effectiveModel;
-    outerContextTokenMeta = buildContextTokenMeta(resolvedRuntimeModel.contextTokenBudget);
   };
   const selectHarness = (
     candidate: typeof model,
@@ -515,7 +511,10 @@ export async function prepareEmbeddedRunRuntime(input: {
       contextTokenBudget: resolvedRuntimeModel.contextTokenBudget,
       authoredContextTokenCap: resolvedRuntimeModel.authoredContextTokenCap,
       contextWindowInfo: resolvedRuntimeModel.contextWindowInfo,
-      outerContextTokenMeta,
+      outerContextTokenMeta: {
+        contextTokens: resolvedRuntimeModel.contextTokenBudget,
+        contextTokensSource: resolvedRuntimeModel.contextTokensSource,
+      },
       activePreparedAuthPlan: authState.apiKeyInfo
         ? {
             ...activePreparedAuthPlan,
