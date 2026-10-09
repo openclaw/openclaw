@@ -671,6 +671,23 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             resolveStorePath: session.resolveStorePath,
             getSessionEntry: session.getSessionEntry,
             listSessionEntries: session.listSessionEntries,
+            createSessionEntryListReader: (params) =>
+              runWithPluginScope(async () => {
+                const read = await session.createSessionEntryListReader(params);
+                assertRuntimeCurrent();
+                return async () =>
+                  await runWithPluginScope(async () => {
+                    const result = await read();
+                    assertRuntimeCurrent();
+                    return {
+                      entries: result.entries,
+                      assertCurrent: () => {
+                        assertRuntimeCurrent();
+                        result.assertCurrent();
+                      },
+                    };
+                  });
+              }),
             createSessionEntry: async (params) => {
               const { assertOwnedHarness, assertReservedSessionKeyOwned } =
                 await loadSessionOwnership();

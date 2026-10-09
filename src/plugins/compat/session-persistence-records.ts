@@ -68,13 +68,20 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     ...DEPRECATED_SESSION_COMPAT,
     introduced: "2026-09-08",
     deprecated: "2026-10-05",
-    warningStarts: "2026-10-05",
+    warningStarts: "2026-10-08",
     replacement:
-      "Use prepareMessageAfterIdempotencyCheckAsync in locked transcript appends. The released synchronous callback retains its result and transaction ordering until the next Plugin SDK major and explicit breaking-release approval. Keep current authority assertions in beforeFreshMessageCommit.",
+      "Use withSessionTranscriptWrite (or withCodexSessionTranscriptMirrorWrite) with preparation.prepareMessage and preparation.source. Legacy lock and opaque callback forms retain durable transaction ordering until the next Plugin SDK major; incognito targets reject them with migration guidance.",
     docsPath: "/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation",
     surfaces: [
       "SessionTranscriptWriteLockContext.appendMessage.prepareMessageAfterIdempotencyCheck",
       "CodexSessionTranscriptMirrorWriteLockContext.appendMessageWithMessageSequence.prepareMessageAfterIdempotencyCheck",
+      "SessionTranscriptWriteLockContext.appendMessage.beforeFreshMessageCommit",
+      "CodexSessionTranscriptMirrorWriteLockContext.appendMessageWithMessageSequence.beforeFreshMessageCommit",
+      "withSessionTranscriptWriteLock",
+      "withCodexSessionTranscriptMirrorWriteLock",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations; one runtime warning per plugin for legacy transcript callbacks/locks; incognito targets receive an actionable replacement error",
     ],
     tests: [
       "src/plugin-sdk/session-transcript-lock.native.test.ts",
@@ -82,7 +89,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "Locked transcript appends can await message preparation and settle accepted operations before releasing the writer. Released synchronous callbacks remain compatible; stored data and update behavior are unchanged.",
+      "Transcript writes have an optimistic, actor-compatible preparation contract. Legacy durable callbacks/locks retain transaction ordering; incognito callers migrate to preparation options. Stored data and update behavior are unchanged, and ordinary incognito routing stays host-owned.",
   },
   {
     code: "session-upstream-links-sync-persistence",
@@ -383,10 +390,11 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     introduced: "2026-10-06",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "Keep the released prepare(source, signal?) Promise<void> contract of execution objects accepted by openOpenClawAgentSqliteWorkerStore. Host schema readmission uses an optional third argument; existing callers and two-argument implementations remain supported without migration or deprecation.",
+      "Keep the execution input shapes shipped in v2026.9.9 and v2026.10.1-beta.1 by openOpenClawAgentSqliteWorkerStore, including the beta capturePreparedGenerationClaim method for parameter-derived types. Private native-adoption capabilities are not plugin requirements. Host schema readmission uses an optional third argument; existing callers and two-argument prepare implementations remain supported without migration or deprecation.",
     docsPath:
       "/plugins/sdk-migration/compatibility-policy#agent-execution-preparation-compatibility",
     surfaces: [
+      "openclaw/plugin-sdk/sqlite-runtime.openOpenClawAgentSqliteWorkerStore publicationSource.execution",
       "openclaw/plugin-sdk/sqlite-runtime.openOpenClawAgentSqliteWorkerStore publicationSource.execution.prepare",
     ],
     diagnostics: ["SDK type assertions and compatibility documentation; no runtime warnings"],
@@ -396,7 +404,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "Agent execution reuses completed native preparation while explicit host admission refreshes schema proof. Released execution preparation calls and implementations retain their Promise contract; schemas, stored data, and update behavior are unchanged.",
+      "Agent execution reuses completed native preparation while explicit host admission refreshes schema proof. Released execution objects do not require private host capabilities; preparation calls and implementations retain their Promise contract. Schemas, stored data, and update behavior are unchanged.",
   },
   {
     code: "acp-session-metadata-released-signatures",
@@ -449,21 +457,24 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     ...DEPRECATED_SESSION_COMPAT,
     introduced: "2026-09-08",
     deprecated: "2026-10-05",
-    warningStarts: "2026-10-05",
+    warningStarts: "2026-10-08",
     replacement:
-      "Use prepareMessageAfterIdempotencyCheckAsync with appendSessionTranscriptMessageByIdentityStrict. The released synchronous callback retains its result and transaction ordering until the next Plugin SDK major and explicit breaking-release approval. Keep live authority assertions in beforeFreshMessageCommit.",
+      "Use preparation.prepareMessage and preparation.source with appendSessionTranscriptMessageByIdentityStrict or appendSessionTranscriptMessageByIdentity. Legacy opaque callbacks retain durable transaction ordering until the next Plugin SDK major; incognito targets reject them with migration guidance.",
     docsPath: "/plugins/sdk-migration/how-to-migrate#await-strict-transcript-message-preparation",
     surfaces: [
       "appendSessionTranscriptMessageByIdentityStrict.prepareMessageAfterIdempotencyCheck",
+      "appendSessionTranscriptMessageByIdentityStrict.beforeFreshMessageCommit",
+      "appendSessionTranscriptMessageByIdentity.prepareMessageAfterIdempotencyCheck",
+      "appendSessionTranscriptMessageByIdentity.beforeFreshMessageCommit",
     ],
     diagnostics: [
-      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
+      "TypeScript @deprecated annotations; one runtime warning per plugin shared with legacy transcript locks; incognito targets receive an actionable replacement error",
     ],
     tests: [
       "src/plugin-sdk/session-transcript-runtime.worker-preparation.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "Strict transcript preparation can await work outside the existing writer transaction. Released synchronous callbacks remain compatible; stored data and update behavior are unchanged.",
+      "Strict and ordinary transcript appends accept prepared source authority and awaited message preparation. Legacy durable callbacks remain compatible until the next Plugin SDK major; stored data and update behavior are unchanged.",
   },
 ] as const satisfies readonly PluginCompatRecord[];

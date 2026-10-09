@@ -11,6 +11,7 @@ import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   resolveOpenClawAgentSqlitePath,
@@ -423,9 +424,12 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
                   expect(nativeAdmission.settlement?.kind).toBe("completed");
                   verifiedCommands++;
                   if (retireOwner && verifiedCommands === 1) {
-                    closing = closeOpenClawAgentDatabaseByPathAsync(
-                      resolveOpenClawAgentSqlitePath(databaseOptions),
-                      "main",
+                    // Retirement belongs to an independent caller after the native commit.
+                    closing = runInDetachedAsyncContext(() =>
+                      closeOpenClawAgentDatabaseByPathAsync(
+                        resolveOpenClawAgentSqlitePath(databaseOptions),
+                        "main",
+                      ),
                     );
                     void closing.catch(() => undefined);
                     captures.mockClear();

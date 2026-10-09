@@ -48,7 +48,18 @@ export async function prepareNativeLockedAppend<T>(
   scope: SessionTranscriptWriteScope,
   options: LockedTranscriptMessageAppendOptions<T>,
 ): Promise<(database: OpenClawAgentDatabase) => TranscriptMessageAppendOptions<T>> {
-  const { prepareMessageAfterIdempotencyCheckAsync: prepare, ...retained } = options;
+  const { preparation, prepareMessageAfterIdempotencyCheckAsync, ...legacy } = options;
+  const prepare = preparation?.prepareMessage ?? prepareMessageAfterIdempotencyCheckAsync;
+  const retained = {
+    ...legacy,
+    ...(preparation?.source ? { beforeFreshMessageCommit: preparation.source } : {}),
+  };
+  if (
+    preparation &&
+    (options.prepareMessageAfterIdempotencyCheck || options.beforeFreshMessageCommit)
+  ) {
+    throw new Error("Choose preparation or the legacy transcript callback form, not both.");
+  }
   if (!prepare) {
     return () => retained;
   }

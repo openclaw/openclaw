@@ -368,14 +368,6 @@ async function consumeChatStream(
   const createMissingToolCallId = (contentIndex: number) =>
     normalizeMissingToolCallId(`${missingToolCallIdScope}:toolcall:${contentIndex}`);
 
-  const findIdentityCandidates = (
-    matches: (identity: ToolBlock) => boolean,
-    excludedContentIndexes: ReadonlySet<number>,
-  ): ToolBlock[] =>
-    toolBlocks.filter(
-      (identity) => !excludedContentIndexes.has(identity.contentIndex) && matches(identity),
-    );
-
   const requireSingleCandidate = (candidates: ToolBlock[]): ToolBlock | undefined => {
     if (candidates.length > 1) {
       throw new Error(
@@ -394,17 +386,14 @@ async function consumeChatStream(
     const explicitId = params.explicitId;
     const functionName = params.functionName;
     const toolCallIndex = params.index;
+    const available = toolBlocks.filter(
+      (identity) => !params.usedContentIndexes.has(identity.contentIndex),
+    );
     const idCandidates = explicitId
-      ? findIdentityCandidates(
-          (identity) => identity.explicitIds.has(explicitId),
-          params.usedContentIndexes,
-        )
+      ? available.filter((identity) => identity.explicitIds.has(explicitId))
       : [];
     const nameCandidates = functionName
-      ? findIdentityCandidates(
-          (identity) => identity.functionNames.has(functionName),
-          params.usedContentIndexes,
-        )
+      ? available.filter((identity) => identity.functionNames.has(functionName))
       : [];
     if (idCandidates.length > 0) {
       let candidates = idCandidates;
@@ -445,10 +434,7 @@ async function consumeChatStream(
     const indexCandidates =
       toolCallIndex === undefined
         ? []
-        : findIdentityCandidates(
-            (identity) => identity.indexes.has(toolCallIndex),
-            params.usedContentIndexes,
-          );
+        : available.filter((identity) => identity.indexes.has(toolCallIndex));
 
     // Adopt newly supplied identity only into a block that still lacks it.
     // Index alone must remain unambiguous even when the SDK defaults it to zero.

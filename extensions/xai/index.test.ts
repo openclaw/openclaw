@@ -943,4 +943,57 @@ describe("xai provider plugin", () => {
       supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
     });
   });
+
+  it("follows the listed reasoning efforts for a Grok model the ID rules do not cover", async () => {
+    mockXaiRuntimeOAuth();
+    stubXaiFetch(() =>
+      Response.json({
+        data: [
+          {
+            id: "grok-fixture-fast",
+            api_backend: "responses",
+            supports_reasoning_effort: true,
+            reasoning_efforts: [
+              { id: "xhigh", value: "xhigh" },
+              { id: "high", value: "high", default: true },
+              { id: "medium", value: "medium" },
+              { id: "low", value: "low" },
+            ],
+          },
+        ],
+      }),
+    );
+    const { provider, result } = await runXaiCatalog();
+    const model = result.models.find((entry) => entry.id === "grok-fixture-fast");
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "xai",
+        modelId: "grok-fixture-fast",
+        reasoning: model?.reasoning,
+        compat: model?.compat,
+      }),
+    ).toEqual({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }],
+      defaultLevel: "high",
+    });
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "xai",
+      modelId: "grok-fixture-fast",
+      model: { ...model, provider: "xai" },
+    } as never);
+    expect(normalized?.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    });
+    // The listing offers no "none", so off is not a selectable effort.
+    expect(normalized?.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+    });
+  });
 });

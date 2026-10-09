@@ -297,11 +297,10 @@ export async function recoverPendingWorkspaceResults(
                 !reclaimResult
               );
             };
-            const currentPreservesEnvironment = () =>
-              canPreserveEnvironment(
-                placements.get(pending.sessionId),
-                placements.getPlacementMove(pending.sessionId) ?? null,
-              );
+            const currentPreservesEnvironment = () => {
+              const current = placements.readCurrentMoveAuthority(pending.sessionId);
+              return canPreserveEnvironment(current.placement, current.move ?? null);
+            };
             const preserveEnvironment = !finishBlockedMove && currentPreservesEnvironment();
             const currentCheck: PlacementTurnClaimCurrentCheck = {
               assertPlacementCurrent(current, move) {

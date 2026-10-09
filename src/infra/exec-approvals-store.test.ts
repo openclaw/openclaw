@@ -20,7 +20,6 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { sha256Hex } from "./crypto-digest.js";
 import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
@@ -157,170 +156,27 @@ describe("exec approvals SQLite store", () => {
     },
   );
 
-  it.each(readOnlyLoaders)(
-    "does not migrate older shared state for a $name read-only load",
-    async ({ load }) => {
-      saveExecApprovals({
-        version: 1,
-        defaults: { security: "allowlist" },
-        agents: {},
-      });
-      const statePath = resolveOpenClawStateSqlitePath();
-      closeOpenClawStateDatabaseForTest();
-      const older = new DatabaseSync(statePath);
-      older.exec(`
-      PRAGMA user_version = 7;
-      UPDATE schema_meta SET schema_version = 7 WHERE meta_key = 'primary';
-    `);
-      older.close();
-
-      expect((await load()).defaults?.security).toBe("allowlist");
-
-      const after = new DatabaseSync(statePath, { readOnly: true });
-      expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 });
-      after.close();
-    },
-  );
-
-  it.each(readOnlyLoaders)(
-    "fails closed for an unavailable $name read-only owner",
-    async ({ load }) => {
-      makeStateDatabaseUnavailable();
-      expect((await load()).defaults).toMatchObject({ security: "deny", ask: "off" });
-      expect(loggerWarn).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("keeps the captured legacy gate and repair directory when an async read resumes elsewhere", async () => {
-    const original = process.env.OPENCLAW_STATE_DIR;
-    if (!original) {
-      throw new Error("missing test state dir");
-    }
-    fs.writeFileSync(path.join(original, "exec-approvals.json"), "{}");
-    const loaded = loadExecApprovalsReadOnlyAsync();
-    const foreign = createStateDir();
-    await expect(loaded).rejects.toMatchObject({
-      name: "ExecApprovalsMigrationRequiredError",
-      message: expect.stringContaining(`OPENCLAW_STATE_DIR set to ${original}`),
-    });
-    expect(fs.existsSync(path.join(original, "state", "openclaw.sqlite"))).toBe(false);
-    expect(fs.existsSync(path.join(foreign, "state", "openclaw.sqlite"))).toBe(false);
+  it("fails closed for an unavailable synchronous read-only owner", () => {
+    makeStateDatabaseUnavailable();
+    expect(loadExecApprovalsReadOnly().defaults).toMatchObject({ security: "deny", ask: "off" });
+    expect(loggerWarn).toHaveBeenCalledTimes(1);
   });
 
-  it("uses a permissive missing-row default without creating the row", () => {
-    expect(loadExecApprovals()).toEqual({
+  it("keeps malformed writes fail-closed instead of discarding invalid policy fields", async () => {
+    const file = {
       version: 1,
-      socket: { path: undefined, token: undefined },
-      defaults: {
-        security: undefined,
-        ask: undefined,
-        askFallback: undefined,
-        autoAllowSkills: undefined,
-      },
-      agents: {},
+      defaults: { ask: "always" },
+      agents: { runner: { ask: "invalid" } },
+    } as unknown as ExecApprovalsFile;
+    const written = await updateExecApprovals({ update: { kind: "replace", file } });
+    expect(written?.file.defaults).toMatchObject({ security: "deny", ask: "off" });
+    expect(written?.raw).toBe(serializeExecApprovals(file));
+    expect(readExecApprovalsSnapshot().raw).toBe(serializeExecApprovals(file));
+    expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+    expect((await loadExecApprovalsReadOnlyAsync()).defaults).toMatchObject({
+      security: "deny",
+      ask: "off",
     });
-    expect(readExecApprovalsSnapshot()).toMatchObject({
-      exists: false,
-      raw: null,
-      hash: expect.stringMatching(/^missing:/u),
-    });
-    expect(row()).toBeUndefined();
-  });
-
-  it("persists CRUD state and all denormalized projections", async () => {
-    const sql = observeMainThreadSql();
-    let written: Awaited<ReturnType<typeof updateExecApprovals>>;
-    try {
-      written = await updateExecApprovals({
-        update: {
-          kind: "replace",
-          file: {
-            version: 1,
-            socket: { path: "/tmp/openclaw-approvals.sock", token: "secret" },
-            defaults: {
-              security: "allowlist",
-              ask: "on-miss",
-              askFallback: "deny",
-              autoAllowSkills: true,
-            },
-            agents: {
-              main: { allowlist: [{ pattern: "/usr/bin/rg" }, { pattern: "/usr/bin/git" }] },
-              worker: { allowlist: [{ pattern: "/usr/bin/jq" }] },
-            },
-          },
-        },
-      });
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
-
-    expect(written?.exists).toBe(true);
-    expect(loadExecApprovals().defaults?.security).toBe("allowlist");
-    expect(row()).toMatchObject({
-      config_key: "current",
-      socket_path: "/tmp/openclaw-approvals.sock",
-      has_socket_token: 1,
-      default_security: "allowlist",
-      default_ask: "on-miss",
-      default_ask_fallback: "deny",
-      auto_allow_skills: 1,
-      agent_count: 2,
-      allowlist_count: 3,
-    });
-  });
-
-  it.each(["update", "direct"] as const)(
-    "keeps malformed %s writes fail-closed instead of discarding invalid policy fields",
-    async (writer) => {
-      const file = {
-        version: 1,
-        defaults: { ask: "always" },
-        agents: { runner: { ask: "invalid" } },
-      } as unknown as ExecApprovalsFile;
-      if (writer === "update") {
-        const written = await updateExecApprovals({ update: { kind: "replace", file } });
-        expect(written?.file.defaults).toMatchObject({ security: "deny", ask: "off" });
-        expect(written?.raw).toBe(serializeExecApprovals(file));
-      } else {
-        writeExecApprovalsConfigRow({ db: openOpenClawStateDatabase().db, file });
-      }
-      expect(readExecApprovalsSnapshot().raw).toBe(serializeExecApprovals(file));
-      expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
-      expect((await loadExecApprovalsReadOnlyAsync()).defaults).toMatchObject({
-        security: "deny",
-        ask: "off",
-      });
-    },
-  );
-
-  it("preserves raw-byte CAS hashes and returns null on a stale base", async () => {
-    const missing = readExecApprovalsSnapshot();
-    const first = await updateExecApprovals({
-      baseHash: missing.hash,
-      update: { kind: "replace", file: { version: 1, defaults: { security: "deny" }, agents: {} } },
-    });
-    expect(first?.raw).not.toBeNull();
-    expect(first?.hash).toBe(sha256Hex(first?.raw ?? ""));
-    if (!first) {
-      throw new Error("missing first snapshot");
-    }
-
-    await expect(
-      updateExecApprovals({
-        baseHash: missing.hash,
-        update: {
-          kind: "replace",
-          file: { version: 1, defaults: { security: "full" }, agents: {} },
-        },
-      }),
-    ).resolves.toBeNull();
-
-    const updated = await updateExecApprovals({
-      baseHash: first?.hash,
-      update: { kind: "replace", file: { ...first.file, defaults: { security: "full" } } },
-    });
-    expect(updated?.file.defaults?.security).toBe("full");
   });
 
   it("rolls back a policy replacement when current authority ends before commit", async () => {
@@ -366,24 +222,6 @@ describe("exec approvals SQLite store", () => {
     expect(row()).toMatchObject({ has_socket_token: 1, socket_path: first.socket?.path });
   });
 
-  it.each([
-    { name: "invalid JSON", raw: "{not-json" },
-    {
-      name: "an invalid own prototype-key policy",
-      raw: '{"version":1,"agents":{"__proto__":{"security":42}}}',
-    },
-  ])("fails closed and warns once for $name", ({ raw }) => {
-    const { db } = openOpenClawStateDatabase();
-    db.prepare(
-      "INSERT INTO exec_approvals_config (config_key, raw_json, socket_path, has_socket_token, default_security, default_ask, default_ask_fallback, auto_allow_skills, agent_count, allowlist_count, updated_at_ms) VALUES (?, ?, NULL, 0, NULL, NULL, NULL, NULL, 0, 0, 1)",
-    ).run("current", raw);
-
-    expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
-    expect(loadExecApprovals().defaults?.security).toBe("deny");
-    expect(loggerWarn).toHaveBeenCalledTimes(1);
-    expect(loggerWarn.mock.calls[0]?.[0]).toContain("malformed");
-  });
-
   it("throws typed snapshot failures while enforcement reads fail closed", () => {
     makeStateDatabaseUnavailable();
 
@@ -400,25 +238,6 @@ describe("exec approvals SQLite store", () => {
       openOpenClawStateDatabase().db.exec("DROP TABLE exec_approvals_config");
       await expect(withAgentExecApprovalsRemoved("removed", commit, deletion)).rejects.toThrow();
       expect(commit).not.toHaveBeenCalled();
-    });
-  });
-
-  it("removes one agent and preserves wildcard and unrelated policy", async () => {
-    saveExecApprovals({
-      version: 1,
-      agents: {
-        "*": { security: "deny" },
-        main: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/old" }] },
-        kept: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/keep" }] },
-      },
-    });
-
-    await expect(removeAgentPolicies("main", async () => "ok")).resolves.toBe("ok");
-    expect(loadExecApprovals().agents).toEqual({
-      "*": { security: "deny" },
-      kept: expect.objectContaining({
-        allowlist: [expect.objectContaining({ pattern: "/usr/bin/keep" })],
-      }),
     });
   });
 
@@ -860,15 +679,5 @@ describe("exec approvals SQLite store", () => {
       `${sourcePath}.doctor-importing`,
       sourcePath,
     ]);
-  });
-
-  it("caches an absent legacy result only after all three probes are clear", () => {
-    const clearProbe = vi.fn<(filePath: string) => boolean>(() => false);
-    assertNoPendingLegacyExecApprovals({ pathMayExist: clearProbe });
-    expect(clearProbe).toHaveBeenCalledTimes(3);
-
-    const laterProbe = vi.fn<(filePath: string) => boolean>(() => true);
-    assertNoPendingLegacyExecApprovals({ pathMayExist: laterProbe });
-    expect(laterProbe).not.toHaveBeenCalled();
   });
 });

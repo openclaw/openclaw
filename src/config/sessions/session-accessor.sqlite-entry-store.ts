@@ -54,8 +54,9 @@ import {
   assertCanonicalSessionEntryLineageWrite,
   assertCanonicalSessionKeyWrite,
   canonicalSessionKeyMigrationRequiredError,
+  markCanonicalSessionValidationPending,
 } from "./session-canonical-key.js";
-import { certifyCanonicalSessionValidationRow } from "./session-canonical-validation.js";
+import { validateCanonicalSessionRow } from "./session-canonical-row.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
 import {
   splitSessionEntrySnapshots,
@@ -326,14 +327,6 @@ function clearSqliteSessionEntryPreservingWindows(
       .values({ session_key: params.sessionKey, ...cleared })
       .onConflict((conflict) => conflict.column("session_key").doUpdateSet(cleared)),
   );
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .updateTable("session_nodes")
-      .set({ entry_valid: -1 })
-      .where("session_key", "=", params.sessionKey),
-  );
-  certifyCanonicalSessionValidationRow(database, params.sessionKey);
 }
 
 export function deleteLifecycleTargetRows(
@@ -535,6 +528,35 @@ export function writeSessionEntry(
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.visibility;
   }
+  const canonicalEntry = stripRuntimeOnlySessionSkillsFields(
+    projectCanonicalSessionEntryShape({ ...normalizedEntry }),
+  );
+  const persisted = splitSessionEntrySnapshots(canonicalEntry, {
+    previousEntry: canonicalPreviousEntry,
+  });
+  const sessionNode = bindSessionNode({
+    entry: canonicalEntry,
+    entryJson: persisted.entryJson,
+    sessionKey,
+    updatedAt,
+  });
+  if (!options.allowStoredAliases) {
+    // SQLite binds TEXT as UTF-8. Validate that exact projection before any write,
+    // including serialization hooks and replacement of unpaired UTF-16 surrogates.
+    validateCanonicalSessionRow({
+      ...sessionNode,
+      session_key: sessionNode.session_key.toWellFormed(),
+      current_session_id: sessionNode.current_session_id.toWellFormed(),
+      entry_json: sessionNode.entry_json.toWellFormed(),
+      parent_session_key: sessionNode.parent_session_key?.toWellFormed() ?? null,
+      spawned_by: sessionNode.spawned_by?.toWellFormed() ?? null,
+      fork_source_session_key: sessionNode.fork_source_session_key?.toWellFormed() ?? null,
+      retained_window_id: null,
+    });
+  } else {
+    // Offline import/repair can stage aliases; readiness must validate them before use.
+    markCanonicalSessionValidationPending(database, [sessionKey]);
+  }
   // Collaboration rows belong to the exact canonical node being overwritten,
   // which can differ from the selected alias during canonicalization.
   if (canonicalPreviousEntry && canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId) {
@@ -570,25 +592,12 @@ export function writeSessionEntry(
     entry: normalizedEntry,
     previousEntry,
   });
-  const canonicalEntry = stripRuntimeOnlySessionSkillsFields(
-    projectCanonicalSessionEntryShape({ ...normalizedEntry }),
-  );
-  const persisted = splitSessionEntrySnapshots(canonicalEntry, {
-    previousEntry: canonicalPreviousEntry,
-  });
-  const sessionNode = bindSessionNode({
-    entry: canonicalEntry,
-    entryJson: persisted.entryJson,
-    sessionKey,
-    updatedAt,
-  });
   const queries = getSessionEntryWriteQueries(database.db);
   const writeGeneration = trackSessionEntryCacheWrite(database, () => {
     queries.node(sessionNode);
     if (persisted.snapshotsChanged) {
       writeSessionEntrySnapshots(database, sessionKey, persisted.snapshots);
     }
-    queries.markValid(sessionKey);
   });
   advanceSessionEntryMaintenanceAgeFact(database.db, {
     sessionKey,
@@ -615,9 +624,6 @@ export function writeSessionEntry(
       conversation,
       updatedAt,
     });
-  }
-  if (!options.allowStoredAliases) {
-    certifyCanonicalSessionValidationRow(database, sessionKey);
   }
   publishSessionEntryCacheInvalidation(
     database,
@@ -647,6 +653,9 @@ export function writeSessionEntry(
               clearMembers:
                 canonicalPreviousEntry !== undefined &&
                 canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId,
+              lifecycleChanged:
+                canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
+                canonicalPreviousEntry?.lifecycleRevision !== normalizedEntry.lifecycleRevision,
             },
           }
         : {}),

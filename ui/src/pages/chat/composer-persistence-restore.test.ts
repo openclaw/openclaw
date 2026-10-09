@@ -11,8 +11,7 @@ import {
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   ChatComposerPersistence,
-  loadChatComposerSnapshot,
-  loadChatComposerDraftRevision,
+  loadChatComposerState,
   restoreChatComposerState,
   persistChatComposerState,
 } from "./composer-persistence.ts";
@@ -97,7 +96,9 @@ it.each([
       expect(sessionStorage.getItem(destinationKey)).toBe(destinationMetadata);
       if (privateSource) {
         expect(draftStore.writeDurableComposerDraft).not.toHaveBeenCalled();
-        expect(loadChatComposerSnapshot(state, state.sessionKey)?.draft).toBe("Destination input");
+        expect(loadChatComposerState(state, state.sessionKey).snapshot?.draft).toBe(
+          "Destination input",
+        );
       } else {
         expect(draftStore.writeDurableComposerDraft).toHaveBeenCalledWith(
           sourceScope,
@@ -371,7 +372,7 @@ it.each(["goal", "reply"] as const)(
     }
     persistence.schedule();
     persistence.persistNow();
-    const revision = loadChatComposerDraftRevision(state, state.sessionKey);
+    const revision = loadChatComposerState(state, state.sessionKey).revisions.latestAttempt;
     const restored = {
       ...createState(),
       client: null,
@@ -386,8 +387,10 @@ it.each(["goal", "reply"] as const)(
     state.chatReplyTarget = null;
     persistence.schedule();
     persistence.persistNow();
-    expect(loadChatComposerDraftRevision(state, state.sessionKey)).toBeGreaterThan(revision);
-    expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
+    expect(loadChatComposerState(state, state.sessionKey).revisions.latestAttempt).toBeGreaterThan(
+      revision,
+    );
+    expect(loadChatComposerState(state, state.sessionKey).snapshot).toBeNull();
     persistence.stop();
   },
 );

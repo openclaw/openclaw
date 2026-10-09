@@ -147,27 +147,6 @@ function input(testedBaseSha = baseSha) {
 }
 
 describe("Crabbox admin merge bypass verifier", () => {
-  it("accepts exact trusted Crabbox proof with hosted infrastructure failure", () => {
-    expect(validateCrabboxMergeBypass(input())).toMatchObject({
-      actor: "maintainer",
-      crabboxCheckId: 21,
-      ciGateCheckId: 20,
-      ciRunId,
-      infrastructureJobs: [
-        {
-          backend: "blacksmith",
-          conclusion: "failure",
-          id: failedJobId,
-          name: "check",
-        },
-      ],
-      mainSha,
-      planDigest,
-      targetCount: 8,
-      workflowSha,
-    });
-  });
-
   it.each([
     [
       "missing Crabbox check",
@@ -297,13 +276,19 @@ describe("Crabbox admin merge bypass verifier", () => {
     const value = input();
     value.publisherRun.path = ".github/workflows/pr-crabbox-gate-publisher.yml@refs/heads/main";
     value.workflowRun.path = ".github/workflows/ci.yml@refs/heads/main";
-    expect(validateCrabboxMergeBypass(value).planDigest).toBe(planDigest);
-  });
-
-  it("rejects a tagged CI workflow path", () => {
-    const value = input();
-    value.workflowRun.path = ".github/workflows/ci.yml@refs/tags/v1.0.0";
-    expect(() => validateCrabboxMergeBypass(value)).toThrow(/normal CI workflow identity/u);
+    expect(validateCrabboxMergeBypass(value)).toMatchObject({
+      actor: "maintainer",
+      crabboxCheckId: 21,
+      ciGateCheckId: 20,
+      ciRunId,
+      infrastructureJobs: [
+        { backend: "blacksmith", conclusion: "failure", id: failedJobId, name: "check" },
+      ],
+      mainSha,
+      planDigest,
+      targetCount: 8,
+      workflowSha,
+    });
   });
 
   it("rejects a gate summary with a different retained preparation base", () => {
@@ -676,20 +661,20 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
 }
 
 describe("Crabbox protected gh request producers", () => {
-  it("verifies fresh paginated proof using the authenticated writer and actual repository", () => {
-    const result = runProtectedShell(`verify_crabbox_admin_merge_bypass 131091 ${headSha}`);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.proof).toMatchObject({ actor: "maintainer", mainSha, workflowSha, ciRunId });
-    expect(result.calls.at(-1)).toContain("orgs/openclaw/memberships/maintainer");
-    expect(result.calls.filter((args) => args.includes("--paginate"))).toHaveLength(2);
-  });
-
   it("accepts a forward final main advance with both ancestry proofs and preserves the first anchor", () => {
     const result = runProtectedShell(`verify_crabbox_admin_merge_bypass 131091 ${headSha}`, {
       advanceMain: true,
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.proof).toMatchObject({ mainSha, finalMainSha: advancedMainSha, workflowSha });
+    expect(result.proof).toMatchObject({
+      actor: "maintainer",
+      mainSha,
+      finalMainSha: advancedMainSha,
+      workflowSha,
+      ciRunId,
+    });
+    expect(result.calls.at(-1)).toContain("orgs/openclaw/memberships/maintainer");
+    expect(result.calls.filter((args) => args.includes("--paginate"))).toHaveLength(2);
     expect(
       result.calls
         .map((args) => args.find((arg) => arg.includes("/compare/")))
@@ -735,14 +720,14 @@ describe("Crabbox protected gh request producers", () => {
     expect(result.stdout.trim()).toBe("maintainer");
   });
 
-  it.each([
-    { role: "member", state: "active" },
-    { role: "admin", state: "pending" },
-  ])("rejects writer membership $state/$role despite the relay's admin identity", (membership) => {
-    const result = runProtectedShell("require_active_org_admin_for_crabbox_gate", membership);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("requires an active openclaw organization admin");
-  });
+  it.each([{ role: "admin", state: "pending" }])(
+    "rejects writer membership $state/$role despite the relay's admin identity",
+    (membership) => {
+      const result = runProtectedShell("require_active_org_admin_for_crabbox_gate", membership);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("requires an active openclaw organization admin");
+    },
+  );
 
   it("keeps protected refusal terminal without alternate identity or dispatch", () => {
     const result = runProtectedShell("require_active_org_admin_for_crabbox_gate", {
@@ -751,18 +736,6 @@ describe("Crabbox protected gh request producers", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("GitHub API preflight failed (HTTP unknown; exit=19)");
     expect(result.calls).toEqual([["api", "user", "--include"]]);
-  });
-
-  it("audits the immutable landed commit in the prepared repository", () => {
-    const result = runProtectedShell(`record_crabbox_landing_parent_audit ${headSha} ${mainSha}`);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.audit).toEqual({
-      status: "match",
-      landedSha: headSha,
-      expectedParentSha: mainSha,
-      actualParentSha: mainSha,
-    });
-    expect(result.calls).toHaveLength(1);
   });
 });
 

@@ -252,16 +252,17 @@ it("executes Board mutations off the host and publishes each committed change on
       html: "<p>committed</p>",
       grantState: "granted",
     });
-    const hostBoardMutations = host.calls
-      .slice(0, 2)
-      .flatMap((call) => call.mock.calls.map(([sql]) => sql))
-      .filter(
-        (sql) =>
-          typeof sql === "string" &&
-          /^\s*(?:insert|update|delete|replace)\b/iu.test(sql) &&
-          /\bboard_(?:tabs|widgets)\b/iu.test(sql),
-      );
+    const hostBoardMutations = host.queries.filter(
+      (sql) =>
+        /^\s*(?:insert|update|delete|replace|create|alter|drop)\b/iu.test(sql) &&
+        /\bboard_(?:tabs|widgets)\b/iu.test(sql),
+    );
     expect(hostBoardMutations).toEqual([]);
+    expect(
+      host.queries.filter(
+        (sql) => /\bfrom\s+sqlite_schema\b/iu.test(sql) && /\bboard_widgets\b/iu.test(sql),
+      ),
+    ).toEqual([]);
     expect(changes).toEqual([]);
   } finally {
     host.restore();

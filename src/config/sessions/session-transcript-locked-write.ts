@@ -40,6 +40,7 @@ import {
 } from "./session-source-authority.js";
 import { withLockedSessionTranscriptReads } from "./session-transcript-execution-read.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
+import { assertLegacyTranscriptPreparation } from "./session-transcript-preparation.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "./transcript-write-context.js";
@@ -276,15 +277,24 @@ export async function withWorkerTranscriptWriteLock<T>(
             options: LockedTranscriptMessageAppendOptions<TMessage>,
             sequenced: boolean,
           ) => {
+            assertLegacyTranscriptPreparation(fenced, options);
             const {
               config,
               message: originalMessage,
+              preparation,
               prepareMessageAfterIdempotencyCheck: legacyPrepare,
-              prepareMessageAfterIdempotencyCheckAsync: prepare,
+              prepareMessageAfterIdempotencyCheckAsync,
               beforeFreshMessageCommit,
               ...serializable
             } = options;
-            const freshGuard = captureExternalSessionCommitGuard(beforeFreshMessageCommit);
+            if (preparation && (legacyPrepare || beforeFreshMessageCommit)) {
+              throw new Error(
+                "Choose preparation or the legacy transcript callback form, not both.",
+              );
+            }
+            const prepare = preparation?.prepareMessage ?? prepareMessageAfterIdempotencyCheckAsync;
+            const source = preparation?.source ?? beforeFreshMessageCommit;
+            const freshGuard = captureExternalSessionCommitGuard(source);
             const input = {
               ...target,
               options: {
@@ -313,7 +323,7 @@ export async function withWorkerTranscriptWriteLock<T>(
             };
             const expected =
               prepare ||
-              beforeFreshMessageCommit ||
+              source ||
               (custody &&
                 input.options.message?.role === "user" &&
                 typeof input.options.message.idempotencyKey === "string")
@@ -375,8 +385,7 @@ export async function withWorkerTranscriptWriteLock<T>(
                 ...input,
                 kind: "message",
                 freshSources: authority.checks.map((check) => check.predicate),
-                freshAuthorityPrepared:
-                  !beforeFreshMessageCommit || (!expected?.pending && !expected?.existing),
+                freshAuthorityPrepared: !source || (!expected?.pending && !expected?.existing),
                 sequenced,
                 preparedMessageJson,
                 ...(prepare && expected
@@ -430,7 +439,10 @@ export async function withWorkerTranscriptWriteLock<T>(
                     const facts = await executeSessionMessageRewriteOperation(
                       worker,
                       database.agentId,
-                      { type: "session.transcript.lock.facts", input: { ...target, ...params } },
+                      {
+                        type: "session.transcript.lock.facts",
+                        input: { ...target, idempotencyKeys: params.idempotencyKeys },
+                      },
                     );
                     assertCurrent();
                     for (const anchor of facts.anchorsByIdempotencyKey.values()) {

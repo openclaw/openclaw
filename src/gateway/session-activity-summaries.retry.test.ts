@@ -803,32 +803,49 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     }
   });
 
-  it.each(["ensure", "new transcript"] as const)(
+  it.for(["ensure", "new transcript"] as const)(
     "stops after bounded retries and starts a fresh retry chain for %s after cooldown",
-    async (trigger) => {
+    async (trigger, { signal }) => {
+      await service.dispose();
+      await scheduler.stop();
+      const time = createGatewaySchedulerClock(Date.now());
+      let retryArmed = createDeferred();
+      scheduler = createTestGatewayScheduler({
+        ...time.clock,
+        arm(run, delayMs) {
+          const cancel = time.clock.arm(run, delayMs);
+          retryArmed.resolve();
+          return cancel;
+        },
+      });
+      service = createService();
       const target = await addSession(1);
       fakeTime();
       complete.mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
       service.ensure(target);
+      await withinTest(retryArmed.promise, signal);
       for (let attempt = 1; attempt <= 4; attempt += 1) {
-        await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(attempt));
-        await vi.advanceTimersByTimeAsync(attempt < 4 ? 30_000 * 2 ** (attempt - 1) : 0);
+        expect(complete).toHaveBeenCalledTimes(attempt);
+        // Join each scheduled attempt through retry admission before moving the clock.
+        await time.advanceBy(attempt < 4 ? 30_000 * 2 ** (attempt - 1) : 0);
       }
       expect(view(target)?.state).toBe("unavailable");
-      await vi.advanceTimersByTimeAsync(3_600_000);
+      await time.advanceBy(3_600_000);
       expect(complete).toHaveBeenCalledTimes(4);
       complete
         .mockResolvedValue(result)
         .mockRejectedValueOnce(Object.assign(new Error("Overloaded again"), { status: 529 }));
+      retryArmed = createDeferred();
       if (trigger === "ensure") {
         service.ensure(target);
       } else {
         await appendWork(target);
         service.handleTranscript({ target: scope(target) });
       }
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(5));
-      await vi.advanceTimersByTimeAsync(120_000);
-      await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
+      await withinTest(retryArmed.promise, signal);
+      expect(complete).toHaveBeenCalledTimes(5);
+      await time.advanceBy(120_000);
+      expect(view(target)?.state).toBe("current");
       expect(complete).toHaveBeenCalledTimes(6);
     },
   );

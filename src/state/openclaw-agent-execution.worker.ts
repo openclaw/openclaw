@@ -87,6 +87,7 @@ import {
   prepareAgentTranscript,
   type RegisteredAgentWorkerOperations,
 } from "./openclaw-agent-execution-operations.js";
+import { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import {
   requireOpenClawStateDatabaseIdentity,
@@ -422,6 +423,8 @@ function openAgentDatabaseBackend(
     keyof RegisteredAgentWorkerOperations
   >({
     "session.entry.read": loadAgentEntryReadOperations,
+    "voice.session.read": loadAgentVoiceSessionOperations,
+    "voice.session.mutate": loadAgentVoiceSessionOperations,
     "session.entry.patch.prepare": loadAgentEntryPatchOperations,
     "session.entry.patch.commit": loadAgentEntryPatchOperations,
     "session.turn.prepare": loadAgentCompoundOperations,
@@ -572,6 +575,14 @@ function openAgentDatabaseBackend(
         return domain.prepare(command);
       }
       const preparing = registry.prepare(command.type);
+      if (command.type === "session.turn.commit" && command.input.options.voiceTranscript) {
+        return Promise.all([
+          preparing,
+          import("../config/sessions/session-turn.worker.js").then((turn) =>
+            turn.prepareVoiceTranscriptCommit(),
+          ),
+        ]).then(() => {});
+      }
       const nativeBindings =
         command.type === "session.nativeBindings.delete"
           ? command.input

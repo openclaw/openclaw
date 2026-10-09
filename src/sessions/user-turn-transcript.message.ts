@@ -153,6 +153,65 @@ export function buildLateMediaAttachedProjection(message: AgentMessage): {
 function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown> | undefined {
   return asOptionalRecord(Reflect.get(message, "__openclaw"));
 }
+
+export function readModelPromptProjection(message: unknown): string | undefined {
+  if (!isUserMessage(message)) {
+    return undefined;
+  }
+  const metadata = readOpenClawMessageMeta(message);
+  if (!metadata || !Object.hasOwn(metadata, "modelPromptProjection")) {
+    return undefined;
+  }
+  const projection = asOptionalRecord(metadata.modelPromptProjection);
+  if (projection?.version !== 1 || typeof projection.text !== "string") {
+    throw new Error(
+      "Unsupported or invalid user-turn model prompt projection; update OpenClaw to a compatible version or start a new session.",
+    );
+  }
+  return projection.text;
+}
+
+export function projectRecordedModelPrompt(
+  message: AgentMessage,
+  transcript?: AgentMessage,
+): AgentMessage {
+  if (!isUserMessage(message)) {
+    return message;
+  }
+  const text = readModelPromptProjection(transcript) ?? readModelPromptProjection(message);
+  if (text === undefined) {
+    return message;
+  }
+  let content = message.content;
+  if (Array.isArray(content)) {
+    let replaced = false;
+    content = content.map((block) => {
+      if (block.type !== "text" || replaced) {
+        return block;
+      }
+      replaced = true;
+      return { ...block, text };
+    });
+    if (!replaced) {
+      content = [{ type: "text", text }, ...content];
+    }
+  } else {
+    content = text;
+  }
+  const metadata = { ...message["__openclaw"] };
+  delete metadata.modelPromptProjection;
+  const projected: PersistedUserTurnMessage = {
+    ...message,
+    content,
+    timestamp: transcript?.role === "user" ? transcript.timestamp : message.timestamp,
+  };
+  delete projected["__openclaw"];
+  if (Object.keys(metadata).length > 0) {
+    projected["__openclaw"] = metadata;
+  }
+  return projected;
+}
+
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const normalizedMedia = (params.media ?? []).map(normalizeStructuredMediaEntryForTranscript);
   const text = params.text ?? "";
@@ -215,6 +274,7 @@ export function buildLateResolvedMediaMessage(params: {
     lateMedia: true,
   };
   delete metadata.humanMentions;
+  delete metadata.modelPromptProjection;
   // Like #111204, mark late-media scaffolding as wire-only so UIs never render it.
   return {
     ...params.resolvedMessage,

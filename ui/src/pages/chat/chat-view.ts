@@ -195,10 +195,10 @@ export function renderChat(props: ChatProps) {
     ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
     : undefined;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  const focusComposer = () =>
+  const focusComposer = (selector = ".agent-chat__composer-combobox > textarea") =>
     props.transcript.scrollElement
       ?.closest(".chat")
-      ?.querySelector<HTMLElement>(".agent-chat__composer-combobox > textarea")
+      ?.querySelector<HTMLElement>(selector)
       ?.focus({ preventScroll: true });
   const openSelectionComment = (
     selection: ChatSelectionSource,
@@ -349,12 +349,9 @@ export function renderChat(props: ChatProps) {
         onOpenSession: props.onSessionSelect,
         // Portaled menus can outlive a render; resolve focus from the current session owner.
         onFocusComposer: () =>
-          props.transcript.scrollElement
-            ?.closest(".chat")
-            ?.querySelector<HTMLElement>(
-              "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > textarea",
-            )
-            ?.focus({ preventScroll: true }),
+          focusComposer(
+            "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > textarea",
+          ),
       },
       props.transcript,
     ),

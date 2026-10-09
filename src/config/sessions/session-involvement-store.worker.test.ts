@@ -165,7 +165,7 @@ it("rejects a profile alias merge between involvement preparation and commit", a
   });
 });
 
-it("invalidates an unknown involvement commit without replay or acknowledged lifecycle publication", async () => {
+it("publishes a committed involvement receipt when the ordinary reply is lost without replay", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = createFixture();
     expect(f.read()).not.toHaveProperty(f.profile.id);
@@ -217,12 +217,17 @@ it("invalidates an unknown involvement commit without replay or acknowledged lif
           ...f.params,
           change: { kind: "mention", source: f.source },
         }),
-      ).rejects.toBe(failure);
+      ).resolves.toBe(true);
       expect(dispatches).toBe(1);
       expect(changes).toEqual([
-        expect.objectContaining({ sessionKey: f.scope.sessionKey, factsInvalidated: true }),
+        expect.objectContaining({
+          sessionKey: f.scope.sessionKey,
+          facts: { kind: "unchanged" },
+        }),
       ]);
-      expect(lifecycle).not.toHaveBeenCalled();
+      expect(lifecycle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionKey: f.scope.sessionKey, reason: "involvement" }),
+      );
       expect(f.read()?.[f.profile.id]).toMatchObject({ hidden: false, lastMention: f.source });
       expect(dispatches).toBe(1);
     } finally {

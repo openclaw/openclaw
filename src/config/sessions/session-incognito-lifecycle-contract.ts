@@ -13,6 +13,10 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import type { ParentForkSourceTranscript } from "./session-accessor.sqlite-parent-fork.js";
 import type {
+  SessionMessageCutIntent,
+  SessionMessageCutResult,
+} from "./session-message-cut.types.js";
+import type {
   ParentForkCandidate,
   ParentForkCommit,
   ParentForkEntryParams,
@@ -37,6 +41,18 @@ type IncognitoReclamationPlan = LifecycleArtifactCleanupPlan & {
 
 /** Checked operations only; lifecycle hooks and companion mutations remain on the host. */
 export type IncognitoLifecycleOperations = {
+  "session.lifecycle.maintenance": {
+    input: { plan: LifecycleArtifactCleanupPlan };
+    output: Extract<SqliteSessionReclamationResult, { kind: "maintenance-finalize" }>["value"];
+  };
+  "session.lifecycle.messageCut": {
+    input: {
+      intent: SessionMessageCutIntent;
+      sourceRepositoryWorkspaceId?: string;
+      target?: IncognitoLifecycleEntry;
+    };
+    output: { result: SessionMessageCutResult; projectionNeedsReconcile: boolean };
+  };
   "session.lifecycle.parentFork.prepare": {
     input: ParentForkEntryParams;
     output: ParentForkEntryPreparation;
@@ -104,7 +120,9 @@ export function captureIncognitoLifecycleSettlement(
 ): IncognitoLifecycleSettlement | undefined {
   const removedEntries =
     "target" in input
-      ? [input.target]
+      ? input.target
+        ? [input.target]
+        : undefined
       : "plan" in input
         ? input.plan.entries.flatMap(({ sessionKey, expectedEntry }) =>
             expectedEntry ? [{ sessionKey, entry: expectedEntry }] : [],
@@ -121,6 +139,10 @@ export function incognitoLifecycleKeys(
   identity: Readonly<SqliteWorkerEphemeralTarget>,
 ): string[] {
   switch (command.type) {
+    case "session.lifecycle.maintenance":
+      return command.input.plan.entries.map(({ sessionKey }) => sessionKey);
+    case "session.lifecycle.messageCut":
+      return [...new Set([command.input.intent.sourceKey, command.input.intent.targetKey])];
     case "session.lifecycle.parentFork.source":
       return [command.input.sessionKey];
     case "session.lifecycle.parentFork.prepare":

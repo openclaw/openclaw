@@ -27,6 +27,7 @@ import { recordSessionParticipant } from "./session-accessor.sqlite-participants
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
+  markCanonicalSessionValidationPending,
   setCanonicalSqliteSessionMainKey,
 } from "./session-canonical-key.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
@@ -224,6 +225,7 @@ describe("exact SQLite session batches", () => {
     database.db
       .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
       .run("agent:main:divergent", scope.sessionKey);
+    markCanonicalSessionValidationPending(database, [scope.sessionKey]);
     // An ordinary unscoped guard must receive the real validation refusal, not
     // the private retry signal or a receipt leaked from the rolled-back read.
     expect(() => assertCanonicalSqliteSessionKeysCurrent(database)).toThrow(

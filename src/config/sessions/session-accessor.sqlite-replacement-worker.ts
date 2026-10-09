@@ -18,10 +18,12 @@ import { getChildLogger } from "../../logging/logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type {
-  AgentDatabaseExecutionScope,
   AgentDatabaseGenerationClaim,
-  AgentDatabaseOperations,
   AgentDatabaseRequestExecutionSource,
+} from "../../state/openclaw-agent-execution-admission-contract.js";
+import type {
+  AgentDatabaseExecutionScope,
+  AgentDatabaseOperations,
   OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -34,6 +36,7 @@ import {
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import type { SessionEntryReplacementCommitted } from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
+import { parseSessionTranscriptAuthorityReceipts } from "./session-transcript-authority.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
@@ -331,6 +334,9 @@ export async function initializeSessionTranscriptInWorker(
               kind: "session-transcript-initialized",
               sessionKey: facts.sessionKey,
               ...(placeholder ? { placeholder } : {}),
+              transcriptPublication: parseSessionTranscriptAuthorityReceipts(
+                facts.transcriptPublication,
+              ),
             };
           }
           unknown = admitted.admission.settlement?.kind !== "completed" || !receipt;
@@ -364,7 +370,13 @@ export async function initializeSessionTranscriptInWorker(
         throw new Error("Session transcript commit omitted its exact publication facts");
       }
       admitted = { admission, retained };
-      publication.begin([input.sessionKey], []);
+      publication.begin(
+        [input.sessionKey],
+        [],
+        [],
+        [],
+        parseSessionTranscriptAuthorityReceipts(facts.publication.transcriptPublication),
+      );
     },
   );
 }
@@ -515,6 +527,7 @@ export async function runSessionEntryWorkerMutation<T>(
         facts.publication.membershipInvalidatedKeys,
         facts.publication.sharingUnchangedKeys,
         facts.publication.generationUnchangedKeys,
+        parseSessionTranscriptAuthorityReceipts(facts.publication.transcriptPublication),
       );
     },
     executionOptions.retainedExecution,

@@ -6,7 +6,7 @@ import {
   renderSelectPicker,
 } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
-import { renderWorkboardToast } from "../../components/toast.ts";
+import { renderWorkboardErrorToast } from "../../components/toast.ts";
 import { t } from "../../i18n/index.ts";
 import {
   changedDraftPayload,
@@ -30,6 +30,7 @@ import {
   canMutate,
   formatPriorityLabel,
   workboardErrorMessage,
+  workboardMutationContext,
   renderPriorityIcon,
   formatStatusLabel,
   isWorkboardSessionChoice,
@@ -261,6 +262,7 @@ export function renderCardModal(props: WorkboardProps) {
       return false;
     }
     resetDraftState(state);
+    props.onRequestUpdate?.();
     return true;
   };
   const draftDialog = renderDialog(
@@ -269,13 +271,7 @@ export function renderCardModal(props: WorkboardProps) {
       description: editing ? t("workboard.editCardHelp") : t("workboard.newCardHelp"),
       style:
         "--openclaw-modal-width: 700px; --openclaw-modal-max-height: calc(100dvh - 40px); --openclaw-modal-backdrop-filter: blur(1px); --wa-color-overlay-modal: rgba(0, 0, 0, 0.32);",
-      onCancel: () => {
-        if (!dismissDraft()) {
-          return false;
-        }
-        props.onRequestUpdate?.();
-        return true;
-      },
+      onCancel: dismissDraft,
     },
     html`
       <form
@@ -298,11 +294,7 @@ export function renderCardModal(props: WorkboardProps) {
           if (draftActionsBusy) {
             return;
           }
-          void saveWorkboardCardDraft({
-            host: props.host,
-            client: props.client,
-            requestUpdate: props.onRequestUpdate,
-          });
+          void saveWorkboardCardDraft(workboardMutationContext(props));
         }}
       >
         <div class="workboard-modal__header">
@@ -320,11 +312,7 @@ export function renderCardModal(props: WorkboardProps) {
               type="button"
               aria-label=${t("common.cancel")}
               ?disabled=${draftDismissalBusy}
-              @click=${() => {
-                if (dismissDraft()) {
-                  props.onRequestUpdate?.();
-                }
-              }}
+              @click=${dismissDraft}
             >
               ${icons.x}
             </button>
@@ -482,11 +470,7 @@ export function renderCardModal(props: WorkboardProps) {
                         type="button"
                         ?disabled=${draftActionsBusy || !state.draftCommentBody.trim()}
                         @click=${() => {
-                          void addWorkboardCardComment({
-                            host: props.host,
-                            client: props.client,
-                            requestUpdate: props.onRequestUpdate,
-                          });
+                          void addWorkboardCardComment(workboardMutationContext(props));
                         }}
                       >
                         ${icons.plus} ${t("common.create")}
@@ -498,16 +482,7 @@ export function renderCardModal(props: WorkboardProps) {
           }
         </div>
         <div class="workboard-modal__actions">
-          <button
-            class="btn"
-            type="button"
-            ?disabled=${draftDismissalBusy}
-            @click=${() => {
-              if (dismissDraft()) {
-                props.onRequestUpdate?.();
-              }
-            }}
-          >
+          <button class="btn" type="button" ?disabled=${draftDismissalBusy} @click=${dismissDraft}>
             ${t("common.cancel")}
           </button>
           <button
@@ -518,11 +493,7 @@ export function renderCardModal(props: WorkboardProps) {
           </button>
         </div>
       </form>
-      ${renderWorkboardToast({
-        owner: state,
-        message: visibleError ?? "",
-        key: visibleError,
-        tone: "error",
+      ${renderWorkboardErrorToast(state, visibleError, {
         hidden: state.draftDiscardOpen,
       })}
     `,
@@ -548,12 +519,7 @@ export function renderCardModal(props: WorkboardProps) {
               resetDraftState(state);
               props.onRequestUpdate?.();
             },
-            error: renderWorkboardToast({
-              owner: state,
-              message: visibleError ?? "",
-              key: visibleError,
-              tone: "error",
-            }),
+            error: renderWorkboardErrorToast(state, visibleError),
           })
         : nothing
     }

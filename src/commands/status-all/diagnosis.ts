@@ -239,7 +239,7 @@ export async function appendStatusAllDiagnosis(params: {
   const isTrivialLastErr = lastErrClean.length < 8;
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");
-    lines.push(muted("Gateway last log line:"));
+    lines.push(muted("Recent Gateway log error (may be from an earlier run):"));
     emitDetail(redactStatusSecrets(lastErrClean));
   }
 

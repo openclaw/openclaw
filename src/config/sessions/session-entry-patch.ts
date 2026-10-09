@@ -16,6 +16,7 @@ import {
 } from "../../infra/sqlite-worker-transfer.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type {
+  AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionScope,
   OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution-contract.js";
@@ -37,16 +38,23 @@ import type {
   SessionEntryPatchReduction,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import {
   acceptSessionSourceValidation,
   type PreparedSessionSourceAuthority,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
+import {
+  retainSessionTranscriptWorkerPublication,
+  type SessionTranscriptAuthorityReceipt,
+} from "./session-transcript-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export async function patchSessionEntryInWorker(params: {
   database: OpenClawAgentDatabaseOptions & { path: string };
   databaseIdentity?: string;
+  retainedExecution?: OpenClawAgentDatabaseExecution;
   agentId: string;
   selection: SessionEntryPatchSelection;
   assertCurrent: () => void;
@@ -55,6 +63,7 @@ export async function patchSessionEntryInWorker(params: {
   reduction?: SessionEntryPatchReduction;
   prepare(snapshot: SqliteLifecycleTargetSnapshot): Promise<SessionEntryPatchCommit | undefined>;
   onCommitted?: SessionEntryPatchCommitObserver;
+  onCommittedSource?: (source: CapturedSessionEntryReadSource, entry: SessionEntry) => void;
 }): Promise<{ entry: SessionEntry | null; wrote: boolean }> {
   let source = params.preparedSource;
   const sourceChecks = source?.checks ?? [];
@@ -64,6 +73,8 @@ export async function patchSessionEntryInWorker(params: {
     return held?.release?.();
   };
   let input: SessionEntryPatchCommit | SessionEntryPatchReduction | undefined = params.reduction;
+  const ensureIdentitySource = params.guard?.ensureIdentitySource;
+  let transactionFacts: SessionPendingInputAuthorityFacts | undefined;
   return await runSessionEntryWorkerOperation<
     SessionEntryPatchCommitted,
     { entry: SessionEntry | null; wrote: boolean }
@@ -71,13 +82,6 @@ export async function patchSessionEntryInWorker(params: {
     ...params,
     releaseSource,
     candidateKind: "session-entry-patch",
-    onTransactionFacts(facts) {
-      if (source && isRecord(facts) && facts.kind === "session-entry-patch-validated") {
-        // SAFETY: The paired kernel supplies the source indices from this transaction.
-        acceptSessionSourceValidation(source, facts.sourceValidation as SessionSourceValidation);
-      }
-      return false;
-    },
     assertPrepared: () => {
       params.guard?.assertCurrent?.();
       source?.assertCurrent();
@@ -90,7 +94,32 @@ export async function patchSessionEntryInWorker(params: {
       if (candidate.entry !== null) {
         params.guard?.assertCurrent?.();
         source?.assertCurrent();
+        if (ensureIdentitySource) {
+          if (!transactionFacts) {
+            throw new Error("Entry ensure omitted its transaction authority facts");
+          }
+          ensureIdentitySource.assertCurrent(transactionFacts);
+        }
       }
+    },
+    onTransactionFacts: (value) => {
+      if (source && isRecord(value) && value.kind === "session-entry-patch-validated") {
+        // SAFETY: The paired kernel supplies the source indices from this transaction.
+        acceptSessionSourceValidation(source, value.sourceValidation as SessionSourceValidation);
+      }
+      if (
+        ensureIdentitySource &&
+        isRecord(value) &&
+        value.kind === "session-entry-patch-validated"
+      ) {
+        if (!isRecord(value.authority)) {
+          throw new Error("Entry ensure omitted its transaction authority facts");
+        }
+        // SAFETY: session-entry-patch.worker supplies typed authority from its locked preimage.
+        transactionFacts = value.authority as SessionPendingInputAuthorityFacts;
+        ensureIdentitySource.assertCurrent(transactionFacts);
+      }
+      return false;
     },
     prepareWorker: params.reduction
       ? undefined
@@ -128,7 +157,7 @@ export async function patchSessionEntryInWorker(params: {
       }
       return commit(() => worker.execute({ type: "session.entry.patch.commit", input: prepared }));
     },
-    async onCommitted(committed, published, identity) {
+    async onCommitted(committed, published, identity, _context, fileIdentity) {
       try {
         if (committed.publication && committed.entry) {
           const entry = structuredClone(committed.entry);
@@ -137,6 +166,15 @@ export async function patchSessionEntryInWorker(params: {
           } else {
             params.onCommitted?.(entry);
           }
+          params.onCommittedSource?.(
+            {
+              agentId: params.database.agentId,
+              path: params.database.path,
+              databaseIdentity: fileIdentity.physicalIdentity,
+              databaseBirthtime: fileIdentity.birthtime,
+            },
+            structuredClone(committed.entry),
+          );
         }
       } finally {
         if (published) {
@@ -157,7 +195,11 @@ export async function patchSessionEntryInWorker(params: {
 }
 
 export async function runSessionEntryWorkerOperation<
-  Candidate extends { kind: string; publication?: SessionEntryReplacementPublication },
+  Candidate extends {
+    kind: string;
+    publication?: SessionEntryReplacementPublication;
+    transcriptPublication?: readonly SessionTranscriptAuthorityReceipt[];
+  },
   Result,
 >(params: {
   database: OpenClawAgentDatabaseOptions & { path: string };
@@ -196,9 +238,13 @@ export async function runSessionEntryWorkerOperation<
     published: ReturnType<ReturnType<typeof retainSessionEntryWorkerPublication>["settle"]>,
     identity: string,
     context: SessionEntryCommitContext,
+    fileIdentity: AgentDatabaseExecutionFileIdentity,
   ): Result | Promise<Result>;
 }): Promise<Result> {
   let publication: ReturnType<typeof retainSessionEntryWorkerPublication> | undefined;
+  let transcriptPublication:
+    | ReturnType<typeof retainSessionTranscriptWorkerPublication>
+    | undefined;
   let committing = false;
   let transferId: number | undefined;
   let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
@@ -232,6 +278,11 @@ export async function runSessionEntryWorkerOperation<
         throw new Error("Session patch has no admitted physical database");
       }
       publication = retainSessionEntryWorkerPublication({
+        agentId: params.agentId,
+        storePath: params.database.path,
+        databaseIdentity: identity.physicalIdentity,
+      });
+      transcriptPublication = retainSessionTranscriptWorkerPublication({
         agentId: params.agentId,
         storePath: params.database.path,
         databaseIdentity: identity.physicalIdentity,
@@ -273,7 +324,12 @@ export async function runSessionEntryWorkerOperation<
             }
             // Confirmed writes must release publication custody even if acknowledgment work fails.
             try {
-              const published = publication?.settle(committed?.publication, unknown);
+              const transcriptChanges = transcriptPublication?.settle(Boolean(committed), unknown);
+              const published = publication?.settle(
+                committed?.publication,
+                unknown,
+                transcriptChanges,
+              );
               if (committed) {
                 publishedResult = {
                   value: await params.onCommitted(
@@ -281,6 +337,7 @@ export async function runSessionEntryWorkerOperation<
                     published,
                     identity.physicalIdentity,
                     context,
+                    identity,
                   ),
                 };
               }
@@ -331,6 +388,11 @@ export async function runSessionEntryWorkerOperation<
       }
       params.assertCandidate?.(settlement.candidate);
       settlement.admitted = { admission, retained };
+      transcriptPublication?.begin(
+        settlement.candidate.publication?.transcriptPublication
+          ? undefined
+          : settlement.candidate.transcriptPublication,
+      );
       const receipt = settlement.candidate.publication;
       if (receipt) {
         publication?.begin(
@@ -338,6 +400,7 @@ export async function runSessionEntryWorkerOperation<
           receipt.membershipInvalidatedKeys,
           receipt.sharingUnchangedKeys,
           receipt.generationUnchangedKeys,
+          receipt.transcriptPublication,
         );
       }
     },
