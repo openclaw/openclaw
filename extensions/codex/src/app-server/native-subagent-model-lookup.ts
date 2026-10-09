@@ -65,25 +65,21 @@ export function findUnqualifiedNativeModelParent(
   parents: ReadonlyMap<string, ParentState>,
   admissions: ReadonlyMap<string, NativeChildAdmissionEvidence[]>,
 ): ParentState | undefined {
-  const candidates = new Set(
-    matchingNativeModelAdmissions(request, admissions).flatMap((entry) => {
+  const candidates = new Set([
+    ...matchingNativeModelAdmissions(request, admissions).flatMap((entry) => {
       const state = parents.get(entry.parentThreadId);
       return state && entry.modelSource?.owner.unqualifiedModelExecution ? [state] : [];
     }),
-  );
-  for (const state of parents.values()) {
-    if (
+    ...[...parents.values()].filter((state) =>
       [...state.owners.values()].some(
         (owner) =>
           owner.unqualifiedModelExecution &&
           !owner.modelExecutionCancelled &&
           !owner.modelExecutionSettled &&
           matchingNativeModelCause(owner, request),
-      )
-    ) {
-      candidates.add(state);
-    }
-  }
+      ),
+    ),
+  ]);
   return candidates.size === 1 ? candidates.values().next().value : undefined;
 }
 
@@ -171,23 +167,18 @@ export function resolveNativeModelThreadId(
     return undefined;
   }
   const candidate = candidates.entries().next().value;
-  const capture = (() => {
-    try {
-      return candidate?.[0].modelSource?.capture();
-    } catch {
+  let capture: ReturnType<NonNullable<ParentOwner["modelSource"]>["capture"]> | undefined;
+  try {
+    capture = candidate?.[0].modelSource?.capture();
+    if (!capture) {
       return undefined;
     }
-  })();
-  if (!capture) {
-    return undefined;
-  }
-  try {
     capture.assertCurrent();
     return candidate?.[1];
   } catch {
     return undefined;
   } finally {
-    capture.release();
+    capture?.release();
   }
 }
 

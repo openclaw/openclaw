@@ -669,12 +669,6 @@ describe("discord component interactions", () => {
       interactionId: "interaction-guild-disabled",
       guildEntries: { g1: { channels: { "guild-channel": { enabled: false } } } },
     },
-    {
-      title: "blocks buttons on denied guild channels",
-      guildId: "g1",
-      interactionId: "interaction-guild-denied",
-      guildEntries: { g1: { channels: { "guild-channel": { enabled: false } } } },
-    },
   ])("$title", async ({ guildId, interactionId, guildEntries }) => {
     await expectBlockedGuildButton({ guildId, interactionId, guildEntries });
   });

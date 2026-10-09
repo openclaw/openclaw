@@ -17,7 +17,7 @@ import {
 } from "./chat-page.test-support.ts";
 import { ChatPage } from "./chat-page.ts";
 
-type RenderedPane = HTMLElement & { paneTitle: string };
+type RenderedPane = HTMLElement & { presentationTitle: string | undefined };
 
 describe("chat page session refresh", () => {
   beforeEach(() => {
@@ -49,12 +49,18 @@ describe("chat page session refresh", () => {
     };
     page.data = { sessionKey: "main" };
     document.body.append(page);
-    setLayout(page, createSplitLayout("main"));
+    const layout = createSplitLayout("main");
+    layout.activePaneId = expectDefined(layout.columns[0]?.panes[0], "active main pane").id;
+    const foreignPane = expectDefined(layout.columns[1]?.panes[0], "foreign-agent pane");
+    foreignPane.sessionKey = "agent:research:dashboard:retained";
+    setLayout(page, layout);
     await page.updateComplete;
 
-    const paneTitles = () =>
-      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map((pane) => pane.paneTitle);
-    expect(paneTitles()).toEqual(["Main Session", "Main Session"]);
+    const presentationTitles = () =>
+      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map(
+        (pane) => pane.presentationTitle,
+      );
+    expect(presentationTitles()).toEqual([undefined, undefined]);
 
     // Rows arrive under the canonical agent key while the route still says
     // "main"; hello-default resolution plus equivalence matching must find
@@ -100,14 +106,14 @@ describe("chat page session refresh", () => {
     source.publish("agent:dev:main", "Loading desk");
     source.publish("agent:dev:main", "Main desk");
     expect(offFrameUpdates).toEqual([]);
-    expect(paneTitles()).toEqual(["Main Session", "Main Session"]);
+    expect(presentationTitles()).toEqual([undefined, undefined]);
     expect(frames).toHaveLength(1);
     insideFrame = true;
     expectDefined(frames[0], "scheduled render frame")(0);
     insideFrame = false;
     await page.updateComplete;
 
-    expect(paneTitles()).toEqual(["Main desk", "Main desk"]);
+    expect(presentationTitles()).toEqual(["Main desk", undefined]);
     expect(offFrameUpdates).toEqual([]);
 
     page.remove();
@@ -135,12 +141,14 @@ describe("chat page session refresh", () => {
     document.body.append(page);
     setLayout(page, createSplitLayout("main"));
     await page.updateComplete;
-    const paneTitles = () =>
-      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map((pane) => pane.paneTitle);
+    const presentationTitles = () =>
+      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map(
+        (pane) => pane.presentationTitle,
+      );
     first.publish("agent:main:main", "First desk");
     await new Promise(requestAnimationFrame);
     await page.updateComplete;
-    expect(paneTitles()).toEqual(["First desk", "First desk"]);
+    expect(presentationTitles()).toEqual(["First desk", "First desk"]);
 
     second.publish("agent:main:main", "Second desk");
     (page as unknown as { context: unknown }).context = {
@@ -150,16 +158,16 @@ describe("chat page session refresh", () => {
     page.requestUpdate();
     await page.updateComplete;
     expect(first.listeners.size).toBe(0);
-    expect(paneTitles()).toEqual(["Second desk", "Second desk"]);
+    expect(presentationTitles()).toEqual(["Second desk", "Second desk"]);
 
     const requestUpdate = vi.spyOn(page, "requestUpdate");
     first.publish("agent:main:main", "Retired desk");
     expect(requestUpdate).not.toHaveBeenCalled();
-    expect(paneTitles()).toEqual(["Second desk", "Second desk"]);
+    expect(presentationTitles()).toEqual(["Second desk", "Second desk"]);
     second.publish("agent:main:main", "Updated desk");
     await new Promise(requestAnimationFrame);
     await page.updateComplete;
-    expect(paneTitles()).toEqual(["Updated desk", "Updated desk"]);
+    expect(presentationTitles()).toEqual(["Updated desk", "Updated desk"]);
 
     page.remove();
     expect(second.listeners.size).toBe(0);

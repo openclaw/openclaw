@@ -46,12 +46,6 @@ function shouldUseCompatPreflight(path: ReadonlyArray<string>, value: unknown): 
   ) {
     return true;
   }
-  if (joined === "channels.telegram.groupMentionsOnly") {
-    return true;
-  }
-  if (last === "ttlHours" && path[path.length - 2] === "threadBindings") {
-    return true;
-  }
   if (
     last === "allow" &&
     typeof value === "boolean" &&

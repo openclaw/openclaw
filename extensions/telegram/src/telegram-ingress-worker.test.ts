@@ -37,7 +37,6 @@ function createWorker(): {
     token: "123456:test",
     accountId: "default",
     initialUpdateId: null,
-    spoolDir: "/tmp/openclaw-telegram-worker-test",
   });
   const worker = workerHarness.instances.at(-1) as FakeWorker | undefined;
   if (!worker) {
@@ -61,7 +60,7 @@ describe("stopTelegramIngressWorker", () => {
     await stopping;
     await vi.advanceTimersByTimeAsync(2_000);
 
-    expect(worker.postMessage).toHaveBeenCalledWith({ type: "stop" });
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: "stop" }, []);
     expect(worker.terminate).not.toHaveBeenCalled();
   });
 
@@ -76,7 +75,7 @@ describe("stopTelegramIngressWorker", () => {
     await vi.advanceTimersByTimeAsync(1);
     await stopping;
 
-    expect(worker.postMessage).toHaveBeenCalledWith({ type: "stop" });
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: "stop" }, []);
     expect(worker.terminate).toHaveBeenCalledOnce();
   });
 });

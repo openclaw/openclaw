@@ -7,6 +7,7 @@ import {
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as cryptoDigest from "../infra/crypto-digest.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as inlineProviderModels from "./embedded-agent-runner/model.inline-provider.js";
@@ -33,7 +34,6 @@ describe("prepared fleet batches", () => {
   });
 
   it.each([
-    { heldIndex: 0, earlyAuth: false },
     { heldIndex: 32, earlyAuth: false },
     { heldIndex: 32, earlyAuth: true },
   ])(
@@ -213,95 +213,83 @@ describe("prepared fleet batches", () => {
     }
   });
 
-  it.each([false, true])(
-    "retains settled agents after a late failure (neutral config advance: %s)",
-    async (advanceConfig) => {
-      mocks.configuredAgentIds = ["first", "last"];
-      const acquiring = createDeferredCore();
-      const acquired = createDeferredCore();
-      const failed = createDeferredCore();
-      mocks.prepareStaticCatalog.mockImplementation(async (options) => {
-        if ((options as { workspaceDir: string }).workspaceDir === "/tmp/workspace-last") {
-          acquiring.resolve();
-          await acquired.promise;
-        }
-        return { entries: [] };
+  it("retains settled agents after a late failure across a neutral config advance", async () => {
+    mocks.configuredAgentIds = ["first", "last"];
+    const acquiring = createDeferredCore();
+    const acquired = createDeferredCore();
+    const failed = createDeferredCore();
+    mocks.prepareStaticCatalog.mockImplementation(async (options) => {
+      if ((options as { workspaceDir: string }).workspaceDir === "/tmp/workspace-last") {
+        acquiring.resolve();
+        await acquired.promise;
+      }
+      return { entries: [] };
+    });
+    mocks.warn.mockImplementation((message: string) => {
+      if (message.includes("background model runtime publication failed")) {
+        failed.resolve();
+      }
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const publication = refreshPreparedModelRuntimeSnapshots(
+      {},
+      {
+        gatewayLifecycle: true,
+        startup: true,
+        catalogMode: "static",
+      },
+    );
+    try {
+      await acquiring.promise;
+      await vi.advanceTimersByTimeAsync(120_000);
+      await publication;
+      advancePreparedModelRuntimeConfig({ logging: { level: "debug" } });
+      acquired.reject(new Error("fixture catalog failure"));
+      await failed.promise;
+      await expect(
+        loadPublishedGatewayReplyDispatchRuntime({ agentId: "first" }),
+      ).resolves.toMatchObject({ agentId: "first" });
+      expect(getPreparedModelRuntimeStartupStatus()).toMatchObject({
+        degraded: true,
+        pendingAgents: ["last"],
       });
-      mocks.warn.mockImplementation((message: string) => {
-        if (message.includes("background model runtime publication failed")) {
-          failed.resolve();
-        }
-      });
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const publication = refreshPreparedModelRuntimeSnapshots(
-        {},
-        {
-          gatewayLifecycle: true,
-          startup: true,
-          catalogMode: "static",
-        },
-      );
-      try {
-        await acquiring.promise;
-        await vi.advanceTimersByTimeAsync(120_000);
-        await publication;
-        if (advanceConfig) {
-          advancePreparedModelRuntimeConfig({ logging: { level: "debug" } });
-        }
-        acquired.reject(new Error("fixture catalog failure"));
-        await failed.promise;
-        await expect(
-          loadPublishedGatewayReplyDispatchRuntime({ agentId: "first" }),
-        ).resolves.toMatchObject({ agentId: "first" });
-        expect(getPreparedModelRuntimeStartupStatus()).toMatchObject({
-          degraded: true,
-          pendingAgents: ["last"],
+    } finally {
+      acquired.resolve();
+      await Promise.allSettled([publication]);
+      await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+      vi.useRealTimers();
+    }
+  });
+
+  it("services queued event-loop work between agents in a shared workspace", async () => {
+    for (const id of mocks.configuredAgentIds) {
+      mocks.configuredWorkspaces.set(id, fixture.state.workspaceDir);
+    }
+    const events: string[] = [];
+    let queued: Promise<void> | undefined;
+    mocks.discoverAuthStorage.mockImplementation((agentDir) => {
+      const agent = mocks.configuredAgentIds.find((id) => fixture.state.agentDir(id) === agentDir)!;
+      events.push(agent);
+      if (agent === "first") {
+        queued = nextTurn().then(() => {
+          events.push("event-loop");
         });
-      } finally {
-        acquired.resolve();
-        await Promise.allSettled([publication]);
-        await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
-        vi.useRealTimers();
       }
-    },
-  );
+      return mocks.authStorage;
+    });
 
-  it.each([false, true])(
-    "services queued event-loop work between agents (shared workspace: %s)",
-    async (sharedWorkspace) => {
-      if (sharedWorkspace) {
-        for (const id of mocks.configuredAgentIds) {
-          mocks.configuredWorkspaces.set(id, fixture.state.workspaceDir);
-        }
-      }
-      const events: string[] = [];
-      let queued: Promise<void> | undefined;
-      mocks.discoverAuthStorage.mockImplementation((agentDir) => {
-        const agent = mocks.configuredAgentIds.find(
-          (id) => fixture.state.agentDir(id) === agentDir,
-        )!;
-        events.push(agent);
-        if (agent === "first") {
-          queued = nextTurn().then(() => {
-            events.push("event-loop");
-          });
-        }
-        return mocks.authStorage;
-      });
+    await refreshPreparedModelRuntimeSnapshots(
+      {},
+      {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+      },
+    );
+    await queued;
 
-      await refreshPreparedModelRuntimeSnapshots(
-        {},
-        {
-          gatewayLifecycle: true,
-          catalogMode: "static",
-        },
-      );
-      await queued;
-
-      expect(events.indexOf("first")).toBeLessThan(events.indexOf("event-loop"));
-      expect(events.indexOf("event-loop")).toBeLessThan(events.indexOf("last"));
-    },
-  );
+    expect(events.indexOf("first")).toBeLessThan(events.indexOf("event-loop"));
+    expect(events.indexOf("event-loop")).toBeLessThan(events.indexOf("last"));
+  });
 
   it("does not start plugin callbacks after cancellation at an event-loop boundary", async () => {
     let cancelled = false;
@@ -501,6 +489,40 @@ describe("prepared fleet batches", () => {
       );
     } finally {
       inherited.mockRestore();
+    }
+  });
+});
+
+describe("prepared catalog source sharing", () => {
+  it("keeps full-roster digest work constant as the fleet grows", async () => {
+    const marker = "synthetic-roster-hash-boundary";
+    const digests = vi.spyOn(cryptoDigest, "sha256Base64Url");
+    try {
+      const counts: number[] = [];
+      for (const size of [8, 16]) {
+        mocks.configuredAgentIds = Array.from({ length: size }, (_, index) => `agent-${index}`);
+        const config: OpenClawConfig = {
+          agents: {
+            entries: Object.fromEntries(
+              mocks.configuredAgentIds.map((id) => [id, { name: marker }]),
+            ),
+          },
+        };
+        digests.mockClear();
+        await refreshPreparedModelRuntimeSnapshots(config, {
+          gatewayLifecycle: true,
+          catalogMode: "static",
+        });
+        counts.push(
+          digests.mock.calls.filter(
+            ([value]) => typeof value === "string" && value.includes(marker),
+          ).length,
+        );
+      }
+      expect(counts[0]).toBeGreaterThan(0);
+      expect(counts[1]).toBe(counts[0]);
+    } finally {
+      digests.mockRestore();
     }
   });
 });

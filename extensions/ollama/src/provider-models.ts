@@ -1,5 +1,6 @@
 // Ollama provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
@@ -8,7 +9,7 @@ import {
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isHostedOllamaCloud,
   OLLAMA_CLOUD_DEFAULT_MODELS,
@@ -65,21 +66,18 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   if (!trimmed) {
     return undefined;
   }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    if (OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)) {
-      return undefined;
-    }
-    return {
-      hostnameAllowlist: [parsed.hostname],
-      allowPrivateNetwork: true,
-    };
-  } catch {
+  const parsed = URL.parse(trimmed);
+  if (
+    !parsed ||
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)
+  ) {
     return undefined;
   }
+  return {
+    hostnameAllowlist: [parsed.hostname],
+    allowPrivateNetwork: true,
+  };
 }
 
 export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
@@ -158,12 +156,7 @@ function buildOllamaModelShowCacheKey(
 }
 
 function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelShowInfo>): void {
-  if (ollamaModelShowInfoCache.size >= MAX_OLLAMA_SHOW_CACHE_ENTRIES) {
-    const oldestKey = ollamaModelShowInfoCache.keys().next().value;
-    if (typeof oldestKey === "string") {
-      ollamaModelShowInfoCache.delete(oldestKey);
-    }
-  }
+  pruneMapToMaxSize(ollamaModelShowInfoCache, MAX_OLLAMA_SHOW_CACHE_ENTRIES - 1);
   ollamaModelShowInfoCache.set(key, value);
 }
 
@@ -316,13 +309,12 @@ export async function queryOllamaContextWindow(
 export async function enrichOllamaModelsWithContext(
   apiBase: string,
   models: OllamaTagModel[],
-  opts?: OllamaModelRequestOptions & { concurrency?: number },
+  opts?: OllamaModelRequestOptions,
 ): Promise<OllamaModelWithContext[]> {
-  const concurrency = Math.max(1, Math.floor(opts?.concurrency ?? OLLAMA_SHOW_CONCURRENCY));
   const enriched: OllamaModelWithContext[] = [];
-  for (let index = 0; index < models.length; index += concurrency) {
+  for (let index = 0; index < models.length; index += OLLAMA_SHOW_CONCURRENCY) {
     throwIfOllamaRequestAborted(opts?.signal);
-    const batch = models.slice(index, index + concurrency);
+    const batch = models.slice(index, index + OLLAMA_SHOW_CONCURRENCY);
     const probes = batch.map(async (model) => {
       const showInfo = await queryOllamaModelShowInfoCached(apiBase, model, opts);
       return mergeOllamaModelShowInfo(model, showInfo);
@@ -478,17 +470,10 @@ export function capLocalOllamaProviderContext(provider: ModelProviderConfig): Mo
   };
 }
 
-/** Optional test hooks so discovery can exercise the real guarded-fetch owner. */
-type OllamaModelsFetchDeps = {
-  fetchImpl?: typeof fetch;
-  lookupFn?: LookupFn;
-};
-
 async function fetchOllamaModelRows(params: {
   baseUrl: string;
   endpoint: "ps" | "tags";
   opts?: OllamaModelRequestOptions;
-  deps?: OllamaModelsFetchDeps;
 }): Promise<{ reachable: boolean; models: OllamaModelRow[] }> {
   try {
     const apiBase = resolveOllamaApiBase(params.baseUrl);
@@ -505,8 +490,6 @@ async function fetchOllamaModelRows(params: {
       ...(params.opts?.signal ? { signal: params.opts.signal } : {}),
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
       auditContext,
-      ...(params.deps?.fetchImpl ? { fetchImpl: params.deps.fetchImpl } : {}),
-      ...(params.deps?.lookupFn ? { lookupFn: params.deps.lookupFn } : {}),
     });
     try {
       if (!response.ok) {
@@ -542,9 +525,8 @@ async function fetchOllamaModelRows(params: {
 export async function fetchOllamaModels(
   baseUrl: string,
   opts?: OllamaModelRequestOptions,
-  deps?: OllamaModelsFetchDeps,
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
-  const result = await fetchOllamaModelRows({ baseUrl, endpoint: "tags", opts, deps });
+  const result = await fetchOllamaModelRows({ baseUrl, endpoint: "tags", opts });
   return {
     reachable: result.reachable,
     models: result.models.filter(
@@ -556,9 +538,8 @@ export async function fetchOllamaModels(
 export async function fetchLoadedOllamaModelNames(
   baseUrl: string,
   opts?: OllamaModelRequestOptions,
-  deps?: OllamaModelsFetchDeps,
 ): Promise<{ reachable: boolean; models: string[] }> {
-  const result = await fetchOllamaModelRows({ baseUrl, endpoint: "ps", opts, deps });
+  const result = await fetchOllamaModelRows({ baseUrl, endpoint: "ps", opts });
   return {
     reachable: result.reachable,
     models: result.models

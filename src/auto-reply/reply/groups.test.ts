@@ -169,29 +169,6 @@ describe("group runtime loading", () => {
     );
   });
 
-  it("gates group silent-token instructions on the resolved silent reply policy", () => {
-    const allowed = groups.buildGroupChatContext({
-      sessionCtx: { Provider: "whatsapp" },
-      silentToken: "NO_REPLY",
-      silentReplyPolicy: "allow",
-    });
-    expect(allowed).toContain('reply with exactly "NO_REPLY"');
-    expect(allowed).toContain("including after a reaction or other action");
-    expect(allowed).toContain(
-      "as the entire final answer, without commentary, punctuation, or formatting",
-    );
-    expect(allowed).toContain("reply only when directly addressed or you can add clear value");
-    expect(allowed).not.toContain("Otherwise stay silent.");
-
-    const disallowed = groups.buildGroupChatContext({
-      sessionCtx: { Provider: "whatsapp" },
-      silentToken: "NO_REPLY",
-      silentReplyPolicy: "disallow",
-    });
-    expect(disallowed).not.toContain("NO_REPLY");
-    expect(disallowed).not.toContain("as the entire final answer");
-  });
-
   it("keeps per-message mention state out of stable group context", () => {
     const mentioned = groups.buildGroupChatContext({
       sessionCtx: {

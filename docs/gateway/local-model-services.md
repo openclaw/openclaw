@@ -7,14 +7,14 @@ read_when:
 title: "Local model services"
 ---
 
-`models.providers.<id>.localService` starts a provider-owned local model server on demand. When a model or embedding request selects that provider, OpenClaw probes the health endpoint, starts the process if it is down, waits for readiness, then sends the request. Use it to avoid keeping expensive local servers running all day.
+`models.providers.<id>.localService` starts a provider-owned local model server on demand. When a model or embedding request selects that provider, OpenClaw checks the health endpoint, starts the process if it is down, waits for readiness, then sends the request. Use it to avoid keeping expensive local servers running all day.
 
 ## How it works
 
 1. A model or embedding request resolves to a configured provider.
-2. If that provider has `localService`, OpenClaw probes `healthUrl`.
-3. On a successful probe, OpenClaw uses the already-running server.
-4. On a failed probe, OpenClaw spawns `command` with `args`.
+2. If that provider has `localService`, OpenClaw checks `healthUrl`.
+3. On a successful check, OpenClaw uses the already-running server.
+4. On a failed check, OpenClaw spawns `command` with `args`.
 5. OpenClaw polls the health endpoint until `readyTimeoutMs` expires.
 6. The request goes through the normal model or embedding transport.
 7. If OpenClaw started the process and `idleStopMs` is set, it stops the process after the last in-flight request has been idle that long.

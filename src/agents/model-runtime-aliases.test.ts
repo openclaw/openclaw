@@ -12,8 +12,11 @@ import {
   isRetiredModelPickerProvider,
   areRuntimeModelRefsEquivalent,
   isCliRuntimeProvider,
+  omitCliRuntimeAliasTwins,
+  resolveCliRuntimeTwinRoute,
   resolveCliRuntimeExecutionProvider as resolveCliRuntimeExecutionProviderBase,
 } from "./model-runtime-aliases.js";
+import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
 
 const anthropicAuthAliasMetadata = {
   plugins: [
@@ -188,7 +191,6 @@ describe("resolveCliRuntimeExecutionProvider", () => {
   );
 
   it.each([
-    { name: "alone", order: ["anthropic:stored-api"] },
     {
       name: "before a configured CLI profile",
       order: ["anthropic:stored-api", "anthropic:claude-cli"],
@@ -237,29 +239,6 @@ describe("resolveCliRuntimeExecutionProvider", () => {
       resolveCliRuntimeExecutionProvider({
         agentId: "secondary",
         cfg: createAnthropicAuthConfig({}),
-        provider: "anthropic",
-        modelId: "opus-4.7",
-      }),
-    ).toBe("claude-cli");
-  });
-
-  it("prefers the stored auth order over a conflicting config order", () => {
-    // Same precedence as resolveAuthProfileOrderWithMetadata: stored order wins,
-    // config order is only the fallback.
-    seedStoredAuthOrder(["anthropic:claude-cli"]);
-    expect(
-      resolveCliRuntimeExecutionProvider({
-        cfg: createAnthropicAuthConfig({ order: ["anthropic:api"] }),
-        provider: "anthropic",
-        modelId: "opus-4.7",
-      }),
-    ).toBe("claude-cli");
-  });
-
-  it("routes Anthropic execution to Claude CLI when the selected auth profile is Claude CLI", () => {
-    expect(
-      resolveCliRuntimeExecutionProvider({
-        cfg: createAnthropicAuthConfig({ order: ["anthropic:claude-cli"] }),
         provider: "anthropic",
         modelId: "opus-4.7",
       }),
@@ -388,6 +367,58 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     expect(isVisibleProvider("claude-cli")).toBe(false);
     expect(isCliRuntimeProvider("acme-cli")).toBe(false);
     expect(isVisibleProvider("acme-cli")).toBe(true);
+  });
+
+  it("collapses CLI runtime rows only into a canonical row config pins to that runtime", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+            // Runtime ids are trimmed and lowercased before execution.
+            "anthropic/claude-haiku-5": { agentRuntime: { id: " Claude-CLI " } },
+          },
+        },
+      },
+    };
+    const rows = [
+      { provider: "anthropic", id: "claude-opus-5", agentRuntime: { id: "claude-cli" } },
+      { provider: "claude-cli", id: "claude-opus-5" },
+      { provider: "anthropic", id: "claude-haiku-5", agentRuntime: { id: "claude-cli" } },
+      { provider: "claude-cli", id: "claude-haiku-5" },
+      // A session runtime override, not config, routes this row through Claude CLI.
+      { provider: "anthropic", id: "claude-sonnet-5", agentRuntime: { id: "claude-cli" } },
+      { provider: "claude-cli", id: "claude-sonnet-5" },
+      { provider: "anthropic", id: "claude-fable-5", agentRuntime: { id: "openclaw" } },
+      { provider: "claude-cli", id: "claude-fable-5" },
+    ].map((row) => ({
+      row,
+      twin: resolveCliRuntimeTwinRoute(row, {
+        config,
+        agentId: "main",
+        cliRuntimeBindings: [{ provider: "anthropic", runtime: "claude-cli" }],
+      }),
+    }));
+    const keys = (policies: Parameters<typeof omitCliRuntimeAliasTwins>[1]) =>
+      omitCliRuntimeAliasTwins(rows, policies).map((row) => `${row.provider}/${row.id}`);
+
+    expect(keys([])).toEqual([
+      "anthropic/claude-opus-5",
+      "anthropic/claude-haiku-5",
+      "anthropic/claude-sonnet-5",
+      "claude-cli/claude-sonnet-5",
+      "anthropic/claude-fable-5",
+      "claude-cli/claude-fable-5",
+    ]);
+    // A role that may see only the Claude CLI rows keeps them.
+    const cliOnly = prepareOperatorModelPolicy({
+      cfg: config,
+      policy: { allow: ["claude-cli/*"] },
+    });
+    if (!cliOnly) {
+      throw new Error("expected a Claude CLI role policy");
+    }
+    expect(keys([cliOnly])).toHaveLength(rows.length);
   });
 
   it("recognizes retired picker providers without loading CLI backend metadata", () => {

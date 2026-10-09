@@ -124,7 +124,7 @@ suite.define(() => {
         await page.screenshot({ path: path.join(artifactDir, "01-collapsed.png") });
         expect(await summary.getAttribute("aria-expanded")).toBe("false");
         expect(await summary.locator(".chat-activity-group__label").textContent()).toBe(
-          "2 commands · 1 read",
+          "1 command · 1 read",
         );
         expect((await summary.textContent())?.match(/1 failed/g)).toHaveLength(1);
         expect(await summary.textContent()).not.toContain("/workspace/README.md");
@@ -163,7 +163,7 @@ suite.define(() => {
         await summary.waitFor();
         expect(await summary.getAttribute("aria-expanded")).toBe("false");
         expect(await summary.locator(".chat-activity-group__label").textContent()).toBe(
-          "2 commands · 1 read",
+          "1 command · 1 read",
         );
         expect((await summary.textContent())?.match(/1 failed/g)).toHaveLength(1);
         expect(await summary.textContent()).not.toContain("/workspace/README.md");

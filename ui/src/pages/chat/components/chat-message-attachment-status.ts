@@ -1,16 +1,38 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import { renderAttachmentCardIcon } from "./chat-attachment-card.ts";
+import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
+import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
+import { omittedMediaReason } from "./chat-message-media.ts";
 
-type AttachmentFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+type OmittedMediaItem = Extract<MessageContentItem, { type: "omitted_media" }>;
+
+type AttachmentFailureCode = Extract<
+  MessageContentItem,
+  { type: "attachment_error" }
+>["attachment"]["code"];
 
 export function attachmentFailureReason(code: AttachmentFailureCode): string {
   return code === "file-not-found"
     ? t("chat.attachments.failureFileNotFound")
     : code === "unsupported-format"
       ? t("chat.attachments.failureUnsupportedFormat")
-      : t("chat.attachments.failureDeliveryFailed");
+      : code === "invalid-reference"
+        ? t("chat.attachments.failureInvalidReference")
+        : t("chat.attachments.failureDeliveryFailed");
+}
+
+export function renderOmittedMedia(items: OmittedMediaItem[]) {
+  if (items.length === 0) {
+    return nothing;
+  }
+  return html`${items.map((item) =>
+    renderAssistantAttachmentStatusCard({
+      label: t("chat.attachments.image"),
+      badge: t("chat.attachments.history"),
+      reason: omittedMediaReason(item.media.sizeBytes),
+    }),
+  )}`;
 }
 
 export function renderAssistantAttachmentStatusCard(params: {
@@ -36,10 +58,10 @@ export function renderAssistantAttachmentStatusCard(params: {
     >
       <div class="chat-assistant-attachment-card__header">
         <div class="chat-assistant-attachment-card__identity">
-          ${renderAttachmentCardIcon({
-            label: params.label,
+          ${renderAttachmentFileIcon({
+            filename: params.label,
             mimeType: params.mimeType,
-            visualMode: "large-placeholder",
+            mode: "large-placeholder",
             unavailable,
           })}
           <span class="chat-assistant-attachment-card__details">

@@ -26,7 +26,11 @@ import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
 } from "./restart-health.constants.js";
-import type { GatewayRestartSnapshot, GatewayRestartWaitOutcome } from "./restart-health.types.js";
+import type {
+  GatewayRestartResult,
+  GatewayRestartSnapshot,
+  GatewayRestartWaitOutcome,
+} from "./restart-health.types.js";
 import {
   allListenersOwnedByRuntimePid,
   listenerOwnedByRuntimePid,
@@ -50,30 +54,14 @@ const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
 const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
 
-function shouldEarlyExitStoppedFree(
-  snapshot: GatewayRestartSnapshot,
-  attempt: number,
-  minAttempt: number,
-): boolean {
-  return (
-    attempt >= minAttempt &&
-    snapshot.runtime.status === "stopped" &&
-    snapshot.portUsage.status === "free"
-  );
-}
-
-function stoppedFreeEarlyExitGraceMs(): number {
-  return process.platform === "win32"
-    ? WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS
-    : STOPPED_FREE_EARLY_EXIT_GRACE_MS;
-}
-
 function withWaitContext(
   snapshot: GatewayRestartSnapshot,
   waitOutcome: GatewayRestartWaitOutcome,
   elapsedMs: number,
-): GatewayRestartSnapshot {
-  return { ...snapshot, waitOutcome, elapsedMs };
+): GatewayRestartResult {
+  const outcome =
+    waitOutcome === "healthy" ? "ready" : waitOutcome === "still-starting" ? "starting" : "failed";
+  return { ...snapshot, outcome, waitOutcome, elapsedMs };
 }
 
 export function isSameGatewayRestartGeneration(
@@ -92,6 +80,7 @@ type GatewayRestartWaitOptions = {
   attempts?: number;
   delayMs?: number;
   timeoutMs?: number;
+  probeTimeoutMs?: number;
   /** Absolute performance.now() deadline supplied by a longer diagnostic operation. */
   deadlineMs?: number;
   deadline?: GatewayRestartDeadline;
@@ -111,6 +100,7 @@ type GatewayRestartWaitOptions = {
   probeHosts?: readonly string[];
   probeContext?: GatewayRestartProbeContext;
   onProgress?: (phase: string) => void;
+  onObservation?: (snapshot: GatewayRestartSnapshot) => void;
   signal?: AbortSignal;
 };
 
@@ -120,7 +110,7 @@ export async function waitForGatewayHealthyRestart(
       | { service: Pick<GatewayService, "readCommand" | "readRuntime">; child?: never }
       | { child: Pick<ChildProcess, "pid" | "exitCode" | "signalCode">; service?: never }
     ),
-): Promise<GatewayRestartSnapshot> {
+): Promise<GatewayRestartResult> {
   const signal = params.deadline?.signal ?? params.signal;
   const read = <T>(phase: string, operation: () => Promise<T>) =>
     params.deadline
@@ -163,12 +153,16 @@ export async function waitForGatewayHealthyRestart(
   // A longer update budget must not make an old heartbeat count as fresh progress.
   const progressWindowMs = attempts * delayMs;
   const standardDeadlineMs = timeoutMs ?? progressWindowMs;
-  const probeTimeoutMs = () =>
-    params.deadline
+  const probeTimeoutMs = () => {
+    const remaining = params.deadline
       ? Math.max(1, params.deadline.remainingMs())
       : timeoutMs === undefined
         ? undefined
         : Math.max(1, timeoutMs + settleDurationMs - (performance.now() - startedAtMs));
+    return params.probeTimeoutMs === undefined
+      ? remaining
+      : Math.min(params.probeTimeoutMs, remaining ?? Infinity);
+  };
   const updateInProgress = (params.env ?? process.env).OPENCLAW_UPDATE_IN_PROGRESS === "1";
 
   let snapshot: GatewayRestartSnapshot = {
@@ -180,8 +174,12 @@ export async function waitForGatewayHealthyRestart(
   };
   let consecutiveStoppedFreeCount = 0;
   const STOPPED_FREE_THRESHOLD = 6;
+  const stoppedFreeGraceMs =
+    process.platform === "win32"
+      ? WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS
+      : STOPPED_FREE_EARLY_EXIT_GRACE_MS;
   const minAttemptForEarlyExit = Math.min(
-    Math.ceil(stoppedFreeEarlyExitGraceMs() / delayMs),
+    Math.ceil(stoppedFreeGraceMs / delayMs),
     Math.floor(attempts / 2),
   );
   let migrationActive = false;
@@ -205,13 +203,19 @@ export async function waitForGatewayHealthyRestart(
     }
     if (
       snapshot.runtime.status !== "running" ||
-      (snapshot.runtime.pid === undefined && snapshot.gatewayBootId === undefined) ||
       snapshot.versionMismatch ||
       snapshot.buildIdMismatch ||
       snapshot.channelProbeErrors?.length ||
       (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) ||
       snapshot.staleGatewayPids.length > 0
     ) {
+      return "timeout";
+    }
+    // The service manager still owns a running startup; a closed port is not an exit.
+    if (snapshot.portUsage.status === "free") {
+      return "still-starting";
+    }
+    if (snapshot.runtime.pid === undefined && snapshot.gatewayBootId === undefined) {
       return "timeout";
     }
     const ownedStartup =
@@ -310,6 +314,14 @@ export async function waitForGatewayHealthyRestart(
             : snapshot.portUsage.status === "free"
               ? "waiting for Gateway listener"
               : "waiting for Gateway health and identity");
+      params.onObservation?.(snapshot);
+      if (!healthy && snapshot.runtime?.systemd?.startRefusal) {
+        return withWaitContext(
+          { ...snapshot, healthy: false },
+          "service-definition-refused",
+          elapsedMs,
+        );
+      }
       if (boundedDeadlineMs !== undefined && elapsedMs > boundedDeadlineMs + settleDurationMs) {
         return withWaitContext(
           { ...snapshot, healthy: false },
@@ -414,7 +426,9 @@ export async function waitForGatewayHealthyRestart(
         !missingServiceFree &&
         (!owner || owner.state === "dead") &&
         !params.supervisorKeepsAlive &&
-        shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)
+        attempt >= minAttemptForEarlyExit &&
+        snapshot.runtime.status === "stopped" &&
+        snapshot.portUsage.status === "free"
       ) {
         consecutiveStoppedFreeCount += 1;
         if (consecutiveStoppedFreeCount >= STOPPED_FREE_THRESHOLD) {

@@ -1,4 +1,3 @@
-// Slack helper module supports directory config behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
   createResolvedDirectoryEntriesLister,
@@ -19,9 +18,7 @@ function resolveSlackDirectoryConfigAccount(
   const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultSlackAccountId(cfg));
   const config = mergeSlackAccountConfig(cfg, resolvedAccountId);
   return {
-    accountId: resolvedAccountId,
     config,
-    dm: config.dm,
     allowFrom: resolveSlackAccountAllowFrom({ cfg, accountId: resolvedAccountId }) ?? [],
   };
 }
@@ -30,7 +27,7 @@ export const listSlackDirectoryPeersFromConfig = createResolvedDirectoryEntriesL
   ReturnType<typeof resolveSlackDirectoryConfigAccount>
 >({
   kind: "user",
-  resolveAccount: (cfg, accountId) => resolveSlackDirectoryConfigAccount(cfg, accountId),
+  resolveAccount: resolveSlackDirectoryConfigAccount,
   resolveSources: (account) => {
     const channelUsers = Object.values(account.config.channels ?? {}).flatMap(
       (channel) => channel.users ?? [],
@@ -55,7 +52,7 @@ export const listSlackDirectoryGroupsFromConfig = createResolvedDirectoryEntries
   ReturnType<typeof resolveSlackDirectoryConfigAccount>
 >({
   kind: "group",
-  resolveAccount: (cfg, accountId) => resolveSlackDirectoryConfigAccount(cfg, accountId),
+  resolveAccount: resolveSlackDirectoryConfigAccount,
   resolveSources: (account) => [Object.keys(account.config.channels ?? {})],
   normalizeId: (raw) => {
     const normalized = parseSlackTarget(raw, { defaultKind: "channel" });

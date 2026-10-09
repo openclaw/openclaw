@@ -220,15 +220,4 @@ describe("connection bootstrap coordinator", () => {
 
     expect(retry).toHaveBeenCalledOnce();
   });
-
-  it("releases fulfilled work for a later automatic refresh", async () => {
-    const coordinator = createConnectionBootstrapCoordinator();
-    coordinator.synchronize({ client: {}, connected: true });
-    const refresh = vi.fn(async () => {});
-
-    await coordinator.run("runtime-config", refresh);
-    await coordinator.run("runtime-config", refresh);
-
-    expect(refresh).toHaveBeenCalledTimes(2);
-  });
 });

@@ -9,7 +9,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
+import type { MemoryCallerContext, MemorySearchHit } from "../plugins/memory-provider-types.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import type { RealtimeVoiceAgentConsultResult } from "./agent-consult-runtime.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "./agent-consult-tool.js";
@@ -18,7 +18,6 @@ type Logger = {
   debug?: (message: string) => void;
 };
 
-/** Fast-context lookup policy for realtime voice consult shortcuts. */
 export type RealtimeVoiceFastContextConfig = {
   enabled: boolean;
   /** Maximum memory/session hits to include in the spoken-context prompt. */
@@ -31,15 +30,27 @@ export type RealtimeVoiceFastContextConfig = {
   fallbackToConsult: boolean;
 };
 
-/** Human labels used in generated fast-context responses. */
 export type RealtimeVoiceFastContextLabels = {
   audienceLabel: string;
   contextName: string;
 };
 
+type FastContextHit = { source: string; location: string; snippet: string };
+
 type FastContextLookupResult =
   | { status: "unavailable"; error?: string }
-  | { status: "hits"; hits: MemorySearchResult[] };
+  | { status: "hits"; hits: FastContextHit[] };
+
+/**
+ * Owner-held liveness of the live voice request. The realtime surface that owns
+ * the call supplies it; the lookup checks it before and after every provider call.
+ */
+type RealtimeVoiceFastContextLiveness = {
+  /** Aborts when the owning consult or call is cancelled. */
+  signal?: AbortSignal;
+  /** Throws once the call that owns this request is no longer live. */
+  assertCurrent(): void;
+};
 
 export type RealtimeVoiceFastContextConsultResult =
   | { handled: false }
@@ -57,30 +68,16 @@ function normalizeSnippet(text: string): string {
   return `${truncateUtf16Safe(normalized, MAX_SNIPPET_CHARS - 1).trimEnd()}...`;
 }
 
-function buildSearchQuery(args: unknown): string {
-  const parsed = parseRealtimeVoiceAgentConsultArgs(args);
-  return [parsed.question, parsed.context].filter(Boolean).join("\n\n");
-}
-
-function resolveLabels(
-  labels?: Partial<RealtimeVoiceFastContextLabels>,
-): RealtimeVoiceFastContextLabels {
-  return {
-    audienceLabel: labels?.audienceLabel?.trim() || "person",
-    contextName: labels?.contextName?.trim() || "OpenClaw memory context",
-  };
-}
-
 function buildContextText(params: {
   query: string;
-  hits: MemorySearchResult[];
+  hits: FastContextHit[];
   labels: RealtimeVoiceFastContextLabels;
 }): string {
   const hits = params.hits
-    .map((hit, index) => {
-      const location = `${hit.path}:${hit.startLine}-${hit.endLine}`;
-      return `${index + 1}. [${hit.source}] ${location}\n${normalizeSnippet(hit.snippet)}`;
-    })
+    .map(
+      (hit, index) =>
+        `${index + 1}. [${hit.source}] ${hit.location}\n${normalizeSnippet(hit.snippet)}`,
+    )
     .join("\n\n");
   return [
     `Fast ${params.labels.contextName} found for the live ${params.labels.audienceLabel}.`,
@@ -98,21 +95,67 @@ function buildMissText(query: string, labels: RealtimeVoiceFastContextLabels): s
   ].join("\n\n");
 }
 
+// Native hits cite provider references; their excerpts are already prompt text.
+function toNativeFastContextHit(hit: MemorySearchHit): FastContextHit {
+  return {
+    source: hit.source ?? hit.reference.providerId,
+    location:
+      hit.citations?.map((citation) => citation.label).join(", ") ||
+      `${hit.reference.providerId}:${hit.reference.id}`,
+    snippet: hit.excerpt,
+  };
+}
+
 async function lookupFastContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
   config: RealtimeVoiceFastContextConfig;
   query: string;
+  context: MemoryCallerContext;
+  callerSuppliedLiveness: boolean;
 }): Promise<FastContextLookupResult> {
-  const { authorizeActiveMemorySearchHits, getActiveMemorySearchManagerCore } =
-    await import("../plugins/memory-runtime.js");
+  const {
+    authorizeActiveMemorySearchHits,
+    getActiveMemoryProviderCore,
+    getActiveMemorySearchManagerCore,
+    isActiveMemoryProviderNative,
+  } = await import("../plugins/memory-runtime.js");
+  if (isActiveMemoryProviderNative({ cfg: params.cfg, agentId: params.agentId })) {
+    // A native provider reads only under the live call's owner-held liveness. Callers
+    // released before liveness existed get the unavailable outcome, never a provider read.
+    if (!params.callerSuppliedLiveness) {
+      return { status: "unavailable", error: "caller supplied no request liveness" };
+    }
+    const memory = await getActiveMemoryProviderCore({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      context: params.context,
+    });
+    if (!memory.provider) {
+      return { status: "unavailable", error: memory.error ?? "no active memory provider" };
+    }
+    try {
+      const { hits } = await memory.provider.search({
+        query: params.query,
+        maxResults: params.config.maxResults,
+        sources: params.config.sources,
+      });
+      params.context.assertCurrent();
+      return { status: "hits", hits: hits.map(toNativeFastContextHit) };
+    } finally {
+      await memory.provider.close();
+      params.context.assertCurrent();
+    }
+  }
+
   // The memory runtime owns whether memory/session search is active for this
   // agent. Talk only consumes the current manager when it is already available.
   const memory = await getActiveMemorySearchManagerCore({
     cfg: params.cfg,
     agentId: params.agentId,
   });
+  params.context.assertCurrent();
   if (!memory.manager) {
     return {
       status: "unavailable",
@@ -124,6 +167,7 @@ async function lookupFastContext(params: {
     sessionKey: params.sessionKey,
     sources: params.config.sources,
   });
+  params.context.assertCurrent();
   // This shortcut runs before an agent sandbox exists, but it still carries
   // the voice session identity needed for ordinary session-history visibility.
   const hits = await authorizeActiveMemorySearchHits({
@@ -133,10 +177,17 @@ async function lookupFastContext(params: {
     sandboxed: false,
     hits: rawHits,
   });
-  return { status: "hits", hits };
+  params.context.assertCurrent();
+  return {
+    status: "hits",
+    hits: hits.map((hit) => ({
+      source: hit.source,
+      location: `${hit.path}:${hit.startLine}-${hit.endLine}`,
+      snippet: hit.snippet,
+    })),
+  };
 }
 
-/** Try to answer a realtime consult from fast memory/session context. */
 export async function resolveRealtimeVoiceFastContextConsult(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -145,13 +196,38 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
   args: unknown;
   logger: Logger;
   labels?: Partial<RealtimeVoiceFastContextLabels>;
+  /** Optional for plugins released before it existed; native providers require it. */
+  liveness?: RealtimeVoiceFastContextLiveness;
 }): Promise<RealtimeVoiceFastContextConsultResult> {
   if (!params.config.enabled) {
     return { handled: false };
   }
 
-  const labels = resolveLabels(params.labels);
-  const query = buildSearchQuery(params.args);
+  const labels = {
+    audienceLabel: params.labels?.audienceLabel?.trim() || "person",
+    contextName: params.labels?.contextName?.trim() || "OpenClaw memory context",
+  };
+  const parsed = parseRealtimeVoiceAgentConsultArgs(params.args);
+  const query = [parsed.question, parsed.context].filter(Boolean).join("\n\n");
+  // The lookup's own lifetime ends on return or timeout; aborting it cancels
+  // provider work still in flight instead of letting it outlive the request.
+  const lookupLifetime = new AbortController();
+  const signal = params.liveness?.signal
+    ? AbortSignal.any([params.liveness.signal, lookupLifetime.signal])
+    : lookupLifetime.signal;
+  // The host derives session authority from the call's session key; the call
+  // owner only supplies liveness, so it cannot widen the caller's authority.
+  const context: MemoryCallerContext = {
+    authority: { kind: "session", sessionKey: params.sessionKey, sandboxed: false },
+    signal,
+    assertCurrent() {
+      if (lookupLifetime.signal.aborted) {
+        throw new Error("voice context request has ended");
+      }
+      signal.throwIfAborted();
+      params.liveness?.assertCurrent();
+    },
+  };
   try {
     const timeoutMs = resolveTimerTimeoutMs(params.config.timeoutMs, 1);
     const lookup = await withTimeout(
@@ -161,37 +237,29 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
         sessionKey: params.sessionKey,
         config: params.config,
         query,
+        context,
+        callerSuppliedLiveness: params.liveness !== undefined,
       }),
       timeoutMs,
       { createError: () => new Error(`fast context lookup timed out after ${timeoutMs}ms`) },
     );
+    context.assertCurrent();
     if (lookup.status === "unavailable") {
       params.logger.debug?.(`[talk] fast context unavailable: ${lookup.error}`);
-      // In fallback mode, let the normal agent consult decide. Otherwise produce
-      // a bounded "no context handy" result immediately for the voice call.
-      return params.config.fallbackToConsult
-        ? { handled: false }
-        : { handled: true, result: { text: buildMissText(query, labels) } };
+    } else if (lookup.hits.length > 0) {
+      return {
+        handled: true,
+        result: { text: buildContextText({ query, hits: lookup.hits, labels }) },
+      };
     }
-    const { hits } = lookup;
-    if (hits.length === 0) {
-      // Empty hits behave like unavailable context: either fall back to full
-      // agent work or answer quickly that nothing relevant was found.
-      return params.config.fallbackToConsult
-        ? { handled: false }
-        : { handled: true, result: { text: buildMissText(query, labels) } };
-    }
-    return {
-      handled: true,
-      result: { text: buildContextText({ query, hits, labels }) },
-    };
   } catch (error) {
     const message = formatErrorMessage(error);
     params.logger.debug?.(`[talk] fast context lookup failed: ${message}`);
-    // Timeouts and lookup failures are non-fatal because this is an optional
-    // acceleration path ahead of the normal consult runtime.
-    return params.config.fallbackToConsult
-      ? { handled: false }
-      : { handled: true, result: { text: buildMissText(query, labels) } };
+  } finally {
+    lookupLifetime.abort(new Error("voice context request has ended"));
   }
+  // Misses, unavailable context, and failures share the caller's fallback policy.
+  return params.config.fallbackToConsult
+    ? { handled: false }
+    : { handled: true, result: { text: buildMissText(query, labels) } };
 }

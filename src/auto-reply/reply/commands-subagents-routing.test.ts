@@ -9,9 +9,9 @@ import {
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
+import { resolveCommandSourceSessionKey as resolveRequesterSessionKey } from "./command-source-session-key.js";
 import { handleAcpCommand } from "./commands-acp.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
-import { resolveRequesterSessionKey } from "./commands-subagents/shared.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const readContextMock = vi.hoisted(() => vi.fn());

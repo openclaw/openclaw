@@ -1,10 +1,10 @@
-// Codex plugin module implements conversation binding data behavior.
 import { createHash, randomUUID } from "node:crypto";
 import process from "node:process";
 import type { PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const APP_SERVER_BINDING_DATA_VERSION = 2;
@@ -95,34 +95,26 @@ export function createCodexCliNodeConversationBindingData(params: {
 export function readCodexConversationBindingData(
   binding: PluginConversationBinding | null | undefined,
 ): CodexConversationBindingData | undefined {
-  const data = binding?.data;
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    return undefined;
-  }
-  return readCodexConversationBindingDataRecord(data);
+  const data = readRecord(binding?.data);
+  return data ? readCodexConversationBindingDataRecord(data) : undefined;
 }
 
 export function readCodexConversationBindingDataRecord(
   data: Record<string, unknown>,
 ): CodexConversationBindingData | undefined {
   if (data.kind === "codex-cli-node-session") {
-    if (
-      data.version !== CLI_BINDING_DATA_VERSION ||
-      typeof data.nodeId !== "string" ||
-      !data.nodeId.trim() ||
-      typeof data.sessionId !== "string" ||
-      !data.sessionId.trim()
-    ) {
+    const nodeId = normalizeOptionalString(data.nodeId);
+    const sessionId = normalizeOptionalString(data.sessionId);
+    if (data.version !== CLI_BINDING_DATA_VERSION || !nodeId || !sessionId) {
       return undefined;
     }
     return {
       kind: "codex-cli-node-session",
       version: CLI_BINDING_DATA_VERSION,
-      nodeId: data.nodeId.trim(),
-      sessionId: data.sessionId.trim(),
-      agentId:
-        typeof data.agentId === "string" && data.agentId.trim() ? data.agentId.trim() : undefined,
-      cwd: typeof data.cwd === "string" && data.cwd.trim() ? data.cwd.trim() : undefined,
+      nodeId,
+      sessionId,
+      agentId: normalizeOptionalString(data.agentId),
+      cwd: normalizeOptionalString(data.cwd),
     };
   }
   if (data.kind !== "codex-app-server-session") {
@@ -141,22 +133,16 @@ export function readCodexConversationBindingDataRecord(
   }
   const start = readConversationStart(readRecord(data.start));
   const source = readConversationSource(readRecord(data.source));
-  const legacyBinding = data.version === 1;
   return {
     kind: "codex-app-server-session",
     version: APP_SERVER_BINDING_DATA_VERSION,
     bindingId,
-    workspaceDir:
-      typeof data.workspaceDir === "string" && data.workspaceDir.trim()
-        ? data.workspaceDir
-        : process.cwd(),
-    agentId:
-      typeof data.agentId === "string" && data.agentId.trim() ? data.agentId.trim() : undefined,
-    agentDir:
-      typeof data.agentDir === "string" && data.agentDir.trim() ? data.agentDir.trim() : undefined,
+    workspaceDir: readNonBlankString(data.workspaceDir) ?? process.cwd(),
+    agentId: normalizeOptionalString(data.agentId),
+    agentDir: normalizeOptionalString(data.agentDir),
     ...(source ? { source } : {}),
     ...(start ? { start } : {}),
-    ...(legacyBinding ? { legacyBinding: true } : {}),
+    ...(data.version === 1 ? { legacyBinding: true } : {}),
   };
 }
 
@@ -192,10 +178,8 @@ export function resolveCodexDefaultWorkspaceDir(pluginConfig: unknown): string {
 function readConversationStart(
   value: CodexAppServerConversationStart | Record<string, unknown> | undefined,
 ): CodexAppServerConversationStart | undefined {
-  const read = (key: keyof CodexAppServerConversationStart) => {
-    const candidate = value?.[key];
-    return typeof candidate === "string" && candidate.trim() ? candidate.trim() : undefined;
-  };
+  const read = (key: keyof CodexAppServerConversationStart) =>
+    normalizeOptionalString(value?.[key]);
   const start = {
     id: read("id"),
     threadId: read("threadId"),

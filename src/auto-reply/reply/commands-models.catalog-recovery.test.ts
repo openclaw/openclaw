@@ -9,15 +9,18 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeAuthStore,
-  setPreparedModelRuntimeAuthStore,
+  bindPreparedModelRuntimeAuth,
+  setPreparedModelFullCatalogAuth,
 } from "../../agents/prepared-model-runtime-auth.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
 } from "../../agents/prepared-model-runtime.errors.js";
+import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import type { ReplyPayload } from "../types.js";
 import { buildPreparedModelsProviderData } from "./commands-models-catalog.js";
 import { handleModelsCommand, resolveModelsCommandReply } from "./commands-models.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
@@ -78,7 +81,7 @@ beforeEach(() => {
         ...preset,
       };
       const retainedAuth = preset ? getPreparedModelRuntimeAuthStore(preset) : undefined;
-      setPreparedModelRuntimeAuthStore(owner, retainedAuth ?? catalogMocks.authStore);
+      bindPreparedModelRuntimeAuth(owner, { store: retainedAuth ?? catalogMocks.authStore });
       return preparedCatalog.materializePreparedModelCatalogOwner(owner);
     },
   );
@@ -96,6 +99,74 @@ afterEach(() => {
 });
 
 describe("/models browse catalog recovery", () => {
+  it("replies with known models while acquisition is held and includes newly published rows next time", async () => {
+    const pendingCatalog: ModelCatalogSnapshot = {
+      entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Known model" }],
+      routeVariants: [],
+      pendingProviders: ["anthropic"],
+    };
+    const refreshedCatalog: ModelCatalogSnapshot = {
+      entries: [
+        ...pendingCatalog.entries,
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Discovered model" },
+      ],
+      routeVariants: [],
+    };
+    catalogMocks.authStore = {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "synthetic-catalog-key",
+        },
+      },
+    };
+    catalogMocks.authModes = { anthropic: "api_key" };
+    catalogMocks.readSnapshot.mockReturnValue(pendingCatalog);
+    const acquisition = createDeferred<ModelCatalogSnapshot>();
+    let completedCatalog: ModelCatalogSnapshot | undefined;
+    catalogMocks.getPreparedOwner.mockReturnValue({
+      readFullModelCatalog: () => completedCatalog,
+      loadFullModelCatalog: async () => {
+        completedCatalog = await acquisition.promise;
+        return completedCatalog;
+      },
+    });
+    const owner = await preparedCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot({
+      config: staleCfg,
+    });
+    setPreparedModelFullCatalogAuth(refreshedCatalog, {
+      authStore: catalogMocks.authStore,
+      authModes: catalogMocks.authModes,
+      providerAuthLabels: new Map(),
+    });
+    vi.mocked(preparedCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot).mockRestore();
+    vi.spyOn(preparedRuntime, "getPreparedModelRuntimeSnapshot").mockReturnValue(owner);
+    vi.spyOn(preparedRuntime, "prepareModelRuntimeSnapshot").mockResolvedValue(owner);
+    vi.useFakeTimers();
+    try {
+      const params = { cfg: staleCfg, agentId: "main", commandBodyNormalized: "/models anthropic" };
+      let reply: ReplyPayload | null | undefined;
+      const first = resolveModelsCommandReply(params).then((result) => {
+        reply = result;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reply?.text).toContain("- anthropic/claude-opus-4-5");
+      expect(reply?.text).toContain("anthropic: checking models…");
+      expect(reply?.text).not.toContain("claude-sonnet-4-6");
+      acquisition.resolve(refreshedCatalog);
+      await first;
+      await vi.advanceTimersByTimeAsync(0);
+      const next = await resolveModelsCommandReply(params);
+      expect(next?.text).toContain("- anthropic/claude-sonnet-4-6");
+      expect(next?.text).not.toContain("checking models");
+    } finally {
+      acquisition.resolve(refreshedCatalog);
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { commandBodyNormalized: "/models", choice: "- anthropic (1)" },
     { commandBodyNormalized: "/models anthropic", choice: "- anthropic/claude-opus-4-5" },
@@ -128,22 +199,21 @@ describe("/models browse catalog recovery", () => {
     async (view) => {
       let current = true;
       catalogMocks.isCurrent = () => current;
-      const evaluating = createDeferred();
-      const resume = createDeferred();
-      const evaluateModelAuth = vi.fn(async () => ({
+      const evaluateModelAuth = vi.fn(() => ({
         availability: true as const,
         routeResolution: null,
       }));
-      evaluateModelAuth.mockImplementationOnce(async () => {
-        evaluating.resolve();
-        await resume.promise;
+      evaluateModelAuth.mockImplementationOnce(() => {
+        current = false;
         return { availability: true, routeResolution: null };
       });
-      const createDecisions = modelDecisions.createModelCatalogDecisions;
-      vi.spyOn(modelDecisions, "createModelCatalogDecisions").mockImplementation((params) => ({
-        ...createDecisions(params),
-        evaluateEntry: evaluateModelAuth,
-      }));
+      const prepareDecisions = modelDecisions.prepareModelCatalogDecisions;
+      vi.spyOn(modelDecisions, "prepareModelCatalogDecisions").mockImplementation(
+        async (params) => ({
+          ...(await prepareDecisions(params)),
+          evaluateEntry: evaluateModelAuth,
+        }),
+      );
       catalogMocks.readSnapshot.mockReturnValueOnce({
         entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Retired model" }],
         routeVariants: [],
@@ -152,9 +222,6 @@ describe("/models browse catalog recovery", () => {
       const rejected = expect(first).rejects.toBeInstanceOf(
         PreparedModelRuntimePublicationSupersededError,
       );
-      await evaluating.promise;
-      current = false;
-      resume.resolve();
       await rejected;
       catalogMocks.isCurrent = () => true;
       catalogMocks.readSnapshot.mockReturnValueOnce({
@@ -176,13 +243,13 @@ describe("/models browse catalog recovery", () => {
   });
 
   it.each([
-    { nativeAuth: true, providerKey: false, disabled: false, visible: true },
-    { nativeAuth: false, providerKey: false, disabled: false, visible: false },
-    { nativeAuth: false, providerKey: true, disabled: false, visible: false },
-    { nativeAuth: true, providerKey: true, disabled: true, visible: false },
+    { nativeAuth: true, providerKey: false, disabled: false, available: true },
+    { nativeAuth: false, providerKey: false, disabled: false, available: false },
+    { nativeAuth: false, providerKey: true, disabled: false, available: false },
+    { nativeAuth: true, providerKey: true, disabled: true, available: false },
   ])(
     "lists bound models using native auth=$nativeAuth, provider key=$providerKey, disabled=$disabled",
-    async ({ nativeAuth, providerKey, disabled, visible }) => {
+    async ({ nativeAuth, providerKey, disabled, available }) => {
       vi.stubEnv("ANTHROPIC_API_KEY", providerKey ? "synthetic-provider-key" : "");
       cliBackendsTesting.setDepsForTest({
         resolveRuntimeCliBackends: () => [
@@ -223,7 +290,7 @@ describe("/models browse catalog recovery", () => {
         }),
         isCurrent: () => true,
       };
-      setPreparedModelRuntimeAuthStore(preparedOwner, catalogMocks.authStore);
+      bindPreparedModelRuntimeAuth(preparedOwner, { store: catalogMocks.authStore });
       catalogMocks.getPreparedOwner.mockReturnValue(preparedOwner);
       catalogMocks.readSnapshot.mockImplementation(() => {
         throw new Error("Published browsing consulted pending acquisition");
@@ -235,7 +302,11 @@ describe("/models browse catalog recovery", () => {
         agentId: "main",
       });
 
-      expect(reply?.text?.includes("- anthropic/claude-sonnet-4-6")).toBe(visible);
+      expect(reply?.text).toContain("- anthropic/claude-sonnet-4-6");
+      expect(reply?.text?.includes("- anthropic/claude-sonnet-4-6 (Sign-in needed")).toBe(
+        !available,
+      );
+      expect(reply?.text?.includes("run claude auth login on the Gateway host")).toBe(!available);
       expect(reply?.text?.includes("- anthropic/claude-haiku-4-5")).toBe(providerKey);
       expect(reply?.text).toContain("- anthropic/claude-opus-4-5");
     },
@@ -264,8 +335,7 @@ describe("/models browse catalog recovery", () => {
       },
       env: { ANTHROPIC_API_KEY: "synthetic-provider-key" },
       authStore: { version: 1, profiles: {} },
-      skipSetupProviderFallback: true,
-      allowPreparedRuntimeAuth: false,
+      preparedRuntimeAuthStore: { version: 1, profiles: {} },
     });
 
     expect(
@@ -308,7 +378,6 @@ describe("/models browse catalog recovery", () => {
           },
         },
         env: {},
-        skipSetupProviderFallback: true,
         preparedRuntimeAuthModes: { "claude-cli": "api_key" },
         authStore: store,
         preparedRuntimeAuthStore: store,

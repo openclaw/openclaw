@@ -7,13 +7,74 @@ import {
   serializeRemoteWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "../gateway/worker-environments/workspace-hash-memo.js";
-import { parseWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
-import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
+import type { WorkspaceManifestComputationOperations } from "../gateway/worker-environments/workspace-manifest-computation.js";
+import {
+  computeWorkspaceManifest,
+  decodeWorkspaceManifest,
+} from "../gateway/worker-environments/workspace-manifest-worker.js";
+import {
+  createRemoteWorkspaceManifestScript,
+  REMOTE_WORKSPACE_MANIFEST_JS,
+} from "../gateway/worker-environments/workspace-sync-scripts.js";
+import { executeGitCommandBuffered, executeGitCommandBytes } from "../infra/git-exec.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES } from "../worker/node-workspace-protocol.js";
 
 export const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const commandLog = createSubsystemLogger("node-host/worker-workspace");
+const NODE_MANIFEST_MEMO_BYTES = NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES - 4096;
+const boundedManifestScript = createRemoteWorkspaceManifestScript(NODE_MANIFEST_MEMO_BYTES);
+
+/** Exact built-in argv retains the workspace-exec contract; other programs still run as children. */
+export function nodeWorkspaceManifestCapture(argv: readonly string[], workspaceDir: string) {
+  if (
+    argv[0] !== "node" ||
+    argv[1] !== "-e" ||
+    (argv[2] !== REMOTE_WORKSPACE_MANIFEST_JS && argv[2] !== boundedManifestScript) ||
+    argv[3] !== workspaceDir
+  ) {
+    return undefined;
+  }
+  const baseCommit = argv[4] || null;
+  if (
+    baseCommit
+      ? !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(baseCommit) || argv[5] !== "eligible"
+      : argv[5] !== "all"
+  ) {
+    return undefined;
+  }
+  const memoMode = argv.at(-1) === "memo-v1";
+  const priorManifestDigests = argv.slice(6, memoMode ? -1 : undefined);
+  if (priorManifestDigests.some((digest) => !/^[a-f0-9]{64}$/u.test(digest))) {
+    return undefined;
+  }
+  return {
+    argv: argv.slice(3),
+    maxHashMemoBytes:
+      argv[2] === boundedManifestScript ? NODE_MANIFEST_MEMO_BYTES : MAX_WORKSPACE_HASH_MEMO_BYTES,
+  };
+}
+
+export async function runNodeWorkspaceManifestCapture(
+  params: WorkspaceManifestComputationOperations["workspace.manifest.remote-capture"]["input"] & {
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+  },
+): Promise<string> {
+  const { env, signal, ...input } = params;
+  const commandEnv = workspaceCommandEnv(input.home, env);
+  return await computeWorkspaceManifest(
+    { type: "workspace.manifest.remote-capture", input },
+    signal,
+    {
+      text: (cwd, args, options) =>
+        executeGitCommandBytes(cwd, args, { ...options, baseEnv: commandEnv, env: undefined }),
+      buffered: (cwd, args, options) =>
+        executeGitCommandBuffered(cwd, args, { ...options, baseEnv: commandEnv, env: undefined }),
+    },
+  );
+}
 
 export async function readWorkspaceManifest(
   homeDir: string,
@@ -29,13 +90,17 @@ export async function readWorkspaceManifest(
     ),
     "utf8",
   );
-  return { raw, manifest: await parseWorkspaceManifest(raw, manifestRef, signal) };
+  const { manifest } = await decodeWorkspaceManifest(raw, manifestRef, signal);
+  return { raw, manifest };
 }
 
 /** Environment for node-owned workspace commands: pinned HOME, no credential prompts. */
-export function workspaceCommandEnv(homeDir: string): NodeJS.ProcessEnv {
+export function workspaceCommandEnv(
+  homeDir: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   return {
-    ...process.env,
+    ...baseEnv,
     HOME: homeDir,
     ...(process.platform === "win32" ? { USERPROFILE: homeDir } : {}),
     GCM_INTERACTIVE: "Never",
@@ -72,10 +137,6 @@ export async function runWorkspaceCommand(params: {
   return result.stdout;
 }
 
-/**
- * Captures the workspace manifest with the shared remote script. With a hash
- * memo the capture round-trips memo-v1 so unchanged files reuse prior hashes.
- */
 export async function captureManifest(params: {
   workspaceDir: string;
   manifestHome: string;
@@ -85,34 +146,32 @@ export async function captureManifest(params: {
   hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
-  const memoMode = params.hashMemo !== undefined;
+  const priorManifestDigests = [
+    ...new Set(
+      [
+        params.referenceManifestRef,
+        ...(params.baseManifestRef ? [params.baseManifestRef] : []),
+      ].map((ref) => ref.slice("sha256:".length)),
+    ),
+  ];
+  const input =
+    params.hashMemo === undefined ? undefined : serializeRemoteWorkspaceHashMemo(params.hashMemo);
   const stdout = (
-    await runWorkspaceCommand({
-      workspaceDir: params.workspaceDir,
-      homeDir: params.manifestHome,
+    await runNodeWorkspaceManifestCapture({
       argv: [
-        "node",
-        "-e",
-        REMOTE_WORKSPACE_MANIFEST_JS,
         params.workspaceDir,
         params.baseCommit ?? "",
         params.baseCommit ? "eligible" : "all",
-        ...new Set(
-          [
-            params.referenceManifestRef,
-            ...(params.baseManifestRef ? [params.baseManifestRef] : []),
-          ].map((ref) => ref.slice("sha256:".length)),
-        ),
-        ...(memoMode ? ["memo-v1"] : []),
+        ...priorManifestDigests,
+        ...(input === undefined ? [] : ["memo-v1"]),
       ],
-      ...(params.hashMemo === undefined
-        ? {}
-        : {
-            input: serializeRemoteWorkspaceHashMemo(params.hashMemo),
-            // The memo round-trip returns up to the memo byte cap on stdout.
-            maxOutputBytes: MAX_WORKSPACE_HASH_MEMO_BYTES + 128 * 1024,
-          }),
-      signal: params.signal,
+      home: params.manifestHome,
+      memo: input,
+      maxHashMemoBytes: MAX_WORKSPACE_HASH_MEMO_BYTES,
+      signal: AbortSignal.any([
+        ...(params.signal ? [params.signal] : []),
+        AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+      ]),
     })
   ).trim();
   if (params.hashMemo === undefined) {

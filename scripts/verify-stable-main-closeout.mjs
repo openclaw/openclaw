@@ -20,6 +20,11 @@ function parseArgs(argv) {
     if (!key.startsWith("--")) {
       throw new Error(`unexpected argument: ${key}`);
     }
+    if (key === "--stable-soak-waiver" || key === "--lane-waiver") {
+      throw new Error(
+        `${key} was removed. Closeout requires the original strict validation evidence; historical waiver-bearing receipt replay is unsupported, and a fresh run cannot replace its published binding.`,
+      );
+    }
     const value = argv[index + 1];
     if (!value || value.startsWith("-")) {
       throw new Error(`${key} requires a value.`);

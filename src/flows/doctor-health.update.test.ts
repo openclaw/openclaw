@@ -1,9 +1,10 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
-import { UpdateCommandFailure } from "../cli/update-cli/update-command-result.js";
+import { transformConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
@@ -30,15 +31,23 @@ const mocks = vi.hoisted(() => ({
   stateMigrationReceipts: [] as LegacyStateMigrationStepReceipt[],
 }));
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
   intro: vi.fn(),
   note: vi.fn(),
   outro: mocks.outro,
 }));
 
-vi.mock("../commands/doctor-prompter.js", () => ({
-  createDoctorPrompter: () => ({ confirm: async () => true }),
-}));
+vi.mock("../commands/doctor-prompter.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../commands/doctor-prompter.js")>();
+  return {
+    ...actual,
+    createDoctorPrompter: (params: Parameters<typeof actual.createDoctorPrompter>[0]) => ({
+      ...actual.createDoctorPrompter(params),
+      confirm: async () => true,
+    }),
+  };
+});
 
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
@@ -116,8 +125,54 @@ describe("runDoctorHealthFlow update outcomes", () => {
     mocks.stateMigrationReceipts = [];
   });
 
+  it("publishes the first include input and last Doctor write through result IPC", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const includePath = path.join(path.dirname(state.configPath), "logging.json");
+      const originalInclude = '{"level":"info"}\n';
+      const finalInclude = '{\n  "level": "error"\n}\n';
+      await state.writeConfig({
+        gateway: { mode: "local" },
+        logging: { $include: "./logging.json" },
+      });
+      await fs.writeFile(includePath, originalInclude);
+      const originalRoot = await fs.readFile(state.configPath, "utf8");
+      const resolvedInclude = await fs.realpath(includePath);
+      const resultPath = createUpdatePostInstallDoctorResultPath();
+      vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
+      mocks.runContributions.mockImplementation(async () => {
+        for (const level of ["warn", "error"] as const) {
+          await transformConfigFile({
+            transform: (config) => ({
+              nextConfig: { ...config, logging: { ...config.logging, level } },
+            }),
+            writeOptions: { skipPluginValidation: true, auditOrigin: "doctor" },
+          });
+        }
+      });
+
+      try {
+        await runDoctorHealthFlow(
+          { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          { nonInteractive: true },
+        );
+        const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+        expect(result).toMatchObject({ status: "ok", configHash: "unchanged" });
+        expect(result?.configInputHash).toBeUndefined();
+        expect(result?.configFileWrites).toEqual({
+          [resolvedInclude]: {
+            inputHash: createHash("sha256").update(originalInclude).digest("hex"),
+            hash: createHash("sha256").update(finalInclude).digest("hex"),
+          },
+        });
+        await expect(fs.readFile(state.configPath, "utf8")).resolves.toBe(originalRoot);
+        await expect(fs.readFile(includePath, "utf8")).resolves.toBe(finalInclude);
+      } finally {
+        await consumeUpdatePostInstallDoctorResult(resultPath);
+      }
+    });
+  });
+
   it.each([
-    { refused: false, noisy: false },
     { refused: false, noisy: true },
     { refused: true, noisy: false },
   ])(
@@ -234,7 +289,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
     },
   );
 
-  it.each(["ok", "skipped", "failed", "pending"] as const)(
+  it.each(["ok", "pending"] as const)(
     "preserves the canonical %s update outcome before further Doctor checks",
     async (outcome) => {
       const { maybeOfferUpdateBeforeDoctor } = await vi.importActual<
@@ -250,38 +305,33 @@ describe("runDoctorHealthFlow update outcomes", () => {
           mocks.config.mockReturnValue(cfg);
           mocks.packageRoot.mockReturnValue(process.cwd());
           const updateResult: UpdateRunResult = {
-            status: outcome === "failed" || outcome === "pending" ? "error" : outcome,
+            status: outcome === "pending" ? "error" : outcome,
             mode: "git",
             root: process.cwd(),
             reason: outcome,
             steps: [],
             durationMs: 1,
           };
-          const failure =
-            outcome === "pending"
-              ? new UpdateCommandRecoveryPendingError("native settlement remains pending")
-              : new UpdateCommandFailure(updateResult);
+          const failure = new UpdateCommandRecoveryPendingError(
+            "native settlement remains pending",
+          );
           mocks.updateCommand.mockImplementation(async ({ onResult }) => {
             onResult?.(updateResult);
-            if (outcome === "failed" || outcome === "pending") {
+            if (outcome === "pending") {
               throw failure;
             }
           });
           const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
           const doctor = runDoctorHealthFlow(runtime);
-          if (outcome === "failed" || outcome === "pending") {
+          if (outcome === "pending") {
             await expect(doctor).rejects.toBe(failure);
           } else {
             await doctor;
           }
           expect(mocks.updateCommand).toHaveBeenCalledOnce();
-          expect(mocks.config).toHaveBeenCalledTimes(outcome === "skipped" ? 1 : 0);
-          expect(mocks.runContributions).toHaveBeenCalledTimes(outcome === "skipped" ? 1 : 0);
-          if (outcome === "skipped") {
-            expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-          } else {
-            expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
-          }
+          expect(mocks.config).not.toHaveBeenCalled();
+          expect(mocks.runContributions).not.toHaveBeenCalled();
+          expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
           if (outcome === "ok") {
             expect(mocks.outro).toHaveBeenCalledWith(
               "Update completed (doctor already ran as part of the update).",

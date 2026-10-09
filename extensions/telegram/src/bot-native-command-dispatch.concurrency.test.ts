@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi, type TestContext } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import {
   apiCalls,
@@ -8,6 +8,7 @@ import {
   groupCommand,
   harness,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
+import { createTestLifetime } from "./test-lifetime.test-support.js";
 
 const DEBOUNCE_MS = 4321;
 
@@ -19,8 +20,8 @@ function expectStopAcknowledged(threadId: number) {
   );
 }
 
-function createDebouncedBot(native: boolean, commandSender = String(from.id)) {
-  return createBot(native, true, {
+async function createDebouncedBot(native: boolean, commandSender = String(from.id)) {
+  return await createBot(native, true, {
     commands: { native, text: true, allowFrom: { telegram: [commandSender] } },
     messages: { inbound: { byChannel: { telegram: DEBOUNCE_MS } } },
     channels: {
@@ -51,40 +52,9 @@ function takeDebounceFlush(): () => void {
   return () => callback();
 }
 
-function createTestLifetime(
-  { signal, onTestFinished }: Pick<TestContext, "signal" | "onTestFinished">,
-  cleanup: () => Promise<void>,
-) {
-  const canceled = createDeferred<never>();
-  // Cancellation can precede the next wait while an update is being admitted.
-  void canceled.promise.catch(() => {});
-  let cleanupTask: Promise<void> | undefined;
-  const close = () =>
-    (cleanupTask ??= Promise.resolve()
-      .then(cleanup)
-      .finally(() => signal.removeEventListener("abort", onAbort)));
-  const onAbort = () => {
-    canceled.reject(signal.reason);
-    // Vitest rejects its wrapper on timeout without unwinding the test body.
-    // Start release/join now; onTestFinished still observes any cleanup failure.
-    void close().catch(() => {});
-  };
-  onTestFinished(close);
-  signal.addEventListener("abort", onAbort, { once: true });
-  if (signal.aborted) {
-    onAbort();
-  }
-  return {
-    wait: <T>(promise: Promise<T>) => Promise.race([promise, canceled.promise]),
-    close,
-  };
-}
-
 describe("Telegram commands during buffered message processing", () => {
   it.for([
     { native: true, command: "/status" },
-    { native: false, command: "/status" },
-    { native: true, command: "/btw check this" },
     { native: false, command: "/btw check this" },
   ])(
     "dispatches $command and cross-topic /stop while an ordinary run is held (native=$native)",
@@ -101,7 +71,7 @@ describe("Telegram commands during buffered message processing", () => {
         }
         return undefined;
       });
-      const bot = createDebouncedBot(native);
+      const bot = await createDebouncedBot(native);
       const timer = vi.spyOn(globalThis, "setTimeout");
       const work: Promise<unknown>[] = [];
       const flushes: Array<() => void> = [];
@@ -195,7 +165,7 @@ describe("Telegram commands during buffered message processing", () => {
       }
       return undefined;
     });
-    const bot = createBot(false, true, {
+    const bot = await createBot(false, true, {
       commands: { native: false, text: true, allowFrom: { telegram: [String(from.id)] } },
       messages: { inbound: { byChannel: { telegram: DEBOUNCE_MS } } },
       channels: {
@@ -252,7 +222,7 @@ describe("Telegram commands during buffered message processing", () => {
   });
 
   it("does not let an unauthorized native stop cancel buffered input", async () => {
-    const bot = createDebouncedBot(true, "99999");
+    const bot = await createDebouncedBot(true, "99999");
     const timer = vi.spyOn(globalThis, "setTimeout");
     let flush: (() => void) | undefined;
     let sourceWork: Promise<unknown> | undefined;

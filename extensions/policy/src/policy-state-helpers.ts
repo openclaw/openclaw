@@ -1,5 +1,5 @@
-// Shared policy evidence path and value helpers.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getPolicyPath } from "./policy-value.js";
 
 export function ocPathSegment(value: string): string {
   if (/^(?:[A-Za-z0-9_-]+|#\d+)$/.test(value)) {
@@ -12,13 +12,7 @@ export function ocPathSegment(value: string): string {
 }
 
 export function readBooleanPath(value: unknown, path: readonly string[]): boolean | undefined {
-  let current = value;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
+  const current = getPolicyPath(value, path);
   return typeof current === "boolean" ? current : undefined;
 }
 
@@ -45,4 +39,16 @@ export function collectPolicyConfiguredAgents(agents: Record<string, unknown>) {
         value,
       }))
     : [];
+}
+
+export function resolvePolicyValue<T extends string | boolean>(
+  local: T | undefined,
+  inherited: T | undefined,
+  fallback: T,
+) {
+  return {
+    value: local ?? inherited ?? fallback,
+    explicit: local !== undefined || inherited !== undefined,
+    inherited: local === undefined && inherited !== undefined,
+  };
 }

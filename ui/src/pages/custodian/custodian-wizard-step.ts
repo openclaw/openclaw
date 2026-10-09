@@ -10,10 +10,6 @@ type CustodianWizardSubmission = {
   display: string;
 };
 
-function findOption(step: WizardStep, value: unknown) {
-  return step.options?.find((option) => Object.is(option.value, value));
-}
-
 /** Build the typed answer sent by a client rendering the current wizard step. */
 export function custodianWizardSubmission(
   step: WizardStep,
@@ -22,46 +18,32 @@ export function custodianWizardSubmission(
   if (step.type === "note" || step.type === "action" || step.type === "progress") {
     return { answer: { stepId: step.id }, display: t("common.continue") };
   }
+  const answer = { stepId: step.id, value };
   if (step.type === "text") {
-    return typeof value === "string"
-      ? { answer: { stepId: step.id, value }, display: value }
-      : null;
+    return typeof value === "string" ? { answer, display: value } : null;
   }
   if (step.type === "confirm") {
-    if (typeof value !== "boolean") {
-      return null;
-    }
-    return {
-      answer: { stepId: step.id, value },
-      display: t(value ? "common.yes" : "common.no"),
-    };
+    return typeof value === "boolean"
+      ? { answer, display: t(value ? "common.yes" : "common.no") }
+      : null;
   }
+  const findOption = (optionValue: unknown) =>
+    step.options?.find((option) => Object.is(option.value, optionValue));
   if (step.type === "select") {
-    const option = findOption(step, value);
-    return option ? { answer: { stepId: step.id, value }, display: option.label } : null;
+    const option = findOption(value);
+    return option ? { answer, display: option.label } : null;
   }
   if (!Array.isArray(value)) {
     return null;
   }
-  if (value.length === 0) {
-    return { answer: { stepId: step.id, value: [] }, display: t("common.none") };
-  }
-  const labels = value.map((entry) => findOption(step, entry)?.label);
+  const labels = value.map((entry) => findOption(entry)?.label);
   if (!labels.every((label): label is string => label !== undefined)) {
     return null;
   }
   return {
-    answer: { stepId: step.id, value },
-    display: labels.join(", "),
+    answer: value.length ? answer : { ...answer, value: [] },
+    display: labels.length ? labels.join(", ") : t("common.none"),
   };
-}
-
-export function initialCustodianWizardValue(step: WizardStep): unknown {
-  return step.type === "multiselect"
-    ? Array.isArray(step.initialValue)
-      ? [...step.initialValue]
-      : []
-    : step.initialValue;
 }
 
 export function isCustodianWizardCancelAvailable(context: ApplicationContext | null): boolean {

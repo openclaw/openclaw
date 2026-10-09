@@ -37,12 +37,12 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
 });
 
-it("rejects a refused fixture start before connecting to the occupied port", async (test) => {
+it("reselects its initial fixture port after a bind collision", async (test) => {
   test.signal.throwIfAborted();
   let callbackEntered = false;
   let connections = 0;
   let refusal: unknown;
-  let daemon: Awaited<ReturnType<typeof runExtensionRelayDaemon>> | undefined;
+  const attemptedPorts: number[] = [];
   const sockets = new Set<net.Socket>();
   const socketErrors: Error[] = [];
   const competitor = net.createServer((socket) => {
@@ -52,17 +52,32 @@ it("rejects a refused fixture start before connecting to the occupied port", asy
     socket.once("error", (error) => socketErrors.push(error));
     socket.once("data", () => socket.resetAndDestroy());
   });
-  const fixture = withConnectedDaemon(
+  const cleanup = async () => {
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    if (competitor.listening) {
+      await new Promise<void>((resolve, reject) => {
+        competitor.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  };
+  test.onTestFinished(cleanup);
+  await withConnectedDaemon(
     async () => {
       callbackEntered = true;
     },
     async (port) => {
       test.signal.throwIfAborted();
+      attemptedPorts.push(port);
+      if (attemptedPorts.length > 1) {
+        return await runExtensionRelayDaemon({ port });
+      }
       const listening = once(competitor, "listening", { signal: test.signal });
       competitor.listen({ port, host: "127.0.0.1", signal: test.signal });
       await listening;
       test.signal.throwIfAborted();
-      daemon = await runExtensionRelayDaemon({ port });
+      const daemon = await runExtensionRelayDaemon({ port });
       if (test.signal.aborted || daemon.port !== null) {
         daemon.stop();
         await daemon.done;
@@ -70,54 +85,15 @@ it("rejects a refused fixture start before connecting to the occupied port", asy
         throw new Error("Expected daemon refusal for the occupied port");
       }
       refusal = await daemon.done;
+      await cleanup();
       test.signal.throwIfAborted();
       return daemon;
     },
-  ).then(
-    () => undefined,
-    (error: unknown) => error,
   );
-  let cleanupPromise: Promise<void> | undefined;
-  const cleanup = () =>
-    (cleanupPromise ??= (async () => {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      try {
-        await new Promise<void>((resolve, reject) => {
-          competitor.close((error) => {
-            if (error && extractErrorCode(error) !== "ERR_SERVER_NOT_RUNNING") {
-              reject(error);
-            } else {
-              resolve();
-            }
-          });
-        });
-      } finally {
-        try {
-          daemon?.stop();
-          await daemon?.done;
-        } finally {
-          await fixture;
-        }
-      }
-    })());
-  test.onTestFinished(cleanup);
-  let failure: unknown;
-  try {
-    failure = await Promise.race([
-      fixture,
-      waitForAbortSignal(test.signal).then(() => test.signal.throwIfAborted()),
-    ]);
-  } finally {
-    await cleanup();
-  }
   expect(refusal).toBe("port-in-use");
-  expect(failure).toBeInstanceOf(Error);
-  expect(failure).toMatchObject({
-    message: expect.stringMatching(/^Relay fixture startup failed:.*\(port-in-use\)$/),
-  });
-  expect(callbackEntered).toBe(false);
+  expect(attemptedPorts).toHaveLength(2);
+  expect(attemptedPorts[1]).not.toBe(attemptedPorts[0]);
+  expect(callbackEntered).toBe(true);
   expect(connections).toBe(0);
   expect(socketErrors).toEqual([]);
   expect(sockets.size).toBe(0);

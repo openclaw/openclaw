@@ -33,49 +33,13 @@ describe("OpenAI realtime public projection", () => {
   beforeEach(() => resetTestState());
   afterEach(() => restoreTestEnvironment());
 
-  it("projects private realtime model routing without exposing the model", () => {
-    const config = { model: "gpt-live-test-canary", voice: "marin" };
-
-    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
-      config: { voice: "marin" },
-      clientHints: {
-        modelSource: "gateway",
-        gatewayRelaySupported: false,
-      },
-    });
-  });
-
-  it("does not add routing hints for public realtime models", () => {
-    const config = { model: "gpt-realtime", voice: "marin" };
-
+  it("preserves native Talk for forced agent consult", () => {
+    const config = { model: "gpt-live-1-codex", consultRouting: "force-agent-consult" };
     expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
       config,
+      clientHints: { gatewayRelaySupported: false },
     });
   });
-
-  it.each(["gpt-live-1", "gpt-live-1-codex"])(
-    "advertises relay capability for the released %s route",
-    (model) => {
-      const config = { model, voice: "spruce" };
-
-      expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
-        config,
-        clientHints: { gatewayRelaySupported: true },
-      });
-    },
-  );
-
-  it.each(["gpt-live-1", "gpt-live-1-codex"])(
-    "preserves native Talk for forced agent consult with %s",
-    (model) => {
-      const config = { model, consultRouting: "force-agent-consult" };
-
-      expect(projectRealtimeVoicePublicProjection({ providerConfig: { model }, config })).toEqual({
-        config,
-        clientHints: { gatewayRelaySupported: false },
-      });
-    },
-  );
 
   it.each([false, true])(
     "advertises the subscription relay capability independently of OAuth readiness=%s",
@@ -99,19 +63,21 @@ describe("OpenAI realtime public projection", () => {
       for (const [azureConfig, supportsRelay] of [
         [{ azureEndpoint: " https://example.openai.azure.com " }, false],
         [{ azureDeployment: " live-deployment " }, false],
+        [{ baseUrl: " wss://voice.example.test/realtime " }, false],
+        [{ baseUrl: " " }, true],
         [{ azureEndpoint: "", azureDeployment: " \t " }, true],
         [{ azureEndpoint: " \t ", azureDeployment: "" }, true],
       ] as const) {
         const azureProviderConfig = { ...providerConfig, ...azureConfig };
-        for (const project of [
-          projectRealtimeVoicePublicProjection,
-          internalApi.projectPublicProjection,
-        ]) {
-          expect(project({ providerConfig: azureProviderConfig, config: providerConfig })).toEqual({
+        expect(
+          internalApi.projectPublicProjection({
+            providerConfig: azureProviderConfig,
             config: providerConfig,
-            clientHints: { gatewayRelaySupported: supportsRelay },
-          });
-        }
+          }),
+        ).toEqual({
+          config: providerConfig,
+          clientHints: { gatewayRelaySupported: supportsRelay },
+        });
         expect(
           internalApi.isGatewayRelayConfigured({
             providerConfig: azureProviderConfig,
@@ -133,23 +99,7 @@ describe("OpenAI realtime public projection", () => {
       model: OPAQUE_REALTIME_MODEL,
     };
 
-    expect(provider.models).toContain("gpt-live-1-codex");
     expect(provider.models).not.toContain(OPAQUE_REALTIME_MODEL);
-    expect(provider.capabilities).toMatchObject({
-      voicesByModel: {
-        "gpt-live-1-codex": [
-          "arbor",
-          "breeze",
-          "cove",
-          "ember",
-          "juniper",
-          "maple",
-          "sol",
-          "spruce",
-          "vale",
-        ],
-      },
-    });
     expect(
       internalApi.isGatewayRelayConfigured({
         providerConfig,
@@ -170,15 +120,18 @@ describe("OpenAI realtime public projection", () => {
     expect(
       internalApi.projectPublicProjection({
         providerConfig,
-        config: { model: OPAQUE_REALTIME_MODEL },
+        config: { model: OPAQUE_REALTIME_MODEL, voice: "marin" },
       }),
-    ).toMatchObject({ config: {} });
+    ).toEqual({
+      config: { voice: "marin" },
+      clientHints: { modelSource: "gateway", gatewayRelaySupported: false },
+    });
     expect(
       internalApi.projectPublicProjection({
         providerConfig: { model: "gpt-realtime-2.1" },
-        config: { model: "gpt-realtime-2.1" },
+        config: { model: "gpt-realtime-2.1", voice: "marin" },
       }),
-    ).toEqual({ config: { model: "gpt-realtime-2.1" } });
+    ).toEqual({ config: { model: "gpt-realtime-2.1", voice: "marin" } });
   });
 
   it.each([

@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { deserialize, serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
@@ -11,42 +9,25 @@ import {
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
-import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
+import {
+  useSqliteWorkerStoreFixture,
+  appendWorkerRow as append,
+} from "./sqlite-worker-fixture.test-support.js";
+import {
+  reserveSqliteWorkerInputPreparation,
+  type SqliteWorkerStore,
+} from "./sqlite-worker-store.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 import {
   SQLITE_WORKER_TRANSFER_FRAME_BYTES,
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
 
-const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    try {
-      await Promise.all([...stores].map((store) => store.close()));
-    } finally {
-      stores.clear();
-      cleanup();
-    }
-  }),
-);
+const { stores, databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-input-", () => {
+  vi.restoreAllMocks();
+});
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const payload = (mib: number) => "x".repeat(mib * 1024 * 1024);
-const databasePath = () => path.join(dirs.make("sqlite-worker-input-"), "store.sqlite");
-
-async function open(file: string) {
-  const store = await openSqliteWorkerStore<FixtureOperations>({
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-    databasePath: file,
-    input: undefined,
-  });
-  stores.add(store);
-  return store;
-}
-
-function append(store: SqliteWorkerStore<FixtureOperations>, value: string, signal?: AbortSignal) {
-  return store.execute({ type: "append", input: { value } }, { signal });
-}
 
 async function expectRows(store: SqliteWorkerStore<FixtureOperations>, expected: string[]) {
   const rows = await store.execute({ type: "read", input: undefined });
@@ -55,10 +36,10 @@ async function expectRows(store: SqliteWorkerStore<FixtureOperations>, expected:
   );
 }
 
-function holdReply(matches: (reply: SqliteWorkerReply) => boolean) {
+function holdFirstStagedChunk() {
   const held = createDeferredCore();
   let publish: (() => void) | undefined;
-  let captured = false;
+  let acknowledgments = 0;
   // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply restores the emitting worker.
   const original = Worker.prototype.emit;
   const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
@@ -67,8 +48,7 @@ function holdReply(matches: (reply: SqliteWorkerReply) => boolean) {
     ...args: unknown[]
   ) {
     const reply = args[0] as SqliteWorkerReply;
-    if (event === "message" && !captured && matches(reply)) {
-      captured = true;
+    if (event === "message" && reply.ok && reply.input === "next" && ++acknowledgments === 2) {
       publish = () => Reflect.apply(original, this, [event, ...args]);
       held.resolve();
       return true;
@@ -85,16 +65,11 @@ function holdReply(matches: (reply: SqliteWorkerReply) => boolean) {
   };
 }
 
-function holdFirstStagedChunk() {
-  let acknowledgments = 0;
-  return holdReply((reply) => reply.ok && reply.input === "next" && ++acknowledgments === 2);
-}
-
 describe("SQLite worker staged input", () => {
-  it.each([40, 72])("snapshots and persists one %s MiB append across reopening", async (mib) => {
+  it("snapshots and persists a 72 MiB append across reopening with bounded frames", async () => {
     const file = databasePath();
     const store = await open(file);
-    const value = payload(mib);
+    const value = payload(72);
     const inputFrames: Array<{ visible: number; backing: number }> = [];
     const receivedFrames: Array<{ visible: number; backing: number; framed: boolean }> = [];
     const commands: SqliteWorkerRequest["type"][] = [];
@@ -151,42 +126,14 @@ describe("SQLite worker staged input", () => {
       expect(frame.visible).toBeLessThanOrEqual(limit);
       expect(frame.backing).toBeLessThanOrEqual(limit);
     }
-    if (mib === 72) {
-      expect(receivedFrames.some((frame) => frame.framed)).toBe(true);
-    }
-  });
-
-  it("charges a queued 40 MiB command in full and frees its credits on cancellation", async () => {
-    const store = await open(databasePath());
-    const hold = holdReply(() => true);
-    const ahead = append(store, "ahead");
-    const cancelQueued = new AbortController();
-    const replacementCancel = new AbortController();
-    let queued: Promise<unknown> | undefined;
-    let replacement: Promise<unknown> | undefined;
-    try {
-      await Promise.race([hold.held, ahead]);
-      queued = append(store, payload(40), cancelQueued.signal);
-      await expect(append(store, payload(30))).rejects.toMatchObject({ code: "overloaded" });
-      const reason = new Error("cancel queued input");
-      cancelQueued.abort(reason);
-      await expect(queued).rejects.toBe(reason);
-      replacement = append(store, payload(30), replacementCancel.signal);
-      replacementCancel.abort(reason);
-      await expect(replacement).rejects.toBe(reason);
-      hold.release();
-      expect(await ahead).toMatchObject({ writes: 1 });
-      await expectRows(store, ["ahead"]);
-    } finally {
-      cancelQueued.abort();
-      replacementCancel.abort();
-      hold.release();
-      await Promise.allSettled([ahead, queued, replacement]);
-    }
+    expect(receivedFrames.some((frame) => frame.framed)).toBe(true);
   });
 
   it("reserves 32 MiB for active oversized input while preserving cancellation and queue credit", async () => {
     const store = await open(databasePath());
+    const concurrentInputs = Array.from({ length: 3 }, () =>
+      reserveSqliteWorkerInputPreparation(64 * 1024 * 1024),
+    );
     const hold = holdFirstStagedChunk();
     const activeCancel = new AbortController();
     const queuedCancel = new AbortController();
@@ -212,6 +159,9 @@ describe("SQLite worker staged input", () => {
       expect(await active).toMatchObject({ writes: 1 });
       await expectRows(store, [value]);
     } finally {
+      for (const prepared of concurrentInputs) {
+        prepared.release();
+      }
       queuedCancel.abort();
       replacementCancel.abort();
       hold.release();

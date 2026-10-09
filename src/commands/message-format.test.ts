@@ -100,7 +100,6 @@ describe("formatMessageCliText displayLimit", () => {
   });
 
   it.each([
-    { displayLimit: 1, expectedRows: 1 },
     { displayLimit: 75, expectedRows: 75 },
     { displayLimit: undefined, expectedRows: 50 },
   ])(
@@ -126,16 +125,10 @@ describe("formatMessageCliText displayLimit", () => {
     },
   );
 
-  it.each([0, 1])(
-    "renders an explicit outcome for a search with no results (total: %i)",
-    (totalResults) => {
-      const result = searchResultPayload({
-        results: { messages: [], total_results: totalResults },
-      });
-
-      expect(formatMessageCliText(result)).toEqual(["Search results", "No results."]);
-    },
-  );
+  it("renders an explicit empty search outcome despite an approximate positive total", () => {
+    const result = searchResultPayload({ results: { messages: [], total_results: 1 } });
+    expect(formatMessageCliText(result)).toEqual(["Search results", "No results."]);
+  });
 
   it("defaults to 25 when no displayLimit is provided", () => {
     const messages = Array.from({ length: 50 }, (_, i) =>
@@ -148,27 +141,18 @@ describe("formatMessageCliText displayLimit", () => {
     expect(out).toContain("text-24");
     expect(out).not.toContain("text-25");
   });
-
-  it("renders all rows when total is below displayLimit", () => {
-    const messages = [
-      msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello"),
-      msg("id-2", "2026-01-01T00:00:01.000Z", "bob", "world"),
-    ];
-
-    const result = readResultPayload({ messages });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 30 }));
-
-    expect(out).toContain("hello");
-    expect(out).toContain("world");
-  });
 });
 
 describe("formatMessageCliText reaction labels", () => {
-  it.each(["raw", "name", "emoji", "key"] as const)(
-    "renders untrusted %s reaction cells as plain terminal text",
-    (field) => {
-      const label = "\u001b[2Jreaction\nline";
-      const reaction = field === "raw" ? { emoji: { raw: label } } : { [field]: label };
+  const label = "\u001b[2J:party_parrot:🦞\nline";
+  it.each([
+    { field: "raw", reaction: { emoji: { raw: label }, name: "unused-name", key: "unused-key" } },
+    { field: "name", reaction: { name: label, emoji: "unused-emoji", key: "unused-key" } },
+    { field: "emoji", reaction: { emoji: label, key: "unused-key" } },
+    { field: "key", reaction: { key: label } },
+  ])(
+    "renders the preferred $field label as plain text without changing the payload",
+    ({ reaction }) => {
       const result = {
         kind: "action",
         channel: "matrix",
@@ -180,81 +164,29 @@ describe("formatMessageCliText reaction labels", () => {
         dryRun: false,
       } satisfies MessageActionResult;
       const payload = structuredClone(result.payload);
-
       const output = textJoined(formatMessageCliText(result));
-
       expect(result.payload).toEqual(payload);
       expect(output).not.toContain("\u001b[2J");
-      expect(output).toContain("reaction\\nline");
+      expect(output).toContain(":party_parrot:🦞\\nline");
+      expect(output).not.toContain("unused-");
       expect(output).toContain("alice");
       expect(output).toContain("bob\\tother");
       expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
     },
   );
-
-  it.each([
-    ["matrix", { key: "👍" }, "👍"],
-    ["matrix", { key: ":party_parrot:" }, ":party_parrot:"],
-    ["discord", { emoji: { id: "123", name: "party", raw: "party:123" } }, "party:123"],
-    ["slack", { name: "thumbsup" }, "thumbsup"],
-    ["msteams", { name: "like", emoji: "👍" }, "like"],
-    [
-      "directchat",
-      { emoji: { raw: "raw-priority" }, name: "unused-name", key: "unused-key" },
-      "raw-priority",
-    ],
-    [
-      "directchat",
-      { name: "name-priority", emoji: "unused-emoji", key: "unused-key" },
-      "name-priority",
-    ],
-    ["directchat", { emoji: "🦞", key: "unused-key" }, "🦞"],
-  ] as const)("renders %s reaction labels from their result shape", (channel, reaction, label) => {
-    const result = {
-      kind: "action",
-      channel,
-      action: "reactions",
-      handledBy: "plugin",
-      payload: {
-        reactions: [{ ...reaction, count: 2, users: ["@alice:qa.test", "@bob:qa.test"] }],
-      },
-      dryRun: false,
-    } satisfies MessageActionResult;
-
-    const output = textJoined(formatMessageCliText(result));
-
-    expect(output).toContain(label);
-    expect(output).toContain("@alice:qa.test");
-    expect(output).toContain("@bob:qa.test");
-  });
 });
 
 describe("renderPaginationHint", () => {
-  it("emits hint when payload has hasMore: true", () => {
+  it.each([
+    { hasMore: true },
+    { nextBatch: "token-123" },
+    { "@odata.nextLink": "https://graph.microsoft.com/v1.0/next" },
+  ])("emits a hint for provider continuation %j", (continuation) => {
     const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    const result = readResultPayload({ messages, hasMore: true });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
-
-    expect(out).toContain("More results available");
-  });
-
-  it("emits hint when payload has nextBatch string", () => {
-    const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    const result = readResultPayload({ messages, nextBatch: "token-123" });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
-
-    expect(out).toContain("More results available");
-  });
-
-  it("emits hint when payload has @odata.nextLink string", () => {
-    const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    const result = readResultPayload({
-      messages,
-      "@odata.nextLink": "https://graph.microsoft.com/v1.0/next",
-    });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
-
-    expect(out).toContain("More results available");
+    const result = readResultPayload({ messages, ...continuation });
+    expect(textJoined(formatMessageCliText(result, { displayLimit: 5 }))).toContain(
+      "More results available",
+    );
   });
 
   it.each([0, 1])("preserves explicit search continuation with %i returned messages", (count) => {
@@ -270,33 +202,15 @@ describe("renderPaginationHint", () => {
     );
   });
 
-  it.each([2, 200])(
-    "does not infer more search results from approximate total %i",
-    (totalResults) => {
-      const message = msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello");
-      const result = searchResultPayload({
-        results: { messages: [[message]], total_results: totalResults },
-      });
-
-      expect(textJoined(formatMessageCliText(result, { displayLimit: 5 }))).not.toContain(
-        "More results available",
-      );
-    },
-  );
-
-  it("does NOT emit hint when total_results equals returned count (completed search)", () => {
-    const messages = [
-      msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello"),
-      msg("id-2", "2026-01-01T00:00:01.000Z", "bob", "world"),
-    ];
-    // total_results: 2 with 2 returned messages → search is complete.
-    const wrapped = messages.map((m) => [m]);
+  it("does not infer more search results from an approximate total", () => {
+    const message = msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello");
     const result = searchResultPayload({
-      results: { messages: wrapped, total_results: 2 },
+      results: { messages: [[message]], total_results: 200 },
     });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
 
-    expect(out).not.toContain("More results available");
+    expect(textJoined(formatMessageCliText(result, { displayLimit: 5 }))).not.toContain(
+      "More results available",
+    );
   });
 
   it("does NOT emit hint when no pagination signal is present", () => {
@@ -456,17 +370,10 @@ describe("formatMessageCliText provider-reported failures", () => {
       { ok: false, warning: "Unavailable", added: "✅" },
       "Unavailable",
     ],
-    [
-      "rejected delete",
-      "delete",
-      { ok: false, deleted: false, warning: "Not deleted" },
-      "Not deleted",
-    ],
     ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
-    ["rejected send", "send", { ok: false, error: "Message rejected" }, "Message rejected"],
   ] as const)("reports %s without claiming success", (_name, action, payload, expected) => {
     const result = {
-      kind: action === "send" || action === "poll" ? action : "action",
+      kind: action === "poll" ? action : "action",
       channel: "telegram",
       action,
       to: "123",

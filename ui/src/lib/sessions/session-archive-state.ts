@@ -1,6 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SessionPatchResult } from "./patch.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 import type { SessionArchiveVisibility } from "./session-capability.ts";
 import type { SessionArchiveFields } from "./session-pending-rows.ts";
 import {
@@ -184,17 +184,21 @@ export function createSessionArchiveState(
       if (!result || confirmed.size === 0) {
         return result;
       }
-      const sessions = result.sessions.map(applyRow);
-      return projectSessionResultRows(result, sessions);
+      return mapSessionResultRows(result, applyRow);
     },
     visibility: (key: string): SessionArchiveVisibility | undefined => {
       const normalizedKey = key.trim();
       const pendingArchive = pending.get(normalizedKey);
+      const archive = confirmed.get(normalizedKey);
+      // Ordinary rows and confirmed restores need no incarnation check. Avoid
+      // scanning the published roster for every visible sidebar row.
+      if (!pendingArchive && !archive?.archived) {
+        return undefined;
+      }
       const row = publishedRow(normalizedKey);
       if (pendingArchive && (!row || row.sessionId === pendingArchive.sessionId)) {
         return "pending";
       }
-      const archive = confirmed.get(normalizedKey);
       if (!archive?.archived) {
         return undefined;
       }

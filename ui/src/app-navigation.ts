@@ -1,13 +1,11 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
-// Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "./app/native-device-settings.ts";
 import type { IconName } from "./components/icons.ts";
-import { i18n, t } from "./i18n/index.ts";
+import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
 
@@ -24,7 +22,6 @@ export const SIDEBAR_NAV_ROUTES = [
   "dashboards",
   "usage",
   "cron",
-  "tasks",
   "sessions",
   "systems",
   "activity",
@@ -36,22 +33,14 @@ export const SIDEBAR_NAV_ROUTES = [
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
 // Plugins entry for all of them, mirroring how config covers settings routes.
-const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
-  "plugins",
-  "skills",
-  "skill-workshop",
-]);
-
 export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
-  return PLUGINS_HUB_ROUTES.has(routeId);
+  return routeId === "plugins" || routeId === "skills" || routeId === "skill-workshop";
 }
 
 // Worktrees renders as a tab of the Sessions hub; the sidebar highlights the
 // Sessions entry for both routes, mirroring the Plugins hub behavior.
-const SESSIONS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set(["sessions", "worktrees"]);
-
 export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
-  return SESSIONS_HUB_ROUTES.has(routeId);
+  return routeId === "sessions" || routeId === "worktrees";
 }
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
@@ -159,41 +148,6 @@ export type SettingsSearchBlock = {
   search?: string;
   hash: string;
 };
-
-let settingsSearchSegmenterLocale = "";
-let settingsSearchSegmenter: Intl.Segmenter | null = null;
-
-function settingsSearchHasWordPrefix(value: string, query: string): boolean {
-  const locale = i18n.getLocale();
-  if (settingsSearchSegmenterLocale !== locale) {
-    settingsSearchSegmenterLocale = locale;
-    settingsSearchSegmenter =
-      typeof Intl !== "undefined" && "Segmenter" in Intl
-        ? new Intl.Segmenter(locale, { granularity: "word" })
-        : null;
-  }
-  if (!settingsSearchSegmenter) {
-    return value.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(query));
-  }
-  for (const segment of settingsSearchSegmenter.segment(value)) {
-    if (segment.isWordLike !== false && segment.segment.startsWith(query)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function settingsSearchTextMatches(value: string, query: string): boolean {
-  const candidate = normalizeLowercaseStringOrEmpty(value).normalize("NFC");
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
-  if (!normalizedQuery) {
-    return false;
-  }
-  if (normalizedQuery.length > 2) {
-    return candidate.includes(normalizedQuery);
-  }
-  return settingsSearchHasWordPrefix(candidate, normalizedQuery);
-}
 
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts). Ordered
 // by user attention: personal/look-and-feel first, system plumbing last.
@@ -320,12 +274,6 @@ const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
   "lobsterdex",
 ];
 export const SETTINGS_SEARCHABLE_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["ai-agents"];
-const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
-  Readonly<Record<NavigationRouteId, NavigationRouteId>>
-> = {
-  "ai-agents": "agents",
-  "model-setup": "model-providers",
-};
 
 const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
@@ -353,7 +301,6 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   systems: navigationPresentation("monitor", "systems"),
   usage: navigationPresentation("coins", "usage"),
   cron: navigationPresentation("calendarClock", "cron"),
-  tasks: navigationPresentation("listChecks", "tasks"),
   skills: navigationPresentation("bookOpenText", "skills"),
   "skill-settings": navigationPresentation("bookOpenText", "skills"),
   plugins: navigationPresentation("plug", "plugins"),
@@ -404,60 +351,8 @@ export function isSettingsTakeover(routeId: RouteId | undefined): boolean {
   return routeId !== undefined && isSettingsNavigationRoute(routeId);
 }
 
-export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): NavigationRouteId {
-  return SETTINGS_SUBPAGE_OWNER_ROUTES[routeId] ?? routeId;
-}
-
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
   return NAVIGATION_PRESENTATION[routeId]?.[0] ?? "folder";
-}
-
-export function scheduleRoutePreload<TRouteId extends string>(
-  timers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>,
-  routeId: TRouteId,
-  event: Event,
-  preload: ((routeId: TRouteId) => Promise<void> | void) | undefined,
-  disabled = false,
-  immediate = false,
-) {
-  if (disabled || !preload) {
-    return;
-  }
-  const target = event.currentTarget;
-  if (!target) {
-    return;
-  }
-  const start = () => {
-    timers.delete(target);
-    try {
-      void Promise.resolve(preload(routeId)).catch(() => undefined);
-    } catch {
-      // Preloading is opportunistic; navigation still handles real route errors.
-    }
-  };
-  if (immediate) {
-    cancelRoutePreload(timers, event);
-    start();
-    return;
-  }
-  if (!timers.has(target)) {
-    timers.set(target, globalThis.setTimeout(start, 50));
-  }
-}
-
-export function cancelRoutePreload(
-  timers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>,
-  event: Event,
-) {
-  const target = event.currentTarget;
-  if (!target) {
-    return;
-  }
-  const timer = timers.get(target);
-  if (timer !== undefined) {
-    globalThis.clearTimeout(timer);
-    timers.delete(target);
-  }
 }
 
 export function titleForRoute(routeId: NavigationRouteId): string {
@@ -484,19 +379,6 @@ export function formatDocumentTitle(options: {
     return `(${options.attentionCount}) ${base}`;
   }
   return base;
-}
-
-export function settingsNavigationLabelForRoute(
-  routeId: NavigationRouteId,
-  snapshot?: NativeDeviceSettingsSnapshot | null,
-): string {
-  if (routeId === "device" && snapshot) {
-    return t(deviceSettingsGroupLabelKey(snapshot));
-  }
-  if (routeId === "custodian") {
-    return t("nav.askOpenClaw");
-  }
-  return titleForRoute(routeId);
 }
 
 export function subtitleForRoute(routeId: NavigationRouteId): string {

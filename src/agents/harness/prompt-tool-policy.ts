@@ -19,7 +19,7 @@ import type { AnyAgentTool } from "../tools/common.js";
 
 type NamedTool = { name: string };
 
-function isAgentTool(tool: NamedTool): tool is AnyAgentTool {
+function isAgentTool<T extends NamedTool>(tool: T): tool is T & AnyAgentTool {
   return "execute" in tool && typeof tool.execute === "function";
 }
 
@@ -48,6 +48,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       ? {
           ref: params.catalogRef,
           entries: [...(params.catalogEntries ?? currentCatalog.entries)],
+          directOnlyToolNames: params.catalogRef.baselineDirectOnlyToolNames,
           controlNames: params.codeModeControlsEnabled
             ? new Set([CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME])
             : TOOL_SEARCH_CONTROL_TOOL_NAMES,
@@ -60,13 +61,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       });
       const allowedTools = filterTools(baselineTools, toolsAllow);
       if (!catalog) {
-        const executableTools: AnyAgentTool[] = [];
-        for (const tool of allowedTools) {
-          if (isAgentTool(tool)) {
-            executableTools.push(tool);
-          }
-        }
-        finalizeAgentToolAvailability(executableTools);
+        finalizeAgentToolAvailability(allowedTools.filter(isAgentTool));
         return {
           tools: allowedTools,
           toolSchemaDirectoryPrompt: undefined,
@@ -86,6 +81,11 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
         const name = normalizeToolPolicyName(tool.name);
         return allowedNames.has(name) || (catalogCount > 0 && catalog.controlNames.has(name));
       });
+      catalog.ref.directOnlyToolNames = new Set(
+        tools
+          .filter((tool) => catalog.directOnlyToolNames?.has(tool.name))
+          .map((tool) => tool.name),
+      );
       const catalogReachable =
         catalogCount > 0 &&
         tools.some((tool) => catalog.controlNames.has(normalizeToolPolicyName(tool.name)));

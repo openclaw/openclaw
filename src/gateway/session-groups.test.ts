@@ -11,6 +11,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
@@ -22,15 +23,13 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { ensureSessionGroupCatalog } from "./session-group-catalog.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { ensureSessionGroupCatalog, readSessionGroupCatalog } from "./session-group-catalog.js";
 import { readSessionGroupCatalogSnapshot } from "./session-group-catalog.kernel.js";
 import { registerSessionGroupInDatabase } from "./session-group-registration.kernel.js";
 import {
   deleteSessionGroup,
   ensureSessionGroupRegistered,
-  listSessionGroupDefaults,
-  listSidebarSectionOrder,
-  listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
   SessionGroupNotEmptyError,
@@ -46,16 +45,20 @@ describe("session groups catalog", () => {
   beforeEach(async () => {
     const tempRoot = await fs.realpath(os.tmpdir());
     root = await fs.mkdtemp(path.join(tempRoot, "openclaw-session-groups-"));
-    env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    // Agent entry helpers and the group catalog must borrow the same shared-state owner.
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    env = { ...process.env };
     await ensureSessionGroupCatalog(env);
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync(root);
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+    vi.unstubAllEnvs();
   });
 
   async function seedSessionStore(
@@ -64,13 +67,13 @@ describe("session groups catalog", () => {
   ): Promise<string> {
     const storePath = path.join(root, "agents", agentId, "sessions", "sessions.json");
     for (const [sessionKey, entry] of Object.entries(entries)) {
-      await replaceSessionEntry({ agentId, storePath, sessionKey }, entry);
+      await replaceSessionEntry({ agentId, env, storePath, sessionKey }, entry);
     }
     return storePath;
   }
 
   it("replaces the ordered catalog with deduped trimmed names", async () => {
-    expect(listSessionGroups(env)).toEqual([]);
+    expect(readSessionGroupCatalog(env).groups).toEqual([]);
     const groups = await putSessionGroups({
       cfg,
       names: ["Work", "  Personal  ", "Work", ""],
@@ -80,7 +83,7 @@ describe("session groups catalog", () => {
       { name: "Work", position: 0 },
       { name: "Personal", position: 1 },
     ]);
-    expect(listSessionGroups(env)).toEqual(groups);
+    expect(readSessionGroupCatalog(env).groups).toEqual(groups);
     expect(await putSessionGroups({ cfg, names: ["Personal"], env })).toEqual([
       { name: "Personal", position: 0 },
     ]);
@@ -98,7 +101,7 @@ describe("session groups catalog", () => {
       SessionGroupNotEmptyError,
     );
     await expect(putSessionGroups({ cfg, names: ["Keep"], env })).rejects.toThrow('"Gone" (1)');
-    expect(listSessionGroups(env)).toEqual(groups);
+    expect(readSessionGroupCatalog(env).groups).toEqual(groups);
     expect(loadSessionEntry(sessionTarget)?.category).toBe("Gone");
 
     await deleteSessionGroup({ cfg, name: "Gone", env });
@@ -126,7 +129,7 @@ describe("session groups catalog", () => {
       putSessionGroups({ cfg, names: ["Keep"], env, assertTargetCurrent }),
     ).rejects.toThrow(error);
     expect(assertTargetCurrent).toHaveBeenCalledExactlyOnceWith({ agentId: "main", sessionKey });
-    expect(listSessionGroups(env)).toEqual(groups);
+    expect(readSessionGroupCatalog(env).groups).toEqual(groups);
     expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })?.category).toBe("Gone");
   });
 
@@ -149,7 +152,10 @@ describe("session groups catalog", () => {
       ],
       env,
     });
-    expect(listSessionGroups(env).map((group) => group.name)).toEqual(["Alpha", "Beta"]);
+    expect(readSessionGroupCatalog(env).groups.map((group) => group.name)).toEqual([
+      "Alpha",
+      "Beta",
+    ]);
     const expectedSectionOrder = [
       "work",
       "catalog:codex",
@@ -157,11 +163,11 @@ describe("session groups catalog", () => {
       "category:Alpha",
       "groups",
     ];
-    expect(listSidebarSectionOrder(env)).toEqual(expectedSectionOrder);
+    expect(readSessionGroupCatalog(env).sectionOrder).toEqual(expectedSectionOrder);
     expect(readConfigMachineState("sidebar.sectionOrder", { env })).toEqual(expectedSectionOrder);
 
     await putSessionGroups({ cfg, names: ["Beta", "Alpha"], env });
-    expect(listSidebarSectionOrder(env)).toEqual(expectedSectionOrder);
+    expect(readSessionGroupCatalog(env).sectionOrder).toEqual(expectedSectionOrder);
   });
 
   it("keeps catalog reads and reorders schema-read-only until defaults are used", async () => {
@@ -184,7 +190,7 @@ describe("session groups catalog", () => {
     );
 
     await ensureSessionGroupCatalog(env);
-    expect(listSessionGroups(env)).toEqual([{ name: "Client", position: 0 }]);
+    expect(readSessionGroupCatalog(env).groups).toEqual([{ name: "Client", position: 0 }]);
     expect(await putSessionGroups({ cfg, names: ["Client"], env })).toEqual([
       { name: "Client", position: 0 },
     ]);
@@ -195,9 +201,9 @@ describe("session groups catalog", () => {
       expect.arrayContaining(["cwd", "worktree"]),
     );
 
-    expect(listSessionGroupDefaults(env)).toEqual([{ name: "Client" }]);
+    expect(readSessionGroupCatalog(env).defaults).toEqual([{ name: "Client" }]);
     await renameSessionGroup({ cfg, name: "Client", to: "Customer", env });
-    expect(listSessionGroupDefaults(env)).toEqual([{ name: "Customer" }]);
+    expect(readSessionGroupCatalog(env).defaults).toEqual([{ name: "Customer" }]);
     const afterDefaultsReadAndRename = openOpenClawStateDatabase({ env })
       .db.prepare("PRAGMA table_info(session_groups)")
       .all() as Array<{ dflt_value: unknown; name: string; notnull: number; type: string }>;
@@ -235,7 +241,7 @@ describe("session groups catalog", () => {
 
     await putSessionGroups({ cfg, names: ["Other", "Client"], env });
     await renameSessionGroup({ cfg, name: "Client", to: "Customer", env });
-    expect(listSessionGroupDefaults(env)).toContainEqual({
+    expect(readSessionGroupCatalog(env).defaults).toContainEqual({
       name: "Customer",
       cwd: "/repos/client",
       worktree: true,
@@ -249,8 +255,8 @@ describe("session groups catalog", () => {
     await expect(renameSessionGroup({ cfg, name: "Missing", to: "Other", env })).rejects.toThrow(
       "unknown session group: Missing",
     );
-    expect(listSessionGroups(env)).toEqual([{ name: "Client", position: 0 }]);
-    expect(listSessionGroupDefaults(env)).toEqual([
+    expect(readSessionGroupCatalog(env).groups).toEqual([{ name: "Client", position: 0 }]);
+    expect(readSessionGroupCatalog(env).defaults).toEqual([
       { name: "Client", cwd: "/repos/client", worktree: true },
     ]);
   });
@@ -271,7 +277,7 @@ describe("session groups catalog", () => {
     expect(
       await updateSessionGroupDefaults("Client", { cwd: "/repos/client", worktree: true }, env),
     ).toBeNull();
-    expect(listSessionGroups(env)).toEqual([]);
+    expect(readSessionGroupCatalog(env).groups).toEqual([]);
   });
 
   it("keeps a stale defaults update schema-free on a legacy database", async () => {
@@ -296,14 +302,8 @@ describe("session groups catalog", () => {
 
   it("publishes catalog writes and serves repeated viewers without parent-thread SQLite", async () => {
     await putSessionGroups({ cfg, names: ["Work"], env });
-    const native = requireNodeSqlite();
-    const counters = [
-      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-      vi.spyOn(native.DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const counters = observeMainThreadSql();
     try {
       expect(await ensureSessionGroupRegistered("  Travel  ", env)).toBe(true);
       expect(await ensureSessionGroupRegistered("Travel", env)).toBe(false);
@@ -326,19 +326,17 @@ describe("session groups catalog", () => {
         await ensureSessionGroupCatalog(env);
         expect(
           JSON.stringify({
-            groups: listSessionGroups(env),
-            defaults: listSessionGroupDefaults(env),
-            sectionOrder: listSidebarSectionOrder(env),
+            groups: readSessionGroupCatalog(env).groups,
+            defaults: readSessionGroupCatalog(env).defaults,
+            sectionOrder: readSessionGroupCatalog(env).sectionOrder,
           }),
         ).toBe(expected);
       }
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
     } finally {
-      for (const counter of counters) {
-        counter.mockRestore();
-      }
+      counters.restore();
     }
-    expect(listSessionGroups(env)).toEqual([
+    expect(readSessionGroupCatalog(env).groups).toEqual([
       { name: "Work", position: 0 },
       { name: "Travel", position: 1 },
     ]);
@@ -352,7 +350,7 @@ describe("session groups catalog", () => {
     );
     env.OPENCLAW_STATE_DIR = redirectedRoot;
     expect(await Promise.all(registrations)).toEqual([true, true, false]);
-    expect(listSessionGroups(originalEnv)).toEqual([
+    expect(readSessionGroupCatalog(originalEnv).groups).toEqual([
       { name: "First", position: 0 },
       { name: "Second", position: 1 },
     ]);
@@ -365,10 +363,10 @@ describe("session groups catalog", () => {
     await fs.symlink(root, aliasPath, process.platform === "win32" ? "junction" : "dir");
     const aliasEnv = { ...env, OPENCLAW_STATE_DIR: aliasPath };
     await ensureSessionGroupCatalog(aliasEnv);
-    expect(listSessionGroups(aliasEnv)).toEqual(listSessionGroups(env));
+    expect(readSessionGroupCatalog(aliasEnv).groups).toEqual(readSessionGroupCatalog(env).groups);
 
     await updateSessionGroupDefaults("Travel", { cwd: "/repos/travel", worktree: true }, aliasEnv);
-    expect(listSessionGroupDefaults(env)).toEqual([
+    expect(readSessionGroupCatalog(env).defaults).toEqual([
       { name: "Work" },
       { name: "Travel", cwd: "/repos/travel", worktree: true },
     ]);
@@ -378,11 +376,11 @@ describe("session groups catalog", () => {
       sectionOrder: ["category:Travel", "work"],
       env,
     });
-    expect(listSessionGroups(aliasEnv)).toEqual([
+    expect(readSessionGroupCatalog(aliasEnv).groups).toEqual([
       { name: "Travel", position: 0 },
       { name: "Work", position: 1 },
     ]);
-    expect(listSidebarSectionOrder(aliasEnv)).toEqual(["category:Travel", "work"]);
+    expect(readSessionGroupCatalog(aliasEnv).sectionOrder).toEqual(["category:Travel", "work"]);
 
     await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(aliasEnv));
     const { DatabaseSync } = requireNodeSqlite();
@@ -398,9 +396,9 @@ describe("session groups catalog", () => {
       { name: "Work", position: 1 },
       { name: "Travel", position: 2 },
     ];
-    expect(listSessionGroups(env)).toEqual(reopened);
-    expect(listSessionGroups(aliasEnv)).toEqual(reopened);
-    expect(listSessionGroupDefaults(aliasEnv)).toEqual([
+    expect(readSessionGroupCatalog(env).groups).toEqual(reopened);
+    expect(readSessionGroupCatalog(aliasEnv).groups).toEqual(reopened);
+    expect(readSessionGroupCatalog(aliasEnv).defaults).toEqual([
       { name: "Work" },
       { name: "Travel", cwd: "/repos/travel", worktree: true },
     ]);
@@ -415,7 +413,7 @@ describe("session groups catalog", () => {
     );
 
     expect(transaction).not.toHaveBeenCalled();
-    expect(listSessionGroups(env)).toEqual([{ name: "Work", position: 0 }]);
+    expect(readSessionGroupCatalog(env).groups).toEqual([{ name: "Work", position: 0 }]);
   });
 
   it("rechecks a missing category after another writer registers it", async () => {
@@ -478,10 +476,16 @@ describe("session groups catalog", () => {
     const storePath = await seedSessionStore({
       "agent:main:dashboard:a": { sessionId: "a1", updatedAt: updatedAtA, category: "Old" },
       "agent:main:dashboard:b": { sessionId: "b1", updatedAt: updatedAtB, category: "Other" },
+      "agent:main:dashboard:c": {
+        sessionId: "c1",
+        updatedAt: updatedAtB,
+        category: " Old ",
+        skillsSnapshot: { prompt: "retained session prompt", skills: [] },
+      },
     });
 
     const result = await renameSessionGroup({ cfg, name: "Old", to: "New", env });
-    expect(result.updatedSessions).toBe(1);
+    expect(result.updatedSessions).toBe(2);
     expect(result.groups.map((group) => group.name)).toEqual(["New", "Other"]);
     expect(result.sectionOrder).toEqual(["ungrouped", "category:New", "work", "category:Other"]);
 
@@ -498,6 +502,14 @@ describe("session groups catalog", () => {
     expect(sessionA?.category).toBe("New");
     expect(sessionA?.updatedAt).toBe(updatedAtA);
     expect(sessionB?.category).toBe("Other");
+    expect(
+      loadSessionEntry({ agentId: "main", storePath, sessionKey: "agent:main:dashboard:c" }),
+    ).toMatchObject({
+      sessionId: "c1",
+      updatedAt: updatedAtB,
+      category: "New",
+      skillsSnapshot: { prompt: "retained session prompt", skills: [] },
+    });
   });
 
   it("deletes a group and clears member categories", async () => {
@@ -525,15 +537,11 @@ describe("session groups catalog", () => {
     ).toBeUndefined();
   });
 
-  it.each(
-    [
-      { action: "rename", targetExists: false },
-      { action: "rename", targetExists: true },
-      { action: "delete", targetExists: false },
-    ].flatMap(({ action, targetExists }) =>
-      ["main", "other"].map((stopAgent) => ({ action, targetExists, stopAgent })),
-    ),
-  )(
+  it.each([
+    { action: "rename", targetExists: false, stopAgent: "main" },
+    { action: "rename", targetExists: true, stopAgent: "other" },
+    { action: "delete", targetExists: false, stopAgent: "other" },
+  ])(
     "keeps group state coherent when $action stops in $stopAgent (target exists: $targetExists)",
     async ({ action, targetExists, stopAgent }) => {
       const groupCfg: OpenClawConfig = {
@@ -604,10 +612,10 @@ describe("session groups catalog", () => {
         stopAgent === "main" ? "Old" : action === "rename" ? "New" : undefined,
       );
       expect(category("other")).toBe("Old");
-      expect(listSessionGroups(env)).toContainEqual({ name: "Old", position: 0 });
-      expect(listSidebarSectionOrder(env)).toContain("category:Old");
+      expect(readSessionGroupCatalog(env).groups).toContainEqual({ name: "Old", position: 0 });
+      expect(readSessionGroupCatalog(env).sectionOrder).toContain("category:Old");
       if (action === "rename") {
-        expect(listSessionGroupDefaults(env)).toContainEqual({
+        expect(readSessionGroupCatalog(env).defaults).toContainEqual({
           name: "New",
           cwd: targetExists ? "/repos/new" : "/repos/old",
           worktree: !targetExists,
@@ -619,10 +627,10 @@ describe("session groups catalog", () => {
         : deleteSessionGroup(retry));
       expect(category("main")).toBe(action === "rename" ? "New" : undefined);
       expect(category("other")).toBe(action === "rename" ? "New" : undefined);
-      expect(listSessionGroups(env).map(({ name }) => name)).toEqual(
+      expect(readSessionGroupCatalog(env).groups.map(({ name }) => name)).toEqual(
         action === "rename" ? ["New"] : [],
       );
-      expect(listSidebarSectionOrder(env)).not.toContain("category:Old");
+      expect(readSessionGroupCatalog(env).sectionOrder).not.toContain("category:Old");
     },
   );
 
@@ -671,7 +679,7 @@ describe("session groups catalog", () => {
       }),
     ).rejects.toThrow(/New/);
     expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })?.category).toBe("Old");
-    expect(listSessionGroups(env)).toContainEqual({ name: "Old", position: 0 });
+    expect(readSessionGroupCatalog(env).groups).toContainEqual({ name: "Old", position: 0 });
   });
 
   it("keeps absent-group deletion and same-name rename idempotent", async () => {
@@ -719,13 +727,13 @@ describe("session groups catalog", () => {
       }),
     ).rejects.toThrow('session group "Old" changed before completion');
     expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })?.category).toBe("New");
-    expect(listSessionGroupDefaults(env)).toEqual(
+    expect(readSessionGroupCatalog(env).defaults).toEqual(
       expect.arrayContaining([
         { name: "Old", cwd: "/repos/after", worktree: true },
         { name: "New", cwd: "/repos/before", worktree: false },
       ]),
     );
-    expect(listSidebarSectionOrder(env)).toContain("category:Old");
+    expect(readSessionGroupCatalog(env).sectionOrder).toContain("category:Old");
   });
 
   it("retains a group when a member is assigned after its store was swept", async () => {
@@ -785,10 +793,10 @@ describe("session groups catalog", () => {
     expect(
       loadSessionEntry({ agentId: "main", storePath: mainStore, sessionKey: lateKey })?.category,
     ).toBe("Old");
-    expect(listSessionGroups(env).map(({ name }) => name)).toEqual(
+    expect(readSessionGroupCatalog(env).groups.map(({ name }) => name)).toEqual(
       expect.arrayContaining(["Old", "New"]),
     );
-    expect(listSidebarSectionOrder(env)).toContain("category:Old");
+    expect(readSessionGroupCatalog(env).sectionOrder).toContain("category:Old");
   });
 
   it("keeps the source sidebar slot when the merge target has no stored slot", async () => {

@@ -1,16 +1,21 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import {
+  appendTranscriptMessage,
   loadSessionEntry,
+  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
@@ -99,8 +104,12 @@ function createFixture(
       | "models.list"
       | "chat.metadata"
       | "chat.startup"
+      | "chat.history"
+      | "chat.message.get"
       | "agents.list"
       | "sessions.list"
+      | "sessions.describe"
+      | "sessions.get"
       | "sessions.patch",
     params: Record<string, unknown>,
   ) => {
@@ -115,6 +124,19 @@ function createFixture(
     return respond;
   };
   return { cfg, role, person, client, context, readChatMetadata, request };
+}
+
+function response(respond: ReturnType<typeof vi.fn<RespondFn>>) {
+  expect(respond.mock.calls).toHaveLength(1);
+  expect(respond.mock.calls[0]?.[0]).toBe(true);
+  expect(respond.mock.calls[0]?.[2]).toBeUndefined();
+  return expectDefined(asOptionalRecord(respond.mock.calls[0]?.[1]), "response payload");
+}
+
+function onlyRecord(value: unknown) {
+  const rows = expectDefined(Array.isArray(value) ? value : undefined, "record list");
+  expect(rows).toHaveLength(1);
+  return expectDefined(asOptionalRecord(rows[0]), "record");
 }
 
 describe("operator model discovery at registered reads", () => {
@@ -285,6 +307,38 @@ describe("operator model discovery at registered reads", () => {
     });
   });
 
+  it.each([
+    { utilityModel: "example/fallback", routeVisible: true },
+    { utilityModel: "example/restricted-model", routeVisible: false },
+  ])(
+    "discloses the utility route only when $utilityModel is visible to the role",
+    async ({ utilityModel, routeVisible }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const f = createFixture();
+        expectDefined(f.cfg.agents?.defaults, "agent defaults").utilityModel = utilityModel;
+        expectDefined(f.cfg.models?.providers?.example, "example provider").apiKey =
+          "synthetic-key";
+        await state.writeConfig(f.cfg);
+        const respond = await f.request("models.list", { agentId: "main", view: "configured" });
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        const { defaultModels } = expectDefined(
+          respond.mock.calls[0]?.[1] as ModelsListResult | undefined,
+          "models.list result",
+        );
+        if (routeVisible) {
+          expect(defaultModels?.utilityRuntime).toEqual({
+            id: "openclaw",
+            kind: "api",
+            label: "OpenClaw Default",
+          });
+        } else {
+          expect(defaultModels).toBeDefined();
+          expect(defaultModels).not.toHaveProperty("utilityRuntime");
+        }
+      });
+    },
+  );
+
   it("does not publish held metadata after a role policy change", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const f = createFixture();
@@ -317,7 +371,7 @@ describe("operator model discovery at registered reads", () => {
     });
   });
 
-  it("projects committed startup and roster defaults without rewriting historical session models", async () => {
+  it("hides forbidden historical models without rewriting stored selections or transcript content", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const f = createFixture();
       expectDefined(f.cfg.agents?.defaults, "agent defaults").model = {
@@ -334,6 +388,11 @@ describe("operator model discovery at registered reads", () => {
       f.context.getRuntimeConfig = () => tentative;
       f.context.getCommittedRuntimeConfig = () => f.cfg;
       const scope = { agentId: "main", sessionKey: "agent:main:historical-model" };
+      const budget = contextBudgetStatusFixture({
+        provider: "example",
+        model: "restricted-model",
+        sessionId: "historical-model",
+      });
       await upsertSessionEntryCore(scope, {
         sessionId: "historical-model",
         updatedAt: 1,
@@ -341,8 +400,27 @@ describe("operator model discovery at registered reads", () => {
         providerOverride: "example",
         modelOverride: "restricted-model",
         modelOverrideSource: "user",
+        modelProvider: "example",
+        model: "restricted-model",
+        agentHarnessId: "openclaw",
+        contextTokens: 200_000,
+        contextTokensSource: "runtime",
+        contextBudgetStatus: budget,
+      });
+      const transcriptScope = { ...scope, sessionId: "historical-model" };
+      const content = "The text example/restricted-model remains part of the conversation.";
+      await appendTranscriptMessage(transcriptScope, {
+        eventId: "historical-reply",
+        message: {
+          role: "assistant",
+          provider: "example",
+          model: "restricted-model",
+          content,
+          stopReason: "stop",
+        },
       });
       const saved = loadSessionEntry(scope);
+      const savedTranscript = await loadTranscriptEvents(transcriptScope);
       f.context.readPreparedGatewayModelCatalog = async () => ({ entries: catalog });
       f.context.readChatStartupProjection = async () => ({
         metadata: { models: catalog, swarmEnabled: false },
@@ -351,47 +429,106 @@ describe("operator model discovery at registered reads", () => {
       });
       await initializeSessionReadContext(f.context);
 
-      const startup = await f.request("chat.startup", scope);
-      expect(startup).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          defaults: expect.objectContaining({ model: "fallback", modelProvider: "example" }),
-          sessionInfo: expect.objectContaining({ model: "restricted-model" }),
-          metadata: expect.objectContaining({
-            models: [expect.objectContaining({ id: "fallback" })],
-            modelSelectionPolicy: { restricted: true, defaultModel: "example/fallback" },
-          }),
+      const startupPayload = response(await f.request("chat.startup", scope));
+      expect(startupPayload).toMatchObject({
+        defaults: { model: "fallback", modelProvider: "example" },
+        sessionInfo: { sessionId: "historical-model" },
+        metadata: expect.objectContaining({
+          models: [expect.objectContaining({ id: "fallback" })],
+          modelSelectionPolicy: { restricted: true, defaultModel: "example/fallback" },
         }),
-      );
+      });
+      expect(startupPayload.sessionInfo).not.toHaveProperty("model");
+      expect(startupPayload.sessionInfo).not.toHaveProperty("modelProvider");
+      expect(startupPayload.sessionInfo).not.toHaveProperty("contextBudgetStatus");
+      const startupMessage = onlyRecord(startupPayload.messages);
+      expect(startupMessage).toMatchObject({ role: "assistant", content });
+      expect(startupMessage).not.toHaveProperty("model");
+      expect(startupMessage).not.toHaveProperty("provider");
 
       // Roster reads also apply the model ceiling when the caller holds their registered read scope.
       f.role.scopes = [READ_SCOPE];
       tentativeRole.scopes = [READ_SCOPE];
       f.client.connect.scopes = [READ_SCOPE];
-      const agents = await f.request("agents.list", {});
-      expect(agents).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          agents: expect.arrayContaining([
-            expect.objectContaining({
-              id: "main",
-              model: { primary: "example/fallback", fallbacks: ["example/fallback"] },
+      expect(response(await f.request("agents.list", {}))).toMatchObject({
+        agents: expect.arrayContaining([
+          expect.objectContaining({
+            id: "main",
+            model: { primary: "example/fallback", fallbacks: ["example/fallback"] },
+          }),
+        ]),
+      });
+
+      for (const staff of [false, true]) {
+        if (staff) {
+          setUserProfileRole(f.person.id, "staff");
+          invalidateOperatorRolePolicy(f.person.id);
+          f.client.connect.scopes = ["operator.admin", "operator.read", "operator.write"];
+        }
+        for (const method of [
+          "chat.history",
+          "chat.message.get",
+          "sessions.get",
+          "sessions.describe",
+          "sessions.list",
+        ] as const) {
+          const payload = response(
+            await f.request(method, {
+              agentId: scope.agentId,
+              ...(method.startsWith("chat.")
+                ? { sessionKey: scope.sessionKey }
+                : method === "sessions.list"
+                  ? {}
+                  : { key: scope.sessionKey }),
+              ...(method === "chat.message.get" ? { messageId: "historical-reply" } : {}),
             }),
-          ]),
-        }),
-        undefined,
-      );
-      const sessions = await f.request("sessions.list", { agentId: "main" });
-      expect(sessions).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          defaults: expect.objectContaining({ model: "fallback", modelProvider: "example" }),
-          sessions: expect.arrayContaining([
-            expect.objectContaining({ key: scope.sessionKey, model: "restricted-model" }),
-          ]),
-        }),
-      );
+          );
+          if (
+            method === "chat.history" ||
+            method === "sessions.describe" ||
+            method === "sessions.list"
+          ) {
+            if (method === "sessions.list" && !staff) {
+              expect(payload.defaults).toMatchObject({
+                model: "fallback",
+                modelProvider: "example",
+              });
+            }
+            const row =
+              method === "sessions.list"
+                ? onlyRecord(payload.sessions)
+                : expectDefined(payload.sessionInfo ?? payload.session, `${method} row`);
+            expect(row).toMatchObject({ key: scope.sessionKey });
+            if (staff) {
+              expect(row).toMatchObject({ modelProvider: "example", model: "restricted-model" });
+              expect(row).toHaveProperty("contextBudgetStatus", budget);
+            } else {
+              expect(row).not.toHaveProperty("model");
+              expect(row).not.toHaveProperty("modelProvider");
+              expect(row).not.toHaveProperty("contextBudgetStatus");
+            }
+          }
+          if (
+            method === "chat.history" ||
+            method === "chat.message.get" ||
+            method === "sessions.get"
+          ) {
+            const message =
+              method === "chat.message.get"
+                ? expectDefined(payload.message, "exact message")
+                : onlyRecord(payload.messages);
+            expect(message).toMatchObject({ role: "assistant", content });
+            if (staff) {
+              expect(message).toMatchObject({ provider: "example", model: "restricted-model" });
+            } else {
+              expect(message).not.toHaveProperty("model");
+              expect(message).not.toHaveProperty("provider");
+            }
+          }
+        }
+      }
       expect(loadSessionEntry(scope)).toEqual(saved);
+      expect(await loadTranscriptEvents(transcriptScope)).toEqual(savedTranscript);
     });
   });
 });

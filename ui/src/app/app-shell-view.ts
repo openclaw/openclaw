@@ -1,7 +1,8 @@
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import type { RouteId } from "../app-routes.ts";
+import { APP_ROUTE_IDS } from "../app-routes.ts";
 import { renderGatewayStatus } from "../components/gateway-status.ts";
 import { icons } from "../components/icons.ts";
 import { renderConnectingSplash } from "../components/loading-skeleton.ts";
@@ -18,14 +19,13 @@ import {
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId, resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import {
-  renderLazyDevicePairSetup,
-  type DevicePairSetupHost,
-} from "./app-shell-device-pair-setup.ts";
+import { renderLazyDevicePairSetup } from "./app-shell-device-pair-setup.ts";
 import { renderShellDocks } from "./app-shell-docks.ts";
+import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import { renderShellLazyOverlays, type ShellLazyOverlayHost } from "./app-shell-lazy-view.ts";
 import type { ShellViewCallbacks } from "./app-shell-view-callbacks.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
@@ -41,7 +41,7 @@ import {
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
-import { isNativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
+import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import {
   floatingSidebarAttentionVisible,
@@ -52,11 +52,11 @@ import { readGatewayOperatorAccess } from "./operator-access.ts";
 import { isDesktopPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, normalizeCatalogOpenTarget } from "./settings.ts";
 import { renderCollapsedHomeToggle } from "./shell-assistant-toggles.ts";
+import type { ShellLayoutController } from "./shell-layout-traits.ts";
 
-type SettingsSidebarHost = Parameters<typeof renderLazySettingsSidebar>[0];
-
-export interface ShellViewHost
-  extends DevicePairSetupHost, ShellLazyOverlayHost, SettingsSidebarHost {
+export interface ShellViewHost extends ShellLazyOverlayHost {
+  readonly devicePairSetup: Parameters<typeof renderLazyDevicePairSetup>[0];
+  readonly settingsSidebar: Parameters<typeof renderLazySettingsSidebar>[0];
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
@@ -65,15 +65,17 @@ export interface ShellViewHost
   readonly onboardingMemoryImportElement: OptionalCustomElement;
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
+  navResizing: boolean;
+  readonly shellLayout: ShellLayoutController;
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
   readonly routeState: ShellRouteState;
   readonly settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   readonly settingsSearchQuery: string;
+  readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   readonly viewCallbacks: ShellViewCallbacks;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   newSessionRouteAgentId(): string;
-  enabledRouteIds(): readonly RouteId[];
   exitSettings(): void;
   readonly handleNativeNewSession: () => void;
   handleSettingsSearchQueryChange(query: string): Promise<void>;
@@ -84,6 +86,7 @@ export interface ShellViewHost
   refreshControlUi: () => Promise<boolean>;
   recoverNotFoundRoute: () => boolean;
   requestUpdate(): void;
+  querySelectorAll: ParentNode["querySelectorAll"];
   resizeNavigation(splitRatio: number): void;
   readonly toggleNavigationSurface: (trigger?: HTMLElement) => void;
 }
@@ -105,7 +108,14 @@ export function renderApplicationShell(host: ShellViewHost) {
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
   const controlUiRefreshRequired = overlaySnapshot.controlUiRefreshRequired;
-  const connectionStatus = resolveGatewayStatus(gatewaySnapshot, controlUiRefreshRequired);
+  const historyRecovering = [...host.querySelectorAll<ChatPaneBase>("openclaw-chat-pane")].some(
+    (pane) => pane.conversationPresented && pane.historyRecovering,
+  );
+  const connectionStatus = resolveGatewayStatus(
+    gatewaySnapshot,
+    controlUiRefreshRequired,
+    historyRecovering,
+  );
   const presentationScope = gatewayPresentationScope(context.gateway);
   // Initial hello can paint the shell before recovery finishes. Keep that brief
   // startup state in existing chrome rather than inserting and removing a row.
@@ -118,7 +128,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   // The install keeps running after `update.run` answers, so the reconciliation
   // — not the request — decides how long the update surfaces stay busy.
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
-  const watchUpdateProgress = callbacks.watchUpdateProgress;
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
@@ -222,7 +231,6 @@ export function renderApplicationShell(host: ShellViewHost) {
     params: {},
     sessionScope: true,
   });
-  const openNewSession = callbacks.requestOpenNewSession;
   const uiSettings = context.theme.settings;
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
@@ -233,13 +241,12 @@ export function renderApplicationShell(host: ShellViewHost) {
       activeRouteId: activeRoute,
       router: host.runtime.router,
       activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
-      enabledRouteIds: host.enabledRouteIds(),
+      enabledRouteIds: APP_ROUTE_IDS,
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       connectionStatus,
       lastError: gatewaySnapshot.lastError,
-      outboxAttentionCountForSession: callbacks.outboxAttentionCountForSession,
-      hasSessionDraft: callbacks.hasSessionDraft,
+      storedOutboxes: host.storedOutboxes,
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
@@ -252,20 +259,45 @@ export function renderApplicationShell(host: ShellViewHost) {
       themeMode: context.theme.mode,
       gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
       devGitBranch: config.devGitBranch,
-      watchUpdateProgress,
+      watchUpdateProgress: callbacks.watchUpdateProgress,
       onOpenPalette: host.openPalette,
       onRetryConnect: callbacks.retryGateway,
       onToggleSidebar: callbacks.toggleSidebar,
-      onOpenNewSession: openNewSession,
+      onOpenNewSession: callbacks.requestOpenNewSession,
       onUpdateSidebarEntries: callbacks.updateSidebarEntries,
       onPairMobile: callbacks.openDevicePairSetup,
       onNavigate: host.navigate,
       onPreloadRoute: callbacks.preloadRoute,
     });
   }
+  const embedNavigation =
+    nativeEmbed && !(nativeEmbedHost()?.surface === "conversation" && activeRoute === "chat");
+  const collapsedControls =
+    !nativeEmbed && navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout;
+  const shellConnectionStatus =
+    (navigationSurfaceHidden ||
+      (settingsTakeover
+        ? host.settingsSidebar.renderer === null
+        : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT))) &&
+    !nativeEmbed &&
+    !onboarding &&
+    !initialConnection
+      ? connectionStatus
+      : null;
+  const floatingUpdateCard = {
+    navigationSurfaceHidden,
+    mobileNavLayout,
+    onboarding,
+    compact: mergedChatChrome && !controlUiRefreshRequired,
+    statusBanner: overlaySnapshot.updateStatusBanner,
+    updateRun: overlaySnapshot.updateRun,
+    refreshRequired: controlUiRefreshRequired,
+    onRefresh: host.refreshControlUi,
+    onNavigate: host.navigate,
+  };
   const navigationContent =
-    settingsTakeover || nativeEmbed
-      ? renderLazySettingsSidebar(host, {
+    settingsTakeover || embedNavigation
+      ? renderLazySettingsSidebar(host.settingsSidebar, {
           presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
           basePath: context.basePath,
           activeRouteId: activeRoute,
@@ -340,7 +372,11 @@ export function renderApplicationShell(host: ShellViewHost) {
         mergedChatChrome ? "shell--merged-chat-chrome" : ""
       } ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${
         onboarding ? "shell--onboarding" : ""
-      } ${nativeEmbed ? "shell--embed" : ""} ${embedSettings ? "shell--embed-settings" : ""} ${settingsTakeover ? "shell--settings" : ""}"
+      } ${nativeEmbed ? "shell--embed" : ""} ${embedSettings ? "shell--embed-settings" : ""} ${settingsTakeover ? "shell--settings" : ""} ${
+        collapsedControls && homePanelAvailable ? "shell--home-control" : ""
+      } ${shellConnectionStatus ? "shell--connection-status" : ""} ${
+        floatingSidebarAttentionVisible(floatingUpdateCard) ? "shell--floating-attention" : ""
+      } ${host.navResizing ? "shell--nav-resizing" : ""}"
       style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
       @theme-change=${(event: CustomEvent<ThemeModeChangeDetail>) => host.handleThemeChange(event)}
     >
@@ -379,7 +415,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             ></openclaw-app-topbar>`
       }
       ${
-        !nativeEmbed && navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout
+        collapsedControls
           ? html`
               <div class="shell-chrome-controls">
                 <openclaw-tooltip
@@ -405,7 +441,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                   label: t("chat.runControls.newSession"),
                   showShortcut: true,
                   disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-                  onOpen: openNewSession,
+                  onOpen: callbacks.requestOpenNewSession,
                 })}
                 <openclaw-tooltip
                   .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
@@ -458,6 +494,12 @@ export function renderApplicationShell(host: ShellViewHost) {
                 .maxRatio=${NAV_WIDTH_MAX / shellWidth}
                 aria-valuetext=${`${navigationSnapshot.navWidth} pixels`}
                 title=${t("nav.resize")}
+                @resize-start=${() => {
+                  host.navResizing = true;
+                }}
+                @resize-end=${() => {
+                  host.navResizing = false;
+                }}
                 @resize=${(event: CustomEvent<{ splitRatio: number }>) =>
                   host.resizeNavigation(event.detail.splitRatio)}
               ></resizable-divider>
@@ -468,7 +510,10 @@ export function renderApplicationShell(host: ShellViewHost) {
         id="control-ui-main"
         class="content ${chatLikeRoute ? "content--chat" : ""} ${
           activeRoute === "custodian" ? "content--custodian" : ""
-        } ${activeRoute === "workboard" ? "content--workboard" : ""}"
+        } ${activeRoute === "workboard" ? "content--workboard" : ""} ${
+          pageActionsBlocked ? "content--actions-blocked" : ""
+        } ${host.shellLayout.className}"
+        ${ref(host.shellLayout.contentRef)}
         .tabIndex=${-1}
         @mousedown=${beginNativeWindowDragFromTopInset}
         ?inert=${(!nativeEmbed && pageActionsBlocked) || (mobileNavLayout && navDrawerOpen)}
@@ -489,40 +534,24 @@ export function renderApplicationShell(host: ShellViewHost) {
               </div>`
             : nothing
         }
-        ${renderFloatingUpdateCard({
-          navigationSurfaceHidden,
-          mobileNavLayout,
-          onboarding,
-          compact: mergedChatChrome && !controlUiRefreshRequired,
-          statusBanner: overlaySnapshot.updateStatusBanner,
-          updateRun: overlaySnapshot.updateRun,
-          refreshRequired: controlUiRefreshRequired,
-          onRefresh: host.refreshControlUi,
-          onNavigate: host.navigate,
-        })}
-        ${nativeEmbed ? navigationContent : nothing}
+        ${renderFloatingUpdateCard(floatingUpdateCard)}
+        ${embedNavigation ? navigationContent : nothing}
         <openclaw-router-outlet
           ?inert=${pageActionsBlocked || reloadRequired}
           aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}
+          .retryEnabled=${gatewayConnected}
           .retentionScope=${presentationScope}
           .onNotFound=${host.recoverNotFoundRoute}
           .notFoundRecoveryReady=${gatewayConnected}
         ></openclaw-router-outlet>
       </main>
       ${
-        (navigationSurfaceHidden ||
-          (settingsTakeover
-            ? host.settingsSidebarRenderer === null
-            : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT))) &&
-        !nativeEmbed &&
-        !onboarding &&
-        connectionStatus &&
-        !initialConnection
+        shellConnectionStatus
           ? html`<div class="shell-connection-status">
               ${renderGatewayStatus({
-                kind: connectionStatus,
+                kind: shellConnectionStatus,
                 lastError: gatewaySnapshot.lastError,
                 onRetry: callbacks.retryGateway,
               })}
@@ -567,7 +596,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             ></openclaw-exec-approval>`
           : nothing
       }
-      ${renderLazyDevicePairSetup(host, {
+      ${renderLazyDevicePairSetup(host.devicePairSetup, {
         open: overlaySnapshot.devicePairSetupOpen,
         lifecycle: overlaySnapshot.devicePairSetupLifecycle,
         nowMs: Date.now(),
@@ -596,7 +625,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     </div>
   `;
   // Keep plugin settings reachable when a replacement owns the workspace.
-  if (activeRoute === "plugins") {
+  if (activeRoute === "plugins" || activeRoute === "plugin-settings") {
     return workspace;
   }
   return renderPluginSurface(

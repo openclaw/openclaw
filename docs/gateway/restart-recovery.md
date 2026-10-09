@@ -1,5 +1,5 @@
 ---
-summary: "What survives a gateway restart or crash: interrupted agent turns resume automatically, subagents and background tasks recover, queued deliveries drain"
+summary: "What survives a gateway restart or crash: eligible interrupted turns resume, native subagents settle, and queued deliveries drain"
 read_when:
   - You want to know whether restarting the gateway loses in-progress agent work
   - An agent run was interrupted by a restart, crash, or config reload
@@ -7,7 +7,7 @@ read_when:
 title: "Restart recovery"
 ---
 
-Conversations, transcripts, scheduled jobs, background task records, and queued
+Conversations, transcripts, scheduled jobs, native subagent records, and queued
 outbound messages live on disk. After a gateway restart, eligible work interrupted
 mid-turn is detected and resumed automatically. Recovery is always on and
 normally needs no manual intervention. Exhausted infrastructure retries, or a
@@ -25,7 +25,6 @@ and what the automatic resume looks like.
 | Accepted Control UI follow-ups | Per-agent SQLite pending inputs and browser outbox | Matching interrupted inputs are re-admitted when the browser reconnects |
 | Interrupted main-session turn  | Per-agent SQLite session row and transcript        | Automatically resumed or reconciled a few seconds after startup         |
 | Subagent runs                  | SQLite (shared state database)                     | Interrupted runs settle; the parent decides how to continue             |
-| Background tasks               | SQLite (shared state database)                     | Reconciled on boot; orphaned runs recovered or marked lost              |
 | Queued outbound deliveries     | SQLite delivery queue                              | Drained after restart; undelivered replies are retried                  |
 | Scheduled (cron) jobs          | SQLite cron store                                  | Schedules persist; the scheduler re-arms on boot                        |
 | Restart continuation           | SQLite restart sentinel                            | One-shot follow-up dispatched to the session that asked for the restart |
@@ -54,8 +53,8 @@ does not depend on the browser returning.
 When an update replaces the bundled Control UI, an open tab reloads after the
 Gateway reports the new build. Automatic recovery for that reported build and
 manual reloads share a bounded document-readiness check, so a transient failed
-probe does not immediately strand the tab. Generic lazy-chunk failures make one
-automatic probe and leave further recovery to the visible retry action. The
+check does not immediately strand the tab. Generic lazy-chunk failures make one
+automatic check and leave further recovery to the visible retry action. The
 browser still limits automatic navigation to one reload per target build. If the
 Gateway remains unavailable, use the visible reload action once it is reachable.
 
@@ -75,17 +74,34 @@ path: update its artifact alongside the Gateway. An intentionally pinned older
 plugin does not acquire the fix from a core-only update.
 
 A detached harness completion that has entered a parent turn with an outbound
-channel route can retain an exact task, terminal outcome, and requester-session claim. After a crash, main-session recovery
+channel route can retain an exact source completion, terminal outcome, and requester-session claim. After a crash, main-session recovery
 continues that admitted turn without starting the child again. The original
 completion identity remains distinct from the recovery run. A retained final
-receipt settles the task even if the old native monitor no longer exists; a
-pending recovery claim is not a delivered result. A later task outcome cannot authorize
+receipt settles the admitted completion even if the old native monitor no longer exists; a
+pending recovery claim is not a delivered result. A later outcome cannot authorize
 the earlier completion input or settle its receipt. Cancellation, session replacement,
-and missing or contradictory task identities do not authorize replay. A real held admission or a still-valid admitted input keeps recovery pending. Rejected input retains the task but releases the process monitor; it does not poll indefinitely. Native parent rotation must preserve the current connection and requester identity checks. Cold task reconstruction requires the saved native history owner. A later parent registration cannot supply missing historical ownership.
+and missing or contradictory source identities do not authorize replay. A held admission
+or still-valid admitted input keeps recovery pending. Native parent rotation must preserve
+the current connection and requester identity checks. A later parent registration cannot
+supply missing historical ownership.
 
-This applies to newly recorded channel-delivery claims. Route-less, transcript-only
-and Control UI parents are not covered by this recovery change. Nor does it recover
-every older native completion or a completion that never reached parent admission. Progress messages, empty or
+Before parent completion admission, native Codex pending assignments retain their
+run, child-thread, native-parent, and known native-turn identities in the existing
+parent binding metadata. Accepted follow-ups can also retain their submission
+receipt there. No new table or Tasks record is created, and historical Tasks
+rows are not imported. When the parent registers again, recovery reads the saved
+assignments and native history under fresh host-issued completion authority. It
+checks the original requester session, lifecycle, connection, and child lineage
+before restoring observation or routing a result. Native-parent thread rotation
+can preserve that metadata within the same requester lifecycle and connection;
+a reset, requester-generation replacement, or connection-policy change does not
+authorize adoption. Missing historical ownership stays unknown. This recovery
+requires a retained assignment and a new parent registration; native lineage
+alone does not reconstruct an unrecorded completion obligation.
+
+The admitted-turn recovery described above applies to newly recorded
+channel-delivery claims, not route-less, transcript-only, or Control UI parents.
+It does not recover every older native completion. Progress messages, empty or
 truncated receipts, and uncertain sends cannot establish final delivery. The
 Gateway and Codex plugin must both be updated for recovery joining. Older builds
 may discard the added receipt fields while rewriting session metadata, even
@@ -123,14 +139,50 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+CLI shutdown drains process-wide work. Closing an individual Gateway drains its
+own active chat runs and queued turns, and waits on the process-wide pending-reply
+count. Both report remaining work as named counts; categories can overlap and
+should not be added as distinct turns.
+
+When Gateway connection shutdown begins, session observer event subscriptions
+stop before the observer closes. Accepted observer work still settles, while
+chat events and terminal session writes continue through their own drain.
+
+If database closure refuses a follow-up drain, the drain parks its queued input
+instead of retrying against the closing owner. A fresh drain request can resume
+it after database admission reopens; durable input recovery owns restart replay.
+
+Read-only RPC waits (`agent.wait`, approval decision waits, `question.waitAnswer`,
+and `device.scopes.waitUpgrade`) stop observing when their client disconnects.
+When shutdown drain begins, connected waiters receive retryable `UNAVAILABLE`
+errors with reason `gateway-restarting`, so clients can reconnect and wait again.
+These waits do not consume the stop drain budget. The underlying runs, decisions,
+and admitted writes keep their normal drain and recovery behavior. This also
+applies to update restarts once the running Gateway contains this fix; installing
+new files cannot change a wait already held by an older Gateway process.
+
+For an accepted WebChat turn, `agent.wait` reports `pending` with
+`timeoutPhase: "queue"` when queue admission completes, including when the wait
+began before admission. Queuing does not complete the turn's run ID.
+
+Cron shutdown gives execution cleanup and durable result writes the same cleanup
+window. Finishing the job's execution does not by itself complete the drain:
+result persistence must also settle, or the Gateway reports the remaining work
+when the window expires. Exit-watcher failures are reported after these drains
+settle.
+
 On Linux and macOS, this also applies when startup recovers from an unsupported
 Node version and the service manager tracks a launcher parent. The launcher
 forwards the stop signal and waits for the serving Gateway to drain within the
 shared service budget. Managed restart intent targets the live serving owner,
 so unfinished work still follows restart recovery when its drain budget expires.
-The launchd stop budget remains 20 seconds; Linux units use the deadlines below.
+When launchd drives the stop, macOS uses the running job's own `ExitTimeOut`, capped
+by the launcher's own stop timer when a launcher is in the path, and Linux units use
+their own stop timeout; both are described in the deadline sections below.
 This requires a Gateway started with the updated launcher: replacing files cannot
-change a launcher that is already running.
+change a launcher that is already running. On macOS, a marked launcher parent
+keeps a conservative 19-second child deadline because its existing markers do not
+identify whether it loaded the old or new stop policy.
 
 For these managed restarts, if the CLI cannot verify the service command, serving
 owner, or restart-intent recording, it refuses the restart before signaling with
@@ -183,16 +235,46 @@ unit's effective `TimeoutStopUSec`, including drop-ins. It logs the source and
 reconciled stop budget at both points, so a repaired unit takes effect without
 restarting first. Inspection and any wait for startup to finish consume the same
 shutdown deadline. Active-work drain uses at most
-315 seconds, with 10 seconds reserved for final chat writes and server cleanup
-and another 5 seconds before systemd's deadline. A unit with the default
+315 seconds, with up to 10 seconds reserved for final chat writes and server cleanup
+and up to another 5 seconds before systemd's deadline. A unit with the default
 90-second stop timeout therefore gets a 75-second drain and an 85-second Gateway
 shutdown deadline. A shorter supervisor timeout also caps requested restart waits.
-The drained work, ordering, and interruption behavior stay the same.
+
+Both allowances are bounded when the deadline cannot fund them, by the same rule the
+launchd budget uses and for the same reason: subtracting two values sized for a
+315-second drain from a short stop timeout consumed it entirely and left active work
+nothing. A unit whose `TimeoutStopSec` is 20 seconds or longer keeps the allocation it
+already had, less whatever the stop inspection itself cost, rather than to the exact
+millisecond: 20 seconds is only the least that funds the full 10-second reserve
+alongside a 5-second drain before that cost comes off. Below that the deadline cannot fund
+both, and the reserve yields to keep a drain: a unit at or below 15 seconds now drains
+at all where it previously drained for zero milliseconds, and the four values between
+trade part of a reserve for a drain that was under 5 seconds. The reserve never falls
+below half the shutdown budget. The exit margin holds its full 5 seconds down to a
+20-second deadline and shrinks below that, to 3.75 seconds at 15 seconds and a quarter
+of anything shorter. The drained work, ordering, and interruption behavior stay the
+same, and systemd's own 90-second default is unaffected.
 
 Service-child cleanup uses the remaining Gateway shutdown budget, leaving time
 for final exit bookkeeping. A forced restart drains admitted work within the same
-budget. When the restart scheduler has already exhausted its deferral budget,
-cleanup retains the 10-second reserve without starting a second drain.
+budget. Expiring the restart scheduler's idle deferral starts the normal drain:
+new work is fenced and admitted work gets the computed grace period, still capped
+by the native shutdown deadline. Deferral time does not spend that shutdown budget.
+For a supervisor's SIGTERM restart, a shorter requested drain limits when active
+runs are interrupted, not when database cleanup must finish: cleanup can use the
+remaining native stop budget. After an interrupted external restart, the Gateway
+joins final chat persistence, drains Memory's database borrows, and closes agent
+databases before exiting. It skips plugin and channel teardown that could retain
+the process until the deadline. Database admission stays fenced through lock
+release and log flushing, which have a final five-second exit window. Shutdown
+logs report each cleanup step that takes at least one second, including its name
+and elapsed milliseconds. Deadline exits list the currently pending cleanup steps
+and how long each has been waiting (up to eight, with a count of any others).
+These diagnostics are always enabled; `OPENCLAW_GATEWAY_RESTART_TRACE=1` adds
+begin/end timing for fast steps too. The supervisor deadline remains
+the hard upper bound. Clean database restart proof is published only after writer
+leases, checkpointing, and native connection closure settle; one database's idle
+receipt alone does not authorize process exit.
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must
@@ -273,6 +355,75 @@ before acknowledging, without overwriting a newer turn in that session.
 If another child cannot be stopped, the response still reports incomplete
 cancellation; the captured parent's cancellation is persisted before that error.
 
+### Launchd stop deadlines
+
+On a launchd-driven stop, the macOS Gateway reads the **loaded** job's effective
+`exit timeout` with `launchctl print`. It checks the system, GUI, and user
+domains, and accepts only a job whose PID is the Gateway or its launcher. Restart
+ownership can still be external: the supervisor that enforces the stop, not the
+owner of the next start, determines the deadline. A direct SIGTERM does not start
+launchd's stop clock, so it keeps the existing Gateway stop policy unless an
+OpenClaw launcher independently enforces its own child reap timer.
+
+The **stop budget** is time available until the supervisor can kill the process.
+The Gateway sets aside an exit margin (up to 5 seconds) and plans its shutdown
+inside the remainder. **Drain** is the first part of that shutdown: stop admitting
+new work and wait for active turns and background tasks to settle. The rest is
+reserved for final writes and service cleanup (up to 10 seconds). The Gateway
+logs the chosen source, drain, shutdown deadline, reserve, and exit margin.
+
+New LaunchAgent plists request `ExitTimeOut=330`, derived from the same service
+stop budget as Linux's `TimeoutStopSec=330`. With that effective deadline, the
+nominal split is 315 seconds of drain, 10 seconds for cleanup, and 5 seconds before
+the supervisor deadline. `openclaw doctor --fix` backs up and migrates the retired
+installer value of 20 seconds to 330 only when the definition otherwise matches
+the retired generated template. A 20-second timeout in a customized definition
+is ambiguous: Doctor reports that it is below the drain budget and preserves it.
+An installer comment alone does not authorize replacing an operator's policy.
+Other explicit values, including 600 and
+unlimited (`0`), are reported and preserved; short custom values receive a warning.
+Update finalization uses the same backed-up service reconciliation. The first
+stop still obeys the previously loaded job's deadline until the replacement is
+bootstrapped.
+
+Time spent inspecting the job is debited. A legacy 20-second job nominally leaves
+5 seconds of drain, 10 seconds for cleanup, and a 5-second exit margin. For a shorter custom deadline the exit
+margin is at most a quarter, and the cleanup reserve gives way to leave active
+work up to 5 seconds of drain (at most half of the remaining shutdown budget
+when it is very short). For example, a 5-second job nominally leaves 1.875
+seconds each for drain and cleanup after its 1.25-second exit margin; a
+15-second job leaves 5 seconds of drain, 6.25 seconds for cleanup, and a
+3.75-second margin. **This reduces cleanup time for custom jobs below 20
+seconds.** The default systemd 90-second deadline is unaffected. The check can
+consume up to three 2-second calls; a very slow inspection can leave no drain.
+
+If a Node-recovery or compile-cache launcher is the job's PID, its own child
+reap timer may be shorter than launchd's deadline. The Gateway caps its budget
+at that timer only when its respawn markers establish that this launcher started
+it; an unrelated parent does not shorten the budget. New launchers use the shared
+330-second service budget, but the child conservatively retains the older
+19-second launcher cap until a parent runtime-generation contract can distinguish
+already-running launchers. Raising the plist value alone does not remove that cap.
+
+A direct signal to a marked launcher can start its own timer while launchd
+still reports `running`. The Gateway cannot distinguish that forwarded signal
+from a direct signal to its child, where the launcher has no timer, so it does
+not cap this case. Operators stopping a launcher directly should use the loaded
+job stop instead to get an enforceable, reported deadline.
+
+`ExitTimeOut=0` means no launchd stop deadline, not a missing value. Without a
+launcher timer, the Gateway keeps its ordinary policy and does not classify the
+job as a native deadline. An unreadable job leaves
+the existing stop policy in place with a warning, while a confirmed stopping
+job whose timeout is missing uses launchd's 20-second default with a warning.
+
+The value comes from the job launchd has **loaded**, not the plist on disk.
+Editing `ExitTimeOut` or running `launchctl kickstart -k` does not reload it;
+`launchctl bootout` followed by `launchctl bootstrap` does, restarting the
+Gateway. Reading per stop avoids a stale startup snapshot, not a stale loaded
+job. On macOS 27, launchd reports at most 60 seconds even if the plist asks
+for more; inspect the loaded job to confirm the effective value.
+
 ## Host sleep and process freezes
 
 When a gateway host wakes from sleep, a virtual machine resumes, or the process
@@ -333,11 +484,11 @@ restart and verification. Unchanged plugins do not run another full Doctor pass.
 
 After activation, the updater verifies that the managed service is running and
 owns its port, the Gateway hello handshake matches the expected version/build
-identity, a 12-probe health settle passes, plugins and channels are healthy, and
+identity, a 12-check health settle passes, plugins and channels are healthy, and
 `/readyz` returns HTTP 200. Update verification does not use model inference.
 Startup receives the update's existing per-step `--timeout` budget (1800 seconds
 by default), including migration and listener initialization, followed by the
-12-probe settle window. On the first update from an older release, the old updater
+12-check settle window. On the first update from an older release, the old updater
 invokes the newly installed CLI but does not pass that readiness budget. The
 candidate recognizes the existing update marker and, once the managed process is
 running, uses the five-minute startup watchdog instead of the standalone
@@ -390,9 +541,11 @@ never triggers automatic re-enablement of the rejected installation.
 
 On macOS, a terminated update helper can leave the selected Gateway LaunchAgent
 installed but unloaded and disabled across logins. `openclaw doctor` and
-`openclaw doctor --fix` diagnose this state. `--fix` leaves an already-stopped
-Gateway stopped. If the update was interrupted or installation safety is
-uncertain, rerun `openclaw update` or use Doctor and triage before starting it.
+`openclaw doctor --fix` diagnose this state. After successful standalone repair,
+`--fix` starts and verifies an already-stopped managed Gateway whose service
+targets the current installation. Update-time Doctor leaves activation with the
+updater. If the update was interrupted or installation safety is uncertain,
+rerun `openclaw update` or use Doctor and triage before starting it manually.
 Once verified, run `openclaw gateway start` (or
 `openclaw --profile <profile> gateway start`) to re-enable and start that service.
 Keep the same state/config and custom-label overrides. Doctor prints the selected
@@ -421,7 +574,7 @@ generation across unchanged configuration and schemas and supplies a verified
 recovery decision, the helper starts and verifies it instead of leaving it
 stopped. Helper recovery verifies service liveness, version/build identity,
 plugin activation, and channel health. It does not repeat the separate `/readyz`
-probe. That report field remains unverified.
+check. That report field remains unverified.
 The run then finishes `rolled-back` with the previous version and measured
 downtime. Missing recovery proof, migrated state, or failed restoration still
 requires repair before restart. A service that is observed stopped is recorded
@@ -440,21 +593,40 @@ Copying one does not grant permission to restart a service.
 
 ## How interrupted work is detected
 
-Startup reconciles older subagent session rows that still say `running` but have
-no live run, task, admission, or recovery owner. It records a diagnostic transcript
-receipt and marks the row `interrupted` in one transaction. The end timestamp records when
-startup observed the interruption, rather than an inferred execution finish time;
-the original activity timestamps remain intact. A failed receipt write becomes a
-warning and leaves the row eligible for a later repair.
+Persisted session status records only a run outcome: `done`, `failed`, `killed`,
+`timeout`, or `interrupted`. A new run clears the previous outcome; session rows
+derive `running` and `queued` from the live run registry and queue owner.
+Restart-aborted runs record `interrupted`, an interruption reason, and their end
+time while retaining the recovery owner's claims.
+
+New input follows the live reply owner's queue policy. Without a live reply, durable execution
+fences must have terminal evidence before admission can retire them. Successful
+final delivery clears its pending intent and any unclaimed recovery route while
+preserving newer execution or delivery claims.
+
+Before readiness, startup invokes the shared Doctor transform to normalize older
+persisted `running` or `queued` values to `interrupted` once, except verified legacy
+yields retain an unset outcome so their child continuation keeps ownership. It logs
+the repaired count, preserves recovery claims and transcripts, and retains activity timestamps.
+Eligible legacy `running` entries without a claim receive recovery custody before
+their old status is removed, preserving their existing automatic resume path.
+The saved end time is preserved or falls back to the entry's last durable update.
+
+Archiving drains and cancels the session's work before committing the archive.
+Existing run outcomes, recovery receipts, and pending delivery metadata remain
+intact; restoring an archived session does not resume its cancelled execution.
+Unarchived main sessions retain their separate resume path below.
 
 Three complementary mechanisms mark sessions whose turn did not finish:
 
 - **At turn admission:** for an ordinary text turn on an existing main session,
-  the gateway appends the user message, marks the session running, and records
+  the gateway appends the user message, clears the previous outcome, and records
   its recovery delivery claim in one SQLite transaction before model or
   `before_agent_reply` hook execution. Control UI does this before returning the
   `started` acknowledgement. Channel dispatch does it when the prepared turn
   adopts the agent run.
+  Turns without a channel delivery route also acquire a durable recovery claim
+  in that admission write; the claim does not grant channel delivery authority.
   Commands, attachments, per-turn overrides, pending deliveries, prior abort
   hints, plugin-owned sessions, and turns with execution hooks keep their
   specialized admission paths.
@@ -467,23 +639,42 @@ Three complementary mechanisms mark sessions whose turn did not finish:
 - **At shutdown:** during the restart drain, every session with an active run
   is stamped with a recovery marker in the session store before the run is
   aborted.
-- **At startup:** the gateway scans session stores for sessions that still
-  claim to be running but have no live owner in the new process. This catches
-  hard crashes and kills where no shutdown code ran. Stale transcript lock
+- **At startup:** the gateway scans recovery-owned claims whose execution has
+  no live owner in the new process. This catches hard crashes and kills where
+  no shutdown code ran, without inferring recovery from a run outcome. Stale transcript lock
   files are cleaned up at the same time.
+
+Agents still undergoing database startup inspection retain their recovery work.
+When admission finishes, the same startup recovery owner scans their stores with
+the original cutoff, so newly admitted turns are not mistaken for crash orphans.
+Inbound channel turns, including unacknowledged messages replayed after a crash,
+wait for their agent's writable admission before recording session metadata or
+dispatching. Other agents remain available, and stopping the channel or Gateway
+cancels the wait.
 
 A failed store scan leaves that store eligible for the scheduled retry while
 other stores continue recovery. `openclaw status` and `openclaw doctor` show
 outstanding startup recovery failures from the running Gateway; the warning clears
 when the store scan succeeds.
 
-If an older Gateway left a dead writer and an unfinished recovery cycle in a
-running, failed, or statusless session, `sessions.recover` reconciles that writer
+A restart abort preserves the interrupted turn's recovery claim even when command
+cleanup finishes before shutdown marking. The Doctor transform also restores a
+missing claim for an older interrupted internal chat writer when its recorded
+terminal marker has no matching delivery evidence. Existing completed-turn
+receipts remain intact; recovery uses its normal transcript replay checks.
+
+If a Gateway left a dead writer and an unfinished recovery cycle,
+`sessions.recover` reconciles that writer
 and starts a continuation in the same session. A new Control UI message also reconciles this
 state before admission, so a rejected send cannot trap the conversation in a
 "conversation changed" retry loop. Both paths preserve the session key and
 transcript. A live run or cloud worker still prevents this repair. Tombstoned
 sessions retain their separate recovery path into a new session.
+
+If recovery fails during preparation before the agent starts, the Gateway restores
+the interrupted state and releases that attempt's delivery claim. The next recovery
+attempt uses a fresh run ID while retaining the original interrupted turn and retry
+budget, so a rejected pending input cannot leave the conversation permanently busy.
 
 ## Automatic resume
 
@@ -493,11 +684,43 @@ interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work.
 
+Startup recovery prepares and admits one continuation at a time to bound database
+and worker pressure. Once execution starts, the normal main lane owns concurrency;
+a long recovered turn does not hold a separate startup slot. Deferred database
+admissions join the same startup scheduler. Shutdown stops new preparation and
+joins the current pass, leaving unstarted interruptions available for the next boot.
+
+Recovery follows retained transcript-window ownership when a session moves to a
+new key or rotates its session ID. Claim validation and cleanup read only those
+candidate sessions, so stale recovery claims do not load unrelated saved prompts
+while interactive session changes wait. Claim authority, retry budgets, stored
+data, and upgrade behavior are unchanged.
+
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking
 the user to repeat the request. Preparing a new message cannot consume the
 interruption marker; the recovery owner retains it until work is adopted or
 settled.
+
+Recovery reads the interrupted turn's source before starting another run, even
+when a final reply is already pending. If the transcript cannot be read, the
+saved reply and any admitted completion claim remain available for a later
+attempt. Delegated requests and unverified internal inputs cannot resume
+automatically without surviving authority. Missing or invalid provenance does not
+establish a human sender for an internal claim. Legacy channel and Control UI
+turns retain their existing recovery checks. Child-completion follow-ups still use
+their existing recovery and delivery ownership checks. If their agent database is
+still undergoing startup inspection or preparation, a child result changes while
+being read, or a preparation worker refuses work at capacity, the pending completion
+wake retries after 30 seconds without consuming delivery attempts or changing its
+batch, replay identity, or retry counters. Each retry reads fresh results under
+the same ownership checks. The retained wake survives another restart. A confirmed
+inspection failure or ownership mismatch remains a failure, not permission to
+bypass database admission; cancellation still retires the wake.
+
+A failed child-completion group does not stop startup recovery for unrelated
+groups. The original group keeps its ownership checks and retries with bounded
+backoff; already-started restored runs are not launched again by those retries.
 
 When a recovered turn starts with an eligible channel delivery route, OpenClaw
 sends a resumption notice to that conversation, retaining its account and topic.
@@ -530,6 +753,11 @@ charge when a post-dispatch result is uncertain to avoid replaying work.
 Foreground work that already owns the session keeps automatic recovery out
 until that work settles.
 
+Cancelling a recovery reservation after foreground work finishes clears an empty,
+uncharged recovery record. Recovery reconciliation and foreground admission also
+clear this residue from older sessions, so it cannot block a completed subagent's
+requester turn. Interrupted work and pending delivery keep their recovery custody.
+
 After the durable budget is exhausted, the session is tombstoned instead of
 looping forever. Inspect the failed session and use `/new` or `/reset` to start a
 replacement. `openclaw doctor --fix` can repair a stale aborted flag that
@@ -546,6 +774,13 @@ Every retry reuses one durable dispatch identifier, so an ambiguous connection
 failure cannot start the same recovery twice. Completed Control UI turns also
 retain bounded durable idempotency tombstones, allowing a reconnecting outbox
 to retire them without re-executing the request.
+
+When a pending final has no remaining queue owner and its delivery outcome is
+uncertain, recovery records a notice for the next turn on the same route when
+the saved final has a delivery context and intent ID. Settling that turn clears
+its recovery ownership together with its delivery claim, so the next agent turn
+can proceed. The notice and terminal deduplication evidence survive another
+restart; completed work is not replayed.
 
 Message-tool-only replies use a second durable correlation. Before a terminal
 same-conversation send reaches the channel, the gateway records an unresolved
@@ -564,6 +799,8 @@ durable channel-ingress claims can restore message-action authority. A resumed
 run keeps the original source-delivery mode and source correlation, including
 requester identity and any same-channel/thread restriction, so the same receipt
 remains authoritative even if another restart happens during recovery. A
+message-tool-only delivery policy also survives run admission and model fallback;
+private final text never becomes a pending automatic reply. A
 message-tool-only turn without reconstructable channel authority is tombstoned
 because OpenClaw cannot safely mint message-action authority without the
 original channel-ingress claim. The terminal notice directs the user to start a
@@ -586,6 +823,9 @@ effective **Full Access**, including an inherited Full Access default, keeps its
 ordinary tools so it can inspect the outcome and finish the task. Recovery does
 not replay the interrupted call automatically or treat its missing result as
 success. Existing tool restrictions and current permissions still apply.
+Recovery prompts identify interrupted, missing, or aborted tool results as unknown
+outcomes from the Gateway restart. A follow-up to an interrupted native child
+receives the same context so it can verify effects before retrying a tool call.
 Pending reply delivery, ambiguous reply-hook outcomes, and explicitly replay-safe
 Code Mode reconstruction retain their narrower recovery restrictions.
 
@@ -606,38 +846,75 @@ approval handles are not revived.
 
 Subagent runs are persisted in the shared SQLite state database, so the
 subagent registry survives the process. On boot, interrupted child runs settle
-through their normal completion path. They are not automatically relaunched.
+through their normal completion path as soon as startup restores requester ownership,
+without waiting for the periodic registry sweep. The sweep remains a retry backstop.
+The crash-loop breaker pauses this settlement too; the same sweep retries when
+the breaker's recovery window ends.
+They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
-It can inspect retained child history, continue that child with `sessions_send`,
-or spawn a replacement after checking that the old execution has stopped.
+Its recovery input lists current unfinished child session and run identities,
+including children interrupted by the restart. Older runs superseded by a newer
+child run are omitted, as are records from another store, parent session, or
+parent lifecycle revision. A reset keeps the session ID but changes its lifecycle
+revision, so retained child work from before that reset cannot enter the new
+parent's actionable recovery roster. Large lists show the first 32 children and tell the parent
+to inspect the remaining children.
+
+The parent must reconcile each unfinished child with its saved history and the
+original request. When the child's task is still needed, it should prefer a
+follow-up in that retained session with `sessions_send`. It first confirms that
+the old execution stopped and checks any uncertain tool effects. It can use work
+already completed, assign a replacement, or finish the remaining work itself.
+Recovery does not automatically replay child commands or duplicate running work.
+An interruption alone is not a blocker; the parent continues until the request
+is finished or a specific blocker requires user input or unavailable authority.
 Existing cleanup and retention settings still apply.
+
+Startup retires superseded requester completion claims through the registry's
+cleanup owner before restoring the surviving claim.
+Those historical rows do not block current children in the same requester turn
+or recovery of other subagents. Saved yield intent is evaluated from the same
+current children used for the transfer. Interrupted current children still report
+their restart outcome to the parent.
+Turns with only superseded children need no requester settlement.
 
 If a parent yielded while waiting for children, its saved batch collects both
 completed and interrupted results and wakes the parent once the batch settles.
+Yielded turns leave the persisted outcome unset while their continuation still owns unfinished work.
 A parent already working on those results resumes through ordinary main-session
 recovery. A child result or an `announce:` run identifier does not make unfinished
-parent work disposable. The recovery turn explains the restart and tells the
-parent to check current state and uncertain effects before continuing.
+parent work disposable. Both recovery paths give the parent the interrupted
+children's identities and the same reconciliation guidance. Restart interruption
+remains in history as an interrupted outcome, rather than a child execution
+failure. Genuine execution and delivery failures still require attention.
+
+Saved batch wakes keep their original batch identity and completion-delivery
+contracts. Their actionable recovery roster includes only children whose captured
+parent ownership still matches. Older or stale records remain ordinary completion
+history; they cannot add new instructions to continue those child sessions.
+Current reset already revokes its live saved wakes. Recorded outcomes and historical
+child metadata are retained.
+
+On upgrade, saved interruptions that retain the typed restart-recovery owner
+are reconciled through the same startup path. Historical failed runs without
+that ownership evidence remain failed: their error text alone cannot distinguish
+a restart from a genuine failure. Inspect those retained sessions before
+continuing them; recovery does not rewrite ambiguous history.
 
 A completed child may still owe its requester a final follow-up. If that
 follow-up is waiting to retry or is interrupted by restart, the saved
 obligation survives and resumes after startup. Restart admission rejection
 does not consume an attempt, and cancellation of an admitted attempt does
 not exhaust the obligation. Existing delivery retry limits still apply.
-Settling a yielded turn's wake leaves its unfinished task and final delivery
-intact. A completed cancellation can also finish wake bookkeeping after its
-task record expires, without recreating the task or repeating cleanup.
+Transient cleanup preparation failures keep required final delivery scheduled
+within its existing delivery window. Incidental cleanup retains its bounded retry limit.
+Settling a yielded turn's wake leaves its unfinished native run and final delivery
+intact. Completed cancellation keeps its wake and cleanup bookkeeping in the
+native subagent record; it does not require a separate Tasks row.
 Recovery reconciles an expired cancellation's retained marker before retrying
 its requester wake, preserving the original cleanup record. Live child cancellation
 can wake a waiting requester while normal cleanup reconciliation completes.
 A delayed cancellation callback cannot reopen completed cleanup.
-
-### Background tasks
-
-The [background task registry](/automation/tasks) is SQLite-backed and
-reconciled on boot and on a periodic interval: durable outcomes recorded by
-finished runs are recovered, and runs whose owning process disappeared are
-marked lost after a grace period instead of hanging forever.
 
 ### Agent-requested restarts
 
@@ -669,11 +946,13 @@ update with no continuation does not wake the model to deliver the report.
 
 The sentinel's typed SQLite columns are authoritative for restart handling.
 Its `payload_json` value is a replay/debug shadow only. Runtime reads, writes,
-and clears SQLite state without a file fallback. A bounded state migration runs
-at startup and through Doctor to preserve a validated legacy
-`restart-sentinel.json` left on disk after an update.
-The migration verifies the typed row and removes the source file before normal
-restart handling continues.
+and clears SQLite state without a file fallback. The pre-July
+`restart-sentinel.json` format and its `.doctor-importing` claim are retired.
+Doctor, update admission, and restart recovery leave these files and any current
+SQLite notification unchanged, and require an intermediate upgrade through
+`2026.9.7` with `openclaw doctor --fix` before retrying. Supported updaters,
+including `2026.6.34` and `2026.9.2`, write native SQLite state and retain their
+existing restart delivery and continuation behavior.
 
 ## Safety valves and observability
 
@@ -691,6 +970,15 @@ restart handling continues.
   `channel autostart suppressed by crash-loop breaker; refusing automatic
 start for <channel>… Start a channel manually with: openclaw gateway call
 channels.start --params '{"channel":"<id>"}'`
+
+  Safe mode also pauses main-session restart recovery. Interrupted entries and
+  transcripts stay unchanged: the pause does not charge an attempt, settle a
+  turn, send a notice, or tombstone a session. The recovery log names the pause
+  and the breaker window end. Once the full window drains, the same healthy
+  process automatically re-arms its existing recovery scheduler and resumes the
+  interrupted work once, using the original startup cutoff and ownership checks.
+  A new unclean boot extends the pause; shutdown or lifecycle replacement cancels
+  the pending re-arm. No manual retry or extra Gateway restart is required.
 
   Operator recovery SOP:
 
@@ -730,7 +1018,11 @@ channels.start --params '{"channel":"<id>"}'`
   `openclaw_session_recovery_age_seconds`.
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `agents/subagent-registry`
-  subsystems.
+  subsystems. Every startup pass includes bounded skip counts by reason such as
+  `live_owner`, `work_start_blocked`, or `dispatch_target_unavailable`, even when
+  other sessions started. Each interrupted main candidate has a structured
+  decision line with boot/pass, session and source-run identity, outcome
+  (`started`, `settled`, `deferred`, or `blocked`), and the next responsible owner.
 - **Reply hooks:** resumed turns run currently loaded `before_agent_reply`
   hooks under the normal user-trigger rules. Automatically delivered replies
   also run the normal `reply_payload_sending` hook before channel delivery,

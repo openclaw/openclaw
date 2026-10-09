@@ -62,7 +62,6 @@ class OpenClawMascot extends LitElement {
   private animationFrame = 0;
   private visible = true;
   private reducedMotion = false;
-  private lastPose: MascotPose = staticMascotPose("idle");
   private intersectionObserver: IntersectionObserver | null = null;
   private themeObserver: MutationObserver | null = null;
   private motionQuery: MediaQueryList | null = null;
@@ -135,16 +134,6 @@ class OpenClawMascot extends LitElement {
     this.syncPlayback();
   }
 
-  catchOnce(): void {
-    if (!this.isConnected || this.reducedMotion || currentThemeBranding().mascot === "none") {
-      return;
-    }
-    const time = currentSeconds();
-    this.animator.playCatch(time);
-    this.drawCurrentFrame(time);
-    this.syncPlayback();
-  }
-
   override render() {
     return currentThemeBranding().mascot === "none"
       ? html`<span class="openclaw-mascot--neutral">${neutralMark}</span>`
@@ -179,18 +168,12 @@ class OpenClawMascot extends LitElement {
   };
 
   private syncPlayback(): void {
-    if (!this.renderRoot.querySelector("canvas")) {
+    const canvas = this.renderRoot.querySelector("canvas");
+    if (!canvas || this.reducedMotion || !this.shouldAnimate) {
       this.stopAnimation();
-      return;
-    }
-    if (this.reducedMotion) {
-      this.stopAnimation();
-      this.lastPose = staticMascotPose(this.resolvedMood);
-      this.drawPose(this.lastPose);
-      return;
-    }
-    if (!this.shouldAnimate) {
-      this.stopAnimation();
+      if (canvas && this.reducedMotion) {
+        this.drawPose(staticMascotPose(this.resolvedMood));
+      }
       return;
     }
     if (this.animationFrame === 0) {
@@ -206,10 +189,9 @@ class OpenClawMascot extends LitElement {
   }
 
   private drawCurrentFrame(time: number): void {
-    this.lastPose = this.reducedMotion
-      ? staticMascotPose(this.resolvedMood)
-      : this.animator.poseAt(time);
-    this.drawPose(this.lastPose);
+    this.drawPose(
+      this.reducedMotion ? staticMascotPose(this.resolvedMood) : this.animator.poseAt(time),
+    );
   }
 
   private drawPose(pose: MascotPose): void {

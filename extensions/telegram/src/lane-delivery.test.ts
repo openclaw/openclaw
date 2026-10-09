@@ -42,7 +42,7 @@ describe("createLaneTextDeliverer", () => {
     answer.update(HELLO_FINAL);
     answer.update.mockClear();
     const harness = createHarness({ answerStream: answer });
-    harness.stopDraftLane.mockImplementationOnce(async () => {
+    answer.stop.mockImplementationOnce(async () => {
       events.push("finalize");
       throw new Error("injected finalization crash");
     });
@@ -221,15 +221,7 @@ describe("createLaneTextDeliverer", () => {
       });
       const deliveryPromise = deliverProjectedFinalAnswer(harness, fullAnswer);
 
-      await vi.advanceTimersByTimeAsync(0);
-      expect(attempts).toEqual(["1234567890", renderedSuffix]);
-      await vi.advanceTimersByTimeAsync(999);
-      expect(attempts).toEqual(["1234567890", renderedSuffix]);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(attempts).toEqual(["1234567890", renderedSuffix, renderedSuffix]);
-      await vi.advanceTimersByTimeAsync(999);
-      expect(attempts).toEqual(["1234567890", renderedSuffix, renderedSuffix]);
-      await vi.advanceTimersByTimeAsync(1);
+      // Flood waits belong to the account limiter; this bare API only counts attempts.
       const result = await deliveryPromise;
 
       expect(result.kind).toBe("sent");

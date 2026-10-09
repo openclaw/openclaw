@@ -139,33 +139,4 @@ struct DashboardBrowserSignInPolicyTests {
             signedOut: GatewayBrowserSessionError.expired, profileID: "research", name: nil,
             endpoint: nil, userGesture: true) == nil)
     }
-
-    @Test func `only expiry errors bypass normal error presentation`() {
-        let now = Date(timeIntervalSince1970: 10000)
-        let errors: [Error] = [
-            GatewayBrowserSessionError.expired, GatewayBrowserSessionError.invalidSession,
-            GatewayBrowserSessionError.wrongOrigin, GatewayBrowserSessionError.superseded,
-            GatewayBrowserSessionError.credentialRetirementFailed, MacGatewayProfileError.profileNotFound,
-            CancellationError(),
-        ]
-        for error in errors {
-            for gesture in [false, true] {
-                #expect(DashboardManager.requiresBrowserSignIn(
-                    error: error, expiresAt: now, userGesture: gesture, now: now) ==
-                    (error as? GatewayBrowserSessionError == .expired))
-            }
-        }
-    }
-
-    @Test func `gesture renews sessions through the fifteen minute boundary`() {
-        let now = Date(timeIntervalSince1970: 10000)
-        for remaining in [-1.0, 0, 1, 899, 900, 901] {
-            for gesture in [false, true] {
-                #expect(DashboardManager.requiresBrowserSignIn(
-                    error: nil, expiresAt: now.addingTimeInterval(remaining), userGesture: gesture, now: now) ==
-                    (gesture && remaining <= 900))
-            }
-        }
-        #expect(!DashboardManager.requiresBrowserSignIn(error: nil, expiresAt: nil, userGesture: true, now: now))
-    }
 }

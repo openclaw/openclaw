@@ -8,7 +8,11 @@ import type {
 } from "acpx/runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AcpRuntime } from "../runtime-api.js";
 import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import {
@@ -59,7 +63,7 @@ export type AcpxGeneration = {
   retired: boolean;
   activeOperations: number;
   pendingAdmissions: number;
-  admissionState: "unadmitted" | "failed" | "admitted";
+  admitted: boolean;
   activeRecordOperations: Map<string, number>;
   closedRecordIds: Set<string>;
   afterReset: boolean;
@@ -92,12 +96,7 @@ export const acpxOperationScope = new AsyncLocalStorage<{
 }>();
 
 export function readSessionRecordName(record: unknown): string {
-  if (typeof record !== "object" || record === null) {
-    return "";
-  }
-  // SAFETY: record is a non-null object; the property stays unknown until checked below.
-  const { name } = record as { name?: unknown };
-  return typeof name === "string" ? name.trim() : "";
+  return normalizeOptionalString(asOptionalObjectRecord(record)?.name) ?? "";
 }
 
 export function readRecordAgentCommand(
@@ -107,33 +106,17 @@ export function readRecordAgentCommand(
 }
 
 export function readRecordCwd(record: unknown): string | undefined {
-  if (typeof record !== "object" || record === null) {
-    return undefined;
-  }
-  // SAFETY: record is a non-null object; cwd is validated before use.
-  const { cwd } = record as { cwd?: unknown };
-  return typeof cwd === "string" ? cwd.trim() || undefined : undefined;
+  return normalizeOptionalString(asOptionalObjectRecord(record)?.cwd);
 }
 
 export function readRecordResetOnNextEnsure(record: unknown): boolean {
-  if (typeof record !== "object" || record === null) {
-    return false;
-  }
-  // SAFETY: record is a non-null object; nested ACPX state is validated below.
-  const { acpx } = record as { acpx?: unknown };
-  if (typeof acpx !== "object" || acpx === null) {
-    return false;
-  }
-  // SAFETY: acpx is a non-null object; only a strict boolean true is accepted.
-  return (acpx as { reset_on_next_ensure?: unknown }).reset_on_next_ensure === true;
+  return (
+    asOptionalObjectRecord(asOptionalObjectRecord(record)?.acpx)?.reset_on_next_ensure === true
+  );
 }
 
 export function readRecordAgentPid(record: unknown): number | undefined {
-  if (typeof record !== "object" || record === null) {
-    return undefined;
-  }
-  // SAFETY: record is a non-null object; both possible PID values remain unknown.
-  const { pid, processId } = record as { pid?: unknown; processId?: unknown };
+  const { pid, processId } = asOptionalObjectRecord(record) ?? {};
   const rawPid = pid ?? processId;
   const numericPid =
     typeof rawPid === "number"
@@ -145,23 +128,11 @@ export function readRecordAgentPid(record: unknown): number | undefined {
 }
 
 export function readOpenClawLeaseIdFromRecord(record: unknown): string | undefined {
-  if (typeof record !== "object" || record === null) {
-    return undefined;
-  }
-  // SAFETY: record is a non-null object; the lease ID is validated as a string.
-  const { openclawLeaseId } = record as { openclawLeaseId?: unknown };
-  return typeof openclawLeaseId === "string" ? openclawLeaseId.trim() || undefined : undefined;
+  return normalizeOptionalString(asOptionalObjectRecord(record)?.openclawLeaseId);
 }
 
 export function readOpenClawGatewayInstanceIdFromRecord(record: unknown): string | undefined {
-  if (typeof record !== "object" || record === null) {
-    return undefined;
-  }
-  // SAFETY: record is a non-null object; the instance ID is validated as a string.
-  const { openclawGatewayInstanceId } = record as { openclawGatewayInstanceId?: unknown };
-  return typeof openclawGatewayInstanceId === "string"
-    ? openclawGatewayInstanceId.trim() || undefined
-    : undefined;
+  return normalizeOptionalString(asOptionalObjectRecord(record)?.openclawGatewayInstanceId);
 }
 
 export function extractGeneratedWrapperPath(command: AcpxAgentCommand | undefined): string {
@@ -221,46 +192,43 @@ export function createResetAwareSessionStore(
       if (pending && (scope?.generation.awaitPriorWrites || freshSessionKeys.has(resource))) {
         await Promise.allSettled(pending);
       }
-      const load = async () => {
-        if (scope?.generation.retired) {
-          return undefined;
-        }
-        const normalized = sessionId.trim();
-        if (normalized && freshSessionKeys.has(normalized)) {
-          return undefined;
-        }
-        const record = await baseStore.load(sessionId);
-        if (
-          scope?.generation.retired ||
-          freshSessionKeys.has(scope?.generation.resource ?? normalized)
-        ) {
-          return undefined;
-        }
-        if (scope && record) {
-          captureGenerationRecord(scope.generation, record);
-        }
-        if (!record || !params?.leaseStore || !params.gatewayInstanceId) {
-          return record;
-        }
-        const sessionName = readSessionRecordName(record) || normalized;
-        const lease = selectCurrentSessionLease({
-          leases: await params.leaseStore.listOpen(params.gatewayInstanceId),
-          sessionKeys: [sessionName, normalized],
-          rootPid: readRecordAgentPid(record),
-        });
-        if (!lease) {
-          return record;
-        }
-        if (scope?.generation.retired) {
-          return undefined;
-        }
-        const leasedRecord = withOpenClawLeaseSessionMetadata(record, lease);
-        if (scope) {
-          captureGenerationRecord(scope.generation, leasedRecord);
-        }
-        return leasedRecord;
-      };
-      return await load();
+      if (scope?.generation.retired) {
+        return undefined;
+      }
+      const normalized = sessionId.trim();
+      if (normalized && freshSessionKeys.has(normalized)) {
+        return undefined;
+      }
+      const record = await baseStore.load(sessionId);
+      if (
+        scope?.generation.retired ||
+        freshSessionKeys.has(scope?.generation.resource ?? normalized)
+      ) {
+        return undefined;
+      }
+      if (scope && record) {
+        captureGenerationRecord(scope.generation, record);
+      }
+      if (!record || !params?.leaseStore || !params.gatewayInstanceId) {
+        return record;
+      }
+      const sessionName = readSessionRecordName(record) || normalized;
+      const lease = selectCurrentSessionLease({
+        leases: await params.leaseStore.listOpen(params.gatewayInstanceId),
+        sessionKeys: [sessionName, normalized],
+        rootPid: readRecordAgentPid(record),
+      });
+      if (!lease) {
+        return record;
+      }
+      if (scope?.generation.retired) {
+        return undefined;
+      }
+      const leasedRecord = withOpenClawLeaseSessionMetadata(record, lease);
+      if (scope) {
+        captureGenerationRecord(scope.generation, leasedRecord);
+      }
+      return leasedRecord;
     },
     async save(record: AcpSessionRecord): Promise<void> {
       const scope = acpxOperationScope.getStore();

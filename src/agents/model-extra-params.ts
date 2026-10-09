@@ -4,13 +4,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelKey } from "../shared/model-key.js";
 import { resolveAgentEntry } from "./agent-scope-config.js";
 
-type ModelExtraParamSources = {
-  defaultParams?: Record<string, unknown>;
-  modelParams?: Record<string, unknown>;
-  agentModelParams?: Record<string, unknown>;
-  agentParams?: Record<string, unknown>;
-};
-
 const FAST_MODE_CUTOFF_MODEL_PARAM_KEYS = new Set([
   "fastAutoOnSeconds",
   "fastSeconds",
@@ -52,7 +45,7 @@ export function resolveModelExtraParamSources(params: {
   provider: string;
   modelId?: string;
   agentId?: string;
-}): ModelExtraParamSources {
+}) {
   const defaultParams = params.config?.agents?.defaults?.params;
   const configuredModels = params.config?.agents?.defaults?.models;
   const canonicalKey = params.modelId ? modelKey(params.provider, params.modelId) : undefined;
@@ -85,4 +78,38 @@ export function hasAuthoredProviderRequestParams(
   return [sources.modelParams, sources.agentModelParams].some((modelParams) =>
     Object.entries(modelParams ?? {}).some(([key, value]) => !isAgentRuntimeModelParam(key, value)),
   );
+}
+
+export function sanitizeExtraParamsRecord(
+  value: object | undefined,
+): Record<string, unknown> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      ([key]) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
+    ),
+  );
+}
+
+/** Later sources win; each source's first own alias wins, including null and undefined. */
+export function resolveAliasedParamValue(
+  sources: ReadonlyArray<Record<string, unknown> | undefined>,
+  keys: readonly string[],
+): unknown {
+  let resolved: unknown = undefined;
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    for (const key of keys) {
+      if (!Object.hasOwn(source, key)) {
+        continue;
+      }
+      resolved = source[key];
+      break;
+    }
+  }
+  return resolved;
 }

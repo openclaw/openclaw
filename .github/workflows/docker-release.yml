@@ -3,6 +3,11 @@ name: Docker Release
 on:
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       tag:
         description: Immutable stable, extended-stable, or beta release tag
         required: true
@@ -33,6 +38,16 @@ on:
         type: string
       focused_release_evidence_workflow_sha:
         description: Exact previously verified focused evidence producer SHA
+        required: false
+        default: ""
+        type: string
+      full_release_validation_run_id:
+        description: Exact Full Release Validation parent authorizing prepared bytes
+        required: false
+        default: ""
+        type: string
+      full_release_validation_run_attempt:
+        description: Exact qualification parent attempt
         required: false
         default: ""
         type: string
@@ -80,7 +95,7 @@ env:
 
 jobs:
   validate_release_identity:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     outputs:
       version: ${{ steps.identity.outputs.version }}
       include_browser: ${{ steps.identity.outputs.include_browser }}
@@ -132,7 +147,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Verify tag, SHA, and package identity agree
@@ -208,6 +223,7 @@ jobs:
     outputs:
       vcr_source_digests: ${{ steps.promote.outputs.vcr_source_digests }}
     env:
+      FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag }}
       RELEASE_SHA: ${{ inputs.release_sha }}
@@ -306,7 +322,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Verify focused release evidence after Docker approval
@@ -337,6 +353,16 @@ jobs:
             --producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
             --producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"
 
+      - name: Download immutable full release qualification
+        if: ${{ inputs.full_release_validation_run_id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}
+          path: ${{ runner.temp }}/docker-qualification
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.full_release_validation_run_id }}
+          github-token: ${{ github.token }}
+
       - name: Download prepared Docker manifest
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -349,7 +375,11 @@ jobs:
         id: prepared
         run: |
           set -euo pipefail
-          node workflow-source/scripts/docker-release-artifacts.mjs verify \
+          qualification_args=()
+          if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
+            qualification_args+=(--full-release-manifest "${RUNNER_TEMP}/docker-qualification/full-release-validation-manifest.json")
+          fi
+          node workflow-source/scripts/docker-release-artifacts.mjs verify "${qualification_args[@]}" \
             --manifest "${RUNNER_TEMP}/docker-release/manifest.json" \
             --manifest-sha256 "${PREPARED_MANIFEST_SHA256}" \
             --artifact-name "${PREPARED_ARTIFACT_NAME}" \
@@ -370,7 +400,7 @@ jobs:
           skopeo --version | grep -Fx 'skopeo version 1.13.3'
           dpkg-query --show --showformat='${Package} ${Version}\n' skopeo
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Validate Docker Hub publish credentials
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -397,7 +427,11 @@ jobs:
         id: promote
         run: |
           set -euo pipefail
-          node workflow-source/scripts/docker-release-artifacts.mjs publish \
+          qualification_args=()
+          if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
+            qualification_args+=(--full-release-manifest "${RUNNER_TEMP}/docker-qualification/full-release-validation-manifest.json")
+          fi
+          node workflow-source/scripts/docker-release-artifacts.mjs publish "${qualification_args[@]}" \
             --manifest "${RUNNER_TEMP}/docker-release/manifest.json" \
             --manifest-sha256 "${PREPARED_MANIFEST_SHA256}" \
             --artifact-name "${PREPARED_ARTIFACT_NAME}" \

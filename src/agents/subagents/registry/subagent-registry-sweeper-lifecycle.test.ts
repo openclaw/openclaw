@@ -49,7 +49,7 @@ async function advance(ms: number) {
 }
 
 describe("registered subagent sweeper lifecycle", () => {
-  const { activateGatewayRuntime } = useSubagentRestartRecoveryFixture();
+  const { activateGatewayRuntime, settle } = useSubagentRestartRecoveryFixture();
 
   beforeEach(async () => {
     resetGatewayWorkAdmission();
@@ -61,7 +61,7 @@ describe("registered subagent sweeper lifecycle", () => {
 
   afterEach(async () => {
     await vi.dynamicImportSettled();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     resetGatewayWorkAdmission();
     vi.useRealTimers();
   });
@@ -70,7 +70,7 @@ describe("registered subagent sweeper lifecycle", () => {
     await register("released");
     await vi.dynamicImportSettled();
     expect(subagentRuns.has("released")).toBe(true);
-    releaseSubagentRun("released");
+    await releaseSubagentRun("released");
     expect(subagentRuns.size).toBe(0);
     await vi.dynamicImportSettled();
     markGatewayRestartDraining();
@@ -91,10 +91,11 @@ describe("registered subagent sweeper lifecycle", () => {
   it.each([false, true])(
     "resumes retained-row periodic sweeps through repeated activateSubagentRegistry (suspended: %s)",
     async (suspended) => {
-      initSubagentRegistry();
+      await initSubagentRegistry();
       await register("retained");
-      activateGatewayRuntime();
+      await activateGatewayRuntime();
       await vi.dynamicImportSettled();
+      recoverRow.mockClear();
       if (suspended) {
         expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
       } else {
@@ -114,7 +115,7 @@ describe("registered subagent sweeper lifecycle", () => {
       expect(subagentRuns.has("retained")).toBe(true);
 
       resetGatewayWorkAdmission();
-      activateGatewayRuntime();
+      await activateGatewayRuntime();
       await advance(4_999);
       expect(recoverRow).not.toHaveBeenCalled();
       await advance(1);
@@ -144,7 +145,7 @@ describe("registered subagent sweeper lifecycle", () => {
         await advance(1);
         expect(recoverRow).toHaveBeenCalledOnce();
         if (released) {
-          releaseSubagentRun("active");
+          await releaseSubagentRun("active");
           expect(subagentRuns.size).toBe(0);
           await vi.dynamicImportSettled();
           expect(getActiveGatewayRootWorkCount()).toBe(1);
@@ -161,6 +162,58 @@ describe("registered subagent sweeper lifecycle", () => {
         await advance(60_000);
       }
       expect(warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { successor: false, rejection: false },
+    { successor: true, rejection: false },
+    { successor: false, rejection: true },
+  ])(
+    "joins a retiring sweep without cancelling a successor (registered: $successor, rejected: $rejection)",
+    async ({ successor, rejection }) => {
+      const pending = createDeferred<{ status: "handled" }>();
+      recoverRow.mockReturnValueOnce(pending.promise);
+      await register("retiring");
+      await vi.dynamicImportSettled();
+      await advance(60_000);
+      expect(recoverRow).toHaveBeenCalledOnce();
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      let retired = false;
+      const registry = Reflect.get(globalThis, Symbol.for("openclaw.subagentRegistryTestApi")) as {
+        resetSubagentRegistryForTests(options: { persist: false }): void | Promise<void>;
+      };
+      const retirement = Promise.resolve(
+        registry.resetSubagentRegistryForTests({ persist: false }),
+      ).then(() => {
+        retired = true;
+      });
+      try {
+        await Promise.resolve();
+        expect(retired).toBe(false);
+        if (successor) {
+          await register("successor");
+        }
+      } finally {
+        if (rejection) {
+          pending.reject(new Error("synthetic recovery failure"));
+        } else {
+          pending.resolve({ status: "handled" });
+        }
+        await retirement;
+        await advance(0);
+        if (rejection) {
+          await expect(settle()).rejects.toMatchObject({
+            message: "Failed to settle subagent cleanup roots",
+            errors: [expect.objectContaining({ message: "synthetic recovery failure" })],
+          });
+        }
+      }
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      await advance(59_999);
+      expect(recoverRow).toHaveBeenCalledOnce();
+      await advance(1);
+      expect(recoverRow).toHaveBeenCalledTimes(successor ? 2 : 1);
     },
   );
 });

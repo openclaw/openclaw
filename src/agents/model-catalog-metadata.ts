@@ -5,6 +5,7 @@ import {
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import {
   modelTransportRoutesMatch,
+  normalizeCatalogRouteBaseUrl,
   resolveCatalogOwnedModelCompat,
 } from "./model-compat-catalog.js";
 
@@ -13,19 +14,6 @@ function mergeCatalogFields<T extends object>(
   override: T | undefined,
 ): T | undefined {
   return base && override ? { ...base, ...override } : (override ?? base);
-}
-
-export function normalizeCatalogRouteBaseUrl(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const url = new URL(value);
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString();
-  } catch {
-    return value.replace(/\/+$/u, "");
-  }
 }
 
 function catalogRouteChanges(base: ModelCatalogEntry, overlay: ModelCatalogEntry): boolean {
@@ -92,29 +80,16 @@ export function overlayCatalogMetadata(
     contextWindowDefault: _baseContextWindowDefault,
     ...selectionNeutralBase
   } = routeBase;
-  const contextWindowSelection =
-    overlay.contextWindows !== undefined
-      ? {
-          contextWindows: overlay.contextWindows,
-          ...(overlay.contextWindowDefault !== undefined
-            ? { contextWindowDefault: overlay.contextWindowDefault }
-            : {}),
-        }
-      : {
-          ...(routeBase.contextWindows !== undefined
-            ? { contextWindows: routeBase.contextWindows }
-            : {}),
-          ...((overlay.contextWindowDefault ?? routeBase.contextWindowDefault)
-            ? {
-                contextWindowDefault:
-                  overlay.contextWindowDefault ?? routeBase.contextWindowDefault,
-              }
-            : {}),
-        };
+  const replacesContextWindows = overlay.contextWindows !== undefined;
+  const contextWindows = replacesContextWindows ? overlay.contextWindows : routeBase.contextWindows;
+  const contextWindowDefault = replacesContextWindows
+    ? overlay.contextWindowDefault
+    : (overlay.contextWindowDefault ?? routeBase.contextWindowDefault) || undefined;
   const applyRoute = !options?.preserveBaseRoute;
   return {
     ...selectionNeutralBase,
-    ...contextWindowSelection,
+    ...(contextWindows !== undefined ? { contextWindows } : {}),
+    ...(contextWindowDefault !== undefined ? { contextWindowDefault } : {}),
     ...(routeChanged ? { name: overlay.name } : {}),
     ...(applyRoute && overlay.api !== undefined ? { api: overlay.api } : {}),
     ...(applyRoute && overlay.baseUrl !== undefined ? { baseUrl: overlay.baseUrl } : {}),

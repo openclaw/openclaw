@@ -68,17 +68,6 @@ export class MemorySourceIndexKernel {
     private readonly state: SourceIndexState,
   ) {}
 
-  replace(params: MemorySourceIndexReplacement): void {
-    this.replaceRows(
-      params,
-      (function* () {
-        for (const [index, chunk] of params.chunks.entries()) {
-          yield { chunk, embedding: params.embeddings[index] ?? [] };
-        }
-      })(),
-    );
-  }
-
   replaceRows(params: MemorySourceIndexHeader, rows: Iterable<MemorySourceIndexRow>): void {
     const { entry, source, model, now, vectorReady } = params;
     this.clear(entry.path, source);
@@ -98,7 +87,7 @@ export class MemorySourceIndexKernel {
       });
       writeChunk(id, chunk, embedding);
       if (vectorReady && embedding.length > 0) {
-        writeVector ??= createMemoryVectorWriter(this.database, MEMORY_INDEX_VECTOR_TABLE);
+        writeVector ??= createMemoryVectorWriter(this.database);
         writeVector(id, embedding);
       }
     }

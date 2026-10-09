@@ -20,9 +20,58 @@ import {
   type OwnedRuntimeChunk,
 } from "./node-bootstrap-artifact.test-support.js";
 
+// Keep byte/race fault injection beside the real builder. The worker suite covers transport.
+vi.mock("./node-bootstrap-artifact-worker.js", async () => {
+  const { prepareNodeBootstrapArtifact } = await import("./node-bootstrap-artifact-build.js");
+  return { prepareNodeBootstrapArtifactInWorker: prepareNodeBootstrapArtifact };
+});
+
 const { fixture, tempDirs } = useNodeBootstrapArtifactFixtures();
 
 describe("node bootstrap distribution", () => {
+  it("packs and runs an installed CommonJS bundle with extensionless relative requires", async () => {
+    const { root, packageRoot, provider, sourcePackage } = await fixture();
+    const bundledName = "@fixture/undici";
+    await write(packageRoot, "package.json", {
+      ...sourcePackage,
+      dependencies: { ...sourcePackage.dependencies, [bundledName]: "8.10.2" },
+      bundleDependencies: [bundledName],
+    });
+    const bundledRoot = path.join(packageRoot, "node_modules", bundledName);
+    const bundledFiles = {
+      "package.json": { name: bundledName, version: "8.10.2", main: "./index-fetch.js" },
+      "index-fetch.js": [
+        'const global = require("./lib/global");',
+        'const proxy = require("./lib/dispatcher/env-http-proxy-agent");',
+        'const options = require("./lib/options");',
+        "module.exports = `${global}:${proxy}:${options.mode}`;",
+      ].join("\n"),
+      "lib/global.js": 'module.exports = require("./state");',
+      "lib/state/index.js": 'module.exports = "commonjs";',
+      "lib/dispatcher/env-http-proxy-agent.js": 'module.exports = require("../proxy");',
+      "lib/proxy/package.json": { main: "./runtime" },
+      "lib/proxy/runtime/index.js": 'module.exports = "proxy";',
+      "lib/options.json": { mode: "ready" },
+    };
+    for (const [relative, contents] of Object.entries(bundledFiles)) {
+      await write(bundledRoot, relative, contents);
+    }
+    await write(
+      packageRoot,
+      "dist/entry.js",
+      `import result from "${bundledName}"; console.log(result);`,
+    );
+
+    const artifact = await provider.prepare();
+    const installed = path.join(root, "node");
+    await fs.mkdir(installed);
+    await tar.extract({ file: artifact.tarballPath, cwd: installed });
+    const { stdout } = await promisify(execFile)(process.execPath, [
+      path.join(installed, "package/openclaw.mjs"),
+    ]);
+    expect(stdout.trim()).toBe("commonjs:proxy:ready");
+  });
+
   it("preserves an installed bundled dependency's runtime layout and assets", async () => {
     const { root, packageRoot, provider } = await fixture();
     const browserRoot = await writeBundledBrowser(packageRoot);
@@ -64,6 +113,56 @@ describe("node bootstrap distribution", () => {
         await fs.readFile(path.join(target, "node_modules/@fixture/browser", relative!), "utf8"),
       ).toBe(contents);
     }
+  });
+
+  it("retains an external plugin's hidden runtime chunks under its dist directory", async () => {
+    const { root, pluginRoot, provider } = await fixture("external-plugin");
+    await write(
+      pluginRoot,
+      "dist/index.js",
+      'export { answer } from "./.setup/chunk-Q1w2E3.mjs";\n',
+    );
+    await write(
+      pluginRoot,
+      "dist/.setup/chunk-Q1w2E3.mjs",
+      'export const answer = "cloud-ready";\n',
+    );
+    await write(pluginRoot, "dist/.cache/credentials.json", {
+      token: "do-not-transfer-host-private-metadata",
+    });
+    await write(pluginRoot, "dist/.setup/.cache/credentials.json", {
+      token: "do-not-transfer-nested-host-private-metadata",
+    });
+    await write(
+      pluginRoot,
+      "dist/.setup/node_modules/private-dependency/index.js",
+      "export const unused = true;\n",
+    );
+    const artifact = await provider.prepare();
+    const installed = path.join(root, "node");
+    await fs.mkdir(installed);
+    await tar.extract({ file: artifact.tarballPath, cwd: installed });
+    const target = path.join(installed, "package");
+    expect(
+      await fs.readFile(
+        path.join(target, "dist/extensions/remote-runtime/dist/.setup/chunk-Q1w2E3.mjs"),
+        "utf8",
+      ),
+    ).toBe('export const answer = "cloud-ready";\n');
+    for (const excluded of [
+      ".env",
+      "dist/.cache/credentials.json",
+      "dist/.setup/.cache/credentials.json",
+      "dist/.setup/node_modules/private-dependency/index.js",
+    ]) {
+      await expect(
+        fs.access(path.join(target, "dist/extensions/remote-runtime", excluded)),
+      ).rejects.toHaveProperty("code", "ENOENT");
+    }
+    const { stdout } = await promisify(execFile)(process.execPath, [
+      path.join(target, "openclaw.mjs"),
+    ]);
+    expect(stdout.trim()).toBe("local-ai:cloud-ready");
   });
 
   it.each(["source", "package", "external-plugin", "linked-package"] as const)(
@@ -129,6 +228,9 @@ describe("node bootstrap distribution", () => {
         ),
       ).toBe(false);
       expect(entries.some((entry) => entry.startsWith("package/dist/worker/"))).toBe(false);
+      expect(entries.some((entry) => entry.startsWith("package/dist/worker-artifacts/"))).toBe(
+        false,
+      );
       expect(entries.some((entry) => entry.startsWith("package/dist/control-ui/"))).toBe(false);
       for (const [file, chunk] of Object.entries(privateChunks)) {
         expect(entries).not.toContain(`package/dist/${file}`);
@@ -337,6 +439,32 @@ describe("node bootstrap distribution", () => {
     await expect(provider.prepare()).rejects.toThrow("running Gateway build");
     await write(packageRoot, "dist/build-info.json", { version, buildId });
     await expect(provider.prepare()).resolves.toMatchObject({ buildId });
+  });
+
+  it("refuses a shortened non-JavaScript package member", async () => {
+    const { packageRoot, provider } = await fixture();
+    const entryPath = path.join(packageRoot, longEntryPath);
+    const openFile = fs.open.bind(fs);
+    let truncated = false;
+    const reader = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await openFile(...args);
+      if (args[0] === entryPath) {
+        const stat = handle.stat.bind(handle);
+        vi.spyOn(handle, "stat").mockImplementationOnce(async () => {
+          const before = await stat();
+          await fs.truncate(entryPath, 1);
+          truncated = true;
+          return before;
+        });
+      }
+      return handle;
+    });
+    try {
+      await expect(provider.prepare()).rejects.toThrow("Node distribution changed while packaging");
+      expect(truncated).toBe(true);
+    } finally {
+      reader.mockRestore();
+    }
   });
 
   it.each(["root resolution", "staging creation"])(

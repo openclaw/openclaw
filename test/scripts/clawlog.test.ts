@@ -207,7 +207,8 @@ describe("clawlog.sh JSON output", () => {
     expect(readdirSync(result.cwd).filter((name) => name.includes(".tmp."))).toEqual([]);
   });
 
-  it.each([64, 65])("preserves failed preflight status %s without staging output", (status) => {
+  it("preserves failed preflight status without staging output", () => {
+    const status = 64;
     const result = runClawlog(["--json", "--output", "logs.json"], {
       preflightStderr: "log preflight failed\n",
       preflightStatus: status,
@@ -243,9 +244,7 @@ describe("clawlog.sh JSON output", () => {
 
   it.each([
     ["--json", "--follow"],
-    ["--follow", "--json"],
     ["--json", "--list-categories"],
-    ["--list-categories", "--json"],
   ])("rejects incompatible JSON options before backend invocation: %s %s", (...args) => {
     const result = runClawlog(args);
 

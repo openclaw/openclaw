@@ -5,7 +5,7 @@ import { defaultRuntime } from "../runtime.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
 
-export type PluginsReloadOptions = { json?: boolean; acceptCapabilities?: boolean };
+export type PluginsReloadOptions = { json?: boolean; acceptCapabilities?: boolean; wait?: boolean };
 
 export async function runPluginsReloadCommand(
   ids: string[],
@@ -23,7 +23,10 @@ export async function runPluginsReloadCommand(
   });
   const result = await gateway<PluginsReloadResult>(
     "plugins.reload",
-    { plugins: pluginIds.map((pluginId) => ({ pluginId })) },
+    {
+      plugins: pluginIds.map((pluginId) => ({ pluginId })),
+      ...(opts.wait ? { waitForDrain: true } : {}),
+    },
     consent.onCapabilityConsent,
   );
   if (opts.json) {

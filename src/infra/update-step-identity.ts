@@ -22,6 +22,7 @@ const stepIds = new Map<string, string>([
     "git import admitted target",
     "git target inspection fetch",
     "git runtime activation",
+    "git runtime backup retention",
     "git update",
     "git update pack cleanup",
     "git target inspection cleanup",
@@ -53,6 +54,7 @@ const stepIds = new Map<string, string>([
     "previous gateway verification",
     "previous generation restoration",
     "post-update verification",
+    "post-core runtime verification",
     "managed-service update handoff",
     "Windows task autostart recovery",
     "update executor settlement",
@@ -158,8 +160,6 @@ for (const operation of [
     `preflight-${operation.replace(/[^a-z]+/gu, "-").replace(/-$/u, "")}`,
   );
 }
-const publicIds = new Set(stepIds.values());
-
 const gitArgumentSteps: ReadonlyArray<readonly [string, string]> = [
   ["git rollback delete ", "git-rollback-delete-branch"],
   ["git checkout ", "git-checkout"],
@@ -169,10 +169,11 @@ const gitArgumentSteps: ReadonlyArray<readonly [string, string]> = [
   ["git rev-parse ", "git-resolve-target"],
   ["git show-ref ", "git-show-branch"],
 ];
-for (const [, id] of gitArgumentSteps) {
-  publicIds.add(id);
-}
-publicIds.add("git-resolve-upstream");
+const publicIds = new Set([
+  ...stepIds.values(),
+  ...gitArgumentSteps.map(([, id]) => id),
+  "git-resolve-upstream",
+]);
 
 /** A closed projection also handles history produced by a restored released updater. */
 export function resolvePublicUpdateStepId(name: string): string | undefined {

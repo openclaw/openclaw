@@ -9,6 +9,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { createGatewayUpdateLifecycle } from "../../infra/update-check-lifecycle.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 
 const mocks = vi.hoisted(() => ({
@@ -44,6 +45,7 @@ vi.mock("../../infra/restart.js", async (original) => ({
 
 let home: TempHomeEnv;
 let lifecycle: ReturnType<typeof createGatewayUpdateLifecycle>;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 let sha: string;
 
 async function git(...args: string[]) {
@@ -78,7 +80,8 @@ beforeEach(async () => {
   );
   sha = await git("rev-parse", "HEAD");
   await git("checkout", "--detach", sha);
-  lifecycle = createGatewayUpdateLifecycle();
+  scheduler = createTestGatewayScheduler();
+  lifecycle = createGatewayUpdateLifecycle(scheduler);
   mocks.handoff.mockReset().mockImplementation(async (params) => ({
     status: "started",
     pid: 12345,
@@ -91,6 +94,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await lifecycle?.stop();
+  await scheduler?.stop();
   vi.restoreAllMocks();
   await home?.restore();
 });
@@ -125,40 +129,36 @@ async function requestUpdate(upstreamRef = "origin/main") {
   return respond.mock.calls[0]?.[1];
 }
 
-it("admits the verified pinned target after its receipt arrives following startup discovery", async () => {
-  expect((await lifecycle.initialize()).status.git?.upstream).toBeNull();
-  await publishReceipt();
-
-  const response = await requestUpdate();
-
-  expect(response).toMatchObject({ ok: true });
-  expect(mocks.handoff).toHaveBeenCalledWith(
-    expect.objectContaining({
-      root: mocks.root,
-      devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: sha },
-    }),
-  );
-});
-
-it.each(["branch", "sha"] as const)(
-  "admits current verified facts after an unavailable startup Git %s probe",
+it.each(["receipt", "branch", "sha"] as const)(
+  "admits current verified facts after startup lacked %s",
   async (probe) => {
-    await publishReceipt();
-    const execute = gitExec.executeGitCommand;
-    const failure = vi
-      .spyOn(gitExec, "executeGitCommand")
-      .mockImplementation((root, args, options) =>
-        args.join(" ") === (probe === "branch" ? "rev-parse --abbrev-ref HEAD" : "rev-parse HEAD")
-          ? Promise.reject(new Error("Git probe temporarily unavailable"))
-          : execute(root, args, options),
-      );
-    expect((await lifecycle.initialize()).status.git?.upstream).toBeNull();
-    failure.mockRestore();
+    if (probe === "receipt") {
+      expect((await lifecycle.initialize()).status.git?.upstream).toBeNull();
+      await publishReceipt();
+    } else {
+      await publishReceipt();
+      const execute = gitExec.executeGitCommand;
+      const failure = vi
+        .spyOn(gitExec, "executeGitCommand")
+        .mockImplementation((root, args, options) =>
+          args.join(" ") === (probe === "branch" ? "rev-parse --abbrev-ref HEAD" : "rev-parse HEAD")
+            ? Promise.reject(new Error("Git probe temporarily unavailable"))
+            : execute(root, args, options),
+        );
+      expect((await lifecycle.initialize()).status.git?.upstream).toBeNull();
+      failure.mockRestore();
+    }
 
     const response = await requestUpdate();
 
     expect(response).toMatchObject({ ok: true });
     expect(mocks.handoff).toHaveBeenCalledOnce();
+    expect(mocks.handoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: mocks.root,
+        devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: sha },
+      }),
+    );
   },
 );
 

@@ -1,35 +1,63 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Discord plugin module implements agent components.handlers behavior.
 import { logError } from "openclaw/plugin-sdk/logging-core";
+import { parseDiscordModalCustomIdForInteraction } from "../component-custom-id.js";
 import {
   resolveDiscordComponentEntryWithPersistence,
   resolveDiscordModalEntryWithPersistence,
 } from "../components-registry.js";
-import type { ButtonInteraction, ComponentData } from "../internal/discord.js";
+import { Modal, type ComponentData, type ModalInteraction } from "../internal/discord.js";
 import {
   ackComponentInteraction,
-  type AgentComponentContext,
-  type AgentComponentMessageInteraction,
-  mapSelectValues,
-  parseDiscordComponentData,
   replyUnavailableComponentInteraction,
-  resolveAuthorizedComponentInteraction,
+} from "./agent-components-context.js";
+import {
+  formatModalSubmissionText,
+  mapSelectValues,
+  parseDiscordModalId,
+  resolveModalFieldValues,
+  parseDiscordComponentData,
   resolveInteractionCustomId,
-} from "./agent-components-helpers.js";
+} from "./agent-components-data.js";
+import { resolveAuthorizedComponentInteraction } from "./agent-components-guild-auth.js";
 import { dispatchDiscordComponentEvent } from "./agent-components.dispatch.js";
 import { dispatchPluginDiscordInteractiveEvent } from "./agent-components.plugin-interactive.js";
+import type { AgentComponentContext } from "./agent-components.types.js";
 import type { DiscordComponentControlHandlers } from "./agent-components.wildcard-controls.js";
 
 const loadComponentsRuntime = createLazyRuntimeModule(() => import("../components.js"));
 
-async function handleDiscordComponentEvent(params: {
-  ctx: AgentComponentContext;
-  interaction: AgentComponentMessageInteraction;
-  data: ComponentData;
-  componentLabel: string;
-  values?: string[];
-  label: string;
-}): Promise<void> {
+async function resolveAuthorizedComponentEntry<
+  T extends { allowedUsers?: string[]; reusable?: boolean },
+>(
+  params: Omit<Parameters<typeof resolveAuthorizedComponentInteraction>[0], "allowedUsers"> & {
+    entry?: T;
+    resolve: (consume: boolean) => Promise<T | null>;
+    expiredReply: string;
+  },
+) {
+  const entry = params.entry ?? (await params.resolve(false));
+  if (!entry) {
+    await replyUnavailableComponentInteraction(params.interaction, params.expiredReply);
+    return null;
+  }
+  const authorized = await resolveAuthorizedComponentInteraction({
+    ...params,
+    allowedUsers: entry.allowedUsers,
+  });
+  if (!authorized) {
+    return null;
+  }
+  const consumed = await params.resolve(!entry.reusable);
+  if (!consumed) {
+    await replyUnavailableComponentInteraction(params.interaction, params.expiredReply);
+    return null;
+  }
+  return { ...authorized, consumed };
+}
+
+async function handleDiscordComponentEvent(
+  params: Parameters<DiscordComponentControlHandlers["handleComponentEvent"]>[0],
+): Promise<void> {
   const parsed = parseDiscordComponentData(
     params.data,
     resolveInteractionCustomId(params.interaction),
@@ -43,38 +71,20 @@ async function handleDiscordComponentEvent(params: {
     return;
   }
 
-  const entry = await resolveDiscordComponentEntryWithPersistence({
-    id: parsed.componentId,
-    consume: false,
+  const resolved = await resolveAuthorizedComponentEntry({
+    ...params,
+    unauthorizedReply: `You are not authorized to use this ${params.componentLabel}.`,
+    expiredReply: "This component has expired.",
+    resolve: (consume) =>
+      resolveDiscordComponentEntryWithPersistence({
+        id: parsed.componentId,
+        consume,
+      }),
   });
-  if (!entry) {
-    await replyUnavailableComponentInteraction(params.interaction, "This component has expired.");
+  if (!resolved) {
     return;
   }
-
-  const unauthorizedReply = `You are not authorized to use this ${params.componentLabel}.`;
-  const authorized = await resolveAuthorizedComponentInteraction({
-    ctx: params.ctx,
-    interaction: params.interaction,
-    label: params.label,
-    componentLabel: params.componentLabel,
-    unauthorizedReply,
-    allowedUsers: entry.allowedUsers,
-    defer: false,
-  });
-  if (!authorized) {
-    return;
-  }
-  const { ctx, interactionCtx, channelCtx, guildInfo, commandAuthorized, replyOpts } = authorized;
-
-  const consumed = await resolveDiscordComponentEntryWithPersistence({
-    id: parsed.componentId,
-    consume: !entry.reusable,
-  });
-  if (!consumed) {
-    await replyUnavailableComponentInteraction(params.interaction, "This component has expired.");
-    return;
-  }
+  const { consumed, ...authorized } = resolved;
 
   if (consumed.kind === "modal-trigger") {
     await replyUnavailableComponentInteraction(
@@ -85,20 +95,17 @@ async function handleDiscordComponentEvent(params: {
   }
 
   const values = params.values ? mapSelectValues(consumed, params.values) : undefined;
-  const selectedCallbackData =
-    consumed.kind === "select" &&
-    consumed.callbackDataKind === "callback" &&
-    params.values?.length === 1
+  const selectedValue =
+    consumed.kind === "select" && params.values?.length === 1
       ? params.values[0]?.trim()
       : undefined;
-  const pluginCallbackData = consumed.callbackData ?? selectedCallbackData;
+  const pluginCallbackData =
+    consumed.callbackData ?? (consumed.callbackDataKind === "callback" ? selectedValue : undefined);
   if (pluginCallbackData) {
     const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
-      ctx,
+      ...authorized,
       interaction: params.interaction,
-      interactionCtx,
-      channelCtx,
-      isAuthorizedSender: commandAuthorized,
+      isAuthorizedSender: authorized.commandAuthorized,
       data: pluginCallbackData,
       kind: consumed.kind === "select" ? "select" : "button",
       values,
@@ -110,19 +117,14 @@ async function handleDiscordComponentEvent(params: {
   }
   // Command actions opt into synthetic command fallback. Opaque callback actions
   // are plugin data only; falling through as slash commands would execute data.
-  const buttonCallbackFallback =
+  const commandFallback =
     consumed.kind === "button" && consumed.callbackDataKind !== "callback"
       ? consumed.callbackData?.trim()
-      : undefined;
-  const selectedCommandFallback =
-    consumed.kind === "select" &&
-    consumed.callbackDataKind === "command" &&
-    params.values?.length === 1
-      ? params.values[0]?.trim()
-      : undefined;
+      : consumed.callbackDataKind === "command"
+        ? selectedValue
+        : undefined;
   const eventText =
-    buttonCallbackFallback ||
-    selectedCommandFallback ||
+    commandFallback ||
     (await loadComponentsRuntime()).formatDiscordComponentEventText({
       kind: consumed.kind === "select" ? "select" : "button",
       label: consumed.label,
@@ -131,36 +133,23 @@ async function handleDiscordComponentEvent(params: {
 
   await ackComponentInteraction({
     interaction: params.interaction,
-    replyOpts,
     label: params.label,
   });
 
   await dispatchDiscordComponentEvent({
-    ctx,
+    ...authorized,
     interaction: params.interaction,
-    interactionCtx,
-    channelCtx,
-    guildInfo,
     eventText,
     commandSource:
-      consumed.callbackDataKind === "command" && (buttonCallbackFallback || selectedCommandFallback)
-        ? "native"
-        : undefined,
+      consumed.callbackDataKind === "command" && commandFallback ? "native" : undefined,
     replyToId: consumed.messageId ?? params.interaction.message?.id,
-    routeOverrides: {
-      sessionKey: consumed.sessionKey,
-      agentId: consumed.agentId,
-      accountId: consumed.accountId,
-    },
+    routeOverrides: consumed,
   });
 }
 
-async function handleDiscordModalTrigger(params: {
-  ctx: AgentComponentContext;
-  interaction: ButtonInteraction;
-  data: ComponentData;
-  label: string;
-}): Promise<void> {
+async function handleDiscordModalTrigger(
+  params: Parameters<DiscordComponentControlHandlers["handleModalTrigger"]>[0],
+): Promise<void> {
   const parsed = parseDiscordComponentData(
     params.data,
     resolveInteractionCustomId(params.interaction),
@@ -191,27 +180,22 @@ async function handleDiscordModalTrigger(params: {
     return;
   }
 
-  const unauthorizedReply = "You are not authorized to use this form.";
-  const authorized = await resolveAuthorizedComponentInteraction({
-    ctx: params.ctx,
-    interaction: params.interaction,
-    label: params.label,
+  const resolved = await resolveAuthorizedComponentEntry({
+    ...params,
+    entry,
     componentLabel: "form",
-    unauthorizedReply,
-    allowedUsers: entry.allowedUsers,
-    defer: false,
+    unauthorizedReply: "You are not authorized to use this form.",
+    expiredReply: "This form has expired.",
+    resolve: (consume) =>
+      resolveDiscordComponentEntryWithPersistence({
+        id: parsed.componentId,
+        consume,
+      }),
   });
-  if (!authorized) {
+  if (!resolved) {
     return;
   }
-  const consumed = await resolveDiscordComponentEntryWithPersistence({
-    id: parsed.componentId,
-    consume: !entry.reusable,
-  });
-  if (!consumed) {
-    await replyUnavailableComponentInteraction(params.interaction, "This form has expired.");
-    return;
-  }
+  const { consumed } = resolved;
 
   const resolvedModalId = consumed.modalId ?? modalId;
   const modalEntry = await resolveDiscordModalEntryWithPersistence({
@@ -240,3 +224,74 @@ export const discordComponentControlHandlers: DiscordComponentControlHandlers = 
   handleComponentEvent: handleDiscordComponentEvent,
   handleModalTrigger: handleDiscordModalTrigger,
 };
+
+export function createDiscordComponentModal(ctx: AgentComponentContext): Modal {
+  return new (class extends Modal {
+    override title = "OpenClaw form";
+    override customId = "__openclaw_discord_component_modal_wildcard__";
+    override components = [];
+    override customIdParser = parseDiscordModalCustomIdForInteraction;
+
+    async run(interaction: ModalInteraction, data: ComponentData): Promise<void> {
+      const modalId = parseDiscordModalId(data, resolveInteractionCustomId(interaction));
+      if (!modalId) {
+        logError("discord component modal: missing modal id");
+        await replyUnavailableComponentInteraction(interaction, "This form is no longer valid.");
+        return;
+      }
+
+      const resolved = await resolveAuthorizedComponentEntry({
+        ctx,
+        interaction,
+        label: "discord component modal",
+        componentLabel: "form",
+        unauthorizedReply: "You are not authorized to use this form.",
+        expiredReply: "This form has expired.",
+        resolve: (consume) =>
+          resolveDiscordModalEntryWithPersistence({
+            id: modalId,
+            consume,
+          }),
+      });
+      if (!resolved) {
+        return;
+      }
+      const { consumed, ...authorized } = resolved;
+
+      if (consumed.callbackData) {
+        const fields = consumed.fields.map((field) => ({
+          id: field.id,
+          name: field.name,
+          values: resolveModalFieldValues(field, interaction),
+        }));
+        const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
+          ...authorized,
+          interaction,
+          isAuthorizedSender: authorized.commandAuthorized,
+          data: consumed.callbackData,
+          kind: "modal",
+          fields,
+          messageId: consumed.messageId,
+        });
+        if (pluginDispatch === "handled") {
+          return;
+        }
+      }
+
+      try {
+        await interaction.acknowledge();
+      } catch (err) {
+        logError(`discord component modal: failed to acknowledge: ${String(err)}`);
+      }
+
+      const eventText = formatModalSubmissionText(consumed, interaction);
+      await dispatchDiscordComponentEvent({
+        ...authorized,
+        interaction,
+        eventText,
+        replyToId: consumed.messageId,
+        routeOverrides: consumed,
+      });
+    }
+  })();
+}

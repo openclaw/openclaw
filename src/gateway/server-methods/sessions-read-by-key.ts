@@ -1,11 +1,13 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { validateSessionsDescribeParams } from "../../../packages/gateway-protocol/src/index.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import {
   authorizeIncognitoSessionTarget,
   createSessionListEntryFilter,
@@ -31,66 +33,49 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
-    while (true) {
-      const prepared = await projection.withPreparedExactRows(
-        (cfg) => {
-          const agent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
-          const denied = authorizeIncognitoSessionTarget({
-            client: client ?? null,
-            sessionKey: key,
-            target: null,
-          });
-          return agent.ok && !denied ? [{ key, agentId: agent.agentId }] : [];
-        },
-        (read) => {
-          sessionMutationAuthorization?.assertCurrent();
-          const requestedAgent = resolveRequestedSessionAgentId(
-            read.state.cfg,
-            key,
-            params.agentId,
-          );
-          if (!requestedAgent.ok) {
-            respond(false, undefined, requestedAgent.error);
-            return;
-          }
-          const query = { key, agentId: requestedAgent.agentId };
-          const presentation = prepareProjectedSessionPresentation(
-            read,
-            client,
-            Date.now(),
-            createVisibleActiveSessionRunProjector(
-              context,
-              read.state.rowContext.projectedAgentRuns,
-            ),
-          );
-          const denied = presentation.authorizeDescription(query);
-          if (denied) {
-            respond(false, undefined, denied);
-            return;
-          }
-          const record = read.describe(query);
-          if (
-            !record ||
-            (hasOperatorBoundary(client, read.state.policyConfig) &&
-              presentation.sharing.entryFilter?.(record.key, record.entry) === false)
-          ) {
-            respond(true, { session: null });
-            return;
-          }
-          respond(true, { session: presentation.present(record, params) });
-        },
-      );
-      if (prepared.kind === "complete") {
-        return;
-      }
-      const { certifySessionCanonicalValidationPending } =
-        await import("../../config/sessions/session-canonical-validation-readiness.js");
-      await certifySessionCanonicalValidationPending(prepared.database);
-    }
+    const projection = requireSessionRowProjection(context);
+    await withReadySessionRows(
+      projection,
+      (cfg) => {
+        const agent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
+        const denied = authorizeIncognitoSessionTarget({
+          client: client ?? null,
+          sessionKey: key,
+          target: null,
+        });
+        return agent.ok && !denied ? [{ key, agentId: agent.agentId }] : [];
+      },
+      (read) => {
+        sessionMutationAuthorization?.assertCurrent();
+        const requestedAgent = resolveRequestedSessionAgentId(read.state.cfg, key, params.agentId);
+        if (!requestedAgent.ok) {
+          respond(false, undefined, requestedAgent.error);
+          return;
+        }
+        const query = { key, agentId: requestedAgent.agentId };
+        const presentation = prepareProjectedSessionPresentation(
+          read,
+          client,
+          Date.now(),
+          createVisibleActiveSessionRunProjector(context, read.state.rowContext.projectedAgentRuns),
+        );
+        const denied = presentation.authorizeDescription(query);
+        if (denied) {
+          respond(false, undefined, denied);
+          return;
+        }
+        const record = read.describe(query);
+        if (
+          !record ||
+          (hasOperatorBoundary(client, read.state.policyConfig) &&
+            presentation.sharing.entryFilter?.(record.key, record.entry) === false)
+        ) {
+          respond(true, { session: null });
+          return;
+        }
+        respond(true, { session: presentation.present(record, params) });
+      },
+    );
   },
   "sessions.get": async ({
     params,
@@ -100,26 +85,14 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     signal,
     sessionMutationAuthorization,
   }) => {
-    // SAFETY: Gateway dispatch supplies object params; each optional field is narrowed before use.
-    const p = params as {
-      key?: unknown;
-      sessionKey?: unknown;
-      limit?: unknown;
-      agentId?: unknown;
-    };
+    const p = params;
     const key = requireSessionKey(p.key ?? p.sessionKey, respond);
     if (!key) {
       return;
     }
-    const limit =
-      typeof p.limit === "number" && Number.isFinite(p.limit)
-        ? Math.max(1, Math.floor(p.limit))
-        : 200;
+    const limit = resolveIntegerOption(p.limit, 200, { min: 1 });
 
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     const requestedAgent = () =>
       resolveRequestedSessionAgentId(
         context.getRuntimeConfig(),
@@ -193,7 +166,11 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         respond(true, { messages: [] }, undefined);
         return;
       }
-      respond(true, { messages }, undefined);
+      respond(
+        true,
+        projectOperatorModelRead({ context, client, agentId: current.agentId }, { messages }),
+        undefined,
+      );
     });
   },
 };

@@ -1,15 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { DEEPSEEK_DSML_MARKERS, DEEPSEEK_DSML_MARKER_PATTERN } from "./deepseek-dsml-grammar.js";
+import {
+  DEEPSEEK_DSML_MARKERS,
+  DEEPSEEK_DSML_MARKER_PATTERN,
+  findEarliestDsmlToken,
+  longestDsmlTokenPrefixSuffixLength,
+} from "./deepseek-dsml-grammar.js";
 import { measureUtf8AppendBytes } from "./openai-transport-shared.js";
-
-export type RecoveredDeepSeekDsmlToolCall = {
-  kind: "toolCall";
-  name: string;
-  arguments: Record<string, unknown>;
-  partialArgs: string;
-};
-
-type DeepSeekDsmlRecoveredPart = { kind: "text"; text: string } | RecoveredDeepSeekDsmlToolCall;
+import type { RecoveredTextToolCall, TextToolCallRecoveryPart } from "./text-tool-call-recovery.js";
 
 const DEEPSEEK_DSML_TOOL_KINDS = ["tool_calls", "tool_call", "function_calls"] as const;
 const DEEPSEEK_DSML_TOOL_OPEN_TOKENS = DEEPSEEK_DSML_MARKERS.flatMap((marker) =>
@@ -32,6 +29,7 @@ const DEEPSEEK_DSML_RECOVERY_MAX_BOUNDARY_LEN = Math.max(
 // Match the shared Chat tool-argument and post-tool-call buffer limits.
 const MAX_DSML_RECOVERY_BUFFER_BYTES = 256_000;
 const DEEPSEEK_DSML_SCAN_BATCH_CHARS = 64 * 1_024;
+const DSML_NAME_ATTRIBUTE_RE = /\bname=("([^"]*)"|'([^']*)'|([^\s>]+))/;
 
 type DeepSeekDsmlToolBlockScanState = {
   offset: number;
@@ -51,12 +49,12 @@ export function createDsmlRecoverer() {
     blockScanState = { offset: 0 };
   };
 
-  const consume = (final: boolean): DeepSeekDsmlRecoveredPart[] => {
-    const output: DeepSeekDsmlRecoveredPart[] = [];
+  const consume = (final: boolean): TextToolCallRecoveryPart[] => {
+    const output: TextToolCallRecoveryPart[] = [];
     while (buffer) {
       const open = activeOpenToken
         ? { index: 0, token: activeOpenToken }
-        : findEarliestStringToken(buffer, DEEPSEEK_DSML_TOOL_OPEN_TOKENS);
+        : findEarliestDsmlToken(buffer, DEEPSEEK_DSML_TOOL_OPEN_TOKENS);
       if (!open) {
         resetBlockScan();
         if (final) {
@@ -66,7 +64,11 @@ export function createDsmlRecoverer() {
           bufferEndsWithHighSurrogate = false;
           return output;
         }
-        const keep = longestDeepSeekDsmlToolOpenPrefixSuffixLength(buffer);
+        const keep = longestDsmlTokenPrefixSuffixLength(
+          buffer,
+          DEEPSEEK_DSML_TOOL_OPEN_TOKENS,
+          DEEPSEEK_DSML_TOOL_MAX_OPEN_TOKEN_LEN,
+        );
         const emitLength = buffer.length - keep;
         if (emitLength > 0) {
           const emitted = buffer.slice(0, emitLength);
@@ -163,8 +165,8 @@ export function createDsmlRecoverer() {
   };
 }
 
-function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredDeepSeekDsmlToolCall[] {
-  const toolCalls: RecoveredDeepSeekDsmlToolCall[] = [];
+function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredTextToolCall[] {
+  const toolCalls: RecoveredTextToolCall[] = [];
   const invokeOpenRegex = new RegExp(`<${DEEPSEEK_DSML_MARKER_PATTERN}invoke\\b([^<>]*)>`, "g");
   let openMatch: RegExpExecArray | null;
   while ((openMatch = invokeOpenRegex.exec(body)) !== null) {
@@ -176,7 +178,7 @@ function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredDeepSeekDsmlTool
     }
     const invokeBody = body.slice(invokeBodyStart, invokeCloseIndex);
     invokeOpenRegex.lastIndex = invokeCloseIndex + invokeCloseToken.length;
-    const invokeName = parseXmlAttribute(openMatch[2] ?? "", "name");
+    const invokeName = parseDsmlNameAttribute(openMatch[2] ?? "");
     if (!invokeName) {
       continue;
     }
@@ -202,15 +204,27 @@ function parseDeepSeekDsmlInvokeArguments(body: string): Record<string, unknown>
   );
   let parameterMatch: RegExpExecArray | null;
   while ((parameterMatch = parameterRegex.exec(body)) !== null) {
-    const name = parseXmlAttribute(parameterMatch[2] ?? "", "name");
+    const name = parseDsmlNameAttribute(parameterMatch[2] ?? "");
     if (!name) {
       continue;
     }
     const rawValue = parameterMatch[3] ?? "";
     if (rawValue.length === 0) {
-      continue;
+      const stringAttribute = Array.from(
+        (parameterMatch[2] ?? "").matchAll(
+          /(?:^|\s)([^\s=]+)=(?:"([^"]*)"|'([^']*)'|([^\s"']+))(?=\s|$)/g,
+        ),
+      ).find((attribute) => attribute[1] === "string");
+      if ((stringAttribute?.[2] ?? stringAttribute?.[3] ?? stringAttribute?.[4]) !== "true") {
+        continue;
+      }
     }
-    args[name] = decodeDeepSeekDsmlText(rawValue);
+    Object.defineProperty(args, name, {
+      value: decodeDeepSeekDsmlText(rawValue),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   if (Object.keys(args).length > 0) {
     return args;
@@ -231,23 +245,8 @@ function parseDeepSeekDsmlInvokeArguments(body: string): Record<string, unknown>
   return null;
 }
 
-// Cache compiled attribute matchers by name so the streaming parser does not
-// recompile a RegExp on every chunk/parameter it scans.
-const xmlAttributeRegexCache = new Map<string, RegExp>();
-
-function xmlAttributeRegex(name: string): RegExp {
-  const cached = xmlAttributeRegexCache.get(name);
-  if (cached) {
-    return cached;
-  }
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`\\b${escaped}=("([^"]*)"|'([^']*)'|([^\\s>]+))`);
-  xmlAttributeRegexCache.set(name, pattern);
-  return pattern;
-}
-
-function parseXmlAttribute(attributes: string, name: string): string | null {
-  const match = xmlAttributeRegex(name).exec(attributes);
+function parseDsmlNameAttribute(attributes: string): string | null {
+  const match = DSML_NAME_ATTRIBUTE_RE.exec(attributes);
   const value = match?.[2] ?? match?.[3] ?? match?.[4];
   return value ? decodeDeepSeekDsmlText(value) : null;
 }
@@ -259,17 +258,6 @@ function decodeDeepSeekDsmlText(value: string): string {
     .replaceAll("&lt;", "<")
     .replaceAll("&gt;", ">")
     .replaceAll("&amp;", "&");
-}
-
-function findEarliestStringToken(text: string, tokens: readonly string[], fromIndex = 0) {
-  let best: { index: number; token: string } | null = null;
-  for (const token of tokens) {
-    const index = text.indexOf(token, fromIndex);
-    if (index !== -1 && (!best || index < best.index)) {
-      best = { index, token };
-    }
-  }
-  return best;
 }
 
 function scanDeepSeekDsmlToolBlock(
@@ -318,9 +306,9 @@ function scanDeepSeekDsmlToolBlock(
       continue;
     }
 
-    const toolOpen = findEarliestStringToken(text, DEEPSEEK_DSML_TOOL_OPEN_TOKENS, state.offset);
+    const toolOpen = findEarliestDsmlToken(text, DEEPSEEK_DSML_TOOL_OPEN_TOKENS, state.offset);
     const toolCloseIndex = text.indexOf(closeToken, state.offset);
-    const invokeOpen = findEarliestStringToken(
+    const invokeOpen = findEarliestDsmlToken(
       text,
       DEEPSEEK_DSML_INVOKE_OPEN_PREFIXES,
       state.offset,
@@ -349,15 +337,4 @@ function scanDeepSeekDsmlToolBlock(
     return next;
   }
   return { kind: "incomplete" };
-}
-
-function longestDeepSeekDsmlToolOpenPrefixSuffixLength(text: string) {
-  const maxLength = Math.min(text.length, DEEPSEEK_DSML_TOOL_MAX_OPEN_TOKEN_LEN - 1);
-  for (let length = maxLength; length > 0; length -= 1) {
-    const suffix = text.slice(text.length - length);
-    if (DEEPSEEK_DSML_TOOL_OPEN_TOKENS.some((token) => token.startsWith(suffix))) {
-      return length;
-    }
-  }
-  return 0;
 }

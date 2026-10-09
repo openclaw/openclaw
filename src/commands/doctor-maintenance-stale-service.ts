@@ -31,15 +31,9 @@ export function doctorGatewayMaintenanceError(params: {
   const next = `Run ${status}; resolve the reported failure, then ${doctor} and ${restart}.`;
   const message = `Doctor ${params.phase} failed. ${params.detail} ${next}`;
   const failureFacts = [
-    createUpdateFailureFact(
-      { check: params.phase, code: params.code, message: params.detail },
-      params.env,
-    ),
-    createUpdateFailureFact(
-      { check: params.phase, code: "stale-gateway-recovery-command", message: next },
-      params.env,
-    ),
-  ];
+    { code: params.code, message: params.detail },
+    { code: "stale-gateway-recovery-command", message: next },
+  ].map((fact) => createUpdateFailureFact({ check: params.phase, ...fact }, params.env));
   return params.phase === "gateway-stop"
     ? new DoctorMaintenanceRefusalError(
         message,
@@ -91,7 +85,7 @@ export async function inspectStaleDoctorGateway(params: {
     legacy ||
     health?.buildIdMismatch?.actual != null ||
     health?.versionMismatch ||
-    health?.probeError?.startsWith("gateway closed (1011): gateway message handler unavailable");
+    health?.staleConnection !== undefined;
   if (!stale) {
     return undefined;
   }

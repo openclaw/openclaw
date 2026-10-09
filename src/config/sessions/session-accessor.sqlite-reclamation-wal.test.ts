@@ -7,8 +7,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
 import * as walCheckpoint from "../../infra/sqlite-wal-checkpoint.js";
+import { observeSqliteWalPeriodicWork } from "../../infra/sqlite-wal-scheduler.test-support.js";
 import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -19,7 +22,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import * as executionCleanup from "../../state/openclaw-agent-execution-cleanup.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
@@ -27,10 +29,8 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
-import {
-  createLifecycleArtifactReclamationPlan,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
+import { createLifecycleArtifactReclamationPlan } from "./session-accessor.sqlite-reclamation.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import {
   deferPhysicalBudgetForCheckpoint,
@@ -123,23 +123,18 @@ test.each([
     };
     const budget = getBudgetKickState(params.storePath, params.maintenance);
     let commitRequestedAtNs: bigint | undefined;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const observeAdmission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (
-            request.stage === "commit" &&
-            isRecord(request.facts) &&
-            isRecord(request.facts.identity) &&
-            typeof request.facts.identity.nativeLocation === "string" &&
-            sqliteReaderDatabasePathKey(request.facts.identity.nativeLocation) === databasePathKey
-          ) {
-            commitRequestedAtNs = process.hrtime.bigint();
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const observeAdmission = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (
+        request.stage === "commit" &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.identity) &&
+        typeof request.facts.identity.nativeLocation === "string" &&
+        sqliteReaderDatabasePathKey(request.facts.identity.nativeLocation) === databasePathKey
+      ) {
+        commitRequestedAtNs = process.hrtime.bigint();
+      }
+      admit(request, grant);
+    });
     let completedAt: number | undefined;
     const relayedCompletions: number[] = [];
     const publish = walCheckpoint.publishSqliteWalCheckpointObservation;
@@ -163,6 +158,29 @@ test.each([
           },
         });
       });
+    const nativeStopped = createDeferredCore();
+    const releaseReceipt = createDeferredCore();
+    const openStore = workerStore.openAgentDatabaseSqliteWorkerStore;
+    const delayReceipt = staleReceipt
+      ? vi
+          .spyOn(workerStore, "openAgentDatabaseSqliteWorkerStore")
+          .mockImplementation((options, custody) =>
+            openStore(options, {
+              ...custody,
+              onNativeStopped(stopped, readReceipt) {
+                custody.onNativeStopped?.(
+                  sqliteReaderDatabasePathKey(options.databasePath) === databasePathKey
+                    ? stopped.then(async () => {
+                        nativeStopped.resolve();
+                        await releaseReceipt.promise;
+                      })
+                    : stopped,
+                  readReceipt,
+                );
+              },
+            }),
+          )
+      : undefined;
     let following: Promise<void> | undefined;
     try {
       reader.exec("BEGIN");
@@ -228,20 +246,6 @@ test.each([
             observed.push(health.state);
           }
         });
-        const cleanupFinished = createDeferredCore();
-        const releaseReceipt = createDeferredCore();
-        const cleanup = executionCleanup.cleanupRetiredAgentDatabaseLease;
-        const delayReceipt = staleReceipt
-          ? vi
-              .spyOn(executionCleanup, "cleanupRetiredAgentDatabaseLease")
-              .mockImplementation(async (cleanupParams) => {
-                await cleanup(cleanupParams);
-                if (sqliteReaderDatabasePathKey(cleanupParams.lease.path) === databasePathKey) {
-                  cleanupFinished.resolve();
-                  await releaseReceipt.promise;
-                }
-              })
-          : undefined;
         let closing: Promise<void> | undefined;
         let closeSettled = false;
         try {
@@ -265,12 +269,12 @@ test.each([
             closeSettled = true;
           });
           if (staleReceipt) {
-            await Promise.race([cleanupFinished.promise, closing]);
+            await Promise.race([nativeStopped.promise, closing]);
             expect(closeSettled).toBe(false);
             expect(database.db.isOpen).toBe(false);
             expect(reader.isOpen).toBe(false);
             expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
-            // The real cleanup has closed native handles and released the exact lease.
+            // Native close has released the handles and lease; receipt publication is still gated.
             const retiredPath = `${database.path}.retired`;
             fs.renameSync(database.path, retiredPath);
             if (recovery === "resource-close-replaced") {
@@ -292,7 +296,6 @@ test.each([
         } finally {
           releaseReceipt.resolve();
           await Promise.allSettled([closing]);
-          delayReceipt?.mockRestore();
           unsubscribe();
         }
       }
@@ -301,6 +304,8 @@ test.each([
         expect(budget.checkpointBlocked).toBeUndefined();
       }
     } finally {
+      releaseReceipt.resolve();
+      delayReceipt?.mockRestore();
       if (reader.isOpen) {
         if (reader.isTransaction) {
           reader.exec("ROLLBACK");
@@ -339,42 +344,76 @@ test.each([false, true])(
     let checksDuringMaintenance = 0;
     let authorizationChecked = false;
     let nativeSettled = false;
-    const workers: Worker[] = [];
+    let reclamationWorker: Worker | undefined;
+    const stopObservingWorkers: Array<() => void> = [];
     const observeWorker = (worker: Worker) => {
-      workers.push(worker);
-      worker.on("message", (message: unknown) => {
-        if (isRecord(message) && message.type === "reclaimed" && message.settled === true) {
+      const onMessage = (message: unknown) => {
+        if (isRecord(message) && message.type === "commit-request") {
+          reclamationWorker = worker;
+          nativeSettled = false;
+        }
+        if (
+          worker === reclamationWorker &&
+          isRecord(message) &&
+          (message.type === "reclaimed" || message.type === "refused") &&
+          message.settled === true
+        ) {
           nativeSettled = true;
         }
-      });
-      worker.once("exit", () => {
-        nativeSettled = true;
+      };
+      const onExit = () => {
+        if (worker === reclamationWorker) {
+          nativeSettled = true;
+        }
+      };
+      worker.on("message", onMessage);
+      worker.once("exit", onExit);
+      stopObservingWorkers.push(() => {
+        worker.off("message", onMessage);
+        worker.off("exit", onExit);
       });
     };
     process.on("worker", observeWorker);
-    const vacuumCalls: Array<{
-      statement: string;
+    const maintenanceAdmissions: Array<{
+      stage: "transaction" | "commit";
       authorizationChecked: boolean;
       nativeSettled: boolean;
     }> = [];
-    const execute = database.db.exec.bind(database.db);
-    const execSpy = vi.spyOn(database.db, "exec").mockImplementation((statement) => {
-      if (statement.startsWith("PRAGMA incremental_vacuum(")) {
-        vacuumCalls.push({ statement, authorizationChecked, nativeSettled });
+    const databasePathKey = sqliteReaderDatabasePathKey(database.path);
+    const observeAdmission = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (
+        (request.stage === "transaction" || request.stage === "commit") &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.identity) &&
+        typeof request.facts.identity.nativeLocation === "string" &&
+        sqliteReaderDatabasePathKey(request.facts.identity.nativeLocation) === databasePathKey
+      ) {
+        maintenanceAdmissions.push({
+          stage: request.stage,
+          authorizationChecked,
+          nativeSettled,
+        });
       }
-      execute(statement);
+      admit(request, grant);
     });
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const maintenance = configureSqliteWalMaintenance(database.db, {
-      busyTimeoutMs: 1_000,
-      checkpointIntervalMs: 1,
-      onCheckpointError: (error) => maintenanceErrors.push(error),
-    });
+    const execSpy = vi.spyOn(database.db, "exec");
+    const scheduled = observeSqliteWalPeriodicWork();
+    let maintenance: ReturnType<typeof configureSqliteWalMaintenance>;
+    try {
+      maintenance = configureSqliteWalMaintenance(database.db, {
+        busyTimeoutMs: 1_000,
+        onCheckpointError: (error) => maintenanceErrors.push(error),
+      });
+    } finally {
+      scheduled.restore();
+    }
+    const periodic = scheduled.periodic;
+    const periodicWork: Promise<unknown>[] = [];
     hooks.beforeAuthorization = () => {
       // Timer work must queue without synchronously servicing or delaying this approval.
       commitRequested = true;
       const checksBeforeMaintenance = commitChecks;
-      vi.advanceTimersByTime(1);
+      periodicWork.push(Promise.resolve(periodic()));
       checksDuringMaintenance = commitChecks - checksBeforeMaintenance;
     };
     try {
@@ -399,6 +438,7 @@ test.each([false, true])(
           value: { removedEntries: 0 },
         });
       }
+      await Promise.all(periodicWork);
       await runExclusiveSqliteSessionWrite(
         databaseOptions,
         async () => undefined,
@@ -406,20 +446,27 @@ test.each([false, true])(
       );
       expect(checksDuringMaintenance).toBe(0);
       expect(authorizationChecked).toBe(true);
-      expect(vacuumCalls[0]).toEqual({
-        statement: "PRAGMA incremental_vacuum(8);",
+      expect(maintenanceAdmissions[0]).toEqual({
+        stage: "transaction",
         authorizationChecked: true,
         nativeSettled: true,
       });
-      expect(vacuumCalls.every((call) => call.authorizationChecked && call.nativeSettled)).toBe(
-        true,
-      );
+      expect(maintenanceAdmissions.some((request) => request.stage === "commit")).toBe(true);
+      expect(
+        maintenanceAdmissions.every(
+          (request) => request.authorizationChecked && request.nativeSettled,
+        ),
+      ).toBe(true);
+      expect(
+        execSpy.mock.calls.filter(([statement]) =>
+          statement.startsWith("PRAGMA incremental_vacuum("),
+        ),
+      ).toEqual([]);
       expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)?.db === database.db).toBe(true);
+      await maintenance.stop();
       maintenance.close({ checkpointMode: "PASSIVE" });
-      vi.useRealTimers();
       await closeOpenClawAgentDatabasesAsync();
-      expect(workers).toHaveLength(1);
-      expect(workers[0]?.threadId).toBe(-1);
+      expect(reclamationWorker?.threadId).toBe(-1);
       const remaining = withOpenClawAgentDatabaseReadOnly(
         ({ db }) => Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count),
         databaseOptions,
@@ -431,11 +478,16 @@ test.each([false, true])(
       expect(maintenanceErrors).toEqual([]);
     } finally {
       process.off("worker", observeWorker);
+      for (const stop of stopObservingWorkers) {
+        stop();
+      }
+      observeAdmission.mockRestore();
       execSpy.mockRestore();
+      await maintenance.stop();
+      await Promise.all(periodicWork);
       if (database.db.isOpen) {
         maintenance.close({ checkpointMode: "PASSIVE" });
       }
-      vi.useRealTimers();
       await closeOpenClawAgentDatabasesAsync();
     }
   },

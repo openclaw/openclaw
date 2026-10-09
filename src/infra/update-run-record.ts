@@ -4,7 +4,7 @@ import type { UpdateRunRecord as PublicUpdateRunRecord } from "../../packages/ga
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import type { UpdateRunRecoveryState } from "./update-run-recovery-state.js";
 import type { UpdateRunRecordSchema } from "./update-run-schema.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export function updateStepDiagnostics(
   step: Pick<UpdateStepResult, "failureFacts" | "stdoutTail" | "stderrTail">,
@@ -39,12 +39,11 @@ export function updateStepDiagnostics(
     }
     return tail
       .split(/\r?\n/u)
-      .filter((line) => {
-        if (/^\[openclaw\] (?:The CLI command failed\.$|Debug: |Try: |Help: )/u.test(line)) {
-          return false;
-        }
-        return !messages.has(line.replace(/^\[openclaw\] Reason: /u, "").trim());
-      })
+      .filter(
+        (line) =>
+          !/^\[openclaw\] (?:The CLI command failed\.$|Debug: |Try: |Help: )/u.test(line) &&
+          !messages.has(line.replace(/^\[openclaw\] Reason: /u, "").trim()),
+      )
       .join("\n");
   });
   return { tails: filtered, reasonDetails };
@@ -54,7 +53,7 @@ export function updateStepDiagnostics(
 export function summarizeUpdateStepFailure(
   step: Pick<
     UpdateStepResult,
-    "name" | "exitCode" | "termination" | "stdoutTail" | "stderrTail" | "failureFacts"
+    "name" | "exitCode" | "termination" | "signal" | "stdoutTail" | "stderrTail" | "failureFacts"
   >,
 ): string {
   const diagnostics = updateStepDiagnostics(step);
@@ -87,7 +86,12 @@ export function summarizeUpdateStepFailure(
           return [truncateUtf16Safe(causeOnly, 120 - outcome.length - 2), outcome].join("; ");
         });
   return truncateUtf16Safe(
-    [step.termination ?? `Exit code: ${step.exitCode ?? "unknown"}`, ...excerpts]
+    [
+      step.termination === "signal"
+        ? `signal: ${step.signal ?? "unknown"}`
+        : (step.termination ?? `Exit code: ${step.exitCode ?? "unknown"}`),
+      ...excerpts,
+    ]
       .filter(Boolean)
       .join("; "),
     300,
@@ -129,6 +133,7 @@ export function isAcknowledgedAbandonedUpdateRun(
 export type FinishUpdateRunResult = {
   status: Exclude<UpdateRunRecord["status"], "running">;
   reason?: string;
+  nextAction?: string;
   after?: UpdateRunRecord["after"];
   downtimeMs?: number;
 };
@@ -158,6 +163,9 @@ export function finishUpdateRunRecord(
   record.status = result.status;
   record.phase = "finished";
   record.reason = result.reason ?? (result.status === "failed" ? record.reason : null);
+  if (result.nextAction !== undefined) {
+    record.origin.nextAction = result.nextAction;
+  }
   record.finishedAtMs = now;
   record.after = { ...record.after, ...result.after };
   record.downtimeMs = result.downtimeMs ?? record.downtimeMs;
@@ -176,7 +184,10 @@ export function isUnacknowledgedPackageOwnerRefusal(record: UpdateRunRecord): bo
     record.steps.every(
       (step) =>
         step.step === "requested" ||
-        (step.step === "driver:adopted" && step.status === "completed") ||
+        (step.status === "completed" &&
+          (step.step === "driver:adopted" ||
+            step.step === "original-state-capture" ||
+            /^warning:original-state-capture:[1-9]\d*$/u.test(step.step))) ||
         (step.step === "installation-inspection" && step.status === "skipped"),
     ) &&
     ((record.status === "skipped" &&

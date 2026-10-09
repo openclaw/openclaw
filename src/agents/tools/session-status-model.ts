@@ -21,108 +21,7 @@ import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
 import { normalizeToolModelOverride, ToolAuthorizationError } from "./common.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
-import type { resolveSessionStatusEntry } from "./session-status-session-resolve.js";
-
-type ResolvedStatusSession = NonNullable<ReturnType<typeof resolveSessionStatusEntry>>;
-
-async function resolveModelOverride(params: {
-  cfg: OpenClawConfig;
-  raw: string;
-  sessionEntry?: SessionEntry;
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
-}): Promise<
-  | { kind: "reset" }
-  | {
-      kind: "set";
-      provider: string;
-      model: string;
-      isDefault: boolean;
-    }
-> {
-  const raw = normalizeToolModelOverride(params.raw);
-  if (!raw) {
-    return { kind: "reset" };
-  }
-
-  const configDefault = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
-
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    defaultProvider: currentProvider,
-  });
-  const catalog = await loadPublishedPreparedModelCatalog({
-    config: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    readOnly: true,
-    ...(params.sessionEntry?.spawnedWorkspaceDir
-      ? { workspaceDir: params.sessionEntry.spawnedWorkspaceDir }
-      : {}),
-  });
-  const workspaceDir = params.sessionEntry?.spawnedWorkspaceDir ?? params.workspaceDir;
-  const manifestMetadataSnapshot =
-    params.metadataSnapshot &&
-    params.metadataSnapshot.pluginIds === undefined &&
-    isPluginMetadataSnapshotCompatible({
-      snapshot: params.metadataSnapshot,
-      config: params.cfg,
-      env: process.env,
-      workspaceDir,
-    })
-      ? params.metadataSnapshot
-      : resolvePluginMetadataSnapshot({
-          config: params.cfg,
-          ...(workspaceDir ? { workspaceDir } : {}),
-          env: process.env,
-        });
-  const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot,
-  };
-  const policy = createModelVisibilityPolicy({
-    cfg: params.cfg,
-    catalog,
-    defaultProvider: currentProvider,
-    defaultModel: configDefault,
-    agentId: params.agentId,
-    allowManifestNormalization: true,
-    allowPluginNormalization: true,
-    ...modelManifestContext,
-  });
-
-  const resolved = resolveModelRefFromString({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    raw,
-    defaultProvider: currentProvider,
-    aliasIndex,
-    allowManifestNormalization: true,
-    allowPluginNormalization: true,
-    ...modelManifestContext,
-  });
-  if (!resolved) {
-    throw new Error(`Unrecognized model "${raw}".`);
-  }
-  const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (!policy.allows(resolved.ref)) {
-    throw new Error(`Model "${key}" is not allowed.`);
-  }
-  const isDefault =
-    resolved.ref.provider === configDefault.provider && resolved.ref.model === configDefault.model;
-  return {
-    kind: "set",
-    provider: resolved.ref.provider,
-    model: resolved.ref.model,
-    isDefault,
-  };
-}
+import type { ResolvedStatusSessionEntry as ResolvedStatusSession } from "./session-status-session-resolve.js";
 
 /** Gateway requests use the mutation owner; standalone runs retain their local store contract. */
 export async function patchSessionStatusModel(params: {
@@ -167,24 +66,85 @@ export async function patchSessionStatusModel(params: {
   }
 
   const configured = resolveDefaultModelForAgent({ cfg, agentId });
-  const selection = await resolveModelOverride({
-    ...params,
-    sessionEntry: resolved.entry,
-  });
-  const modelSelection =
-    selection.kind === "reset" ? { ...configured, isDefault: true } : selection;
-  const applied = applyModelOverrideWithAuthProfileCompatibility({
-    cfg,
-    agentDir: params.agentDir,
-    entry: { ...resolved.entry },
-    currentProvider:
-      resolved.entry.providerOverride?.trim() ||
-      resolved.entry.modelProvider?.trim() ||
-      configured.provider,
-    selection: modelSelection,
-    explicitDefaultSelection: modelSelection.isDefault,
-    markLiveSwitchPending: true,
-  });
+  const raw = normalizeToolModelOverride(params.raw);
+  let modelSelection = { ...configured, isDefault: true };
+  if (raw) {
+    const currentProvider = resolved.entry.providerOverride?.trim() || configured.provider;
+
+    const aliasIndex = buildModelAliasIndex({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      defaultProvider: currentProvider,
+    });
+    const catalog = await loadPublishedPreparedModelCatalog({
+      config: params.cfg,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      readOnly: true,
+      ...(resolved.entry.spawnedWorkspaceDir
+        ? { workspaceDir: resolved.entry.spawnedWorkspaceDir }
+        : {}),
+    });
+    const workspaceDir = resolved.entry.spawnedWorkspaceDir ?? params.workspaceDir;
+    const manifestMetadataSnapshot =
+      params.metadataSnapshot &&
+      params.metadataSnapshot.pluginIds === undefined &&
+      isPluginMetadataSnapshotCompatible({
+        snapshot: params.metadataSnapshot,
+        config: params.cfg,
+        env: process.env,
+        workspaceDir,
+      })
+        ? params.metadataSnapshot
+        : resolvePluginMetadataSnapshot({
+            config: params.cfg,
+            ...(workspaceDir ? { workspaceDir } : {}),
+            env: process.env,
+          });
+    const modelResolution = {
+      cfg,
+      agentId,
+      defaultProvider: currentProvider,
+      allowManifestNormalization: true,
+      allowPluginNormalization: true,
+      manifestPlugins: manifestMetadataSnapshot,
+    };
+    const policy = createModelVisibilityPolicy({
+      ...modelResolution,
+      catalog,
+      defaultModel: configured,
+    });
+
+    const selected = resolveModelRefFromString({
+      ...modelResolution,
+      raw,
+      aliasIndex,
+    });
+    if (!selected) {
+      throw new Error(`Unrecognized model "${raw}".`);
+    }
+    const key = modelKey(selected.ref.provider, selected.ref.model);
+    if (!policy.allows(selected.ref)) {
+      throw new Error(`Model "${key}" is not allowed.`);
+    }
+    modelSelection = {
+      ...selected.ref,
+      isDefault:
+        selected.ref.provider === configured.provider && selected.ref.model === configured.model,
+    };
+  }
+  const applySelection = (entry: SessionEntry) =>
+    applyModelOverrideWithAuthProfileCompatibility({
+      cfg,
+      agentDir: params.agentDir,
+      entry,
+      currentProvider:
+        entry.providerOverride?.trim() || entry.modelProvider?.trim() || configured.provider,
+      selection: modelSelection,
+      explicitDefaultSelection: modelSelection.isDefault,
+      markLiveSwitchPending: true,
+    });
+  const applied = applySelection({ ...resolved.entry });
   if (!applied.updated) {
     return { resolved, changedModel: false };
   }
@@ -192,16 +152,7 @@ export async function patchSessionStatusModel(params: {
     { agentId, sessionKey: resolved.key, storePath: params.storePath },
     (entry, context) => {
       const next: SessionEntry = { ...entry };
-      applyModelOverrideWithAuthProfileCompatibility({
-        cfg,
-        agentDir: params.agentDir,
-        entry: next,
-        currentProvider:
-          entry.providerOverride?.trim() || entry.modelProvider?.trim() || configured.provider,
-        selection: modelSelection,
-        explicitDefaultSelection: modelSelection.isDefault,
-        markLiveSwitchPending: true,
-      });
+      applySelection(next);
       if (!next.sessionId.trim() && !context.existingEntry?.sessionId?.trim()) {
         next.sessionId = randomUUID();
       }
@@ -218,11 +169,27 @@ export async function patchSessionStatusModel(params: {
     sessionKey: patched.sessionKey,
     patch: {
       key: patched.sessionKey,
-      model: selection.kind === "reset" ? null : `${selection.provider}/${selection.model}`,
+      model: raw ? `${modelSelection.provider}/${modelSelection.model}` : null,
     },
   });
   return {
     resolved: { entry: patched.entry, key: patched.sessionKey, persisted: true },
     changedModel: true,
   };
+}
+
+export function withActiveStatusModelIdentity(
+  entry: SessionEntry,
+  identity: { provider?: string; model: string },
+): SessionEntry {
+  const next: SessionEntry = {
+    ...entry,
+    model: identity.model,
+    ...(identity.provider ? { modelProvider: identity.provider } : {}),
+  };
+  delete next.providerOverride;
+  delete next.modelOverride;
+  delete next.modelOverrideSource;
+  delete next.modelOverrideRouteResolution;
+  return next;
 }

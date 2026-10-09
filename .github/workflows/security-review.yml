@@ -8,6 +8,8 @@ on:
   workflow_run: # zizmor: ignore[dangerous-triggers] reads CI metadata only; never downloads artifacts or executes PR code
     workflows: [CI]
     types: [completed]
+  schedule:
+    - cron: "4-59/10 * * * *" # reconcile CI completions whose workflow_run delivery was lost
 
 permissions:
   contents: read
@@ -15,7 +17,7 @@ permissions:
   actions: read
   statuses: write
 
-# Use the event's trusted default-branch checkout in both jobs. An explicit SHA
+# Use the event's trusted default-branch checkout in resolver and review. A SHA
 # can be mistaken for fork code after a merge when it matches merge_commit_sha.
 # Sparse checkout also enables blobless fetches. PR contents come from the API,
 # so neither job needs the product source tree.
@@ -37,11 +39,17 @@ jobs:
       contains(github.event.changes.body.from, '/allow-dependencies-change')))))) &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request' ||
       github.event.workflow_run.event == 'workflow_dispatch') }}
+    # Rate-limit recovery can hold a scheduled resolver for an hour. GitHub keeps one
+    # pending pass; the next pass still starts from the last successful window.
+    concurrency:
+      group: ${{ github.event_name == 'schedule' && 'security-review-reconcile' || format('security-review-resolve-{0}', github.run_id) }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 85
     outputs:
       matrix: ${{ steps.event.outputs.matrix }}
       has-prs: ${{ steps.event.outputs.has-prs }}
+      truncated: ${{ steps.event.outputs.truncated }}
     steps:
       - name: Check out trusted workflow scripts
         id: checkout
@@ -49,6 +57,7 @@ jobs:
         timeout-minutes: 5
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: security-review-primary
           persist-credentials: false
           sparse-checkout: |
             /scripts/github/guard-shared.mjs
@@ -66,6 +75,7 @@ jobs:
         timeout-minutes: 5
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: security-review-retry
           persist-credentials: false
           sparse-checkout: |
             /scripts/github/guard-shared.mjs
@@ -73,11 +83,19 @@ jobs:
             /scripts/lib/bounded-response.mjs
           sparse-checkout-cone-mode: false
 
+      # A timed-out checkout can leave Git writers or locks behind. Keep its
+      # directory isolated and copy only the successful attempt's runtime files.
+      - name: Stage trusted workflow scripts
+        id: sources
+        env:
+          SOURCE_DIRECTORY: ${{ steps.checkout.outcome == 'success' && 'security-review-primary' || 'security-review-retry' }}
+        run: cp -R "$SOURCE_DIRECTORY/scripts" scripts
+
       - name: Setup supported Node runtime
         timeout-minutes: 3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Resolve current pull requests
@@ -85,6 +103,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/github/security-review-event.mjs
+
+  # A failed pass keeps the anchor. Reviewed heads now have fresh statuses, so
+  # the next scheduled pass can select the remaining backlog from the same window.
+  reconcile-backlog:
+    needs: [resolve, review]
+    if: ${{ always() && needs.resolve.outputs.truncated == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Keep the reconciliation window open
+        run: |
+          echo "::error::Reconciliation selected the per-pass maximum; failing this pass so the next scheduled pass continues from the same window."
+          exit 1
 
   review:
     needs: resolve
@@ -113,6 +145,7 @@ jobs:
         timeout-minutes: 5
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: security-review-primary
           persist-credentials: false
           sparse-checkout: |
             /scripts/github/dependency-guard.mjs
@@ -139,6 +172,7 @@ jobs:
         timeout-minutes: 5
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: security-review-retry
           persist-credentials: false
           sparse-checkout: |
             /scripts/github/dependency-guard.mjs
@@ -154,6 +188,14 @@ jobs:
             /.github/actions/setup-security-review/package.json
             /.github/actions/setup-security-review/package-lock.json
           sparse-checkout-cone-mode: false
+
+      - name: Stage trusted workflow scripts
+        id: sources
+        env:
+          SOURCE_DIRECTORY: ${{ steps.checkout.outcome == 'success' && 'security-review-primary' || 'security-review-retry' }}
+        run: |
+          cp -R "$SOURCE_DIRECTORY/scripts" scripts
+          cp -R "$SOURCE_DIRECTORY/.github" .github
 
       - name: Setup trusted policy runtime
         id: runtime

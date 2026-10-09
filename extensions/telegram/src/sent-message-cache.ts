@@ -1,20 +1,26 @@
+import { createHash } from "node:crypto";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { getTelegramRuntime } from "./runtime.js";
-import {
-  resolveSentMessageScopeKey,
-  sentMessageEntryKey,
-  TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
-  TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
-  TTL_MS,
-  type PersistedSentMessage,
-  type SentMessageConfig,
-} from "./sent-message-cache.legacy-state.js";
 
+const TTL_MS = 24 * 60 * 60 * 1000;
+const TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE = "telegram.sent-messages";
+const TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES = 10_000;
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const TELEGRAM_SENT_MESSAGES_STATE_KEY = Symbol.for("openclaw.telegramSentMessagesState");
 
+type PersistedSentMessage = {
+  scopeKey: string;
+  chatId: string;
+  messageId: string;
+  timestamp: number;
+};
+
+type SentMessageConfig = Pick<OpenClawConfig, "agents" | "bindings" | "channels" | "session">;
 type SentMessageStore = Map<string, Map<string, number>>;
 type SentMessagePersistentStore = PluginStateKeyedStore<PersistedSentMessage>;
 
@@ -26,12 +32,6 @@ type SentMessageBucket = {
 type SentMessageState = {
   bucketsByScope: Map<string, Promise<SentMessageBucket>>;
 };
-
-function getSentMessageState(): SentMessageState {
-  return resolveGlobalSingleton(TELEGRAM_SENT_MESSAGES_STATE_KEY, () => ({
-    bucketsByScope: new Map(),
-  }));
-}
 
 function openSentMessageStore(): SentMessagePersistentStore {
   return getTelegramRuntime().state.openKeyedStore<PersistedSentMessage>({
@@ -56,12 +56,6 @@ function cleanupExpired(
   }
 }
 
-function cleanupExpiredSentMessages(store: SentMessageStore, now: number): void {
-  for (const [scopeKey, entry] of store) {
-    cleanupExpired(store, scopeKey, entry, now);
-  }
-}
-
 async function readPersistedSentMessages(scopeKey: string): Promise<SentMessageStore> {
   const now = Date.now();
   const store: SentMessageStore = new Map();
@@ -70,11 +64,8 @@ async function readPersistedSentMessages(scopeKey: string): Promise<SentMessageS
       if (entry.value.scopeKey !== scopeKey || now - entry.value.timestamp > TTL_MS) {
         continue;
       }
-      let messages = store.get(entry.value.chatId);
-      if (!messages) {
-        messages = new Map<string, number>();
-        store.set(entry.value.chatId, messages);
-      }
+      const messages = store.get(entry.value.chatId) ?? new Map<string, number>();
+      store.set(entry.value.chatId, messages);
       messages.set(entry.value.messageId, entry.value.timestamp);
     }
   } catch (error) {
@@ -85,8 +76,24 @@ async function readPersistedSentMessages(scopeKey: string): Promise<SentMessageS
 
 type SentMessageOwner = { accountId?: string; agentId?: string };
 
+function resolveSentMessageScopeKey(cfg?: SentMessageConfig, owner?: SentMessageOwner): string {
+  const agentId =
+    owner?.agentId?.trim() ||
+    (cfg
+      ? resolveTelegramAccountOwnerAgentId({
+          cfg,
+          accountId: owner?.accountId,
+        })
+      : "main");
+  // The transient cache follows the current owner, including a changed default.
+  const storePath = resolveStorePath(cfg?.session?.store, { agentId });
+  return createHash("sha256").update(storePath, "utf8").digest("hex").slice(0, 24);
+}
+
 function getSentMessageBucket(scopeKey: string): Promise<SentMessageBucket> {
-  const state = getSentMessageState();
+  const state = resolveGlobalSingleton<SentMessageState>(TELEGRAM_SENT_MESSAGES_STATE_KEY, () => ({
+    bucketsByScope: new Map(),
+  }));
   const existing = state.bucketsByScope.get(scopeKey);
   if (existing) {
     return existing;
@@ -107,7 +114,10 @@ async function persistSentMessage(
 ): Promise<void> {
   try {
     await openSentMessageStore().register(
-      sentMessageEntryKey(scopeKey, chatId, messageId),
+      createHash("sha256")
+        .update(`${scopeKey}\0${chatId}\0${messageId}`, "utf8")
+        .digest("hex")
+        .slice(0, 32),
       { scopeKey, chatId, messageId, timestamp },
       { ttlMs: TTL_MS },
     );
@@ -130,14 +140,13 @@ export async function recordSentMessage(
   const persistence = persistSentMessage(cacheScopeKey, scopeKey, idKey, now);
   const bucket = await bucketTask;
   const { store } = bucket;
-  let entry = store.get(scopeKey);
-  if (!entry) {
-    entry = new Map<string, number>();
-    store.set(scopeKey, entry);
-  }
+  const entry = store.get(scopeKey) ?? new Map<string, number>();
+  store.set(scopeKey, entry);
   entry.set(idKey, now);
   if (now >= bucket.nextCleanupAt) {
-    cleanupExpiredSentMessages(store, now);
+    for (const [entryScopeKey, messages] of store) {
+      cleanupExpired(store, entryScopeKey, messages, now);
+    }
     bucket.nextCleanupAt = now + CLEANUP_INTERVAL_MS;
   }
   await persistence;

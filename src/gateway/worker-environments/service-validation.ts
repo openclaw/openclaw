@@ -5,11 +5,10 @@ import {
   WorkerMachineOptionsSchema,
   WorkerOperatingSystemSchema,
 } from "../../../packages/gateway-protocol/src/schema/environments.js";
-import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
+import { validateProviderSettings } from "../../config/provider-settings.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
-  type WorkerDesktopEndpoint,
   type WorkerLease,
   type WorkerLeaseStatus,
   type WorkerProvider,
@@ -18,14 +17,13 @@ import {
   type WorkerOperatingSystem,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
+import { normalizeWorkerSshEndpoint } from "./store-validation.js";
 
-export function requireWorkerProfile(
-  value: unknown,
-  serviceError: (code: "invalid_profile", message: string) => Error,
-): WorkerProfile {
-  const error = validateCloudWorkerProfileSettings(value);
+export function requireWorkerProfile(value: unknown): WorkerProfile {
+  const error = validateProviderSettings(value, "Worker profile");
   if (error) {
     throw serviceError("invalid_profile", error);
   }
@@ -38,7 +36,6 @@ export function requireInheritedWorkerProfileAuthorization(
   providerId: string,
   settings: unknown,
   configuredProviderId: string | undefined,
-  serviceError: (code: "profile_not_found" | "invalid_profile", message: string) => Error,
 ): void {
   if (
     providerId === DEVICE_WORKER_PROVIDER_ID &&
@@ -223,7 +220,7 @@ export function requireWorkerLease(value: unknown): WorkerLease {
     ...(value.sharedHost === undefined ? {} : { sharedHost: value.sharedHost }),
     ...(value.desktop === undefined
       ? {}
-      : { desktop: normalizeWorkerDesktopEndpoint(value.desktop as WorkerDesktopEndpoint) }),
+      : { desktop: normalizeWorkerDesktopEndpoint(value.desktop) }),
   };
   if (hasSsh) {
     return {

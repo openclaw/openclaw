@@ -79,16 +79,8 @@ function normalizeHeartbeatReply(
   const notifyFalse = stripTrailingHeartbeatNotifyFalse(stripped.text);
   notifyFalse.silent ||= isSilentReply;
   const isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(notifyFalse.text);
-  if ((stripped.shouldSkip || isInternalPlaceholderOnly) && !hasMedia) {
-    return {
-      shouldSkip: true,
-      text: "",
-      hasMedia,
-      isInternalPlaceholderOnly,
-      ...(notifyFalse.silent ? { silent: true } : {}),
-    };
-  }
-  let finalText = isInternalPlaceholderOnly ? "" : notifyFalse.text;
+  let finalText =
+    (stripped.shouldSkip && !hasMedia) || isInternalPlaceholderOnly ? "" : notifyFalse.text;
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }
@@ -125,6 +117,7 @@ export function classifyHeartbeatAgentOutcome(params: {
     heartbeatTerminalToolFailure?: HeartbeatTerminalToolFailure;
     replyPayload?: ReplyPayload;
   };
+  useHeartbeatFailureCopy: boolean;
   hasRelayableExecCompletion: boolean;
   suppressUnmarkedSourceReplies: boolean;
   responsePrefix: string | undefined;
@@ -172,7 +165,7 @@ export function classifyHeartbeatAgentOutcome(params: {
           params.ackMaxChars,
           mode,
         );
-  if (agentRunFailed) {
+  if (agentRunFailed && params.useHeartbeatFailureCopy) {
     const replacement = replaceGenericExternalRunFailureText(normalized.text);
     if (replacement.replaced) {
       normalized.text = replacement.text;

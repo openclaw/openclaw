@@ -4,6 +4,7 @@ import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-st
 import { OAuthRefreshFailureError } from "../auth-profiles/oauth-refresh-failure.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
+import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../provider-model-route-auth.js";
 import { shouldForceDirectAuthFallbackModelResolve } from "./credential-scoped-model.js";
@@ -194,19 +195,22 @@ function scopeAuthStoreToPreparedCandidates(
   };
 }
 
+function preparedProfileIds(plan: AgentRuntimeAuthPlan): string[] {
+  return [plan.forwardedAuthProfileId, ...(plan.forwardedAuthProfileCandidateIds ?? [])].filter(
+    (profileId, index, values): profileId is string =>
+      Boolean(profileId?.trim()) && values.indexOf(profileId) === index,
+  );
+}
+
 /** Restricts a native auth consumer to the profiles selected for one physical route. */
 export function scopeAuthProfileStoreToPreparedPlan(
   store: AuthProfileStore,
   plan: AgentRuntimeAuthPlan,
 ): AuthProfileStore {
   const profileIds =
-    plan.modelRoute?.authRequirement === "api-key"
+    plan.modelRoute?.authRequirement === "api-key" && plan.selectedAuthMode !== "oauth"
       ? []
-      : [plan.forwardedAuthProfileId, ...(plan.forwardedAuthProfileCandidateIds ?? [])].filter(
-          (profileId, index, values): profileId is string => {
-            return Boolean(profileId?.trim()) && values.indexOf(profileId) === index;
-          },
-        );
+      : preparedProfileIds(plan);
   return scopeAuthStoreToPreparedCandidates(store, profileIds);
 }
 
@@ -215,28 +219,23 @@ function applyResolvedAuthToPlan(params: {
   auth: Awaited<ReturnType<typeof getApiKeyForModelCore>>;
   candidates: string[];
 }): AgentRuntimeAuthPlan {
-  const profileId = params.auth.profileId?.trim();
-  if (!profileId) {
-    return {
-      ...params.plan,
-      forwardedAuthProfileId: undefined,
-      forwardedAuthProfileSource: undefined,
-      forwardedAuthProfileCandidateIds: undefined,
-      selectedAuthMode: params.auth.mode,
-    };
+  const profileId = params.auth.profileId?.trim() || undefined;
+  let source: AgentRuntimeAuthPlan["forwardedAuthProfileSource"];
+  let candidates: string[] | undefined;
+  if (profileId) {
+    const resolvedIndex = params.candidates.indexOf(profileId);
+    const remainingCandidates =
+      resolvedIndex >= 0 ? params.candidates.slice(resolvedIndex) : [profileId];
+    source = params.plan.forwardedAuthProfileId ? params.plan.forwardedAuthProfileSource : "auto";
+    candidates = source === "auto" ? remainingCandidates : [profileId];
   }
-  const resolvedIndex = params.candidates.indexOf(profileId);
-  const remainingCandidates =
-    resolvedIndex >= 0 ? params.candidates.slice(resolvedIndex) : [profileId];
-  const source = params.plan.forwardedAuthProfileId
-    ? params.plan.forwardedAuthProfileSource
-    : "auto";
   return {
     ...params.plan,
     forwardedAuthProfileId: profileId,
     forwardedAuthProfileSource: source,
-    forwardedAuthProfileCandidateIds: source === "auto" ? remainingCandidates : [profileId],
+    forwardedAuthProfileCandidateIds: candidates,
     selectedAuthMode: params.auth.mode,
+    selectedAuthFlow: params.auth.authFlow,
   };
 }
 
@@ -250,6 +249,13 @@ function assertResolvedAuthMatchesPreparedRoute(params: {
     providerModelRouteAcceptsAuthMode({
       requirement: route.authRequirement,
       mode: params.auth.mode,
+      authRequirement: resolveProviderModelAuthPolicy({
+        provider: route.provider,
+        mode: params.auth.mode,
+        authFlow: params.auth.authFlow,
+        api: route.api,
+        baseUrl: route.baseUrl,
+      }).authRequirement,
     })
   ) {
     return;
@@ -266,12 +272,7 @@ export async function resolvePreparedRuntimeModelAuth(
   },
 ): Promise<PreparedRuntimeModelAuthResolution> {
   const { plan, ...authParams } = params;
-  const candidates = [
-    plan.forwardedAuthProfileId,
-    ...(plan.forwardedAuthProfileCandidateIds ?? []),
-  ].filter((profileId, index, values): profileId is string => {
-    return Boolean(profileId?.trim()) && values.indexOf(profileId) === index;
-  });
+  const candidates = preparedProfileIds(plan);
   if (candidates.length === 0) {
     // The planner selected direct auth. Resolve only env/config material so an
     // unrelated full store cannot replace or pre-reject that immutable source.

@@ -3,6 +3,7 @@
 import { realpathSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import {
   classifyAttachmentBytes,
   type AttachmentClassification,
@@ -16,7 +17,6 @@ import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { readFileHandleBounded } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, openLocalFileSafely, type OpenResult } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { buildRandomTempFilePath } from "../infra/temp-download.js";
@@ -341,11 +341,7 @@ export class MediaAttachmentCache {
   }
 
   /** Returns a local path for providers that cannot accept buffers, creating a temp file if needed. */
-  async getPath(params: {
-    attachmentIndex: number;
-    maxBytes: number;
-    timeoutMs: number;
-  }): Promise<string> {
+  async getPath(params: Parameters<MediaAttachmentCache["getBuffer"]>[0]): Promise<string> {
     const entry = await this.ensureEntry(params.attachmentIndex);
     const local = await this.withLocalFile(entry, async () => {
       await (await this.prepareLocalFile(entry))?.handle.close().catch(() => {});
@@ -414,22 +410,15 @@ export class MediaAttachmentCache {
   }
 
   private async ensureEntry(attachmentIndex: number): Promise<AttachmentCacheEntry> {
-    const existing = this.entries.get(attachmentIndex);
-    if (existing) {
-      if (!existing.localResolutionAttempted) {
-        existing.resolvedPath = await this.resolveLocalPath(existing.attachment);
-        existing.localResolutionAttempted = true;
-      }
-      return existing;
+    const entry: AttachmentCacheEntry = this.entries.get(attachmentIndex) ?? {
+      attachment: this.attachments.find((item) => item.index === attachmentIndex) ?? {
+        index: attachmentIndex,
+      },
+    };
+    if (!entry.localResolutionAttempted) {
+      entry.resolvedPath = await this.resolveLocalPath(entry.attachment);
+      entry.localResolutionAttempted = true;
     }
-    const attachment = this.attachments.find((item) => item.index === attachmentIndex) ?? {
-      index: attachmentIndex,
-    };
-    const entry: AttachmentCacheEntry = {
-      attachment,
-      resolvedPath: await this.resolveLocalPath(attachment),
-      localResolutionAttempted: true,
-    };
     this.entries.set(attachmentIndex, entry);
     return entry;
   }
@@ -541,10 +530,7 @@ export class MediaAttachmentCache {
   }
 
   private async getCanonicalLocalPathRoots(): Promise<readonly string[]> {
-    if (this.canonicalLocalPathRoots) {
-      return await this.canonicalLocalPathRoots;
-    }
-    this.canonicalLocalPathRoots = (async () =>
+    return await (this.canonicalLocalPathRoots ??= (async () =>
       mergeInboundPathRoots(
         this.localPathRoots,
         await Promise.all(
@@ -555,7 +541,6 @@ export class MediaAttachmentCache {
             return await fs.realpath(root).catch(() => root);
           }),
         ),
-      ))();
-    return await this.canonicalLocalPathRoots;
+      ))());
   }
 }

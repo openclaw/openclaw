@@ -115,8 +115,8 @@ Backend adapters retain protocol validation and special-mode handling.
     equivalent control and otherwise may ignore them. They do not weaken the
     execution mode's isolation guarantees.
 
-    To require the configured agent runtime and a literal zero-tool model
-    surface, select isolated execution explicitly:
+    To require fresh inference through the configured agent runtime, select
+    isolated execution explicitly:
 
     ```typescript
     const result = await api.runtime.llm.complete({
@@ -132,10 +132,17 @@ Backend adapters retain protocol validation and special-mode handling.
     ```
 
     This mode accepts exactly one user message. Core derives the configured CLI
-    or harness owner, starts a fresh context, exposes no model-callable tools,
+    or harness owner, starts a fresh context, supplies no model-callable tools,
     and never falls back to direct provider transport. Unsupported runtimes fail
     before inference. `result.execution.owner` reports the selected owner;
     token usage remains absent when a CLI cannot report it.
+
+    Agents API has a documented exception to the literal zero-tool guarantee:
+    its restricted sessions may retain service-owned helpers despite having no
+    executor or supplied tools. Output rejection cannot prevent those helpers
+    from acting during inference. Callers requiring zero tools must select a
+    runtime that enforces that boundary. See the
+    [isolated-completion contract](/plugins/sdk-agent-harness/registration#isolated-completion).
 
     Completion failures expose a stable `code` on the thrown error. Isolated
     callers can distinguish authorization, invalid isolated input, unsupported
@@ -171,7 +178,7 @@ Backend adapters retain protocol validation and special-mode handling.
     replace aliases with an adapter id: separate aliases can point at separate
     local GPU hosts. The host rejects endpoints that do not match the configured
     provider base URL, apart from the `/v1` normalization used by Ollama and LM
-    Studio adapters. The host owns startup serialization, readiness probes,
+    Studio adapters. The host owns startup serialization, readiness checks,
     request leases, abort handling, and idle shutdown.
 
     The helper uses the same simple-completion preparation path as OpenClaw's
@@ -192,6 +199,12 @@ Backend adapters retain protocol validation and special-mode handling.
     `requiredAuthMode: "oauth"`; the host then rejects a selected non-OAuth
     credential before dispatch. Isolated agent-runtime completions reject these
     direct-provider controls before dispatch.
+
+    OpenAI and Azure Responses accept a raw JSON Schema as `responseFormat` and
+    wrap it in `text.format` with `type: "json_schema"` and the name
+    `openclaw_response`. Native `json_schema`, `json_object`, and `text` formats
+    are preserved; Chat Completions-style nested `json_schema` descriptors are
+    flattened for Responses, including any supplied `strict` value.
 
     Set `reasoning` to request a reasoning effort for the selected model. The
     host accepts the canonical thinking levels (`off`, `minimal`, `low`,

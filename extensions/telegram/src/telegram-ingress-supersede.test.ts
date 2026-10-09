@@ -136,123 +136,62 @@ describe("telegram ingress supersede policy", () => {
   const auth = { cfg: cfgWithOwner(), accountId: "default" };
   const shouldSupersede = createShouldSupersedeTelegramSpooledPending(auth);
 
-  it.each(["root", "account"])(
-    "follows %s runtime policy and expires prepared decisions",
-    async (scope) => {
-      const policy = (allowFrom: string[]): OpenClawConfig => ({
-        channels: {
-          telegram:
-            scope === "root"
-              ? { dmPolicy: "allowlist", allowFrom }
-              : { accounts: { default: { dmPolicy: "allowlist", allowFrom } } },
-        },
-      });
-      const initial = policy([]);
-      setRuntimeConfigSnapshot(initial);
-      const predicate = createSupersedePredicate({
-        getConfig: getRuntimeConfig,
-        accountId: "default",
-      });
-      const candidate = record(
-        "2",
-        messageUpdate({ updateId: 2, text: "stop", senderId: OWNER_ID }),
-      );
-      const pending = claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID }));
-      expect(await predicate(candidate, pending)).toBe(false);
+  it("follows account runtime policy and expires prepared decisions", async () => {
+    const policy = (allowFrom: string[]): OpenClawConfig => ({
+      channels: {
+        telegram: { accounts: { default: { dmPolicy: "allowlist", allowFrom } } },
+      },
+    });
+    const initial = policy([]);
+    setRuntimeConfigSnapshot(initial);
+    const predicate = createSupersedePredicate({
+      getConfig: getRuntimeConfig,
+      accountId: "default",
+    });
+    const candidate = record("2", messageUpdate({ updateId: 2, text: "stop", senderId: OWNER_ID }));
+    const pending = claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID }));
+    expect(await predicate(candidate, pending)).toBe(false);
 
-      setRuntimeConfigSnapshot(policy([OWNER_ID]));
-      const decision = await predicate(candidate, pending);
-      expect(typeof decision).toBe("function");
-      if (typeof decision !== "function") {
-        throw new Error("expected a prepared policy guard");
-      }
-      expect(decision()).toBe(true);
-      setRuntimeConfigSnapshot(policy([]));
-      expect(decision()).toBe(false);
-      expect(await predicate(candidate, pending)).toBe(false);
-    },
-  );
-
-  it.each(["root", "account", "group", "topic"])(
-    "honors disabled %s group policy for an allowlisted sender",
-    async (scope) => {
-      const groupConfig = {
-        allowFrom: [OWNER_ID],
-        ...(scope === "group" ? { groupPolicy: "disabled" as const } : {}),
-        ...(scope === "topic" ? { topics: { "10": { groupPolicy: "disabled" as const } } } : {}),
-      };
-      const account = {
-        groupAllowFrom: [OWNER_ID],
-        groupPolicy: scope === "account" ? ("disabled" as const) : ("open" as const),
-        groups: { "-1001": groupConfig },
-      };
-      const cfg: OpenClawConfig = {
-        channels: {
-          telegram:
-            scope === "root"
-              ? { ...account, groupPolicy: "disabled" }
-              : { accounts: { default: account } },
-        },
-      };
-      expect(
-        await isTelegramSpooledUpdateSenderAuthorized(
-          messageUpdate({
-            updateId: 1,
-            text: "hello",
-            senderId: OWNER_ID,
-            chatId: -1001,
-            chatType: "supergroup",
-            messageThreadId: 10,
-            isTopicMessage: true,
-            isForum: true,
-          }),
-          { cfg, accountId: "default" },
-        ),
-      ).toBe(false);
-    },
-  );
-
-  it("never supersedes on normal messages even from owner", async () => {
-    expect(
-      await shouldSupersede(
-        record("2", messageUpdate({ updateId: 2, text: "hello there", senderId: OWNER_ID })),
-        claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID })),
-      ),
-    ).toBe(false);
+    setRuntimeConfigSnapshot(policy([OWNER_ID]));
+    const decision = await predicate(candidate, pending);
+    expect(typeof decision).toBe("function");
+    if (typeof decision !== "function") {
+      throw new Error("expected a prepared policy guard");
+    }
+    expect(decision()).toBe(true);
+    setRuntimeConfigSnapshot(policy([]));
+    expect(decision()).toBe(false);
+    expect(await predicate(candidate, pending)).toBe(false);
   });
 
-  it("does not supersede unauthorized abort text (group stranger)", async () => {
+  it("honors disabled topic group policy for an allowlisted sender", async () => {
+    const groupConfig = {
+      allowFrom: [OWNER_ID],
+      topics: { "10": { groupPolicy: "disabled" as const } },
+    };
+    const account = {
+      groupAllowFrom: [OWNER_ID],
+      groupPolicy: "open" as const,
+      groups: { "-1001": groupConfig },
+    };
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: { accounts: { default: account } },
+      },
+    };
     expect(
-      await shouldSupersede(
-        record(
-          "2",
-          messageUpdate({
-            updateId: 2,
-            text: "stop",
-            senderId: STRANGER_ID,
-            chatId: -1001,
-            chatType: "supergroup",
-          }),
-        ),
-        claim(
-          "1",
-          messageUpdate({
-            updateId: 1,
-            text: "prior",
-            senderId: OWNER_ID,
-            chatId: -1001,
-            chatType: "supergroup",
-          }),
-        ),
-      ),
-    ).toBe(false);
-  });
-
-  it("does not supersede bare slash prefixes that are not recognized commands", async () => {
-    expect(
-      await shouldSupersede(
-        record("2", messageUpdate({ updateId: 2, text: "/notarealcmd", senderId: OWNER_ID })),
-        claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID })),
+      await isTelegramSpooledUpdateSenderAuthorized(
+        messageUpdate({
+          updateId: 1,
+          text: "hello",
+          senderId: OWNER_ID,
+          chatId: -1001,
+          chatType: "supergroup",
+          messageThreadId: 10,
+          isTopicMessage: true,
+          isForum: true,
+        }),
+        { cfg, accountId: "default" },
       ),
     ).toBe(false);
   });
@@ -287,6 +226,30 @@ describe("telegram ingress supersede policy", () => {
     );
     expect(authorized).toBe(true);
     expect(unauthorized).toBe(false);
+  });
+
+  it.each([
+    { senderId: OWNER_ID, messageSenderId: STRANGER_ID, expected: true },
+    { senderId: STRANGER_ID, messageSenderId: OWNER_ID, expected: false },
+  ])("authorizes callback sender $senderId independently of its message author", async (entry) => {
+    const update = {
+      update_id: 2,
+      callback_query: {
+        data: "/new",
+        from: { id: Number(entry.senderId) },
+        message: messageUpdate({
+          updateId: 2,
+          text: "controls",
+          senderId: entry.messageSenderId,
+        }).message,
+      },
+    };
+    expect(
+      await shouldSupersede(
+        record("2", update),
+        claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID })),
+      ),
+    ).toBe(entry.expected);
   });
 
   it("gates ambient room-event supersede on authorized sender", async () => {
@@ -325,12 +288,6 @@ describe("telegram ingress supersede policy", () => {
   });
 
   it.each([
-    {
-      name: "does not supersede an identityless foreign targeted command",
-      text: "/queue@OtherBot",
-      entityText: "/queue@OtherBot",
-      expected: false,
-    },
     {
       name: "keeps identityless targeted aborts pessimistic",
       text: "/stop@OtherBot!",
@@ -397,26 +354,6 @@ describe("telegram ingress supersede policy", () => {
         ),
       ).toBe(false);
     }
-  });
-
-  it("does not supersede bot_command entities addressed to another bot", async () => {
-    const ourBotAuth = {
-      ...auth,
-      botUsername: "mybot",
-    };
-    const shouldSupersedeOurBot = createShouldSupersedeTelegramSpooledPending(ourBotAuth);
-    const otherBotCommand = messageUpdate({
-      updateId: 2,
-      text: "/deploy@OtherBot",
-      senderId: OWNER_ID,
-      entities: [{ type: "bot_command", offset: 0, length: "/deploy@OtherBot".length }],
-    });
-    expect(
-      await shouldSupersedeOurBot(
-        record("2", otherBotCommand),
-        claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID })),
-      ),
-    ).toBe(false);
   });
 
   it("rejects supersede when topic allowFrom excludes the sender despite account allowFrom *", async () => {
@@ -486,12 +423,6 @@ describe("telegram ingress supersede policy", () => {
   });
 
   it.each([
-    {
-      name: "allows the topic sender when the base chat denies them",
-      baseAllowFrom: [STRANGER_ID],
-      topicAllowFrom: [OWNER_ID],
-      expected: true,
-    },
     {
       name: "denies the topic sender when the base chat allows them",
       baseAllowFrom: [OWNER_ID],

@@ -793,11 +793,13 @@ suite.define(() => {
     }
   });
 
-  it("rejects a combined attachment frame before the Gateway connection is lost", async () => {
+  it("rejects the file that would overflow one send's frame at intake", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      // 400 bytes past the 256 KiB envelope slack leaves a 300-byte decoded batch
+      // budget: each 200-byte file fits the per-file ceiling, both together do not.
       const gateway = await installMockGateway(page, {
         attachmentMaxBytes: 256,
-        maxPayload: 700,
+        maxPayload: 256 * 1024 + 400,
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -807,23 +809,14 @@ suite.define(() => {
         { name: "first.txt", mimeType: "text/plain", buffer: Buffer.alloc(200, 0x61) },
         { name: "second.txt", mimeType: "text/plain", buffer: Buffer.alloc(200, 0x62) },
       ]);
+
+      await page
+        .locator(".app-toast")
+        .filter({ hasText: "Too large to send: second.txt" })
+        .waitFor();
       await expect
         .poll(() => page.locator('.chat-attachment-thumb[aria-busy="false"]').count())
-        .toBe(2);
-
-      await composer.press("Enter");
-
-      const alert = page
-        .getByRole("alert")
-        .filter({ hasText: "Remove one or more attachments and retry" });
-      const outcome = await Promise.race([
-        alert.waitFor().then(() => "rejected" as const),
-        gateway.waitForRequest("chat.send").then(() => "sent" as const),
-      ]);
-      expect(outcome).toBe("rejected");
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
-      await expect.poll(() => composer.inputValue()).toBe("Send both files");
+        .toBe(1);
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
@@ -831,11 +824,10 @@ suite.define(() => {
         await page.screenshot({ path: path.join(artifactDir, "attachment-frame-rejected.png") });
       }
 
-      await page.locator(".chat-attachment-remove").first().click();
       await composer.press("Enter");
       const request = await gateway.waitForRequest("chat.send");
       expect(request.params).toMatchObject({
-        attachments: [{ fileName: "second.txt", mimeType: "text/plain", origin: "file" }],
+        attachments: [{ fileName: "first.txt", mimeType: "text/plain", origin: "file" }],
         message: "Send both files",
       });
     });
@@ -954,6 +946,72 @@ suite.define(() => {
         .locator('openclaw-chat-pane[aria-hidden="false"]')
         .getByRole("img", { name: "pixel.png" })
         .waitFor();
+    });
+  });
+
+  it("settles an eventless stalled attachment read through failure, preserves draft, and releases send", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installDeferredAttachmentReader(page);
+      const gateway = await installMockGateway(page);
+
+      const proofDir = path.join(suite.artifactDir, "stalled-attachment-read");
+      await mkdir(proofDir, { recursive: true });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const send = page.getByRole("button", { name: "Send message" });
+      const draftText = "Draft message while attachment read stalls";
+      await composer.fill(draftText);
+
+      await page.clock.install();
+      await pastePng(composer);
+
+      // 1. Stalled preparing state
+      await expect.poll(() => send.isDisabled()).toBe(true);
+      await page.locator(".chat-attachment-loading").waitFor();
+      await page.screenshot({
+        path: path.join(proofDir, "screenshot-1-attachment-stalled-preparing.png"),
+      });
+
+      // Advance virtual clock past the 15-second read timeout
+      await page.clock.runFor(15_001);
+
+      // 2. Settles through failure, error icon visible, send released for draft text
+      await page.locator(".chat-attachment-thumb--error").waitFor();
+      await page.locator(".chat-attachment-error").waitFor();
+      await expect.poll(() => send.isEnabled()).toBe(true);
+      await page.screenshot({
+        path: path.join(proofDir, "screenshot-2-attachment-stalled-settled-error.png"),
+      });
+
+      // 3. Remove failed attachment tile, draft retained, send still ready
+      const removeButton = page.locator(".chat-attachment-remove").first();
+      await removeButton.click();
+      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
+      expect(await composer.inputValue()).toBe(draftText);
+      await expect.poll(() => send.isEnabled()).toBe(true);
+      await page.screenshot({
+        path: path.join(proofDir, "screenshot-3-attachment-removed-draft-ready.png"),
+      });
+
+      // 4. Send draft message successfully
+      await send.click();
+      const request = await gateway.waitForRequest("chat.send");
+      expect(request.params).toMatchObject({
+        message: draftText,
+      });
+      expect((request.params as { attachments?: unknown }).attachments).toBeUndefined();
+      await expect.poll(() => composer.inputValue()).toBe("");
+      await page.screenshot({
+        path: path.join(proofDir, "screenshot-4-attachment-draft-sent.png"),
+      });
+
+      const aborts = await page.evaluate(
+        () =>
+          (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
+            .attachmentReadProof.aborts,
+      );
+      expect(aborts).toBe(1);
     });
   });
 });

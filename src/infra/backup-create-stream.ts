@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import { compose, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
 
@@ -161,23 +161,21 @@ export async function writeArchiveStreamToFile(params: {
     return { archivePath: params.archivePath, identity: currentIdentity };
   } catch (err) {
     archiveWriteStream.destroy();
-    let cleanupReceipt: BackupArchiveCleanupReceipt | undefined = openedIdentity
-      ? { archivePath: params.archivePath, identity: openedIdentity }
-      : undefined;
-    if (!cleanupReceipt) {
+    let cleanupReceipt: BackupArchiveCleanupReceipt | undefined = {
+      archivePath: params.archivePath,
+    };
+    if (openedIdentity) {
+      cleanupReceipt.identity = openedIdentity;
+    } else {
       try {
         const currentIdentity = fsSync.lstatSync(params.archivePath);
-        cleanupReceipt = currentIdentity.isFile()
-          ? {
-              archivePath: params.archivePath,
-              identity: currentIdentity,
-            }
-          : { archivePath: params.archivePath };
+        if (currentIdentity.isFile()) {
+          cleanupReceipt.identity = currentIdentity;
+        }
       } catch (cleanupError) {
-        if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") {
-          // Preserve the cleanup obligation even when the filesystem cannot
-          // supply an identity until a later outer-cleanup attempt.
-          cleanupReceipt = { archivePath: params.archivePath };
+        // Preserve unknown identities for a later outer-cleanup attempt.
+        if ((cleanupError as NodeJS.ErrnoException).code === "ENOENT") {
+          cleanupReceipt = undefined;
         }
       }
     }

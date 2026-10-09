@@ -8,16 +8,6 @@ function normalizeComparableSlackText(text: string): string {
   return text.trim().replace(/\s+/g, " ");
 }
 
-function isSlackAuthoredTextRepresentedInInteractive(
-  text: string,
-  interactive?: LegacyInteractiveReply,
-): boolean {
-  return isSlackAuthoredTextRepresentedInFragments(
-    text,
-    interactive?.blocks.flatMap((block) => (block.type === "text" ? [block.text] : [])) ?? [],
-  );
-}
-
 function isSlackAuthoredTextRepresentedInFragments(
   text: string,
   rawFragments: readonly string[],
@@ -64,6 +54,10 @@ export function resolveSlackAuthoredTextPlacement(params: {
   const isRepresentedInBlocks =
     params.renderedInBlocks ||
     isSlackAuthoredTextRepresentedInFragments(text, params.renderedTextFragments ?? []) ||
-    isSlackAuthoredTextRepresentedInInteractive(text, params.interactive);
+    isSlackAuthoredTextRepresentedInFragments(
+      text,
+      params.interactive?.blocks.flatMap((block) => (block.type === "text" ? [block.text] : [])) ??
+        [],
+    );
   return isRepresentedInBlocks ? "blocks" : "outside-blocks";
 }

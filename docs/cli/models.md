@@ -33,11 +33,13 @@ openclaw models scan
 
 For `models status`, `OPENCLAW_AGENT_DIR` overrides the inspected auth directory when `--agent` is omitted. A matching configured `agentDir` retains that agent's ownership during credential refresh. An explicit `--agent <id>` takes precedence over the environment override.
 
-`fallbacks`/`image-fallbacks` manage global defaults. `set`, `set-image`, `scan`, `refresh`, and `aliases` also operate globally and reject `--agent`.
+`set`, `set-image`, `scan`, `refresh`, `aliases`, and `fallbacks`/`image-fallbacks` `add`, `remove`, and `clear` operate on global defaults and reject `--agent`.
 
 `models set` and `models set-image` require the provider to be declared by an installed plugin or configured under `models.providers`. An unknown provider exits nonzero without changing config. If the provider is known but the model is absent from the local catalog, the command saves the selection and prints a warning because newly released and self-hosted models may not be cataloged yet. Writing `agents.defaults.model` with [`openclaw config set`](/cli/config#values) is stricter than `models set`: it rejects a model reference it cannot resolve instead of warning. That check is text-model only; `config set` does not validate `agents.defaults.imageModel` at all, so it is not the stricter path for the `set-image` setting. `openclaw doctor --json` reports configured unknown providers; add `--severity-min info` to also see active models that the local catalog cannot confirm.
 
 Default-model, alias, and fallback changes resolve provider-owned model aliases using the current plugin configuration. When stored entries resolve to the selected model, their settings move to its canonical key; existing canonical settings take precedence. Adding an alias replaces the model's previous alias. If config changes during that preparation, the command rejects the write; rerun it against the updated config.
+
+An explicit `provider/model` that matches a configured provider model keeps its literal identity, even when another model has a colliding alias. Bare aliases and noncolliding `provider/alias` selections still resolve normally.
 
 ### Status
 
@@ -58,9 +60,9 @@ The list shows model inventory. Status explains the configured default, fallback
 and authentication for their routes. It does not inspect a chat session's model
 override; use [`/model status`](/concepts/models#model-in-chat) in that session.
 
-For agents with `runtime.type: "acp"`, status and auth probes inspect the native
+For agents with `runtime.type: "acp"`, status and auth checks inspect the native
 default and native fallback policy. The agent's `model.primary` selects its ACP
-harness and is not a native probe candidate. Use ACP session controls to inspect
+harness and is not a model candidate for the native check. Use ACP session controls to inspect
 or change the external harness model.
 
 #### Read status correctly
@@ -106,34 +108,35 @@ Options:
 | `--json`                  | JSON output; auth-profile, provider, and startup diagnostics go to stderr so stdout stays pipeable into `jq`. |
 | `--plain`                 | Plain text output.                                                                                            |
 | `--check`                 | Return the auth/runtime check exit code described above, including `1` for indeterminate readiness.           |
-| `--probe`                 | Live probe of configured auth profiles. Real requests; may consume tokens and trigger rate limits.            |
-| `--probe-provider <name>` | Probe one provider only.                                                                                      |
-| `--probe-profile <id>`    | Probe specific auth profile ids (repeat or comma-separated).                                                  |
-| `--probe-timeout <ms>`    | Per-probe timeout.                                                                                            |
-| `--probe-concurrency <n>` | Concurrent probes.                                                                                            |
-| `--probe-max-tokens <n>`  | Probe max tokens (best effort).                                                                               |
+| `--probe`                 | Live check of configured auth profiles. Real requests; may consume tokens and trigger rate limits.            |
+| `--probe-provider <name>` | Check one provider only.                                                                                      |
+| `--probe-profile <id>`    | Check specific auth profile ids (repeat or comma-separated).                                                  |
+| `--probe-timeout <ms>`    | Per-check timeout.                                                                                            |
+| `--probe-concurrency <n>` | Concurrent checks.                                                                                            |
+| `--probe-max-tokens <n>`  | Maximum tokens per check (best effort).                                                                       |
 | `--agent <id>`            | Configured agent id; overrides `OPENCLAW_AGENT_DIR`.                                                          |
 
 `--probe-timeout` requires a positive number; `--probe-concurrency` and `--probe-max-tokens` require positive integers. Omit these options to use their defaults (`8000`, `2`, and `8`, respectively); explicitly empty values are rejected.
 
-Probe rows can come from auth profiles, env credentials, or `models.json`. Probe status buckets: `ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`.
+Check rows can come from auth profiles, env credentials, or `models.json`. Check status buckets: `ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`.
 
-Direct `models status --probe` runs create temporary internal sessions in the selected agent's canonical database, so the command requires exclusive ownership of the configured state directory. Stop a running Gateway with `openclaw gateway stop` before probing. Probe results can be reported before slow cleanup finishes. Temporary auth directories, internal sessions, and the state lock remain held until accepted work and cleanup settle, including after interruption. Cleanup failures are reported; a timeout does not certify that resources have closed.
+Direct `models status --probe` runs create temporary internal sessions in the selected agent's canonical database, so the command requires exclusive ownership of the configured state directory. Stop a running Gateway with `openclaw gateway stop` before checking. Check results can be reported before slow cleanup finishes. Temporary auth directories, internal sessions, and the state lock remain held until accepted work and cleanup settle, including after interruption. Cleanup failures are reported; a timeout does not certify that resources have closed.
 
-Probe detail/reason codes to expect when a probe never reaches a model call:
+Check detail/reason codes to expect when a check never reaches a model call:
 
-- `excluded_by_auth_order`: a stored profile exists, but explicit `auth.order.<provider>` omitted it, so probe reports the exclusion instead of trying it.
+- `excluded_by_auth_order`: a stored profile exists, but explicit `auth.order.<provider>` omitted it, so the check reports the exclusion instead of trying it.
 - `missing_credential`, `invalid_expires`, `expired`, `unresolved_ref`: profile is present but not eligible or resolvable.
 - `ineligible_profile`: profile is incompatible with provider config for another reason.
-- `no_model`: provider auth exists, but OpenClaw could not resolve a probeable model candidate for that provider.
+- `no_model`: provider auth exists, but OpenClaw could not resolve a model candidate that can be tested for that provider.
 
 For OpenAI ChatGPT/Codex OAuth troubleshooting, `openclaw models status`, `openclaw models auth list --provider openai`, and `openclaw config get agents.defaults.model --json` are the quickest way to confirm whether an agent has a usable `openai` OAuth profile for `openai/*` through the native Codex runtime. See [OpenAI provider setup](/providers/openai/setup#check-and-recover-codex-oauth-routing).
 
 ### List
 
-`openclaw models list` reads published model inventory. It does not start model
-provider discovery or rewrite `models.json`. This also applies to `--all` and
-`--provider <id>`.
+`openclaw models list` returns published model inventory without waiting for
+provider discovery or rewriting `models.json`. This also applies to `--all` and
+`--provider <id>`. A Gateway-backed request can renew expired inventory in the
+background as described below.
 
 ```bash
 openclaw models list --agent <agentId>
@@ -147,12 +150,27 @@ agent on that Gateway. Provider filtering, model visibility and availability use
 the Gateway's captured config and auth facts. The command does not resolve local
 model-provider secrets for that request.
 
-When a provider's saved inventory expires, catalog reads return saved rows while
-the Gateway refreshes that provider in the background. A later read shows newly
+When a provider's saved inventory expires, inventory requests return saved rows while
+the Gateway refreshes that provider in the background. Internal chat and session
+metadata reads do not schedule discovery. A later inventory request shows newly
 published models. Failed refreshes preserve saved rows; use `--refresh` to retry.
 Chat model menus, the Control UI, and `models list` display the catalog's refresh
 warning. The CLI writes the warning to stderr, keeping JSON and plain stdout
 machine-readable.
+
+A provider that rejects catalog authentication produces a separate CLI diagnostic
+with its provider and, when available, profile ID. Open **Models** in the Control
+UI to check sign-in and catalog access, then retry with `--refresh`. Catalog
+rejection alone does not cause the generic refresh warning or prove that model
+requests will fail. Timeouts and other discovery failures still produce the
+refresh warning, even when another provider needs sign-in.
+
+Discovery diagnostics go to stderr in every output mode. JSON output also includes
+`providerOutcomes` when the Gateway or local catalog publishes them: each entry
+contains `provider`, optional `profileId`, and `status` (`ready`, `auth-rejected`,
+or `unavailable`). These are catalog-wide outcomes, independent of model-row
+filters such as `--provider` and `--local`. Provider error bodies and credentials
+are not included. Plain stdout remains one model key per line.
 
 A selected Gateway must advertise `published-model-catalog`. If it does not,
 update or restart it and retry. Connection, authorization and capability errors
@@ -184,6 +202,7 @@ Notes:
 - `Input` and `Ctx` use the selected physical route plus explicit configured logical overrides. Unresolved route metadata stays unknown instead of borrowing another route's capabilities.
 - Configured model IDs retain case. For example, `Reader` and `reader` remain distinct. Provider-owned aliases still apply, and configured aliases remain in the table tags and JSON output.
 - `--provider` takes a provider ID, such as `moonshot`, rather than a picker label such as `Moonshot AI`.
+- Unknown provider IDs fail with a non-zero exit and name the rejected provider. Run `openclaw models list --all` to list models and their provider IDs.
 - Model refs split on the first `/`. Include the provider prefix when the model ID contains `/`, for example `openrouter/moonshotai/kimi-k2`.
 
 Provider discovery through `models list --refresh` is separate from the hosted
@@ -197,9 +216,11 @@ for the wire controls.
 not sign in to providers, test credentials, or activate downloaded rows in a
 running Gateway. It rejects `--agent` because the hosted catalog is global.
 
-Restart the Gateway to use downloaded updates. The Gateway reports when a
-checked catalog needs a restart, including an update downloaded by another
-process. A successful refresh result describes the download, not live activation.
+The Gateway applies compatible downloads at its next background catalog check
+or after an explicit model-list refresh, without restarting. Refresh requests
+return current rows without waiting for the replacement generation.
+A failed preparation leaves the previous generation active. A successful CLI
+refresh result describes the download, not live activation.
 If `models.catalogRefresh.enabled` is `false`, the command reports that refresh
 is disabled.
 
@@ -225,7 +246,7 @@ exposes the configured default, the first configured provider/model is used.
 
 `models scan` reads OpenRouter's public `:free` catalog and ranks candidates for fallback use. The catalog itself is public, so metadata-only scans do not need an OpenRouter key.
 
-By default OpenClaw tries to probe tool and image support with live model calls. If no OpenRouter key is configured, the command falls back to metadata-only output and explains that `:free` models still require `OPENROUTER_API_KEY` for probes and inference.
+By default OpenClaw tries to check tool and image support with live model calls. If no OpenRouter key is configured, the command falls back to metadata-only output and explains that `:free` models still require `OPENROUTER_API_KEY` for checks and inference.
 
 Options:
 
@@ -234,7 +255,7 @@ Options:
 - `--max-age-days <days>`
 - `--provider <name>`
 - `--max-candidates <n>`
-- `--timeout <ms>` (catalog request and per-probe timeout)
+- `--timeout <ms>` (catalog request and per-check timeout)
 - `--concurrency <n>`
 - `--yes`
 - `--no-input`
@@ -244,7 +265,9 @@ Options:
 
 Numeric scan options reject empty and whitespace-only values. Omit a flag to retain its default behavior.
 
-`--set-default` and `--set-image` require live probes; metadata-only scan results are informational and are not applied to config.
+A probed scan writes config, even without `--set-default`. It replaces `agents.defaults.model.fallbacks` with the selected models, replaces `agents.defaults.imageModel.fallbacks` when image-capable models are selected, and adds the selected models to `agents.defaults.models`. `--set-default` and `--set-image` additionally set the matching primary. `--json` still writes. Use `--no-probe` to inspect candidates without changing config.
+
+`--set-default` and `--set-image` require live checks; metadata-only scan results are informational and are not applied to config.
 
 ## Aliases
 
@@ -358,11 +381,19 @@ For the shared-main agent, `--force` clears the provider's shared credentials an
 
 `models auth logout <profileId>` removes one saved auth profile from the selected agent auth store. Use the profile id shown by `models auth list`. It also drops that profile from `auth.profiles` and from every `auth.order` list in your config, so no stale reference is left behind, and it deletes an `auth.order.<provider>` entry that would otherwise be emptied (an authored empty order means "select no profiles" and would disable the provider). It prompts for confirmation on a TTY; pass `--yes` for scripts and agents. Provider key references are cleared before the credential is removed. Model defaults and connection settings stay unchanged. Logout refuses when the profile is not in the store.
 
+Logout also removes copies of the selected credential from generated plugin model catalog caches, including retained migration copies, while preserving model inventory and other accounts. Unusable generated-cache rows are discarded rather than retaining unknown secrets. Cleanup checks candidate stores together and only writes catalogs that need credentials removed or unusable rows discarded. A catalog refresh already in progress rechecks saved credentials before publishing. Doctor's catalog credential recovery is unchanged. This cleanup applies while the selected profile is still saved; it cannot identify cached credentials from profiles already removed by an older version.
+
+If final catalog cleanup fails, logout restores the saved credential and its config references so you can rerun the same command with the same profile ID. The error reports whether restoration completed; concurrent auth changes can prevent full restoration and require inspecting the current profiles before retrying.
+
 `models auth login-github-copilot` is a shortcut for `models auth login --provider github-copilot --method device` (GitHub device flow); it accepts `--yes` to overwrite an existing profile without prompting.
 
 Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models auth <subcommand> --agent <id>` to target a specific configured agent store. Both forms are supported by `add`, `list`, `login`, `activate`, `logout`, `paste-api-key`, `setup-token`, `paste-token`, `login-github-copilot`, and `order get`/`set`/`clear`.
 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
+
+See [OpenAI authentication](/providers/openai/authentication) to compare Codex
+OAuth, device code, API keys, and Sign in with ChatGPT (Beta) (`--method siwc`),
+including model access, hosted plugins, and shared versus personal setup.
 
 Examples:
 

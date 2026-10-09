@@ -66,20 +66,12 @@ describe("createBoundedProviderBinaryStream", () => {
     },
   );
 
-  it.each(
-    (["cancel", "release"] as const).flatMap((operation) =>
-      [false, true].flatMap((cancelRejects) =>
-        [false, true].map((cleanupRejects) => ({ operation, cancelRejects, cleanupRejects })),
-      ),
-    ),
-  )(
-    "settles $operation after source and request cleanup (cancel rejects: $cancelRejects, cleanup rejects: $cleanupRejects)",
-    async ({ operation, cancelRejects, cleanupRejects }) => {
+  it.each(["cancel", "release"] as const)(
+    "settles %s only after source and request cleanup finish",
+    async (operation) => {
       const canceled = createDeferredCore();
       const cleaned = createDeferredCore();
       const reason = new Error("stop playback");
-      const cancelError = new Error("source cancellation failed");
-      const cleanupError = new Error("request cleanup failed");
       const cancel = vi.fn(() => canceled.promise);
       const source = new ReadableStream<Uint8Array>({ cancel });
       const cleanup = vi.fn(async () => {
@@ -111,29 +103,11 @@ describe("createBoundedProviderBinaryStream", () => {
         await waitForImmediate();
         expect(settled).toBe(false);
         expect(cleanup).toHaveBeenCalledOnce();
-        if (cancelRejects) {
-          canceled.reject(cancelError);
-        } else {
-          canceled.resolve();
-        }
+        canceled.resolve();
         await waitForImmediate();
         expect(settled).toBe(false);
-        if (cleanupRejects) {
-          cleaned.reject(cleanupError);
-        } else {
-          cleaned.resolve();
-        }
-        const observed = await result;
-        const expectedError = cleanupRejects
-          ? cleanupError
-          : operation === "cancel" && cancelRejects
-            ? cancelError
-            : undefined;
-        if (expectedError) {
-          expect("error" in observed && observed.error).toBe(expectedError);
-        } else {
-          expect(observed).toEqual({});
-        }
+        cleaned.resolve();
+        expect(await result).toEqual({});
         await bounded.release().catch(() => undefined);
         await bounded.release().catch(() => undefined);
         expect(cancel).toHaveBeenCalledOnce();

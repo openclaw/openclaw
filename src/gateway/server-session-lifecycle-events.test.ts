@@ -54,7 +54,9 @@ describe("createLifecycleEventBroadcastHandler", () => {
       reason,
       ...(["swarm", "swarm-note", "run-capacity"].includes(reason)
         ? { scope: "runtime" as const }
-        : {}),
+        : reason === "participants"
+          ? { scope: "session-entry" as const }
+          : {}),
     });
     expect(broadcastToConnIds.mock.calls[0]?.[1]).not.toHaveProperty("scope");
     expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
@@ -76,6 +78,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const query = { key: "agent:main:late-successor", agentId: "main" };
     const original = { ...query, entry: { sessionId: "original", lifecycleRevision: "first" } };
     let current = scenario.captured ? original : undefined;
+    let generation = 0;
     const snapshot = vi.fn(() => ({
       row: current ? { ...current.entry, key: query.key, kind: "direct" } : null,
     }));
@@ -89,7 +92,16 @@ describe("createLifecycleEventBroadcastHandler", () => {
         return { kind: "complete", value: consume(projection) };
       }) satisfies SessionRowProjection["withPreparedExactRows"],
       isCurrent: (record: typeof original) => record === current,
+      observeGeneration: (() => {
+        const observed = generation;
+        return { isCurrent: () => generation === observed, dispose() {} };
+      }) satisfies SessionRowProjection["observeGeneration"],
       snapshot,
+      describe: () => {
+        const row = snapshot().row;
+        return row ? { materialized: { row } } : undefined;
+      },
+      present: (record: Parameters<SessionRowProjection["present"]>[0]) => record.materialized.row,
     } as unknown as SessionRowProjection;
     const broadcastToConnIds = vi.fn();
     const handler = createLifecycleEventBroadcastHandler({
@@ -103,6 +115,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       expect(broadcastToConnIds).not.toHaveBeenCalled();
     }
     if (!scenario.captured) {
+      generation += 1;
       current = { ...query, entry: { sessionId: "successor", lifecycleRevision: "next" } };
     }
     prepared.resolve();
@@ -189,7 +202,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
         text: "Research",
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true },
+      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
     );
   });
 
@@ -254,7 +267,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
         activeRunIds: ["run-before-finalize"],
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true },
+      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     if (agentId) {

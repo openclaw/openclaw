@@ -1,5 +1,3 @@
-// Offline-indicator grace timer and lifecycle-unavailability deadlines, split
-// out of gateway-store.ts to keep that module inside the TS LOC ratchet.
 import { resolveSafeTimeoutDelayMs } from "@openclaw/gateway-client/browser";
 import type { ApplicationGatewaySnapshot } from "./context.ts";
 
@@ -32,20 +30,23 @@ export function createAvailabilityIndicators(host: AvailabilityHost) {
     unavailableDeadlines[key] = globalThis.setTimeout(
       () => {
         delete unavailableDeadlines[key];
-        host.applySnapshot({ [key]: key === "restartPending" ? false : undefined });
+        if (key !== "restartPending" || host.getSnapshot().phase !== "connected") {
+          host.applySnapshot({ [key]: key === "restartPending" ? false : undefined });
+        }
       },
-      // Floor 15s: stale lifecycle evidence must degrade to the ordinary offline pill.
+      // Offline evidence expires after at least 15s; connected drains wait for close or hello.
       resolveSafeTimeoutDelayMs(expectedMs * 3, { minMs: 15_000 }),
     );
   };
   const scheduleOfflineIndicator = () => {
     const snapshot = host.getSnapshot();
-    if (
-      host.isStopped() ||
-      snapshot.phase === "connected" ||
-      snapshot.offlineStable ||
-      offlineIndicatorTimer !== null
-    ) {
+    if (host.isStopped() || snapshot.phase === "connected") {
+      return;
+    }
+    if (snapshot.restartPending && unavailableDeadlines.restartPending === undefined) {
+      setUnavailableDeadline("restartPending", 0);
+    }
+    if (snapshot.offlineStable || offlineIndicatorTimer !== null) {
       return;
     }
     offlineIndicatorTimer = globalThis.setTimeout(() => {

@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { WorkboardChange } from "@openclaw/workboard-contract";
+import type {
+  WorkboardBoardSummary,
+  WorkboardChange,
+  WorkboardListResult,
+} from "@openclaw/workboard-contract";
 import type {
   WorkboardCardStore,
   WorkboardKeyedStore,
@@ -8,14 +12,23 @@ import type {
 } from "./persistence-types.js";
 
 export class WorkboardStoreRuntime {
+  protected readonly cardLists = new Map<
+    string | undefined,
+    Promise<
+      WorkboardListResult & {
+        boards: WorkboardBoardSummary[];
+        revision: WorkboardChange & { boardId?: string };
+      }
+    >
+  >();
   private readonly operationScope = new AsyncLocalStorage<{ active: boolean }>();
   private readonly operations = new Set<Promise<unknown>>();
   private mutationQueue: Promise<unknown> = Promise.resolve();
   private closePromise: Promise<void> | undefined;
   private sealed = false;
-  private readonly epoch = randomUUID();
+  protected cardsRevision: WorkboardChange = { epoch: randomUUID(), revision: 1 };
+  sessionsRevision: WorkboardChange = { epoch: this.cardsRevision.epoch, revision: 1 };
   private revision = 0;
-  private mutationRevision = 0;
   private externalDataVersion: number | undefined;
   private readonly listeners = new Set<(change: WorkboardChange) => void>();
   private readonly initialization: Promise<void>;
@@ -64,6 +77,7 @@ export class WorkboardStoreRuntime {
         while (this.operations.size > 0) {
           await Promise.allSettled(this.operations);
         }
+        this.cardLists.clear();
         this.operationScope.disable();
         await this.closePersistence?.();
       })
@@ -76,25 +90,25 @@ export class WorkboardStoreRuntime {
 
   protected track<T>(
     store: WorkboardKeyedStore<T>,
-    { notifyChanges = true }: { notifyChanges?: boolean } = {},
+    {
+      notifyChanges = true,
+      sessions = false,
+    }: { notifyChanges?: boolean; sessions?: boolean } = {},
   ): WorkboardKeyedStore<T> {
     return {
       register: (key, value) =>
-        this.runOperation(async () => {
-          await store.register(key, value);
-          if (notifyChanges) {
-            this.mutationRevision += 1;
-          }
-        }),
+        this.trackMutation(
+          () => store.register(key, value),
+          () => notifyChanges,
+          sessions,
+        ),
       lookup: (key) => this.runOperation(() => store.lookup(key)),
       delete: (key) =>
-        this.runOperation(async () => {
-          const deleted = await store.delete(key);
-          if (deleted && notifyChanges) {
-            this.mutationRevision += 1;
-          }
-          return deleted;
-        }),
+        this.trackMutation(
+          () => store.delete(key),
+          (deleted) => deleted && notifyChanges,
+          sessions,
+        ),
       entries: () => this.runOperation(() => store.entries()),
     };
   }
@@ -104,43 +118,16 @@ export class WorkboardStoreRuntime {
       ...this.track(store),
       entries: (scope) => this.runOperation(() => store.entries(scope)),
       registerIfAbsent: (key, value) =>
-        this.runOperation(async () => {
-          const inserted = await store.registerIfAbsent(key, value);
-          if (inserted) {
-            this.mutationRevision += 1;
-          }
-          return inserted;
-        }),
+        this.trackMutation(() => store.registerIfAbsent(key, value)),
       registerIfUpdatedAt: (key, value, expectedUpdatedAt) =>
-        this.runOperation(async () => {
-          const updated = await store.registerIfUpdatedAt(key, value, expectedUpdatedAt);
-          if (updated) {
-            this.mutationRevision += 1;
-          }
-          return updated;
-        }),
+        this.trackMutation(() => store.registerIfUpdatedAt(key, value, expectedUpdatedAt)),
       deleteIfUpdatedAt: (key, expectedUpdatedAt) =>
-        this.runOperation(async () => {
-          const deleted = await store.deleteIfUpdatedAt(key, expectedUpdatedAt);
-          if (deleted) {
-            this.mutationRevision += 1;
-          }
-          return deleted;
-        }),
+        this.trackMutation(() => store.deleteIfUpdatedAt(key, expectedUpdatedAt)),
       claimIfOwnerAvailable: (key, value, expectedUpdatedAt, ownerId, now) =>
-        this.runOperation(async () => {
-          const result = await store.claimIfOwnerAvailable(
-            key,
-            value,
-            expectedUpdatedAt,
-            ownerId,
-            now,
-          );
-          if (result === "updated") {
-            this.mutationRevision += 1;
-          }
-          return result;
-        }),
+        this.trackMutation(
+          () => store.claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now),
+          (result) => result === "updated",
+        ),
       listCardStatuses: (ids) => this.runOperation(() => store.listCardStatuses(ids)),
       listBoardAggregates: () => this.runOperation(() => store.listBoardAggregates()),
       listStatsAggregates: (boardId) => this.runOperation(() => store.listStatsAggregates(boardId)),
@@ -148,9 +135,33 @@ export class WorkboardStoreRuntime {
     };
   }
 
+  protected trackMutation<T>(
+    run: () => Promise<T>,
+    changed: (result: T) => boolean = Boolean,
+    sessions = false,
+  ): Promise<T> {
+    return this.runOperation(async () => {
+      const result = await run();
+      if (changed(result)) {
+        this.invalidateCards();
+        if (sessions) {
+          this.invalidateSessionBoards();
+        }
+      }
+      return result;
+    });
+  }
+
   subscribeChanges(listener: (change: WorkboardChange) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  invalidateSessionBoards(): void {
+    this.sessionsRevision = {
+      ...this.sessionsRevision,
+      revision: this.sessionsRevision.revision + 1,
+    };
   }
 
   announceChangeEpoch(): void {
@@ -167,6 +178,8 @@ export class WorkboardStoreRuntime {
         return false;
       }
       this.externalDataVersion = current;
+      this.invalidateCards();
+      this.invalidateSessionBoards();
       this.emit();
       return true;
     });
@@ -177,8 +190,8 @@ export class WorkboardStoreRuntime {
     assertCurrent?: () => void,
   ): Promise<T> {
     return await this.runOperation(async () => {
-      const runAndNotify = async () =>
-        await this.withMutationAuthority(async () => await this.runMutation(run), assertCurrent);
+      const runAndNotify = () =>
+        this.withMutationAuthority(() => this.runMutation(run), assertCurrent);
       const result = this.mutationQueue.then(runAndNotify, runAndNotify);
       this.mutationQueue = result.then(
         () => undefined,
@@ -202,18 +215,30 @@ export class WorkboardStoreRuntime {
   }
 
   private async runMutation<T>(run: () => Promise<T>): Promise<T> {
-    const initialRevision = this.mutationRevision;
+    const initialRevision = this.cardsRevision.revision;
     try {
       return await run();
     } finally {
-      if (this.mutationRevision !== initialRevision) {
+      if (this.cardsRevision.revision !== initialRevision) {
         this.emit();
       }
     }
   }
 
+  private invalidateCards(): void {
+    // Every list includes all board summaries, so even a board-scoped payload
+    // depends on the whole store revision, including foreign SQLite commits.
+    this.cardLists.clear();
+    this.cardsRevision = { ...this.cardsRevision, revision: this.cardsRevision.revision + 1 };
+  }
+
   private emit(): void {
-    const change = { epoch: this.epoch, revision: ++this.revision };
+    const change = {
+      epoch: this.cardsRevision.epoch,
+      revision: ++this.revision,
+      cardsRevision: this.cardsRevision.revision,
+      sessionsRevision: this.sessionsRevision.revision,
+    };
     for (const listener of this.listeners) {
       try {
         listener(change);

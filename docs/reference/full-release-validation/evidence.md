@@ -1,6 +1,6 @@
 ---
 doc-schema-version: 1
-summary: "Which Full Release Validation evidence to retain, advisory lane handling, and the backing workflow files"
+summary: "Which Full Release Validation evidence to retain, blocking lane outcomes, and the backing workflow files"
 title: "Evidence to keep"
 read_when:
   - Recording release evidence after a validation pass
@@ -14,6 +14,9 @@ harness/tooling/provenance, infrastructure/credential, or wrapper. Only a
 confirmed product failure changes the Code SHA. Use one diagnosis, one fix when
 needed, and one narrow retry, then reassess; do not automatically rerun `all`.
 Narrow evidence is not publish authorization by itself.
+
+Decide blocker or flake for every failed test. Every selected failure blocks
+publication.
 
 Linux, Windows, and macOS Gateway cross-OS install and upgrade lanes are
 required for beta, stable, and full validation. The manifest records their

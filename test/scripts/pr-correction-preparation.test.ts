@@ -11,125 +11,23 @@ import {
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
+import { createCorrectionFixture } from "./pr-correction-preparation.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const scripts = join(process.cwd(), "scripts");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
-function fixture() {
-  const root = tempDirs.make("openclaw-pr-correction-");
-  const env = {
-    ...process.env,
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_AUTHOR_NAME: "Fixture",
-    GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-    GIT_COMMITTER_NAME: "Fixture",
-    GIT_COMMITTER_EMAIL: "fixture@example.invalid",
-  };
-  const git = (...args: string[]) => {
-    const result = spawnSync("git", args, { cwd: root, env, encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-    return result.stdout.trim();
-  };
-  git("init", "-q", "-b", "topic");
-  git("config", "commit.gpgSign", "false");
-  git("config", "core.hooksPath", "/dev/null");
-  writeFileSync(join(root, ".gitignore"), ".local/\n");
-  mkdirSync(join(root, "docs"));
-  writeFileSync(join(root, "docs/fix.md"), "broken\n");
-  git("add", ".");
-  git("commit", "-qm", "incoming");
-  const incoming = git("rev-parse", "HEAD");
-  const review = validReview(incoming);
-  review.issueValidation.status = "valid";
-  review.findings.push({
-    id: "I1",
-    severity: "IMPORTANT",
-    title: "Incorrect behavior",
-    area: "docs/fix.md",
-    fix: "Correct the behavior",
-  });
-  writeReviewArtifacts(root, review, { headSha: incoming, files: ["docs/fix.md"] });
-  const metadata = {
-    number: 42,
-    headRefOid: incoming,
-    headRefName: "topic",
-    url: "https://github.com/fixture/repo/pull/42",
-    baseRepository: {
-      id: "fixture-repo",
-      databaseId: 1,
-      nameWithOwner: "fixture/repo",
-      url: "https://github.com/fixture/repo",
-    },
-    files: [{ path: "docs/fix.md" }],
-  };
-  writeFileSync(join(root, ".local/pr-meta.json"), JSON.stringify(metadata));
-  writeFileSync(
-    join(root, ".local/pr-meta.env"),
-    `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA=${incoming}\n`,
-  );
-  const run = (invocation: string, envOverrides: NodeJS.ProcessEnv = {}) =>
-    spawnSync(
-      "bash",
-      [
-        "-c",
-        [
-          "set -euo pipefail",
-          'script_parent_dir="$1"',
-          'source "$1/pr-lib/common.sh"',
-          'source "$1/pr-lib/review.sh"',
-          'source "$1/pr-lib/prepare-core.sh"',
-          'source "$1/pr-lib/gates.sh"',
-          'require_artifact() { [ -s "$1" ]; }',
-          "enter_worktree() { :; }",
-          'pr_git() { "${OPENCLAW_PR_GIT:-${GIT_EXEC:-git}}" "$@"; }',
-          'pr_gh() { gh "$@"; }',
-          "common_repo_root() { pwd; }",
-          "pr_worktree_state() { jq -n --arg path \"$PWD\" '{present:true,path:$path}'; }",
-          "read_pr_view_json() { cat .local/pr-meta.json; }",
-          'review_guard() { REVIEW_MODE=pr; source .local/pr-meta.env; [ "$(git rev-parse HEAD)" = "$PR_HEAD_SHA" ]; }',
-          "print_review_stdout_summary() { :; }",
-          "mark_pr_operation_side_effects_started() { touch .local/side-effects; }",
-          'checkout_pr_worktree_target() { git checkout -q --detach "$2"; }',
-          "pr_meta_json() { cat .local/pr-meta.json; }",
-          "resolve_pr_author_access_at_prepare() { echo external; }",
-          'fetch_pr_head() { PR_HEAD_OBSERVATION="$4"; git update-ref "$3" "$2"; }',
-          invocation,
-        ].join("\n"),
-        "correction-fixture",
-        scripts,
-      ],
-      { cwd: root, env: { ...env, ...envOverrides }, encoding: "utf8" },
-    );
-  const commitFix = () => {
-    writeFileSync(join(root, "docs/fix.md"), "corrected\n");
-    git("add", "docs/fix.md");
-    git("commit", "-qm", "fix behavior");
-  };
-  const approve = () => {
-    const path = join(root, ".local/correction-review.json");
-    const correction = JSON.parse(readFileSync(path, "utf8"));
-    Object.assign(correction, validReview(git("rev-parse", "HEAD")));
-    correction.recommendation = "READY FOR /prepare-pr";
-    correction.issueValidation.status = "valid";
-    correction.correction.resolvedFindings[0].resolution = "The corrected behavior is verified.";
-    writeFileSync(path, JSON.stringify(correction));
-  };
-  return { root, run, git, incoming, review, commitFix, approve };
+function fixture(approved = false) {
+  const f = createCorrectionFixture(tempDirs.make("openclaw-pr-correction-"));
+  if (approved) {
+    expect(f.run("prepare_init 42 '' correction").status).toBe(0);
+    f.commitFix();
+    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
+    f.approve();
+  }
+  return f;
 }
 
 describePosix("native correction preparation", () => {
-  it("keeps normal READY preparation available", () => {
-    const f = fixture();
-    f.review.recommendation = "READY FOR /prepare-pr";
-    f.review.findings = [];
-    writeFileSync(join(f.root, ".local/review.json"), JSON.stringify(f.review));
-    expect(f.run("prepare_init 42").status).toBe(0);
-    expect(f.run("require_prepared_review 42").status).toBe(0);
-  });
-
   it.each(["OPENCLAW_PR_GIT", "GIT_EXEC"])(
     "uses configured Git for correction review initialization and validation via %s",
     (selector) => {
@@ -143,7 +41,9 @@ describePosix("native correction preparation", () => {
       writeFileSync(join(bin, "git"), "#!/bin/sh\necho 'unexpected PATH Git' >&2\nexit 97\n", {
         mode: 0o755,
       });
-      const selected = join(f.root, ".local", "selected git");
+      const selectedDir = join(f.root, ".local", "selected git");
+      mkdirSync(selectedDir);
+      const selected = join(selectedDir, "git");
       symlinkSync(resolved.stdout.trim(), selected);
       const env = {
         PATH: `${bin}:${process.env.PATH}`,
@@ -179,6 +79,7 @@ describePosix("native correction preparation", () => {
     expect(existsSync(join(f.root, ".local/gates-reached"))).toBe(true);
     expect(existsSync(join(f.root, ".local/push-reached"))).toBe(true);
     expect(f.git("rev-parse", "HEAD")).toBe(f.incoming);
+    expect(f.run("require_prepared_review 42").status).toBe(0);
   });
 
   it("preserves default NEEDS WORK refusal and explicitly admits only correction preparation", () => {
@@ -262,11 +163,7 @@ describePosix("native correction preparation", () => {
   it.each(["incoming review", "finding resolution", "foreign candidate", "lost correction mode"])(
     "refuses changed %s",
     (kind) => {
-      const f = fixture();
-      expect(f.run("prepare_init 42 '' correction").status).toBe(0);
-      f.commitFix();
-      expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-      f.approve();
+      const f = fixture(true);
       if (kind === "incoming review") {
         writeFileSync(join(f.root, ".local/review.json"), `${JSON.stringify(f.review)}\n\n`);
       } else if (kind === "lost correction mode") {
@@ -295,12 +192,8 @@ describePosix("native correction preparation", () => {
   it.each([false, true])(
     "binds recovered approval to incoming review bytes, changed=%s",
     (changed) => {
-      const f = fixture();
-      expect(f.run("prepare_init 42 '' correction").status).toBe(0);
-      f.commitFix();
+      const f = fixture(true);
       const candidate = f.git("rev-parse", "HEAD");
-      expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-      f.approve();
       const names = ["correction-review.json", "correction-incoming-review.json"];
       const retained = names.map((name) => ({
         name,
@@ -327,12 +220,8 @@ describePosix("native correction preparation", () => {
   );
 
   it.each(["push", "sync"])("requires exact gates before correction %s", (operation) => {
-    const f = fixture();
-    expect(f.run("prepare_init 42 '' correction").status).toBe(0);
-    f.commitFix();
+    const f = fixture(true);
     const qualified = f.git("rev-parse", "HEAD");
-    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-    f.approve();
     const publish = () =>
       f.run(
         [
@@ -361,16 +250,12 @@ describePosix("native correction preparation", () => {
   });
 
   it("does not qualify a correction with deferred GitHub gates", () => {
-    const f = fixture();
-    expect(f.run("prepare_init 42 '' correction").status).toBe(0);
-    f.commitFix();
-    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-    f.approve();
+    const f = fixture(true);
     const result = f.run(
       [
         "resolve_pr_gates_remote_mode() { echo github; }",
         "mark_pr_operation_side_effects_if_available() { :; }",
-        "derive_prepare_gate_change_plan() { PREPARE_GATE_CHANGED_FILES=docs/fix.md; PREPARE_GATE_DOCS_ONLY=false; PREPARE_GATE_CHANGELOG_ONLY=false; PREPARE_GATE_CHANGELOG_REQUIRED=false; PREPARE_GATE_CHANGELOG_UPDATE=false; }",
+        `derive_prepare_gate_change_plan() { PREPARE_GATE_BASE_SHA=${f.incoming}; PREPARE_GATE_CHANGED_FILES=docs/fix.md; PREPARE_GATE_DOCS_ONLY=false; PREPARE_GATE_CHANGELOG_ONLY=false; PREPARE_GATE_CHANGELOG_REQUIRED=false; PREPARE_GATE_CHANGELOG_UPDATE=false; }`,
         "push_prep_head_to_pr_branch() { touch .local/execution-reached; return 73; }",
         "prepare_gates 42",
         "prepare_push 42",
@@ -385,6 +270,57 @@ describePosix("native correction preparation", () => {
     expect(f.run("prepare_sync_head 42").status).toBe(1);
   });
 
+  it.each(["completed", "pending", "revoked", "fork", "stale-review", "foreign-gate"])(
+    "preserves correction authority when a partial publication has %s gates",
+    (state) => {
+      const f = fixture(true);
+      const local = f.git("rev-parse", "HEAD");
+      const hosted = f.git("commit-tree", `${local}^{tree}`, "-p", f.incoming, "-m", "hosted");
+      writeFileSync(
+        join(f.root, ".local/prepare-push-result.env"),
+        `PUSH_PREP_HEAD_SHA=${hosted}\nPUSH_LOCAL_PREP_HEAD_SHA=${local}\nPUSHED_FROM_SHA=${f.incoming}\nPUSH_REPLACED_HOSTED_ANCESTRY=false\nPR_HEAD_SHA_AFTER_PUSH=${hosted}\n`,
+      );
+      const pending = ["pending", "revoked", "fork"].includes(state);
+      const qualified =
+        state === "foreign-gate"
+          ? f.git("commit-tree", `${local}^{tree}`, "-p", f.incoming, "-m", "foreign")
+          : pending
+            ? local
+            : hosted;
+      writeFileSync(
+        join(f.root, ".local/gates.env"),
+        `PR_NUMBER=42\nGATES_MODE=${pending ? "remote_crabbox_aws_pending" : "full"}\nLAST_VERIFIED_HEAD_SHA=${qualified}\nFULL_GATES_HEAD_SHA=${qualified}\nREMOTE_GATES_PROVIDER=aws\n`,
+      );
+      if (state === "stale-review") {
+        const reviewPath = join(f.root, ".local/correction-review.json");
+        const review = JSON.parse(readFileSync(reviewPath, "utf8"));
+        review.pr.headSha = f.incoming;
+        writeFileSync(reviewPath, JSON.stringify(review));
+      }
+      const target = JSON.stringify({
+        state: "OPEN",
+        isCrossRepository: state === "fork",
+        baseRefName: "main",
+        baseRefOid: f.incoming,
+        headRefOid: hosted,
+      });
+      const result = f.run(
+        [
+          "source .local/prep-context.env",
+          `resolve_prep_publication_target 42 ${local}`,
+          `test "$PREP_PUBLICATION_LEASE_SHA" = ${hosted}`,
+          "require_prepared_review 42",
+          `require_active_org_admin_for_crabbox_gate() { [ '${state}' != revoked ]; }`,
+          `gh() { printf '%s\\n' '${target}'; }`,
+          `require_correction_publication_gates 42 ${local} true`,
+        ].join("\n"),
+      );
+      const allowed = state === "completed" || state === "pending";
+      expect(result.status, result.stdout + result.stderr).toBe(allowed ? 0 : 1);
+      expect(existsSync(join(f.root, ".local/prep.env"))).toBe(false);
+    },
+  );
+
   it.each([
     { fork: true, authorization: "granted" },
     { fork: false, authorization: "granted" },
@@ -393,11 +329,7 @@ describePosix("native correction preparation", () => {
   ])(
     "checks native pending-route eligibility before correction publication, fork=$fork, authorization=$authorization",
     ({ fork, authorization }) => {
-      const f = fixture();
-      expect(f.run("prepare_init 42 '' correction").status).toBe(0);
-      f.commitFix();
-      expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-      f.approve();
+      const f = fixture(true);
       const target = JSON.stringify({
         state: "OPEN",
         isCrossRepository: fork,
@@ -417,7 +349,7 @@ describePosix("native correction preparation", () => {
             if [ '${authorization}' = revoked ] && [ "$phase" = publication ]; then return 1; fi
             echo fixture-admin
           }`,
-          "derive_prepare_gate_change_plan() { PREPARE_GATE_CHANGED_FILES=docs/fix.md; PREPARE_GATE_DOCS_ONLY=false; PREPARE_GATE_CHANGELOG_ONLY=false; PREPARE_GATE_CHANGELOG_REQUIRED=false; PREPARE_GATE_CHANGELOG_UPDATE=false; }",
+          `derive_prepare_gate_change_plan() { PREPARE_GATE_BASE_SHA=${f.incoming}; PREPARE_GATE_CHANGED_FILES=docs/fix.md; PREPARE_GATE_DOCS_ONLY=false; PREPARE_GATE_CHANGELOG_ONLY=false; PREPARE_GATE_CHANGELOG_REQUIRED=false; PREPARE_GATE_CHANGELOG_UPDATE=false; }`,
           `gh() { printf '%s\\n' '${target}'; }`,
           "push_prep_head_to_pr_branch() { touch .local/execution-reached; return 73; }",
           "prepare_gates 42",
@@ -484,14 +416,12 @@ describePosix("native correction preparation", () => {
     ["graphql", "unchanged"],
     ["graphql", "JSON"],
     ["graphql", "Markdown"],
+    ["git", "publication receipt"],
+    ["graphql", "publication receipt"],
   ])(
     "revalidates JSON authority immediately before %s publication after %s change",
     (route, change) => {
-      const f = fixture();
-      expect(f.run("prepare_init 42 '' correction").status).toBe(0);
-      f.commitFix();
-      expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-      f.approve();
+      const f = fixture(true);
       const head = f.git("rev-parse", "HEAD");
       writeFileSync(
         join(f.root, ".local/gates.env"),
@@ -500,9 +430,11 @@ describePosix("native correction preparation", () => {
       const mutation =
         change === "JSON"
           ? "printf '\\n' >> .local/correction-review.json"
-          : change === "Markdown"
-            ? "printf 'obsolete presentation\\n' > .local/correction-review.md"
-            : ":";
+          : change === "publication receipt"
+            ? "printf 'changed\\n' > .local/prepare-push-result.env"
+            : change === "Markdown"
+              ? "printf 'obsolete presentation\\n' > .local/correction-review.md"
+              : ":";
       const result = f.run(
         [
           'source "$script_parent_dir/pr-lib/push.sh"',
@@ -519,20 +451,17 @@ describePosix("native correction preparation", () => {
             : `graphql_push_to_fork fixture/repo topic ${f.incoming} 42 fixture-observation ${head}`,
         ].join("\n"),
       );
-      expect(result.status, result.stdout + result.stderr).toBe(change === "JSON" ? 1 : 0);
-      expect(existsSync(join(f.root, ".local/publication"))).toBe(change !== "JSON");
-      if (change === "JSON") {
+      const changedAuthority = change === "JSON" || change === "publication receipt";
+      expect(result.status, result.stdout + result.stderr).toBe(changedAuthority ? 1 : 0);
+      expect(existsSync(join(f.root, ".local/publication"))).toBe(!changedAuthority);
+      if (changedAuthority) {
         expect(result.stderr).toContain("Correction review authority changed");
       }
     },
   );
 
   it("retains prior candidate reviews when initializing another review", () => {
-    const f = fixture();
-    expect(f.run("prepare_init 42 '' correction").status).toBe(0);
-    f.commitFix();
-    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-    f.approve();
+    const f = fixture(true);
     const original = readFileSync(join(f.root, ".local/correction-review.json"), "utf8");
     expect(f.run("prepare_correction_review_init 42").status).toBe(0);
     const retained = readdirSync(join(f.root, ".local")).find((name) =>
@@ -547,4 +476,50 @@ describePosix("native correction preparation", () => {
     );
     expect(f.run("require_prepared_review 42").status).toBe(1);
   });
+
+  it.each(["review", "publication lease", "replacement flag"])(
+    "refuses a resumed no-op when %s changes during hosted acquisition",
+    (change) => {
+      const f = fixture(true);
+      const local = f.git("rev-parse", "HEAD");
+      const hosted = f.git("commit-tree", `${local}^{tree}`, "-p", f.incoming, "-m", "hosted");
+      const receipt = `PUSH_PREP_HEAD_SHA=${hosted}\nPUSH_LOCAL_PREP_HEAD_SHA=${local}\nPUSHED_FROM_SHA=${f.incoming}\nPUSH_REPLACED_HOSTED_ANCESTRY=false\nPR_HEAD_SHA_AFTER_PUSH=${hosted}\n`;
+      writeFileSync(join(f.root, ".local/prepare-push-result.env"), receipt);
+      writeFileSync(
+        join(f.root, ".local/gates.env"),
+        `PR_NUMBER=42\nGATES_MODE=full\nLAST_VERIFIED_HEAD_SHA=${hosted}\nFULL_GATES_HEAD_SHA=${hosted}\n`,
+      );
+      const changedReceipt =
+        change === "publication lease"
+          ? receipt.replace(`PUSHED_FROM_SHA=${f.incoming}`, `PUSHED_FROM_SHA=${hosted}`)
+          : receipt.replace("=false\n", "=true\n");
+      const mutation =
+        change === "review"
+          ? "printf '\\n' >> .local/correction-review.json"
+          : `printf '%s' '${changedReceipt}' > .local/prepare-push-result.env`;
+      const result = f.run(
+        [
+          'source "$script_parent_dir/pr-lib/worktree.sh"',
+          'source "$script_parent_dir/pr-lib/push.sh"',
+          "source .local/prep-context.env",
+          "PREP_PUBLICATION_PR=42; PREP_PUBLICATION_ALLOW_PENDING=false",
+          "PREP_PUBLICATION_REVIEW_SNAPSHOT=$(correction_review_snapshot 42)",
+          "resolve_head_push_url() { echo https://example.invalid/repo.git; }",
+          `resolve_prhead_remote_sha() { PRHEAD_REMOTE_SHA=${hosted}; }`,
+          "revalidate_pr_publication() { :; }",
+          `wait_for_pr_head_sha() { PR_OBSERVATION='{"headRefOid":"${hosted}"}'; }`,
+          "verify_pr_publication_identity() { :; }",
+          `fetch_pr_head() { git update-ref "$3" "$2"; ${mutation}; }`,
+          `push_prep_head_to_pr_branch 42 topic ${hosted} ${hosted} .local/prepare-push-result.env "$(cat .local/pr-meta.json)"`,
+          "touch .local/completed",
+        ].join("\n"),
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stderr).toContain("Correction review authority changed");
+      expect(existsSync(join(f.root, ".local/completed"))).toBe(false);
+      expect(readFileSync(join(f.root, ".local/prepare-push-result.env"), "utf8")).toBe(
+        change === "review" ? receipt : changedReceipt,
+      );
+    },
+  );
 });

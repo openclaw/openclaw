@@ -1,5 +1,4 @@
 import fs from "node:fs";
-/** Doctor warnings for heartbeat.session values that resolve to missing delivery sessions. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -28,10 +27,7 @@ export async function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig):
   const warnings: string[] = [];
   const sessionScope = cfg.session?.scope ?? "per-sender";
   for (const { agentId, heartbeat: heartbeatConfig } of resolveHeartbeatAgents(cfg)) {
-    if (!heartbeatConfig) {
-      continue;
-    }
-    if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeatConfig)) {
+    if (!heartbeatConfig || !resolveHeartbeatIntervalMs(cfg, undefined, heartbeatConfig)) {
       continue;
     }
     const configuredSession = normalizeOptionalString(heartbeatConfig.session);
@@ -42,13 +38,12 @@ export async function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig):
     // `main` / `global` resolve to the agent main session via
     // `resolveHeartbeatSession`; missing entries fall back to the same key
     // and are repaired elsewhere — don't double-warn here.
-    if (normalizedSession === "main" || normalizedSession === "global") {
-      continue;
-    }
-    if (isSubagentSessionKey(configuredSession)) {
-      continue;
-    }
-    if (sessionScope === "global") {
+    if (
+      normalizedSession === "main" ||
+      normalizedSession === "global" ||
+      isSubagentSessionKey(configuredSession) ||
+      sessionScope === "global"
+    ) {
       continue;
     }
     const target = normalizeOptionalString(heartbeatConfig.target);

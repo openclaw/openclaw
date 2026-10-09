@@ -11,6 +11,49 @@ export type MediaGenerateToolExecutionResult = MediaGenerationExecutionResult & 
   details: Record<string, unknown>;
 };
 
+/** Projects generated attachments into the common foreground and completion result contract. */
+export function buildMediaGenerateToolExecutionResult(params: {
+  result: {
+    provider: string;
+    model: string;
+    attempts: readonly { provider: string; model: string; error: string }[];
+    normalization?: MediaGenerationNormalizationMetadataInput;
+    metadata?: Record<string, unknown>;
+    ignoredOverrides?: readonly { key: string; value: string | boolean | number }[];
+  };
+  attachments: AgentGeneratedAttachment[];
+  mediaUrls: string[];
+  lines: string[];
+  taskHandle?: { taskId: string; runId: string } | null;
+  warning?: string;
+  details: Record<string, unknown>;
+}): MediaGenerateToolExecutionResult {
+  const { result, attachments, mediaUrls, warning } = params;
+  const identity = { provider: result.provider, model: result.model, count: attachments.length };
+  const contentText = params.lines.join("\n");
+  return {
+    ...identity,
+    attachments,
+    contentText,
+    wakeResult: contentText,
+    details: {
+      ...identity,
+      media: { mediaUrls, attachments },
+      attachments,
+      paths: mediaUrls,
+      ...(params.taskHandle
+        ? { task: { taskId: params.taskHandle.taskId, runId: params.taskHandle.runId } }
+        : {}),
+      ...params.details,
+      attempts: result.attempts,
+      ...(result.normalization ? { normalization: result.normalization } : {}),
+      metadata: result.metadata,
+      ...(warning ? { warning } : {}),
+      ...(result.ignoredOverrides?.length ? { ignoredOverrides: result.ignoredOverrides } : {}),
+    },
+  };
+}
+
 export function describeMediaGenerationResult(result: {
   provider: string;
   model: string;
@@ -31,12 +74,15 @@ export function describeMediaGenerationResult(result: {
   return { displayProvider, displayModel, warning };
 }
 
-export function resolveMediaGenerationResultGeometry(
+export function buildMediaGenerationGeometryDetails(
+  kind: "image" | "video",
   result: {
     normalization?: MediaGenerationNormalizationMetadataInput;
     metadata?: Record<string, unknown>;
+    appliedResolution?: string;
   },
-  requestedSize?: string,
+  requested: { size?: string; aspectRatio?: string; resolution?: string },
+  ignoredOverrides?: ReadonlySet<string>,
 ) {
   const readMetadataString = (key: string) => {
     const value = result.metadata?.[key];
@@ -52,12 +98,23 @@ export function resolveMediaGenerationResultGeometry(
     result.normalization?.aspectRatio?.derivedFrom === "size" ||
     (!normalizedSize &&
       typeof result.metadata?.requestedSize === "string" &&
-      result.metadata.requestedSize === requestedSize &&
+      result.metadata.requestedSize === requested.size &&
       Boolean(normalizedAspectRatio));
+  const appliedResolution =
+    kind === "image" ? (result.appliedResolution ?? normalizedResolution) : normalizedResolution;
+  const resolutionDetails =
+    appliedResolution || (!ignoredOverrides?.has("resolution") && requested.resolution)
+      ? { resolution: appliedResolution ?? requested.resolution }
+      : {};
   return {
-    normalizedSize,
-    normalizedAspectRatio,
-    normalizedResolution,
-    sizeTranslatedToAspectRatio,
+    ...(kind === "image" ? resolutionDetails : {}),
+    ...(normalizedSize ||
+    (!ignoredOverrides?.has("size") && requested.size && !sizeTranslatedToAspectRatio)
+      ? { size: normalizedSize ?? requested.size }
+      : {}),
+    ...(normalizedAspectRatio || (!ignoredOverrides?.has("aspectRatio") && requested.aspectRatio)
+      ? { aspectRatio: normalizedAspectRatio ?? requested.aspectRatio }
+      : {}),
+    ...(kind === "video" ? resolutionDetails : {}),
   };
 }

@@ -1,10 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import { createGatewayHarness, mountSidebar } from "../app-sidebar.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
 import { waitForFast } from "../wait-for.ts";
@@ -102,8 +103,15 @@ describe("AppSidebar child session archives", () => {
         `[data-session-key="${childKey}"] [data-sidebar-session-archive]`,
       );
       expect(archive?.disabled).toBe(false);
+      const archiveSession = vi.spyOn(sidebar.sessionOrganizer, "archiveSessionWithUndo");
       archive!.click();
-      await waitForFast(() => expect(sessions.archiveVisibility(childKey)).toBe("archived"));
+      expect(archiveSession).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ key: childKey, sessionId: child.sessionId }),
+      );
+      // The organizer owns the lazy import, mutation, and reconciliation. A rendered
+      // button does not mean that lifecycle has completed within a polling window.
+      await archiveSession.mock.results[0]!.value;
+      expect(sessions.archiveVisibility(childKey)).toBe("archived");
     }
     await sidebar.updateComplete;
     expect(sidebar.querySelector("[data-child-session-toggle]")).toBeNull();
@@ -117,19 +125,7 @@ describe("AppSidebar child session archives", () => {
       return;
     }
     expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
-    const selectStatus = async (value: string) => {
-      sidebar
-        .querySelector<HTMLButtonElement>(".sidebar-session-toolbar .sidebar-session-sort")!
-        .click();
-      await sidebar.updateComplete;
-      sidebar.querySelector(".sidebar-session-sort-menu")!.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value } },
-        }),
-      );
-      await sidebar.updateComplete;
-    };
+    const selectStatus = (value: string) => activateSessionMenuValue(sidebar, value);
     await selectStatus("status:all");
     await waitForFast(() =>
       expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).not.toBeNull(),
@@ -137,12 +133,19 @@ describe("AppSidebar child session archives", () => {
     expect(sidebar.querySelector("[data-child-session-toggle]")?.getAttribute("aria-label")).toBe(
       "Hide 1 child sessions for Parent task",
     );
+    const restoreSession = vi.spyOn(sidebar.sessionOrganizer, "patchSession");
     sidebar
       .querySelector<HTMLButtonElement>(
         `[data-session-key="${childKey}"] [data-sidebar-session-archive]`,
       )!
       .click();
-    await waitForFast(() => expect(archived).toBe(false));
+    expect(restoreSession).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ key: childKey, sessionId: child.sessionId }),
+      { archived: false },
+      { sessionScope: true },
+    );
+    await expect(restoreSession.mock.results[0]!.value).resolves.toBe("completed");
+    expect(archived).toBe(false);
     await selectStatus("status:active");
     await waitForFast(() =>
       expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).not.toBeNull(),

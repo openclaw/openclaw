@@ -26,26 +26,28 @@ const questionReactionTargets = createQuestionReactionTargetStore({
   resolveReaction: questionGatewayRuntime.resolveReaction,
 });
 
-function reactionCandidates(
-  message: IMessagePayload,
-  bodyText: string,
-): {
-  action: "added" | "removed";
-  emoji: string;
-  guids: string[];
-} | null {
-  const reaction = resolveIMessageReactionContext(message, bodyText);
-  if (!reaction) {
+function resolveQuestionReaction(params: {
+  accountId: string;
+  message: IMessagePayload;
+  bodyText: string;
+}) {
+  const reaction = resolveIMessageReactionContext(params.message, params.bodyText);
+  if (!reaction || reaction.action !== "added") {
     return null;
   }
-  const guids = Array.from(
-    new Set(
-      [...(reaction.targetGuids ?? []), reaction.targetGuid ?? ""]
-        .map(normalizeIMessageGuid)
-        .filter(Boolean),
-    ),
-  );
-  return guids.length > 0 ? { action: reaction.action, emoji: reaction.emoji, guids } : null;
+  const guids = [
+    ...new Set((reaction.targetGuids ?? []).map(normalizeIMessageGuid).filter(Boolean)),
+  ];
+  if (guids.length === 0) {
+    return null;
+  }
+  const optionIndex = questionGatewayRuntime.resolveReactionIndex(reaction.emoji);
+  return optionIndex === undefined
+    ? null
+    : {
+        optionIndex,
+        identities: guids.map((messageGuid) => ({ accountId: params.accountId, messageGuid })),
+      };
 }
 
 export function registerIMessageQuestionReactionTargetForDeliveredPayload(params: {
@@ -84,17 +86,8 @@ export function hasIMessageQuestionReactionTarget(params: {
   message: IMessagePayload;
   bodyText: string;
 }): boolean {
-  const reaction = reactionCandidates(params.message, params.bodyText);
-  if (
-    !reaction ||
-    reaction.action !== "added" ||
-    questionGatewayRuntime.resolveReactionIndex(reaction.emoji) === undefined
-  ) {
-    return false;
-  }
-  return questionReactionTargets.has(
-    reaction.guids.map((messageGuid) => ({ accountId: params.accountId, messageGuid })),
-  );
+  const reaction = resolveQuestionReaction(params);
+  return reaction ? questionReactionTargets.has(reaction.identities) : false;
 }
 
 export async function maybeResolveIMessageQuestionReaction(params: {
@@ -106,19 +99,12 @@ export async function maybeResolveIMessageQuestionReaction(params: {
   gatewayUrl?: string;
   logDebug?: (message: string) => void;
 }): Promise<boolean> {
-  const reaction = reactionCandidates(params.message, params.bodyText);
-  const optionIndex = reaction
-    ? questionGatewayRuntime.resolveReactionIndex(reaction.emoji)
-    : undefined;
-  if (!reaction || reaction.action === "removed" || optionIndex === undefined) {
+  const reaction = resolveQuestionReaction(params);
+  if (!reaction) {
     return false;
   }
   return await questionReactionTargets.resolve({
-    identities: reaction.guids.map((messageGuid) => ({
-      accountId: params.accountId,
-      messageGuid,
-    })),
-    optionIndex,
+    ...reaction,
     cfg: params.cfg,
     senderId: params.senderId,
     gatewayUrl: params.gatewayUrl,

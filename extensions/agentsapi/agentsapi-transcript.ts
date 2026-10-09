@@ -5,15 +5,66 @@ import {
 import type {
   AgentHarnessAttemptParamsV2,
   AgentMessage,
+  AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { appendSessionTranscriptMessageByIdentityStrict } from "openclaw/plugin-sdk/session-transcript-runtime";
-import type { AgentsApiItem } from "./agentsapi-client.js";
+import type { NativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import {
+  appendSessionTranscriptMessageByIdentityStrict,
+  publishSessionTranscriptUpdateByIdentity,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { AgentsApiFunctionCall, AgentsApiItem } from "./agentsapi-client.js";
 import {
   agentsApiNativeTool,
   agentsApiNativeToolDetails,
   agentsApiNativeToolOutcome,
   agentsApiNativeToolOutput,
 } from "./agentsapi-native-items.js";
+import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
+
+type TranscriptAssertion = NativeSessionBindingAuthority["assertLegacyCurrent"];
+
+export function bindAgentsApiTranscriptAuthority(
+  owner: TranscriptAssertion,
+  signal: AbortSignal,
+): TranscriptAssertion {
+  const assertCurrent = () => {
+    owner();
+    signal.throwIfAborted();
+  };
+  const prepare = owner.prepareSessionSource;
+  return prepare
+    ? Object.assign(assertCurrent, {
+        async prepareSessionSource() {
+          const source = await prepare();
+          return {
+            ...source,
+            assertCurrent: () => {
+              source.assertCurrent();
+              signal.throwIfAborted();
+            },
+            assertPreparedCurrent: () => {
+              (source.assertPreparedCurrent ?? source.assertCurrent)();
+              signal.throwIfAborted();
+            },
+          };
+        },
+      })
+    : assertCurrent;
+}
+
+async function assertTranscriptCurrent(assertCurrent: TranscriptAssertion): Promise<void> {
+  if (!assertCurrent.prepareSessionSource) {
+    assertCurrent();
+    return;
+  }
+  const source = await assertCurrent.prepareSessionSource();
+  try {
+    source.assertCurrent();
+  } finally {
+    await source.release?.();
+  }
+}
 
 /** Canonical native facts use the same durable identities during live and historical repair. */
 export async function recordAgentsApiNativeToolTranscript(
@@ -29,7 +80,7 @@ export async function recordAgentsApiNativeToolTranscript(
     captureTruncated?: boolean;
   } = {},
 ): Promise<boolean> {
-  assertCurrent();
+  await assertTranscriptCurrent(assertCurrent);
   const tool = agentsApiNativeTool(item, params);
   if (!tool || !["completed", "failed", "incomplete"].includes(item.status ?? "")) {
     // A failed parent turn can retire before its command completes. Do not
@@ -91,7 +142,7 @@ export async function recordAgentsApiNativeToolInvocation(
   assertCurrent: () => void,
   nextTimestamp: () => number,
 ): Promise<boolean> {
-  assertCurrent();
+  await assertTranscriptCurrent(assertCurrent);
   const tool = agentsApiNativeTool(item, params);
   if (!tool || !canRecordAgentsApiNativeToolInvocation(item)) {
     return false;
@@ -101,7 +152,7 @@ export async function recordAgentsApiNativeToolInvocation(
     params,
     {
       ...createAgentHarnessToolCallMessage(
-        { api: "openai-responses", provider: "openai", modelId: params.model.id },
+        { api: "openai-agents", provider: "openai", modelId: params.model.id },
         { id, name: tool.name, arguments: tool.args },
         nextTimestamp(),
       ),
@@ -112,40 +163,78 @@ export async function recordAgentsApiNativeToolInvocation(
   return true;
 }
 
+/** Persist host tool evidence before its result is acknowledged by the native session. */
+export async function recordAgentsApiToolTranscript(
+  params: AgentHarnessAttemptParamsV2,
+  call: AgentsApiFunctionCall,
+  result: Awaited<ReturnType<AnyAgentTool["execute"]>>,
+  isError: boolean,
+  assertCurrent: () => void,
+): Promise<void> {
+  const identity = `agentsapi:tool:${call.turn_id}:${call.call_id}`;
+  const attribution = {
+    api: "openai-agents" as const,
+    provider: "openai",
+    modelId: params.model.id,
+  };
+  const toolCall = {
+    ...createAgentHarnessToolCallMessage(
+      attribution,
+      { id: call.call_id, name: call.name, arguments: asOptionalRecord(call.arguments) ?? {} },
+      Date.now(),
+    ),
+    idempotencyKey: `${identity}:call`,
+  };
+  const toolResult = {
+    ...createAgentHarnessToolResultMessage(
+      {
+        id: call.call_id,
+        name: call.name,
+        content: result.content,
+        details: result.details,
+        isError,
+      },
+      Date.now(),
+    ),
+    idempotencyKey: `${identity}:result`,
+  };
+  await appendAgentsApiTranscriptMessage(params, toolCall, assertCurrent);
+  await appendAgentsApiTranscriptMessage(params, toolResult, assertCurrent);
+}
+
 export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMessage>(
   params: AgentHarnessAttemptParamsV2,
   message: TMessage,
-  assertCurrent: () => void,
+  assertCurrent: TranscriptAssertion,
+  assistantItemIds?: readonly string[],
 ): Promise<TMessage> {
-  assertCurrent();
-  const { agentId, sessionId, sessionKey, storePath } = params.sessionTarget ?? {};
-  if (
-    !agentId ||
-    !sessionId ||
-    !sessionKey ||
-    !storePath ||
-    sessionId !== params.sessionId ||
-    agentId !== params.agentId ||
-    sessionKey !== params.sessionKey
-  ) {
-    throw new Error("Agents API requires a matching host-prepared session target");
-  }
+  await assertTranscriptCurrent(assertCurrent);
+  const target = requireAgentsApiSessionTarget(params);
   const append = await appendSessionTranscriptMessageByIdentityStrict({
-    ...params.sessionTarget,
-    agentId,
-    sessionId,
-    sessionKey,
-    storePath,
+    ...target,
     config: params.config,
+    runId: params.runId,
     message,
-    prepareMessageAfterIdempotencyCheck: (prepared) => {
-      assertCurrent();
-      return prepared;
-    },
+    preparation: { source: assertCurrent },
   });
-  assertCurrent();
+  await assertTranscriptCurrent(assertCurrent);
   if (append.kind !== "result") {
     throw new Error("Agents API transcript append was refused");
+  }
+  if (assistantItemIds) {
+    await publishSessionTranscriptUpdateByIdentity({
+      ...target,
+      update: {
+        message: append.result.message,
+        messageId: append.result.messageId,
+        ...(append.result.anchor
+          ? { messageSeq: append.result.anchor.activeMessagePosition + 1 }
+          : {}),
+        runId: params.runId,
+        assistantItemIds,
+      },
+    });
+    await assertTranscriptCurrent(assertCurrent);
   }
   return append.result.message;
 }

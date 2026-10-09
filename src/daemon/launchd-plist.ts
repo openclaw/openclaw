@@ -1,9 +1,10 @@
-/** Reads and renders macOS LaunchAgent plists for gateway service installs. */
 import fs from "node:fs/promises";
 import { asOptionalRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../infra/gateway-shutdown-budget.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExec } from "../process/exec.js";
+import { escapeXml } from "../shared/xml.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnvironmentValueSource,
@@ -27,14 +28,6 @@ export const LAUNCH_AGENT_POLICY = {
 } as const;
 export const LAUNCH_AGENT_ENV_WRAPPER_SHELL = "/bin/sh";
 
-const plistEscape = (value: string): string =>
-  value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-
 type ReadLaunchAgentProgramArgumentsOptions = GatewayServiceReadOptions & {
   expectedEnvironmentWrapperPath?: string;
   expectedEnvironmentFilePath?: string;
@@ -51,14 +44,6 @@ function parseGeneratedEnvValue(value: string): string {
     return trimmed;
   }
   return trimmed.slice(1, -1).replaceAll("'\\''", "'");
-}
-
-function includesGeneratedEnvironmentPathToken(value: string | undefined, token: string): boolean {
-  return Boolean(value?.replaceAll("\\", "/").includes(token));
-}
-
-function includesGeneratedEnvironmentDirToken(value: string | undefined): boolean {
-  return Boolean(value?.replaceAll("\\", "/").includes("/service-env/"));
 }
 
 function resolveSiblingGeneratedEnvFilePath(
@@ -104,15 +89,17 @@ function isExpectedGeneratedEnvWrapperPair(
   }
   // Legacy/corrupted plists may preserve the label-derived wrapper name inside
   // a mangled service-env path. Still unwrap it so the next rewrite can repair.
+  const normalizedWrapper = wrapperPath.replaceAll("\\", "/");
+  const normalizedEnvFile = envFilePath.replaceAll("\\", "/");
   return (
-    includesGeneratedEnvironmentDirToken(wrapperPath) &&
-    includesGeneratedEnvironmentDirToken(envFilePath) &&
-    includesGeneratedEnvironmentPathToken(wrapperPath, `${label}-env-wrapper.sh`) &&
-    includesGeneratedEnvironmentPathToken(envFilePath, `${label}.env`)
+    normalizedWrapper.includes("/service-env/") &&
+    normalizedEnvFile.includes("/service-env/") &&
+    normalizedWrapper.includes(`${label}-env-wrapper.sh`) &&
+    normalizedEnvFile.includes(`${label}.env`)
   );
 }
 
-function resolveGeneratedEnvWrapperLayout(
+export function resolveGeneratedEnvWrapperLayout(
   programArguments: string[],
   options?: ReadLaunchAgentProgramArgumentsOptions,
 ): { envFilePath: string; commandStartIndex: number } | null {
@@ -132,14 +119,12 @@ function resolveGeneratedEnvWrapperLayout(
 }
 
 async function readLaunchAgentEnvironmentFile(
-  programArguments: string[],
+  envFilePath: string | undefined,
   options?: ReadLaunchAgentProgramArgumentsOptions,
 ): Promise<Record<string, string>> {
-  const layout = resolveGeneratedEnvWrapperLayout(programArguments, options);
-  if (!layout) {
+  if (envFilePath === undefined) {
     return {};
   }
-  const envFilePath = layout.envFilePath;
   let content = "";
   const candidateEnvFilePaths = options?.requireEffective
     ? [envFilePath]
@@ -208,17 +193,6 @@ async function readLaunchAgentEnvironmentFile(
   return environment;
 }
 
-function unwrapGeneratedEnvWrapperArgs(
-  programArguments: string[],
-  options?: ReadLaunchAgentProgramArgumentsOptions,
-): string[] {
-  const layout = resolveGeneratedEnvWrapperLayout(programArguments, options);
-  if (!layout) {
-    return programArguments;
-  }
-  return programArguments.slice(layout.commandStartIndex);
-}
-
 const renderEnvDict = (env: Record<string, string | undefined> | undefined): string => {
   if (!env) {
     return "";
@@ -233,7 +207,7 @@ const renderEnvDict = (env: Record<string, string | undefined> | undefined): str
   const items = entries
     .map(
       ([key, value]) =>
-        `\n    <key>${plistEscape(key)}</key>\n    <string>${plistEscape(value?.trim() ?? "")}</string>`,
+        `\n    <key>${escapeXml(key)}</key>\n    <string>${escapeXml(value?.trim() ?? "")}</string>`,
     )
     .join("");
   return `\n    <key>EnvironmentVariables</key>\n    <dict>${items}\n    </dict>`;
@@ -292,46 +266,61 @@ export async function readLaunchAgentProgramArgumentsFromFile(
       return null;
     }
     const plist = await decodeLaunchdPlistMetadata(contents, options?.timeoutMs);
-    const args = plist?.ProgramArguments;
-    const workingDirectory = plist?.WorkingDirectory;
-    const inlineEnvironment = plist?.EnvironmentVariables;
-    if (
-      !Array.isArray(args) ||
-      !args.every((arg): arg is string => typeof arg === "string") ||
-      (workingDirectory !== undefined && typeof workingDirectory !== "string") ||
-      (inlineEnvironment !== undefined && !isStringRecord(inlineEnvironment))
-    ) {
-      throw new Error("Invalid LaunchAgent command fields");
+    return await resolveLaunchAgentProgramArguments(plist, plistPath, options);
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
     }
-    const fileEnvironment = await readLaunchAgentEnvironmentFile(args, options);
-    const effectiveProgramArguments = unwrapGeneratedEnvWrapperArgs(args, options);
-    if (options?.requireEffective && !effectiveProgramArguments[0]) {
-      throw new Error("Missing LaunchAgent command");
-    }
-    const environment = { ...inlineEnvironment, ...fileEnvironment };
-    const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> = {};
-    // Track source provenance so repair flows can tell inline plist env from the
-    // generated env file and preserve both when they overlap.
-    for (const key of Object.keys(environment)) {
-      environmentValueSources[key] = !Object.hasOwn(fileEnvironment, key)
-        ? "inline"
-        : Object.hasOwn(inlineEnvironment ?? {}, key)
-          ? "inline-and-file"
-          : "file";
-    }
-    return {
-      programArguments: effectiveProgramArguments,
-      ...(workingDirectory ? { workingDirectory } : {}),
-      ...(Object.keys(environment).length > 0 ? { environment } : {}),
-      ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
-      sourcePath: plistPath,
-    };
-  } catch {
     if (options?.requireEffective) {
-      throw new Error("Effective LaunchAgent service command could not be inspected.");
+      throw new Error("Effective LaunchAgent service command could not be inspected.", {
+        cause: error,
+      });
     }
     return null;
   }
+}
+
+/** Resolve captured plist metadata through the same generated environment owner as file reads. */
+export async function resolveLaunchAgentProgramArguments(
+  plist: Awaited<ReturnType<typeof decodeLaunchdPlistMetadata>>,
+  plistPath: string,
+  options?: ReadLaunchAgentProgramArgumentsOptions,
+): Promise<GatewayServiceCommandConfig> {
+  const args = plist?.ProgramArguments;
+  const workingDirectory = plist?.WorkingDirectory;
+  const inlineEnvironment = plist?.EnvironmentVariables;
+  if (
+    !Array.isArray(args) ||
+    !args.every((arg): arg is string => typeof arg === "string") ||
+    (workingDirectory !== undefined && typeof workingDirectory !== "string") ||
+    (inlineEnvironment !== undefined && !isStringRecord(inlineEnvironment))
+  ) {
+    throw new Error("Invalid LaunchAgent command fields");
+  }
+  const layout = resolveGeneratedEnvWrapperLayout(args, options);
+  const fileEnvironment = await readLaunchAgentEnvironmentFile(layout?.envFilePath, options);
+  const effectiveProgramArguments = layout ? args.slice(layout.commandStartIndex) : args;
+  if (options?.requireEffective && !effectiveProgramArguments[0]) {
+    throw new Error("Missing LaunchAgent command");
+  }
+  const environment = { ...inlineEnvironment, ...fileEnvironment };
+  const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> = {};
+  // Track source provenance so repair flows can tell inline plist env from the
+  // generated env file and preserve both when they overlap.
+  for (const key of Object.keys(environment)) {
+    environmentValueSources[key] = !Object.hasOwn(fileEnvironment, key)
+      ? "inline"
+      : Object.hasOwn(inlineEnvironment ?? {}, key)
+        ? "inline-and-file"
+        : "file";
+  }
+  return {
+    programArguments: effectiveProgramArguments,
+    ...(workingDirectory ? { workingDirectory } : {}),
+    ...(Object.keys(environment).length > 0 ? { environment } : {}),
+    ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
+    sourcePath: plistPath,
+  };
 }
 
 export function buildLaunchAgentPlist({
@@ -352,13 +341,13 @@ export function buildLaunchAgentPlist({
   environment?: Record<string, string | undefined>;
 }): string {
   const argsXml = programArguments
-    .map((arg) => `\n      <string>${plistEscape(arg)}</string>`)
+    .map((arg) => `\n      <string>${escapeXml(arg)}</string>`)
     .join("");
   const workingDirXml = workingDirectory
-    ? `\n    <key>WorkingDirectory</key>\n    <string>${plistEscape(workingDirectory)}</string>`
+    ? `\n    <key>WorkingDirectory</key>\n    <string>${escapeXml(workingDirectory)}</string>`
     : "";
   const commentXml = comment?.trim()
-    ? `\n    <key>Comment</key>\n    <string>${plistEscape(comment.trim())}</string>`
+    ? `\n    <key>Comment</key>\n    <string>${escapeXml(comment.trim())}</string>`
     : "";
   const envXml = renderEnvDict(environment);
   const policyXml = Object.entries(LAUNCH_AGENT_POLICY)
@@ -367,9 +356,9 @@ export function buildLaunchAgentPlist({
       const xml =
         typeof value === "boolean"
           ? `<${value}/>`
-          : `<${type}>${plistEscape(String(value))}</${type}>`;
+          : `<${type}>${escapeXml(String(value))}</${type}>`;
       return `    <key>${key}</key>\n    ${xml}`;
     })
     .join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${plistEscape(label)}</string>\n    ${commentXml}\n${policyXml}\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${plistEscape(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${plistEscape(stderrPath)}</string>${envXml}\n  </dict>\n</plist>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${escapeXml(label)}</string>\n    ${commentXml}\n${policyXml}\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${escapeXml(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${escapeXml(stderrPath)}</string>${envXml}\n  </dict>\n</plist>\n`;
 }

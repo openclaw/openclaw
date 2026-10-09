@@ -6,8 +6,8 @@ import {
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
+import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
-import * as subagentStore from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -143,7 +143,7 @@ describe("exec approval signed agent runtime", () => {
           sessionId: source.sessionId,
           ownerEpoch: 3,
         });
-        let placement = placements.startDispatch(source);
+        let placement = await placements.startDispatch(source);
         for (const [to, patch] of [
           ["provisioning", { environmentId: "worker-approval-environment" }],
           ["syncing", { workerBundleHash: "a".repeat(64) }],
@@ -156,7 +156,7 @@ describe("exec approval signed agent runtime", () => {
           ],
           ["active", { activeOwnerEpoch: 3 }],
         ] as const) {
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId: source.sessionId,
             from: placement.state,
             to,
@@ -164,7 +164,7 @@ describe("exec approval signed agent runtime", () => {
             patch,
           });
         }
-        const claim = placements.claimTurn({
+        const claim = await placements.claimTurn({
           ...source,
           claimId: "worker-approval-claim",
           runId: "worker-approval-run",
@@ -228,7 +228,7 @@ describe("exec approval signed agent runtime", () => {
             throw new Error("registered worker approval is missing");
           }
           if (revoked) {
-            placements.releaseTurn(claim);
+            await placements.releaseTurn(claim);
           }
           await fixture.manager.resolve(record.id, "allow-once");
           await pending;
@@ -241,7 +241,7 @@ describe("exec approval signed agent runtime", () => {
           }
         } finally {
           if (placements.validateTurnClaim(claim)) {
-            placements.releaseTurn(claim);
+            await placements.releaseTurn(claim);
           }
           releaseAgentRunDelegatedAuthority(delegated);
         }
@@ -267,7 +267,7 @@ describe("exec approval signed agent runtime", () => {
           completion: { required: false },
           delivery: { status: "not_required" },
         });
-        subagentStore.saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+        saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: parent },
           {

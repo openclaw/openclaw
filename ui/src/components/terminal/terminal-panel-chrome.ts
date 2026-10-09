@@ -69,20 +69,23 @@ export function renderTerminalPanelViewport({
             })
           : nothing
       }
-      <input
-        class="tp-file-input"
-        type="file"
-        multiple
-        aria-hidden="true"
-        tabindex="-1"
-        @change=${uploadController.handleFileSelection}
-      />
+      ${
+        uploadController.uploadsEnabled()
+          ? html`<input
+              class="tp-file-input"
+              type="file"
+              multiple
+              aria-hidden="true"
+              tabindex="-1"
+              @change=${uploadController.handleFileSelection}
+            />`
+          : nothing
+      }
       ${renderTerminalUploadLayer(uploadController)}
     </wa-tab-panel>
   `;
 }
 
-/** Operator-facing text for a failed terminal.open; typed errors map to copy. */
 export function terminalOpenErrorText(error: unknown): string {
   if (error instanceof TerminalOpenTimeoutError) {
     return t("terminal.connectionTimedOut");

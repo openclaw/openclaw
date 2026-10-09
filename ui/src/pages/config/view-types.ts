@@ -6,14 +6,10 @@ import type {
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
-import type {
-  NativeNotificationsPermission,
-  NativeNotificationTestOutcome,
-} from "../../app/native-notifications.ts";
+import type { NativeNotificationsCapability } from "../../app/native-notifications.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
-import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../../app/settings.ts";
+import type { ChatSendShortcut, UiSettings } from "../../app/settings.ts";
 import type { ThemeCatalogSnapshot } from "../../app/theme-catalog.ts";
-import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
@@ -22,6 +18,7 @@ import type { ConfigSchemaAnalysis } from "../../components/config-form.ts";
 import type { Locale } from "../../i18n/index.ts";
 import type { RealtimeTalkInputDevice } from "../chat/talk/input.ts";
 import type { SessionObserverModelSelection } from "./session-observer-settings.ts";
+import type { TabIconViewProps } from "./view-tab-icon.ts";
 
 type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
@@ -60,7 +57,26 @@ export type ConfigViewState = {
   lastFormModeForScroll: ConfigFormMode | null;
 };
 
-export type ConfigProps = {
+type AppearancePreferences = Required<
+  Pick<
+    UiSettings,
+    | "sidebarLiveActivity"
+    | "openLinksExternally"
+    | "chatShowTaskProgress"
+    | "chatCollapseTaskProgress"
+    | "showAdvancedSettings"
+    | "lobsterPetVisits"
+    | "sessionDeleteConfirm"
+    | "lobsterPetSounds"
+    | "chatSendShortcut"
+    | "catalogOpenTarget"
+    | "composerHoldToRecord"
+  >
+> &
+  Pick<UiSettings, "chatMessageMaxWidth" | "chatFollowUpMode">;
+
+export interface ConfigProps extends TabIconViewProps, AppearancePreferences {
+  onAppearanceChange: (patch: Partial<AppearancePreferences>) => void;
   raw: string;
   originalRaw: string;
   valid: boolean | null;
@@ -91,7 +107,6 @@ export type ConfigProps = {
   /** Curated content inside the active section; receives the canonical schema editor. */
   renderSection?: (editor: TemplateResult | typeof nothing) => TemplateResult;
   formValue: Record<string, unknown> | null;
-  originalValue: Record<string, unknown> | null;
   activeSection: string | null;
   activeSubsection: string | null;
   onRawChange: (next: string) => void;
@@ -129,8 +144,8 @@ export type ConfigProps = {
   onLocaleChange: (locale: Locale | undefined) => void;
   themeCatalog?: ThemeCatalogSnapshot;
   onRetryThemeCatalog?: () => void;
-  setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
-  setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+  setTheme: (theme: ThemeName) => void;
+  setThemeMode: (mode: ThemeMode) => void;
   setAccent: (accent: string | undefined) => void;
   hasCustomTheme: boolean;
   customThemeLabel: string | null;
@@ -147,19 +162,11 @@ export type ConfigProps = {
   textScale: number;
   textScaleOverridden: boolean;
   setTextScale: (value: number) => void;
-  sidebarLiveActivity: boolean;
-  setSidebarLiveActivity: (enabled: boolean) => void;
   hiddenSessionCatalogIds: ReadonlySet<string>;
   hiddenSessionCatalogLabels: ReadonlyMap<string, string>;
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
-  chatMessageMaxWidth?: string;
-  setChatMessageMaxWidth: (value: string | undefined) => void;
-  chatShowTaskProgress: boolean;
-  setChatShowTaskProgress: (enabled: boolean) => void;
-  chatCollapseTaskProgress: boolean;
-  setChatCollapseTaskProgress: (enabled: boolean) => void;
-  showAdvancedSettings: boolean;
-  setShowAdvancedSettings: (enabled: boolean) => void;
+  terminalFontFamily?: string;
+  setTerminalFontFamily: (value: string | undefined) => void;
   forceShowAdvanced?: boolean;
   forceAdvancedSection?: string | null;
   sessionObserverEnabled?: boolean;
@@ -170,35 +177,21 @@ export type ConfigProps = {
   sessionObserverDisabled?: boolean;
   setSessionObserverEnabled?: (enabled: boolean) => void;
   setSessionObserverUtilityModel?: (selection: SessionObserverModelSelection) => void;
-  lobsterPetVisits?: boolean;
-  setLobsterPetVisits?: (enabled: boolean) => void;
-  sessionDeleteConfirm?: boolean;
-  setSessionDeleteConfirm?: (enabled: boolean) => void;
-  lobsterPetSounds?: boolean;
-  setLobsterPetSounds?: (enabled: boolean) => void;
   lobsterdexHref?: string;
   onOpenLobsterdex?: () => void;
-  chatSendShortcut: ChatSendShortcut;
   chatSendShortcutOverridden: boolean;
   chatSendShortcutProvenance: ServerUiPrefProvenance;
   chatSendShortcutResetValue: ChatSendShortcut;
-  setChatSendShortcut: (value: ChatSendShortcut) => void;
-  chatFollowUpMode: ChatFollowUpMode | undefined;
   chatFollowUpModeOverridden: boolean;
   chatFollowUpModeProvenance: ServerUiPrefProvenance;
   serverQueueMode: QueueMode | undefined;
-  setChatFollowUpMode: (value: ChatFollowUpMode | undefined) => void;
   resetChatFollowUpMode: () => void;
-  catalogOpenTarget: CatalogOpenTarget;
-  setCatalogOpenTarget: (value: CatalogOpenTarget) => void;
   microphone?: SettingsMediaDeviceState;
   onMicrophoneRefresh?: () => void;
   onMicrophoneSelect?: (deviceId: string) => void;
   camera?: SettingsMediaDeviceState;
   onCameraRefresh?: () => void;
   onCameraSelect?: (deviceId: string) => void;
-  composerHoldToRecord?: boolean;
-  setComposerHoldToRecord?: (enabled: boolean) => void;
   gatewayUrl: string;
   pluginsHref?: string;
   installedSessionSourcePluginIds?: ReadonlySet<string> | null;
@@ -212,10 +205,7 @@ export type ConfigProps = {
   includeVirtualSections?: boolean;
   /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
   settingsLayout?: "tabs" | "accordion";
-  nativeNotifications?: {
-    permission: NativeNotificationsPermission | "unknown";
-    test: NativeNotificationTestOutcome | null;
-  };
+  nativeNotifications?: NativeNotificationsCapability["snapshot"];
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
   webPush?: WebPushSnapshot;
@@ -224,4 +214,4 @@ export type ConfigProps = {
   onWebPushTest?: () => void;
   onWebPushSetUserPreferences?: (preferences: WebPushNotificationPreferences) => void;
   onWebPushSetDevicePreferences?: (preferences: WebPushDevicePreferences) => void;
-};
+}

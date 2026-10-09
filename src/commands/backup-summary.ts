@@ -9,11 +9,9 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
   if (result.skipped.length > 0) {
     lines.push(`Skipped ${result.skipped.length} path${result.skipped.length === 1 ? "" : "s"}:`);
     for (const entry of result.skipped) {
-      if (entry.reason === "covered" && entry.coveredBy) {
-        lines.push(`- ${entry.kind}: ${entry.displayPath} (${entry.reason} by ${entry.coveredBy})`);
-      } else {
-        lines.push(`- ${entry.kind}: ${entry.displayPath} (${entry.reason})`);
-      }
+      const coverage =
+        entry.reason === "covered" && entry.coveredBy ? ` by ${entry.coveredBy}` : "";
+      lines.push(`- ${entry.kind}: ${entry.displayPath} (${entry.reason}${coverage})`);
     }
   }
   for (const link of result.externalSymbolicLinks ?? []) {

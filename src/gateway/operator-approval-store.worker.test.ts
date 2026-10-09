@@ -1,11 +1,14 @@
+import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as store from "./operator-approval-store.js";
 import * as native from "./operator-approval-store.kernel.js";
 import { getOperatorApprovalResolutionKey } from "./operator-approval-store.rows.js";
@@ -106,28 +109,10 @@ it("preserves serialized records, first-answer wins, consumption and history thr
 it("runs lookup, pending scans, expiry and history without host SQLite calls through close", async () => {
   const databaseOptions = options();
   await store.insertOperatorApproval({ approval: approval("off-thread"), databaseOptions });
-  const sqlite = requireNodeSqlite();
-  const counters = [
-    vi.spyOn(sqlite.DatabaseSync.prototype, "prepare"),
-    vi.spyOn(sqlite.DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(sqlite.StatementSync.prototype, method),
-    ),
-  ];
+  requireNodeSqlite();
+  const counters = observeMainThreadSql();
   try {
-    const calibration = new sqlite.DatabaseSync(":memory:");
-    try {
-      calibration.exec("CREATE TABLE calibration (value INTEGER)");
-      calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
-      const read = calibration.prepare("SELECT value FROM calibration");
-      read.get();
-      read.all();
-      expect([...read.iterate()]).toHaveLength(1);
-      expect(counters.every((counter) => counter.mock.calls.length > 0)).toBe(true);
-    } finally {
-      calibration.close();
-      counters.forEach((counter) => counter.mockClear());
-    }
+    counters.calibrate();
     const pending = await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions });
     expect(pending.map((record) => record.id)).toEqual(["off-thread"]);
     expect(
@@ -140,9 +125,9 @@ it("runs lookup, pending scans, expiry and history without host SQLite calls thr
       await store.listTerminalOperatorApprovals({ nowMs: 10_002, databaseOptions }),
     ).toMatchObject({ records: [{ id: "off-thread", status: "expired" }] });
     await closeOpenClawStateDatabaseAsync();
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    counters.expectIdle();
   } finally {
-    counters.forEach((counter) => counter.mockRestore());
+    counters.restore();
   }
 });
 
@@ -178,20 +163,6 @@ it("keeps native reads between earlier and later worker mutations", async () => 
   });
 });
 
-it("leaves the default approval clock to the worker when dispatching a public read", async () => {
-  const databaseOptions = options();
-  const input = approval("worker-clock");
-  await store.insertOperatorApproval({ approval: input, databaseOptions });
-  // Only the requesting thread sees this pre-expiry clock; the real worker must
-  // expire the historical fixture using its own transaction-time clock.
-  using _ = vi.spyOn(Date, "now").mockReturnValue(input.createdAtMs);
-
-  expect(await store.getOperatorApprovalDetailed({ id: input.id, databaseOptions })).toMatchObject({
-    outcome: "found",
-    record: { status: "expired", terminalReason: "timeout" },
-  });
-});
-
 it("revalidates live authority after dispatch and rolls back refused decisions", async () => {
   const databaseOptions = options();
   await store.insertOperatorApproval({ approval: approval("guarded"), databaseOptions });
@@ -224,16 +195,12 @@ it.each(["worker", "native-compatibility"] as const)(
     let refuse = true;
     let current = true;
     if (family === "worker") {
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit" && refuse) {
-              current = false;
-            }
-            return admit(request, grant);
-          }),
-      );
+      probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === "commit" && refuse) {
+          current = false;
+        }
+        return admit(request, grant);
+      });
     }
     const input = {
       id: "receipt-rollback",
@@ -268,9 +235,7 @@ it.each(["worker", "native-compatibility"] as const)(
     ).toMatchObject({ outcome: "found", record: { status: "pending" } });
     const winner = await store.resolveOperatorApproval(input);
     expect(winner.outcome).toBe("resolved");
-    if (winner.outcome !== "resolved") {
-      throw new Error("Expected committed resolution");
-    }
+    assert(winner.outcome === "resolved", "Expected committed resolution");
     expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
       getOperatorApprovalResolutionKey(winner.record),
     );

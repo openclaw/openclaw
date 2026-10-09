@@ -1,41 +1,18 @@
 // Media and voice compatibility migrations retired from canonical runtime config.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRecord } from "../../../config/legacy.shared.js";
-import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";
+import {
+  deleteRetiredPath,
+  moveLegacyConfigKey,
+  visitAgentConfigScopes,
+  visitChannelEntries,
+} from "./legacy-config-record-shared.js";
 
-export function moveVoice(owner: Record<string, unknown>, path: string, changes: string[]): void {
-  if (!Object.hasOwn(owner, "voice")) {
-    return;
-  }
-  if (owner.speakerVoice === undefined) {
-    owner.speakerVoice = owner.voice;
-    changes.push(`Moved ${path}.voice → ${path}.speakerVoice.`);
-  } else {
-    changes.push(`Removed ${path}.voice (${path}.speakerVoice already set).`);
-  }
-  delete owner.voice;
-}
-
-export function migrateDiscordVoice(channels: Record<string, unknown>, changes: string[]): void {
-  const discord = getRecord(channels.discord);
-  if (!discord) {
-    return;
-  }
-  const migrateEntry = (entry: Record<string, unknown>, path: string) => {
+export function migrateDiscordVoice(raw: Record<string, unknown>, changes: string[]): void {
+  visitChannelEntries(raw, "discord", (entry, path) => {
     const realtime = getRecord(getRecord(entry.voice)?.realtime);
-    if (realtime) {
-      moveVoice(realtime, `${path}.voice.realtime`, changes);
-    }
-  };
-  migrateEntry(discord, "channels.discord");
-  const accounts = getRecord(discord.accounts);
-  if (accounts) {
-    for (const [accountId, value] of Object.entries(accounts)) {
-      const account = getRecord(value);
-      if (account) {
-        migrateEntry(account, `channels.discord.accounts.${accountId}`);
-      }
-    }
-  }
+    moveLegacyConfigKey(realtime, "voice", "speakerVoice", `${path}.voice.realtime`, changes);
+  });
 }
 
 export function hasDiscordRealtimeVoice(value: unknown): boolean {
@@ -131,6 +108,32 @@ export function hasMediaDeepgram(value: unknown): boolean {
   });
 }
 
+const RETIRED_LOOP_DETECTION_PATHS = [
+  ["tools", "loopDetection", "genericRepeat"],
+  ["tools", "loopDetection", "knownPollNoProgress"],
+  ["tools", "loopDetection", "pingPong"],
+  ["tools", "loopDetection", "windowSize"],
+  ["tools", "loopDetection", "historySize"],
+  ["tools", "loopDetection", "warningThreshold"],
+  ["tools", "loopDetection", "unknownToolThreshold"],
+  ["tools", "loopDetection", "criticalThreshold"],
+  ["tools", "loopDetection", "globalCircuitBreakerThreshold"],
+  ["tools", "loopDetection", "detectors"],
+  ["tools", "loopDetection", "postCompactionGuard"],
+] as const;
+
+const RETIRED_MEMORY_SEARCH_PATHS = [
+  ["memory", "search", "chunking"],
+  ["memory", "search", "sync", "watchDebounceMs"],
+  ["memory", "search", "sync", "intervalMinutes"],
+  ["memory", "search", "query", "hybrid", "vectorWeight"],
+  ["memory", "search", "query", "hybrid", "textWeight"],
+  ["memory", "search", "query", "hybrid", "candidateMultiplier"],
+  ["memory", "search", "query", "hybrid", "mmr", "lambda"],
+  ["memory", "search", "query", "hybrid", "temporalDecay", "halfLifeDays"],
+  ["memory", "search", "cache", "maxEntries"],
+] as const;
+
 const RETIRED_TUNING_PATHS = [
   ["systemAgent"],
   ["marketplaces"],
@@ -147,17 +150,7 @@ const RETIRED_TUNING_PATHS = [
   ["browser", "tabCleanup", "idleMinutes"],
   ["browser", "tabCleanup", "maxTabsPerSession"],
   ["browser", "tabCleanup", "sweepMinutes"],
-  ["tools", "loopDetection", "genericRepeat"],
-  ["tools", "loopDetection", "knownPollNoProgress"],
-  ["tools", "loopDetection", "pingPong"],
-  ["tools", "loopDetection", "windowSize"],
-  ["tools", "loopDetection", "historySize"],
-  ["tools", "loopDetection", "warningThreshold"],
-  ["tools", "loopDetection", "unknownToolThreshold"],
-  ["tools", "loopDetection", "criticalThreshold"],
-  ["tools", "loopDetection", "globalCircuitBreakerThreshold"],
-  ["tools", "loopDetection", "detectors"],
-  ["tools", "loopDetection", "postCompactionGuard"],
+  ...RETIRED_LOOP_DETECTION_PATHS,
   ["gateway", "handshakeTimeoutMs"],
   ["gateway", "channelHealthCheckMinutes"],
   ["gateway", "channelStaleEventThresholdMinutes"],
@@ -196,15 +189,7 @@ const RETIRED_TUNING_PATHS = [
   ["update", "auto", "stableDelayHours"],
   ["update", "auto", "stableJitterHours"],
   ["update", "auto", "betaCheckIntervalHours"],
-  ["memory", "search", "chunking"],
-  ["memory", "search", "sync", "watchDebounceMs"],
-  ["memory", "search", "sync", "intervalMinutes"],
-  ["memory", "search", "query", "hybrid", "vectorWeight"],
-  ["memory", "search", "query", "hybrid", "textWeight"],
-  ["memory", "search", "query", "hybrid", "candidateMultiplier"],
-  ["memory", "search", "query", "hybrid", "mmr", "lambda"],
-  ["memory", "search", "query", "hybrid", "temporalDecay", "halfLifeDays"],
-  ["memory", "search", "cache", "maxEntries"],
+  ...RETIRED_MEMORY_SEARCH_PATHS,
   ["channels", "*", "streaming", "progress", "render"],
   ["channels", "*", "accounts", "*", "streaming", "progress", "render"],
 ] as const;
@@ -218,30 +203,9 @@ const RETIRED_AGENT_TUNING_PATHS = [
   ["contextPruning", "hardClearRatio"],
   ["contextPruning", "minPrunableToolChars"],
   ["contextPruning", "softTrim"],
-  ["memory", "search", "chunking"],
-  ["memory", "search", "sync", "watchDebounceMs"],
-  ["memory", "search", "sync", "intervalMinutes"],
-  ["memory", "search", "query", "hybrid", "vectorWeight"],
-  ["memory", "search", "query", "hybrid", "textWeight"],
-  ["memory", "search", "query", "hybrid", "candidateMultiplier"],
-  ["memory", "search", "query", "hybrid", "mmr", "lambda"],
-  ["memory", "search", "query", "hybrid", "temporalDecay", "halfLifeDays"],
-  ["memory", "search", "cache", "maxEntries"],
-  ["cliBackends", "*", "reliability", "outputLimits"],
-  ["cliBackends", "*", "reliability", "watchdog", "fresh", "noOutputTimeoutMs"],
-  ["cliBackends", "*", "reliability", "watchdog", "resume", "noOutputTimeoutMs"],
+  ...RETIRED_MEMORY_SEARCH_PATHS,
   ["runRetries"],
-  ["tools", "loopDetection", "genericRepeat"],
-  ["tools", "loopDetection", "knownPollNoProgress"],
-  ["tools", "loopDetection", "pingPong"],
-  ["tools", "loopDetection", "windowSize"],
-  ["tools", "loopDetection", "historySize"],
-  ["tools", "loopDetection", "warningThreshold"],
-  ["tools", "loopDetection", "unknownToolThreshold"],
-  ["tools", "loopDetection", "criticalThreshold"],
-  ["tools", "loopDetection", "globalCircuitBreakerThreshold"],
-  ["tools", "loopDetection", "detectors"],
-  ["tools", "loopDetection", "postCompactionGuard"],
+  ...RETIRED_LOOP_DETECTION_PATHS,
 ] as const;
 
 export function stripRetiredTuningKnobs(raw: Record<string, unknown>, changes?: string[]): boolean {
@@ -312,11 +276,7 @@ export function consolidateMediaCapabilityConfig(
   if (!media) {
     return;
   }
-  const sharedModels = Array.isArray(media.models)
-    ? media.models.filter(
-        (value): value is Record<string, unknown> => getRecord(value) !== undefined,
-      )
-    : [];
+  const sharedModels = Array.isArray(media.models) ? media.models.filter(isRecord) : [];
   const migratedModels: Record<string, unknown>[] = [];
   let changed = false;
 
@@ -325,23 +285,18 @@ export function consolidateMediaCapabilityConfig(
     if (!config) {
       continue;
     }
-    const legacyModels = Array.isArray(config.models)
-      ? config.models.filter(
-          (value): value is Record<string, unknown> => getRecord(value) !== undefined,
-        )
-      : [];
-    const migratedBySignature = new Map<string, Record<string, unknown>>();
-    const eligibleLegacyModels = legacyModels.flatMap((legacyModel) => {
-      const scoped = scopeLegacyMediaModel(legacyModel, capability);
-      return scoped ? [scoped] : [];
-    });
-    for (const migrated of eligibleLegacyModels) {
-      const signature = mediaModelSignature(migrated);
-      const duplicate = migratedBySignature.get(signature);
-      if (duplicate) {
+    const legacyModels = Array.isArray(config.models) ? config.models.filter(isRecord) : [];
+    const migratedSignatures = new Set<string>();
+    for (const legacyModel of legacyModels) {
+      const migrated = scopeLegacyMediaModel(legacyModel, capability);
+      if (!migrated) {
         continue;
       }
-      migratedBySignature.set(signature, migrated);
+      const signature = mediaModelSignature(migrated);
+      if (migratedSignatures.has(signature)) {
+        continue;
+      }
+      migratedSignatures.add(signature);
       migratedModels.push(migrated);
     }
     if (Object.hasOwn(config, "models")) {

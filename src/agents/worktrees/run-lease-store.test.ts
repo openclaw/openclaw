@@ -7,8 +7,12 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
-import { releaseWorktreeRunLeaseRowAsync } from "./run-lease-store.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { insertRegistryWorktree } from "./registry.js";
+import {
+  admitWorktreeRunLeaseRowAsync,
+  releaseWorktreeRunLeaseRowAsync,
+} from "./run-lease-store.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
@@ -19,6 +23,18 @@ afterEach(async () => {
 it("settles exact lease deletions without host SQL or fsync and refuses a retired store", async () => {
   const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("worktree-release-worker-") };
   const database = openOpenClawStateDatabase({ env });
+  await insertRegistryWorktree(env, {
+    id: "synthetic",
+    name: "synthetic",
+    repoFingerprint: "0123456789abcdef",
+    repoRoot: env.OPENCLAW_STATE_DIR,
+    path: env.OPENCLAW_STATE_DIR,
+    branch: "synthetic",
+    baseRef: "HEAD",
+    ownerKind: "session",
+    createdAt: 1,
+    lastActiveAt: 1,
+  });
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const insert = db.prepare(
@@ -57,6 +73,21 @@ it("settles exact lease deletions without host SQL or fsync and refuses a retire
   await expect(
     releaseWorktreeRunLeaseRowAsync(env, "synthetic", "successor", context),
   ).rejects.toThrow();
+  const settlement = vi.fn();
+  await expect(
+    admitWorktreeRunLeaseRowAsync(
+      context,
+      {
+        worktreeId: "synthetic",
+        token: "retired-admission",
+        pid: process.pid,
+        startTime: null,
+        now: 1,
+      },
+      settlement,
+    ),
+  ).rejects.toThrow();
+  expect(settlement).toHaveBeenCalledExactlyOnceWith("not-entered");
   expect(
     openOpenClawStateDatabase({ env })
       .db.prepare("SELECT COUNT(*) AS count FROM state_leases")

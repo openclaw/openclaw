@@ -105,13 +105,7 @@ function hasMatrixApprovalApprovers(params: {
   accountId?: string | null;
   approvalKind: ChannelApprovalKind;
 }): boolean {
-  return (
-    getMatrixApprovalApprovers({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      approvalKind: params.approvalKind,
-    }).length > 0
-  );
+  return getMatrixApprovalApprovers(params).length > 0;
 }
 
 function hasAnyMatrixApprovalApprovers(params: {
@@ -193,7 +187,7 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
       accountId && accountId !== "default"
         ? `channels.matrix.accounts.${accountId}`
         : "channels.matrix";
-    return `Approve it from the Web UI or terminal UI for now. Matrix supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`${prefix}.dm.allowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+    return `Approve it from the Web UI for now. Matrix supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`${prefix}.dm.allowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
   },
   listAccountIds: listMatrixAccountIds,
   hasApprovers: ({ cfg, accountId }) =>
@@ -201,8 +195,7 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
       cfg: cfg as CoreConfig,
       accountId,
     }),
-  isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
-    isMatrixExecApprovalAuthorizedSender({ cfg, accountId, senderId }),
+  isExecAuthorizedSender: isMatrixExecApprovalAuthorizedSender,
   isPluginAuthorizedSender: ({ cfg, accountId, senderId }) =>
     isMatrixApprovalReactionAuthorizedSender({
       cfg: cfg as CoreConfig,
@@ -210,10 +203,8 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
       senderId,
       approvalKind: "plugin",
     }),
-  isNativeDeliveryEnabled: ({ cfg, accountId }) =>
-    isMatrixExecApprovalClientEnabled({ cfg, accountId }),
-  resolveNativeDeliveryMode: ({ cfg, accountId }) =>
-    resolveMatrixExecApprovalTarget({ cfg, accountId }),
+  isNativeDeliveryEnabled: isMatrixExecApprovalClientEnabled,
+  resolveNativeDeliveryMode: resolveMatrixExecApprovalTarget,
   requireMatchingTurnSourceChannel: true,
   resolveSuppressionAccountId,
   resolveOriginTarget: resolveMatrixOriginTarget,
@@ -222,18 +213,8 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
   nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
     capabilityBoundary: true,
     eventKinds: ["exec", "plugin", "system-agent"],
-    isConfigured: ({ cfg, accountId }) =>
-      isMatrixAnyApprovalClientEnabled({
-        cfg,
-        accountId,
-      }),
-    shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
-      shouldHandleMatrixApprovalRequest({
-        cfg,
-        accountId,
-        approvalKind,
-        request,
-      }),
+    isConfigured: isMatrixAnyApprovalClientEnabled,
+    shouldHandle: shouldHandleMatrixApprovalRequest,
     load: async () => (await import("./approval-handler.runtime.js")).matrixApprovalNativeRuntime,
   }),
 });

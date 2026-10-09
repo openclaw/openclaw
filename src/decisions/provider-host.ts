@@ -207,25 +207,27 @@ export class DecisionProviderHost {
   }
 
   async evaluate(
-    batch: DecisionBatch,
+    submitted: DecisionBatch,
     options: Options,
     model: string,
     config: OpenClawConfig,
     registry: PluginRegistry,
     consumerId?: string,
+    isAdmissible?: () => boolean,
   ): Promise<DecisionOutcome> {
     const started = performance.now();
     const facts: DecisionEvaluationFacts = { dispatched: false };
     let outcome: DecisionOutcome | undefined;
     try {
       outcome = await this.evaluateRequest(
-        batch,
+        submitted,
         options,
         model,
         config,
         registry,
         facts,
         consumerId,
+        isAdmissible,
       );
       return outcome;
     } finally {
@@ -241,21 +243,16 @@ export class DecisionProviderHost {
   }
 
   private async evaluateRequest(
-    batch: DecisionBatch,
+    submitted: DecisionBatch,
     options: Options,
     model: string,
     config: OpenClawConfig,
     registry: PluginRegistry,
     facts: DecisionEvaluationFacts,
     consumerId?: string,
+    isAdmissible?: () => boolean,
   ): Promise<DecisionOutcome> {
     options.signal.throwIfAborted();
-    let submitted: DecisionBatch;
-    try {
-      submitted = structuredClone(batch);
-    } catch {
-      throw new DecisionContractError();
-    }
     const instance = getPluginInstance(this.record);
     if (this.retired || this.reloadPause || !instance?.acceptingCalls || instance.owner?.revoked) {
       return this.unavailable("retiring");
@@ -291,19 +288,43 @@ export class DecisionProviderHost {
       settle = resolve;
     });
     this.pending.set(controller, { consumerId, done });
+    let observedInterruption: DecisionOutcome | undefined;
+    let admissionError: { error: unknown } | undefined;
     const interrupted = (): DecisionOutcome | undefined => {
       options.signal.throwIfAborted();
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {
         throw controller.signal.reason;
       }
-      if (this.retired || controller.signal.reason === "decision-provider-retired") {
+      if (admissionError) {
+        throw admissionError.error;
+      }
+      if (
+        this.retired ||
+        instance.owner?.revoked ||
+        controller.signal.reason === "decision-provider-retired"
+      ) {
         return this.unavailable("retiring");
       }
       if (
         controller.signal.reason === "decision-deadline" ||
         performance.now() >= deadlineMonotonicMs
       ) {
+        // The host deadline bounds this request; it is not a provider-reported outage.
+        // Genuine transport, rate-limit, and auth failures are accounted below.
         return this.unavailable("deadline");
+      }
+      if (observedInterruption) {
+        return observedInterruption;
+      }
+      try {
+        if (isAdmissible && !isAdmissible()) {
+          return this.unavailable("disabled");
+        }
+      } catch (error) {
+        // Adapters may sanitize this error and yield during cleanup. Preserve
+        // the caller-owned terminal assertion rather than treating it as health.
+        admissionError = { error };
+        throw error;
       }
       const currentConfig = readConfig();
       const selection = resolveDecisionModelSetting(currentConfig, options.agentId);
@@ -327,30 +348,41 @@ export class DecisionProviderHost {
       try {
         // Preserve the offered questions even when the provider mutates its input.
         questions = structuredClone(submitted.questions);
-        outcome = await instance.runInRegistry(registry, () => {
-          facts.dispatched = true;
-          return this.provider.evaluate(submitted, {
-            model,
-            ...(options.agentId ? { agentId: options.agentId } : {}),
-            signal,
-            deadlineMonotonicMs,
-          });
-        });
+        outcome = await instance.runInRegistry(
+          registry,
+          () => {
+            facts.dispatched = true;
+            return this.provider.evaluate(submitted, {
+              model,
+              ...(options.agentId ? { agentId: options.agentId } : {}),
+              signal,
+              deadlineMonotonicMs,
+              ...(isAdmissible
+                ? {
+                    isAdmissible: () => {
+                      // The same owner fences consumer and provider generations. Keep
+                      // its observed outcome even if config changes back during cleanup.
+                      observedInterruption ??= interrupted();
+                      return observedInterruption === undefined;
+                    },
+                  }
+                : {}),
+            });
+          },
+          // The provider callback's physical settlement is already tracked by
+          // `done`. Do not make its lease await instance disposal: disposal
+          // invokes host.stop(), which itself waits for `done`.
+          { joinDisposal: false },
+        );
       } catch {
         const stopped = interrupted();
         if (stopped) {
-          if (stopped.status === "unavailable" && stopped.reason === "deadline") {
-            this.fail(health, "transport");
-          }
           return stopped;
         }
         throw new DecisionContractError();
       }
       const stopped = interrupted();
       if (stopped) {
-        if (stopped.status === "unavailable" && stopped.reason === "deadline") {
-          this.fail(health, "transport");
-        }
         return stopped;
       }
       if (outcome?.status === "ok") {
@@ -390,6 +422,9 @@ export class DecisionProviderHost {
       options.signal.throwIfAborted();
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {
         throw controller.signal.reason;
+      }
+      if (admissionError) {
+        throw admissionError.error;
       }
       if (error instanceof DecisionContractError) {
         throw error;

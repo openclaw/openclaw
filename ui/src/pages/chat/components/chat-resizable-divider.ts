@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
 
 export function renderChatResizableDivider(props: {
   className?: string;
@@ -8,7 +7,6 @@ export function renderChatResizableDivider(props: {
   measureRatio?: () => number;
   measureSize?: () => number;
   minRatio?: number;
-  onElement?: (element: Element | undefined) => void;
   onDragover?: (event: DragEvent) => void;
   onDrop?: (event: DragEvent) => void;
   onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
@@ -16,7 +14,6 @@ export function renderChatResizableDivider(props: {
   splitRatio: number;
 }) {
   return html`<resizable-divider
-    ${ref(props.onElement ?? (() => {}))}
     class=${props.className ?? nothing}
     .splitRatio=${props.splitRatio}
     .minRatio=${props.minRatio ?? 0.4}

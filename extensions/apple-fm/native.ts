@@ -9,13 +9,6 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
 
-export type AppleFmFacts = {
-  available: boolean;
-  reason?: string;
-  modelName: string;
-  contextWindow: number;
-};
-
 type NativeOptions = { signal?: AbortSignal; env?: NodeJS.ProcessEnv };
 const SETUP_REQUIRED = "Run Apple Foundation Models setup again to build its native helper.";
 const infoSchema = z.object({
@@ -24,6 +17,7 @@ const infoSchema = z.object({
   modelName: z.string(),
   contextWindow: z.number().int().nonnegative(),
 });
+export type AppleFmFacts = z.infer<typeof infoSchema>;
 const resultSchema = z.object({
   text: z.string(),
   toolCalls: z.array(

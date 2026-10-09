@@ -1,9 +1,3 @@
-// Decorative critter visitor that perches on the new-session composer and mirrors
-// gateway status: it idles (naps, waves, wanders) when nothing is running,
-// scurries while runs are active, and paces worriedly while disconnected.
-// Drawn in the smooth OpenClaw lobster style (see the dreams scene and
-// icons.lobster). Look and personality are seeded per session + page load so
-// every new session hatches a slightly different lobster.
 import { LitElement, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { ThemeArtwork } from "../../../packages/gateway-protocol/src/theme.ts";
@@ -26,6 +20,15 @@ import {
   type LobsterSceneMove,
 } from "./lobster-pet-scene.ts";
 import { LobsterLedgeTraffic } from "./lobster-pet-traffic.ts";
+
+type ResidentTimer =
+  | "idleTimer"
+  | "actEndTimer"
+  | "enterTimer"
+  | "visitTimer"
+  | "leaveTimer"
+  | "shellTimer"
+  | "vigilTimer";
 
 class LobsterPet extends LitElement {
   override createRenderRoot() {
@@ -72,11 +75,9 @@ class LobsterPet extends LitElement {
   private movingDayChecked = false;
   @state() private anniversary = false;
   private sailorDay = false;
-  // Rare-load identity resolved once per seed (Elder, old-friend returns,
-  // Lobsterdex completion) - a load-start snapshot, like familiarity.
+  // Identity and familiarity remain load-start snapshots.
   private identity: plans.LobsterLoadIdentity | null = null;
   private entranceRng: () => number = lobsterLook.mulberry32(0);
-  // Passers and the bottle run on their own clocks beside the resident.
   private readonly traffic = new LobsterLedgeTraffic(this, {
     visitsEnabled: () => this.visitsEnabled && !this.dismissed,
     passerOptions: () => ({
@@ -106,7 +107,7 @@ class LobsterPet extends LitElement {
       this.facing = facing;
     },
     onHuff: () => {
-      this.clearVisitTimers();
+      this.clearTimers("visitTimer", "leaveTimer");
       this.scheduledVisiting = false;
       this.armArrival(
         lobsterLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]),
@@ -151,20 +152,12 @@ class LobsterPet extends LitElement {
   override disconnectedCallback() {
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.clearActTimers();
-    this.clearVisitTimers();
+    this.clearTimers("visitTimer", "leaveTimer");
     this.restartPending = false;
     this.scheduledVisiting = false;
     this.presence = "out";
     this.act = null;
-    this.travel = null;
-    if (this.shellTimer !== null) {
-      window.clearTimeout(this.shellTimer);
-      this.shellTimer = null;
-    }
-    if (this.vigilTimer !== null) {
-      window.clearTimeout(this.vigilTimer);
-      this.vigilTimer = null;
-    }
+    this.clearTimers("shellTimer", "vigilTimer");
     super.disconnectedCallback();
   }
 
@@ -205,11 +198,7 @@ class LobsterPet extends LitElement {
       this.presence = "out";
       this.molted = false;
       this.shellVisible = false;
-      if (this.shellTimer !== null) {
-        window.clearTimeout(this.shellTimer);
-        this.shellTimer = null;
-      }
-      // The Elder never molts: it is already every size it will ever need.
+      this.clearTimers("shellTimer");
       this.moltPlanned = plans.isLobsterMoltLoad(this.seed) && !this.identity.elder;
       this.twinPlanned = plans.isLobsterTwinLoad(this.seed);
       this.geometry.scheduleMeasure();
@@ -229,12 +218,6 @@ class LobsterPet extends LitElement {
       const presenceOwner = finished && this.vigil ? "vigil" : null;
       this.trackVigil();
       if (this.presence === "in" && !plans.prefersReducedMotion()) {
-        // Status flips get an immediate reaction. A finished run (busy ->
-        // idle) earns a cheer when it succeeded and a sympathetic droop when
-        // it failed; everything else startles. The act-end timer then
-        // reschedules from the new mode's pool.
-        // Success cheers, failure droops, a user abort is nothing to
-        // celebrate or mourn - just acknowledge the change.
         const finishAct = plans.resolveLobsterFinishAct(this.runOutcome);
         this.performAct(finished ? finishAct : "startle", presenceOwner);
       }
@@ -286,7 +269,6 @@ class LobsterPet extends LitElement {
     ) {
       this.clearActTimers();
       this.act = null;
-      this.travel = null;
       this.anchor = "top";
       this.restartPending = this.presence === "in";
     }
@@ -295,16 +277,11 @@ class LobsterPet extends LitElement {
     this.reconcilePresence();
   }
 
-  // Presence follows the visit schedule, offline summons, the setting, and
-  // dismissals. Runs inside the update pass so arrivals/departures never
-  // chain a post-update state change.
+  // Reconcile in the update pass to avoid chaining post-update state changes.
   private reconcilePresence() {
     const visible = this.wantsVisible();
     if (visible && this.presence !== "in") {
-      if (this.leaveTimer !== null) {
-        window.clearTimeout(this.leaveTimer);
-        this.leaveTimer = null;
-      }
+      this.clearTimers("leaveTimer");
       if (this.presence === "out") {
         this.rollPerch();
         // Entrance rolls burn once per arrival on their own stream, aligned
@@ -317,9 +294,6 @@ class LobsterPet extends LitElement {
             dex.getLobsterdexEntries().get(this.look.palette.id)?.firstSeenAt ?? null,
             new Date(),
           );
-          // Every genuine arrival (visit or offline summon) logs the palette
-          // with the first visitor's name (the Elder signs as itself) and
-          // any shiny sighting, and bumps the familiarity count.
           dex.recordLobsterVisit(this.look.palette.id, {
             name: this.identity
               ? plans.lobsterLoadDisplayName(this.identity, this.seed)
@@ -356,8 +330,6 @@ class LobsterPet extends LitElement {
     this.enterTimer = window.setTimeout(() => {
       this.enterTimer = null;
       this.entering = false;
-      // Familiar humans and returning old friends get a hello on the first
-      // arrival of the load.
       if (
         !this.greetedThisLoad &&
         (this.familiarity.tier === "friend" || this.identity?.oldFriend === true) &&
@@ -381,13 +353,8 @@ class LobsterPet extends LitElement {
     }
   };
 
-  // Long runs earn solidarity: after 10 minutes of busy the pet settles
-  // into a quiet waiting pose until the run ends.
   private trackVigil() {
-    if (this.vigilTimer !== null) {
-      window.clearTimeout(this.vigilTimer);
-      this.vigilTimer = null;
-    }
+    this.clearTimers("vigilTimer");
     if (this.mode === "busy" && this.visitsEnabled && this.residentEnabled && !this.dismissed) {
       this.vigilTimer = window.setTimeout(() => {
         this.vigilTimer = null;
@@ -423,37 +390,24 @@ class LobsterPet extends LitElement {
 
   private clearActTimers() {
     this.travel = null;
-    for (const timer of [this.idleTimer, this.actEndTimer, this.enterTimer]) {
-      if (timer !== null) {
-        window.clearTimeout(timer);
-      }
-    }
-    this.idleTimer = null;
-    this.actEndTimer = null;
-    this.enterTimer = null;
+    this.clearTimers("idleTimer", "actEndTimer", "enterTimer");
   }
 
-  private clearVisitTimers() {
-    for (const timer of [this.visitTimer, this.leaveTimer]) {
+  private clearTimers(...names: ResidentTimer[]) {
+    for (const name of names) {
+      const timer = this[name];
       if (timer !== null) {
         window.clearTimeout(timer);
+        this[name] = null;
       }
     }
-    this.visitTimer = null;
-    this.leaveTimer = null;
   }
 
   private suspendResident() {
     this.clearActTimers();
-    this.clearVisitTimers();
+    this.clearTimers("visitTimer", "leaveTimer");
     this.interactions.suspend();
-    for (const timer of [this.shellTimer, this.vigilTimer]) {
-      if (timer !== null) {
-        window.clearTimeout(timer);
-      }
-    }
-    this.shellTimer = null;
-    this.vigilTimer = null;
+    this.clearTimers("shellTimer", "vigilTimer");
     this.shellVisible = false;
     this.vigil = false;
     this.outcomePresenceOwner = null;
@@ -465,10 +419,8 @@ class LobsterPet extends LitElement {
     this.restartPending = false;
   }
 
-  // ---- Visit schedule ----
-
   private scheduleVisits() {
-    this.clearVisitTimers();
+    this.clearTimers("visitTimer", "leaveTimer");
     this.scheduledVisiting = false;
     if (!this.visitsEnabled || !this.residentEnabled) {
       return;
@@ -515,11 +467,7 @@ class LobsterPet extends LitElement {
     }, stayMs);
   }
 
-  // ---- Ledge traffic (scheduling lives in LobsterLedgeTraffic) ----
-
-  // The resident notices traffic: it turns toward a passer's entry side,
-  // then follows it out with a mid-crossing flip. Scuttle owns facing while
-  // it walks; anything else can turn its head.
+  // Scuttle owns facing while walking; other acts can watch passing traffic.
   private watchTraffic(facing: 1 | -1) {
     if (this.presence === "in" && this.act !== "scuttle" && !this.vigil) {
       this.facing = facing;
@@ -603,7 +551,7 @@ class LobsterPet extends LitElement {
     if (act === "hop") {
       this.startFloorHop();
     } else if (act === "scuttle") {
-      this.startScuttle();
+      this.applyMove(this.geometry.planWalk(this.anchor, this.spotPct, this.rng()));
     }
     const duration = this.travel
       ? lobsterTravelDuration(this.travel)
@@ -618,7 +566,6 @@ class LobsterPet extends LitElement {
           this.completeMolt();
         }
         if (act === "droop") {
-          // Bad news gets processed lobster-style: tidy the ledge, then move on.
           this.performAct("sweep", presenceOwner);
           return;
         }
@@ -631,8 +578,6 @@ class LobsterPet extends LitElement {
     );
   }
 
-  // Shedding: the old shell stays behind and slowly fades while the pet
-  // steps aside one size bigger. Once per load.
   private completeMolt() {
     this.molted = true;
     if (this.look) {
@@ -648,9 +593,7 @@ class LobsterPet extends LitElement {
     this.shellAnchor = this.anchor;
     this.shellVisible = true;
     this.spotPct = Math.min(100, Math.max(0, this.spotPct + this.facing * 9));
-    if (this.shellTimer !== null) {
-      window.clearTimeout(this.shellTimer);
-    }
+    this.clearTimers("shellTimer");
     this.shellTimer = window.setTimeout(() => {
       this.shellTimer = null;
       this.shellVisible = false;
@@ -666,10 +609,6 @@ class LobsterPet extends LitElement {
     this.facing = move.facing;
     this.travel = move.travel;
     this.travelScene = this.geometry.scene;
-  }
-
-  private startScuttle() {
-    this.applyMove(this.geometry.planWalk(this.anchor, this.spotPct, this.rng()));
   }
 
   private startFloorHop() {
@@ -737,7 +676,7 @@ class LobsterPet extends LitElement {
       sailorDay: this.sailorDay,
       nameOverride: identity ? plans.lobsterLoadDisplayName(identity, this.seed) : null,
       flavor,
-      bottle: this.traffic.bottle(),
+      bottle: this.traffic.bottle,
       onPointerDown: this.interactions.handleHoldStart,
       onPointerUp: this.interactions.handleHoldEnd,
       onPointerCancel: this.interactions.handleHoldCancel,

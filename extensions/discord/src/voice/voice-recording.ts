@@ -169,16 +169,12 @@ export class DiscordVoiceRecording {
     const conversationOnly = createDeferred<void>();
     const previousProcessing = entry.processingQueue;
     const processing = (async (): Promise<DiscordVoiceSegmentOutcome> => {
-      let outcome: DiscordVoiceSegmentOutcome = { status: "excluded" };
       try {
         await previousProcessing;
-        outcome = await processDiscordVoiceSegment({
-          entry,
-          cfg: this.params.cfg,
+        return await processDiscordVoiceSegment({
+          ...this.params,
           wavPath: wav.path,
           durationSeconds: wav.durationSeconds,
-          userId: this.params.userId,
-          resolveIngressContext: this.params.resolveIngressContext,
           isConversationCurrent: this.params.canConverse,
           onConversationOnly: () => conversationOnly.resolve(),
           recording,
@@ -186,10 +182,10 @@ export class DiscordVoiceRecording {
       } catch (error) {
         this.params.onExcluded();
         logger.warn(`discord voice: recording failed: ${formatErrorMessage(error)}`);
+        return { status: "excluded" };
       } finally {
         await cleanup();
       }
-      return outcome;
     })();
     // Register in audio order before work starts. A retired recorder releases its
     // queue slot, while the same operation retains the WAV for authorized conversation.

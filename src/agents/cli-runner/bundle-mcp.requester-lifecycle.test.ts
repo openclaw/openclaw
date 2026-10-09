@@ -5,11 +5,13 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { materializeRequesterScopedMcpToolsForHarnessRunCore } from "../agent-bundle-mcp-harness.js";
 import {
   getAdvertisedScopedMcpCatalog,
   getSessionMcpRuntimeManagerForTesting,
   retireSessionMcpRuntime,
+  setSessionMcpRuntimeScheduler,
 } from "../agent-bundle-mcp-manager-api.js";
 import { createMcpProofPluginRegistry } from "../mcp-connection-resolver.test-fixtures.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
@@ -84,7 +86,9 @@ it("keeps requester tools callable across static native preflight until session 
   });
   const sessionId = "mixed-native-discovery";
   const sessionKey = `agent:main:${sessionId}`;
+  const scheduler = createTestGatewayScheduler();
   try {
+    await setSessionMcpRuntimeScheduler(scheduler);
     await withEnvAsync({ OPENCLAW_STATE_DIR: workspaceDir }, async () => {
       await withPluginRuntimeRegistryScope(registry.registry, async () => {
         const manager = getSessionMcpRuntimeManagerForTesting();
@@ -167,6 +171,7 @@ it("keeps requester tools callable across static native preflight until session 
     });
   } finally {
     await retireSessionMcpRuntime({ sessionId, reason: "mixed-discovery-test-cleanup" });
+    await scheduler.stop();
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));

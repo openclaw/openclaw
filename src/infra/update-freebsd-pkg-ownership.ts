@@ -1,25 +1,51 @@
 import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { normalizeSupportDiagnosticErrorCode } from "../logging/diagnostic-support-redaction.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { isPathInside } from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 
 export const PKG_INSPECTION_TIMEOUT_MS = 30_000;
 
+type InspectionOperation =
+  | "pkg query"
+  | "lstat"
+  | "realpath"
+  | "directory resolution"
+  | "path inspection";
+type InspectionDiagnostic = { operation: InspectionOperation } & (
+  | { code?: string }
+  | { budgetMs: number }
+);
+
 export class FreeBsdPkgOwnershipError extends Error {
   constructor(
     readonly reason: "pkg-owned-install" | "pkg-ownership-unavailable",
     source: "database" | "paths" = "database",
+    diagnostic?: InspectionDiagnostic,
   ) {
+    const code =
+      diagnostic && "code" in diagnostic
+        ? normalizeSupportDiagnosticErrorCode(diagnostic.code)
+        : undefined;
+    // Facts truncate messages to 200 characters; keep the safe owning failure first.
+    const prefix = !diagnostic
+      ? ""
+      : "budgetMs" in diagnostic
+        ? `FreeBSD pkg inspection exhausted its shared ${diagnostic.budgetMs} ms budget during ${diagnostic.operation}. `
+        : `FreeBSD pkg inspection failed during ${diagnostic.operation}${code ? ` (${code})` : ""}. `;
     super(
-      reason === "pkg-owned-install"
-        ? "This installation contains files owned by FreeBSD pkg. Update it through pkg or the Ports deployment that owns it; openclaw update will not replace package-owned files."
-        : source === "paths"
-          ? "FreeBSD pkg paths could not be inspected completely. Check access to the registered package directories and installation paths, and resolve any inspection timeout before retrying."
-          : "FreeBSD pkg ownership could not be verified. Restore access to the active pkg database and configuration, then retry.",
+      prefix +
+        (reason === "pkg-owned-install"
+          ? "This installation contains files owned by FreeBSD pkg. Update it through pkg or the Ports deployment that owns it; openclaw update will not replace package-owned files."
+          : source === "paths"
+            ? "FreeBSD pkg paths could not be inspected completely. Check access to the registered package directories and installation paths, and resolve any inspection timeout before retrying."
+            : "FreeBSD pkg ownership could not be verified. Restore access to the active pkg database and configuration, then retry."),
     );
     this.name = "FreeBsdPkgOwnershipError";
   }
@@ -46,18 +72,23 @@ async function readPkgFiles(timeoutMs: number): Promise<string[]> {
     result.stderr.length !== 0 ||
     !isUtf8(result.stdout)
   ) {
-    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable");
+    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "database", {
+      operation: "pkg query",
+      ...(result.termination === "timeout"
+        ? { budgetMs: timeoutMs }
+        : { code: extractErrorCode(result.error) }),
+    });
   }
   const output = result.stdout.toString("utf8");
-  if (output !== "" && !output.endsWith("\n")) {
-    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable");
-  }
   const files = output === "" ? [] : output.slice(0, -1).split("\n");
   if (
+    (output !== "" && !output.endsWith("\n")) ||
     files.length > 250_000 ||
     files.some((file) => !path.isAbsolute(file) || containsAsciiControlCharacter(file))
   ) {
-    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable");
+    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "database", {
+      operation: "pkg query",
+    });
   }
   return files;
 }
@@ -76,7 +107,11 @@ export function createFreeBsdPkgOwnershipInspection(
   // package manager's potentially much longer installation timeout.
   let deadline: number | undefined;
   let pathReads = 0;
-  const read = async <T>(operation: () => Promise<T>, source: "database" | "paths") => {
+  const read = async <T>(
+    source: "database" | "paths",
+    label: InspectionOperation,
+    operation: () => Promise<T>,
+  ) => {
     try {
       const value = await awaitWithinDeadline(operation, deadline);
       if (value !== ABSOLUTE_DEADLINE_EXPIRED) {
@@ -86,58 +121,59 @@ export function createFreeBsdPkgOwnershipInspection(
       if (error instanceof FreeBsdPkgOwnershipError) {
         throw error;
       }
+      throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", source, {
+        operation: label,
+        code: extractErrorCode(error),
+      });
     }
-    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", source);
+    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", source, {
+      operation: label,
+      budgetMs: budget,
+    });
   };
-  const readPath = <T>(operation: () => Promise<T>) =>
-    read(() => {
+  const readPath = <T>(label: "lstat" | "realpath", operation: () => Promise<T>) =>
+    read("paths", label, () => {
       if (++pathReads > 50_000) {
         throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths");
       }
       return operation();
-    }, "paths");
+    });
   // Resolve parents, not registered file symlinks: pkg owns the directory
   // entry replaced by an update, not a symlink's unrelated referent.
   const canonicalDirectory = (directory: string): Promise<string> =>
-    read(() => {
-      let canonical = directories.get(directory);
-      if (!canonical) {
-        canonical = (async () => {
-          // fs-safe's ancestor lookup is synchronous. Bound each asynchronous
-          // lookup here so a late ENOENT cannot start work after the deadline.
-          let ancestor = directory;
-          while (
-            !(await readPath(() =>
-              fs.lstat(ancestor).then(
-                () => true,
-                (error: unknown) => {
-                  if (hasNodeErrorCode(error, "ENOENT")) {
-                    return false;
-                  }
-                  throw error;
-                },
-              ),
-            ))
-          ) {
-            const parent = path.dirname(ancestor);
-            if (parent === ancestor) {
-              throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths");
-            }
-            ancestor = parent;
+    read("paths", "directory resolution", () =>
+      getOrCreatePromise(directories, directory, async () => {
+        // fs-safe's ancestor lookup is synchronous. Bound each asynchronous
+        // lookup here so a late ENOENT cannot start work after the deadline.
+        let ancestor = directory;
+        while (
+          !(await readPath("lstat", () =>
+            fs.lstat(ancestor).catch((error: unknown) => {
+              if (hasNodeErrorCode(error, "ENOENT")) {
+                return null;
+              }
+              throw error;
+            }),
+          ))
+        ) {
+          const parent = path.dirname(ancestor);
+          if (parent === ancestor) {
+            throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths");
           }
-          return path.resolve(
-            await readPath(() => fs.realpath(ancestor)),
-            path.relative(ancestor, directory),
-          );
-        })();
-        directories.set(directory, canonical);
-      }
-      return canonical;
-    }, "paths");
+          ancestor = parent;
+        }
+        return path.resolve(
+          await readPath("realpath", () => fs.realpath(ancestor)),
+          path.relative(ancestor, directory),
+        );
+      }),
+    );
+  const canonicalEntry = async (file: string) =>
+    path.join(await canonicalDirectory(path.dirname(file)), path.basename(file));
   const assertUnowned = async (lexicalRoot: string, entryOnly: boolean) => {
     // Start cached work inside the admitted callback so synchronous budget
     // consumption cannot leave a started promise outside the deadline race.
-    const inventory = await read(() => (files ??= readPkgFiles(budget)), "database");
+    const inventory = await read("database", "pkg query", () => (files ??= readPkgFiles(budget)));
     const matches = (candidate: string, file: string) =>
       entryOnly ? candidate === file : isPathInside(candidate, file);
     // A recorded lexical owner is authoritative even when another package's
@@ -145,16 +181,10 @@ export function createFreeBsdPkgOwnershipInspection(
     if (inventory.some((file) => matches(lexicalRoot, file))) {
       throw new FreeBsdPkgOwnershipError("pkg-owned-install");
     }
-    const rootEntry = path.join(
-      await canonicalDirectory(path.dirname(lexicalRoot)),
-      path.basename(lexicalRoot),
-    );
+    const rootEntry = await canonicalEntry(lexicalRoot);
     const canonicalRoot = entryOnly ? rootEntry : await canonicalDirectory(lexicalRoot);
     for (const file of inventory) {
-      const canonicalFile = path.join(
-        await canonicalDirectory(path.dirname(file)),
-        path.basename(file),
-      );
+      const canonicalFile = await canonicalEntry(file);
       // An aliased root symlink is itself an owned entry even when its
       // referent is outside the package prefix.
       if (canonicalFile === rootEntry || matches(canonicalRoot, canonicalFile)) {
@@ -174,7 +204,12 @@ export function createFreeBsdPkgOwnershipInspection(
     }
     deadline ??= Date.now() + budget;
     if (Date.now() >= deadline) {
-      return Promise.reject(new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths"));
+      return Promise.reject(
+        new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths", {
+          operation: "path inspection",
+          budgetMs: budget,
+        }),
+      );
     }
     const assertion = assertUnowned(resolvedRoot, entryOnly);
     assertions.set(key, assertion);

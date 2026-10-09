@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -25,50 +26,40 @@ export const WORKTREE_RECORD_COLUMNS = [
   "last_active_at",
   "removed_at",
   "run_end_cleanup_json",
+  "gc_protection_json",
 ] as const satisfies readonly (keyof WorktreeRow)[];
 type WorktreeRecordRow = Pick<WorktreeRow, (typeof WORKTREE_RECORD_COLUMNS)[number]>;
+export type WorktreeRegistryListOptions = { liveOnly?: boolean };
 
 function parseRunEndCleanup(
   raw: string | null | undefined,
 ): ManagedWorktreeRunEndCleanup | undefined {
-  if (raw == null) {
+  const parsed = safeParseJsonRecord(raw ?? "");
+  if (!parsed || typeof parsed.at !== "number" || !Number.isInteger(parsed.at) || parsed.at < 0) {
     return undefined;
   }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (
-      !isRecord(parsed) ||
-      typeof parsed.at !== "number" ||
-      !Number.isInteger(parsed.at) ||
-      parsed.at < 0
-    ) {
+  const at = parsed.at;
+  switch (parsed.outcome) {
+    case "failed":
+      return typeof parsed.reason === "string" &&
+        parsed.reason.length > 0 &&
+        parsed.reason.length <= 500
+        ? { outcome: parsed.outcome, at, reason: parsed.reason }
+        : undefined;
+    case "removed-lossless":
+    case "retained-busy":
+    case "retained-dirty":
+    case "retained-unpushed":
+    case "retained-provisioned-drift":
+      return parsed.reason === undefined ? { outcome: parsed.outcome, at } : undefined;
+    default:
       return undefined;
-    }
-    const at = parsed.at;
-    switch (parsed.outcome) {
-      case "failed":
-        return typeof parsed.reason === "string" &&
-          parsed.reason.length > 0 &&
-          parsed.reason.length <= 500
-          ? { outcome: parsed.outcome, at, reason: parsed.reason }
-          : undefined;
-      case "removed-lossless":
-      case "retained-busy":
-      case "retained-dirty":
-      case "retained-unpushed":
-      case "retained-provisioned-drift":
-        return parsed.reason === undefined ? { outcome: parsed.outcome, at } : undefined;
-      default:
-        return undefined;
-    }
-  } catch {
-    return undefined;
   }
 }
 
 export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
   const runEndCleanup = parseRunEndCleanup(row.run_end_cleanup_json);
-  return {
+  const record: ManagedWorktreeRecord = {
     id: row.id,
     name: row.path.split(/[\\/]/).at(-1) ?? row.id,
     repoFingerprint: row.repo_fingerprint,
@@ -85,6 +76,54 @@ export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
     ...(row.removed_at == null ? {} : { removedAt: row.removed_at }),
     ...(runEndCleanup ? { runEndCleanup } : {}),
   };
+  const protection = safeParseJsonRecord(row.gc_protection_json ?? "");
+  if (
+    protection &&
+    protection.revision === worktreeGcRevision(record) &&
+    typeof protection.reason === "string"
+  ) {
+    record.gcProtection = protection.reason;
+    const retry = protection.retry;
+    if (
+      isRecord(retry) &&
+      typeof retry.stage === "string" &&
+      typeof retry.elapsedMs === "number" &&
+      Number.isSafeInteger(retry.elapsedMs) &&
+      retry.elapsedMs >= 0 &&
+      typeof retry.attempts === "number" &&
+      Number.isSafeInteger(retry.attempts) &&
+      retry.attempts > 0 &&
+      typeof retry.retryAt === "number" &&
+      Number.isSafeInteger(retry.retryAt) &&
+      retry.retryAt >= 0
+    ) {
+      record.gcRetry = {
+        stage: retry.stage,
+        elapsedMs: retry.elapsedMs,
+        attempts: retry.attempts,
+        retryAt: retry.retryAt,
+      };
+    }
+  }
+  return record;
+}
+
+/** Registry mutations invalidate a retained decision without rewriting its derived column. */
+export function worktreeGcRevision(record: ManagedWorktreeRecord): string {
+  return JSON.stringify([
+    record.path,
+    record.repoRoot,
+    record.repoFingerprint,
+    record.branch,
+    record.baseRef,
+    record.createdAt,
+    record.ownerKind,
+    record.ownerId,
+    record.lastActiveAt,
+    record.removedAt,
+    record.snapshotRef,
+    record.runEndCleanup,
+  ]);
 }
 
 export function getRegistryWorktreeInDatabase(
@@ -99,12 +138,52 @@ export function getRegistryWorktreeInDatabase(
   return row ? rowToRecord(row) : undefined;
 }
 
-export function listRegistryWorktreesInDatabase(db: DatabaseSync): ManagedWorktreeRecord[] {
+export function findLiveRegistryWorktreeByOwnerInDatabase(
+  db: DatabaseSync,
+  ownerKind: ManagedWorktreeOwnerKind,
+  ownerId: string,
+): ManagedWorktreeRecord | undefined {
   const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+    .selectFrom("worktrees")
+    .select(WORKTREE_RECORD_COLUMNS)
+    .where("owner_kind", "=", ownerKind)
+    .where("owner_id", "=", ownerId)
+    .where("removed_at", "is", null)
+    .orderBy("created_at", "desc")
+    .limit(1);
+  const row = executeSqliteQuerySync(db, query).rows[0];
+  return row ? rowToRecord(row) : undefined;
+}
+
+export function findLiveRegistryWorktreeByPathInDatabase(
+  db: DatabaseSync,
+  worktreePath: string,
+): ManagedWorktreeRecord | undefined {
+  const row = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+      .selectFrom("worktrees")
+      .select(WORKTREE_RECORD_COLUMNS)
+      .where("path", "=", worktreePath)
+      .where("removed_at", "is", null)
+      .orderBy("created_at", "desc")
+      .limit(1),
+  ).rows[0];
+  return row ? rowToRecord(row) : undefined;
+}
+
+export function listRegistryWorktreesInDatabase(
+  db: DatabaseSync,
+  options: WorktreeRegistryListOptions = {},
+): ManagedWorktreeRecord[] {
+  let query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
     .selectFrom("worktrees")
     .select(WORKTREE_RECORD_COLUMNS)
     .orderBy("created_at", "desc")
     .orderBy("id", "asc");
+  if (options.liveOnly) {
+    query = query.where("removed_at", "is", null);
+  }
   return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
 }
 
@@ -134,23 +213,16 @@ function isProvisionedFileState(entry: unknown): entry is ProvisionedFileState {
 function parseProvisionedData(
   raw: string | null,
 ): Array<string | ProvisionedFileState> | undefined {
-  if (raw === null) {
+  const parsed = safeParseJson(raw ?? "");
+  if (!Array.isArray(parsed)) {
     return undefined;
   }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      return undefined;
-    }
-    return parsed.every(
-      (entry): entry is string | ProvisionedFileState =>
-        typeof entry === "string" || isProvisionedFileState(entry),
-    )
-      ? parsed
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return parsed.every(
+    (entry): entry is string | ProvisionedFileState =>
+      typeof entry === "string" || isProvisionedFileState(entry),
+  )
+    ? parsed
+    : undefined;
 }
 
 function readProvisionedData(db: DatabaseSync, id: string) {

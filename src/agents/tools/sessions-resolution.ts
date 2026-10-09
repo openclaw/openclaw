@@ -1,8 +1,3 @@
-/**
- * Session key resolution helpers.
- *
- * Normalizes display/internal/current-session aliases and resolves session-id inputs through Gateway.
- */
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -29,10 +24,8 @@ import {
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 import {
   callAgentToolGatewayRequest,
-  type AgentToolGatewayRequestCaller,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
-
-type GatewayCaller = AgentToolGatewayRequestCaller;
 
 const CURRENT_SESSION_CLIENT_ALIAS_IDS = new Set<string>([
   GATEWAY_CLIENT_IDS.TUI,
@@ -52,19 +45,16 @@ export function resolveMainSessionAlias(cfg: OpenClawConfig) {
 }
 
 export function resolveDisplaySessionKey(params: { key: string; alias: string; mainKey: string }) {
-  if (params.key === params.alias) {
-    return "main";
-  }
-  if (params.key === params.mainKey) {
-    return "main";
-  }
-  return params.key;
+  return params.key === params.alias || params.key === params.mainKey ? "main" : params.key;
+}
+
+export function isSessionToolMainAlias(key: string, context: { mainKey: string; alias: string }) {
+  return key === "main" || key === "global" || key === context.mainKey || key === context.alias;
 }
 
 export function resolveInternalSessionKey(params: {
   key: string;
   alias: string;
-  mainKey: string;
   requesterInternalKey?: string;
 }) {
   if (params.key === "current") {
@@ -158,33 +148,23 @@ export async function lookupRequesterSessionOwnership(params: {
 
 function looksLikeSessionKey(value: string): boolean {
   const raw = normalizeOptionalString(value) ?? "";
-  if (!raw) {
-    return false;
-  }
-  // These are canonical key shapes that should never be treated as sessionIds.
-  if (raw === "main" || raw === "global" || raw === "unknown" || raw === "current") {
-    return true;
-  }
-  if (isAcpSessionKey(raw)) {
-    return true;
-  }
-  if (raw.startsWith("agent:")) {
-    return true;
-  }
-  if (raw.startsWith("cron:") || raw.startsWith("hook:")) {
-    return true;
-  }
-  if (raw.startsWith("node-") || raw.startsWith("node:")) {
-    return true;
-  }
-  if (raw.includes(":group:") || raw.includes(":channel:")) {
-    return true;
-  }
-  return false;
+  return (
+    raw === "main" ||
+    raw === "global" ||
+    raw === "unknown" ||
+    raw === "current" ||
+    isAcpSessionKey(raw) ||
+    raw.startsWith("agent:") ||
+    raw.startsWith("cron:") ||
+    raw.startsWith("hook:") ||
+    raw.startsWith("node-") ||
+    raw.startsWith("node:") ||
+    raw.includes(":group:") ||
+    raw.includes(":channel:")
+  );
 }
 
 export function shouldResolveSessionIdInput(value: string): boolean {
-  // Treat anything that doesn't look like a well-formed key as a sessionId candidate.
   return looksLikeSessionId(value) || !looksLikeSessionKey(value);
 }
 
@@ -195,7 +175,7 @@ type SessionReferenceResolution =
       key: string;
       displayKey: string;
       resolvedViaSessionId: boolean;
-      requesterOwned?: boolean;
+      requesterOwned: boolean;
     }
   | { ok: false; status: "error" | "forbidden"; error: string; notFound?: boolean };
 
@@ -221,20 +201,12 @@ async function requestResolvedSession(
   params: Record<string, unknown> & { allowMissing?: boolean },
   callGateway: GatewayCaller,
 ): Promise<{ agentId?: string; key: string } | undefined> {
-  const toResolvedSession = (result: { agentId?: unknown; key?: unknown } | undefined) => {
-    const key = normalizeOptionalString(result?.key);
-    if (!key) {
-      return undefined;
-    }
-    const agentId = normalizeOptionalString(result?.agentId);
-    return { key, ...(agentId ? { agentId } : {}) };
-  };
+  let result: { agentId?: unknown; key?: unknown } | undefined;
   try {
-    const result = await callGateway<{ agentId?: unknown; key?: unknown }>({
+    result = await callGateway<{ agentId?: unknown; key?: unknown }>({
       method: "sessions.resolve",
       params,
     });
-    return toResolvedSession(result);
   } catch (error) {
     const olderGatewayRejectedProbe =
       params.allowMissing === true &&
@@ -249,12 +221,17 @@ async function requestResolvedSession(
     // Retry without it for mixed-version correctness; remove at the next protocol break.
     const legacyParams: Record<string, unknown> = { ...params };
     delete legacyParams.allowMissing;
-    const result = await callGateway<{ agentId?: unknown; key?: unknown }>({
+    result = await callGateway<{ agentId?: unknown; key?: unknown }>({
       method: "sessions.resolve",
       params: legacyParams,
     });
-    return toResolvedSession(result);
   }
+  const key = normalizeOptionalString(result?.key);
+  if (!key) {
+    return undefined;
+  }
+  const agentId = normalizeOptionalString(result?.agentId);
+  return { key, ...(agentId ? { agentId } : {}) };
 }
 
 function buildSessionResolveQuery(params: {
@@ -277,58 +254,6 @@ function buildSessionResolveQuery(params: {
       : {}),
     ...(params.allowMissing ? { allowMissing: true } : {}),
   };
-}
-
-type ResolvedReference = Extract<SessionReferenceResolution, { ok: true }>;
-type ReferenceLookupResult = Result<ResolvedReference | null, SessionOwnershipLookupFailure>;
-
-async function resolveSessionReferenceByKeyOrSessionId(params: {
-  raw: string;
-  keyAgentId?: string;
-  agentId?: string;
-  alias: string;
-  mainKey: string;
-  requesterInternalKey?: string;
-  restrictToSpawned: boolean;
-  callGateway: GatewayCaller;
-}): Promise<ReferenceLookupResult> {
-  // Prefer key resolution to avoid misclassifying custom keys as sessionIds.
-  for (const kind of ["key", "sessionId"] as const) {
-    try {
-      const resolved = await requestResolvedSession(
-        buildSessionResolveQuery({
-          input: params.raw,
-          kind,
-          agentId:
-            kind === "key"
-              ? (parseAgentSessionKey(params.raw)?.agentId ?? params.keyAgentId ?? params.agentId)
-              : params.agentId,
-          requesterInternalKey: params.requesterInternalKey,
-          restrictToSpawned: params.restrictToSpawned,
-        }),
-        params.callGateway,
-      );
-      if (!resolved) {
-        continue;
-      }
-      return ok({
-        ok: true,
-        ...resolved,
-        displayKey: resolveDisplaySessionKey({
-          key: resolved.key,
-          alias: params.alias,
-          mainKey: params.mainKey,
-        }),
-        resolvedViaSessionId: kind === "sessionId",
-        requesterOwned: params.restrictToSpawned,
-      });
-    } catch (error) {
-      if (!isExpectedSessionLookupMiss(error)) {
-        return err(sessionOwnershipLookupFailure(error));
-      }
-    }
-  }
-  return ok(null);
 }
 
 export async function resolveSessionReference(params: {
@@ -365,21 +290,40 @@ export async function resolveSessionReference(params: {
   const raw =
     rawInput === "current" && params.requesterInternalKey ? params.requesterInternalKey : rawInput;
   if (shouldResolveSessionIdInput(raw)) {
-    const resolvedByGateway = await resolveSessionReferenceByKeyOrSessionId({
-      raw,
-      keyAgentId: params.keyAgentId,
-      agentId: params.agentId,
-      alias: params.alias,
-      mainKey: params.mainKey,
-      requesterInternalKey: params.requesterInternalKey,
-      restrictToSpawned: params.restrictToSpawned,
-      callGateway: gatewayCall,
-    });
-    if (!resolvedByGateway.ok) {
-      return failedLookup(resolvedByGateway.error);
-    }
-    if (resolvedByGateway.value) {
-      return resolvedByGateway.value;
+    // Prefer key resolution to avoid misclassifying custom keys as sessionIds.
+    for (const kind of ["key", "sessionId"] as const) {
+      try {
+        const resolved = await requestResolvedSession(
+          buildSessionResolveQuery({
+            input: raw,
+            kind,
+            agentId:
+              kind === "key"
+                ? (parseAgentSessionKey(raw)?.agentId ?? params.keyAgentId ?? params.agentId)
+                : params.agentId,
+            requesterInternalKey: params.requesterInternalKey,
+            restrictToSpawned: params.restrictToSpawned,
+          }),
+          gatewayCall,
+        );
+        if (resolved) {
+          return {
+            ok: true,
+            ...resolved,
+            displayKey: resolveDisplaySessionKey({
+              key: resolved.key,
+              alias: params.alias,
+              mainKey: params.mainKey,
+            }),
+            resolvedViaSessionId: kind === "sessionId",
+            requesterOwned: params.restrictToSpawned,
+          };
+        }
+      } catch (error) {
+        if (!isExpectedSessionLookupMiss(error)) {
+          return failedLookup(sessionOwnershipLookupFailure(error));
+        }
+      }
     }
     return {
       ok: false,
@@ -394,7 +338,6 @@ export async function resolveSessionReference(params: {
   const resolvedKey = resolveInternalSessionKey({
     key: raw,
     alias: params.alias,
-    mainKey: params.mainKey,
     requesterInternalKey: params.requesterInternalKey,
   });
   const semanticAliasAgentId =
@@ -439,18 +382,17 @@ export async function resolveVisibleSessionReference(params: {
     params.resolvedSession.agentId ?? parseAgentSessionKey(resolvedKey)?.agentId;
   let displayKey = params.resolvedSession.displayKey;
   let missing = false;
-  const requesterOwnedByResolution =
-    params.resolvedSession.requesterOwned ??
-    (params.restrictToSpawned && params.resolvedSession.resolvedViaSessionId);
+  const requesterOwnedByResolution = params.resolvedSession.requesterOwned;
+  const invisible = (): VisibleSessionReferenceResolution => ({
+    ok: false,
+    status: "forbidden",
+    error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
+    displayKey,
+  });
   // Cross-session tools persist their results into the caller transcript; an
   // incognito target must remain unreachable even from an incognito requester.
   if (isIncognitoSessionKey(resolvedKey)) {
-    return {
-      ok: false,
-      status: "forbidden",
-      error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
-      displayKey,
-    };
+    return invisible();
   }
   const input = params.visibilitySessionKey.trim();
   const isExplicitKey =
@@ -485,18 +427,11 @@ export async function resolveVisibleSessionReference(params: {
         missing = true;
       }
     } catch (error) {
-      if (params.concealResolutionError && !params.restrictToSpawned) {
-        return {
-          ok: false,
-          status: "forbidden",
-          error: params.concealResolutionError,
-          displayKey,
-        };
-      }
       return {
         ok: false,
-        status: "error",
+        status: params.concealResolutionError ? "forbidden" : "error",
         error:
+          params.concealResolutionError ||
           formatErrorMessage(error) ||
           `Session not found: ${params.visibilitySessionKey} (use the full sessionKey from sessions_list)`,
         displayKey,
@@ -504,12 +439,7 @@ export async function resolveVisibleSessionReference(params: {
     }
   }
   if (isIncognitoSessionKey(resolvedKey)) {
-    return {
-      ok: false,
-      status: "forbidden",
-      error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
-      displayKey,
-    };
+    return invisible();
   }
   return {
     ok: true,

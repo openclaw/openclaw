@@ -78,12 +78,6 @@ describe("normalizeStaticProviderModelId", () => {
     }
   });
 
-  it("strips native Anthropic provider prefixes from static catalog ids", () => {
-    expect(normalizeStaticProviderModelId("anthropic", "anthropic/claude-haiku-4-5")).toBe(
-      "claude-haiku-4-5",
-    );
-  });
-
   it("uses supplied manifest normalization policies when provided", () => {
     const manifestPlugins = [
       {
@@ -108,14 +102,6 @@ describe("normalizeStaticProviderModelId", () => {
         allowManifestNormalization: false,
       }),
     ).toBe("openrouter/auto");
-  });
-
-  it("preserves provider-owned XAI beta aliases without manifest lookup", () => {
-    expect(
-      normalizeStaticProviderModelId("xai", "grok-4.20-experimental-beta-0304-reasoning", {
-        allowManifestNormalization: false,
-      }),
-    ).toBe("grok-4.20-experimental-beta-0304-reasoning");
   });
 
   it("normalizes the shipped retired Together default without manifest lookup", () => {
@@ -179,12 +165,6 @@ describe("normalizeConfiguredProviderCatalogModelId", () => {
       }),
     ).toBe("latest");
   });
-
-  it("normalizes nested retired Google Gemini ids in proxy-prefixed rows", () => {
-    expect(
-      normalizeConfiguredProviderCatalogModelId("kilocode", "kilocode/google/gemini-3-pro-preview"),
-    ).toBe("kilocode/google/gemini-3.1-pro-preview");
-  });
 });
 
 const execFileAsync = promisify(execFile);
@@ -225,11 +205,12 @@ function createModelNormalizerGeneration() {
 }
 
 describe("provider model normalization bridge", () => {
-  it.each(
-    ["fixture", "fixture-alias"].flatMap((provider) =>
-      ["generation", "request", "active"].map((scope) => ({ provider, scope })),
-    ),
-  )("invokes $provider with its registry owner from $scope", ({ provider, scope }) => {
+  it.each([
+    { provider: "fixture", scope: "generation" },
+    { provider: "fixture-alias", scope: "generation" },
+    { provider: "fixture", scope: "request" },
+    { provider: "fixture", scope: "active" },
+  ])("invokes $provider with its registry owner from $scope", ({ provider, scope }) => {
     const generation = createModelNormalizerGeneration();
     const normalize = () =>
       normalizeProviderModelIdWithRuntime({

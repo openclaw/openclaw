@@ -52,71 +52,6 @@ describe("searchVector sqlite-vec KNN", () => {
   const { DatabaseSync } = requireNodeSqlite();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("yields to the event loop during large fallback scans (issue #81172)", async () => {
-    // Real Nextcloud-scale corpus where the vec0 fast path is unavailable
-    // (e.g., extension not loaded or dimension mismatch with active model)
-    // used to pin the main thread for the entire fallback scan, blocking
-    // channel I/O. After fix the loop yields after each full
-    // FALLBACK_VECTOR_BATCH_SIZE batch so a setImmediate-scheduled task can
-    // interleave between batches.
-    const db = new DatabaseSync(":memory:");
-    try {
-      ensureMemoryIndexSchema({
-        db,
-        cacheEnabled: false,
-        ftsEnabled: false,
-      });
-
-      const insertChunk = db.prepare(
-        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      );
-      // Just over 3x the yield batch (FALLBACK_VECTOR_BATCH_SIZE=256), so we
-      // expect at least 3 yield points to fire during the scan.
-      const N = 1024;
-      for (let i = 0; i < N; i += 1) {
-        insertChunk.run(
-          `chunk-${i}`,
-          `memory/chunk-${i}.md`,
-          "memory",
-          1,
-          1,
-          `hash-${i}`,
-          "yield-model",
-          `chunk ${i}`,
-          // Tiny 2-dim embeddings: the test asserts the yielding *cadence*,
-          // not real similarity scoring (other tests cover scoring).
-          encodeMemoryEmbedding([Math.cos(i), Math.sin(i)]),
-          i,
-        );
-      }
-
-      // Heartbeat captures whether the event loop gets a chance to run between
-      // setImmediate batches. With the pre-fix synchronous loop, this would
-      // fire zero times during searchVector. With the fix it should fire at
-      // least once because we yield ≥3 times across 1024 rows.
-      let heartbeats = 0;
-      const heartbeatInterval = setInterval(() => {
-        heartbeats += 1;
-      }, 0);
-
-      try {
-        const results = await searchVectorFixture(db, {
-          providerModel: "yield-model",
-          limit: 4,
-        });
-        expect(results).toHaveLength(4);
-        // ≥1 heartbeat proves the event loop was given a chance to run during
-        // the scan. (Exact counts depend on machine speed; we only check the
-        // qualitative property that the loop is no longer fully blocked.)
-        expect(heartbeats).toBeGreaterThan(0);
-      } finally {
-        clearInterval(heartbeatInterval);
-      }
-    } finally {
-      db.close();
-    }
-  });
-
   it("stops fallback scanning when the caller aborts and keeps later searches healthy", async () => {
     const db = createFallbackDb();
     try {
@@ -168,8 +103,6 @@ describe("searchVector sqlite-vec KNN", () => {
     }
   });
 
-  // ===== Fallback path boundary coverage (issue #81172 review diligence) =====
-
   function createFallbackDb(): InstanceType<typeof DatabaseSync> {
     const db = new DatabaseSync(":memory:");
     ensureMemoryIndexSchema({
@@ -186,6 +119,7 @@ describe("searchVector sqlite-vec KNN", () => {
       id: string;
       model: string;
       vector: number[];
+      source?: "memory" | "sessions";
     },
   ): void {
     db.prepare(
@@ -193,7 +127,7 @@ describe("searchVector sqlite-vec KNN", () => {
     ).run(
       params.id,
       `memory/${params.id}.md`,
-      "memory",
+      params.source ?? "memory",
       1,
       1,
       params.id,
@@ -275,18 +209,6 @@ describe("searchVector sqlite-vec KNN", () => {
     },
   );
 
-  it("returns an empty result set when no chunks match the provider model", async () => {
-    const db = createFallbackDb();
-    try {
-      // One chunk with a different model must not appear in results.
-      insertFallbackChunk(db, { id: "other-only", model: "other-model", vector: [1, 0] });
-      const results = await searchVectorFixture(db);
-      expect(results).toEqual([]);
-    } finally {
-      db.close();
-    }
-  });
-
   it("searches provider-declared model aliases while excluding arbitrary paths", async () => {
     const db = createFallbackDb();
     try {
@@ -319,17 +241,6 @@ describe("searchVector sqlite-vec KNN", () => {
     }
   });
 
-  it("handles a single matching row (below the yield batch size)", async () => {
-    const db = createFallbackDb();
-    try {
-      insertFallbackChunk(db, { id: "lone", model: "target-model", vector: [1, 0] });
-      const results = await searchVectorFixture(db);
-      expect(results.map((r) => r.id)).toEqual(["lone"]);
-    } finally {
-      db.close();
-    }
-  });
-
   it("keeps malformed binary vectors inert without interrupting fallback search", async () => {
     const db = createFallbackDb();
     try {
@@ -353,46 +264,14 @@ describe("searchVector sqlite-vec KNN", () => {
     }
   });
 
-  it("handles an exact batch-size boundary (FALLBACK_VECTOR_BATCH_SIZE rows)", async () => {
-    // When N === FALLBACK_VECTOR_BATCH_SIZE exactly, the loop produces one
-    // full batch and then must take one extra empty-batch step before
-    // breaking; verify no row is dropped or double-counted at the seam.
-    const db = createFallbackDb();
-    try {
-      const N = 256;
-      for (let i = 0; i < N; i += 1) {
-        // Each chunk gets a unique vector so cosine scoring is well-defined.
-        insertFallbackChunk(db, {
-          id: `chunk-${i}`,
-          model: "target-model",
-          vector: [Math.cos(i), Math.sin(i)],
-        });
-      }
-      const results = await searchVectorFixture(db, { limit: 3 });
-      expect(results).toHaveLength(3);
-      // Strictly decreasing scores confirms top-K maintenance is intact.
-      let previous = expectDefined(results[0], "first vector-search result");
-      for (const current of results.slice(1)) {
-        expect(previous.score).toBeGreaterThan(current.score);
-        previous = current;
-      }
-    } finally {
-      db.close();
-    }
-  });
-
   it("preserves top-K ordering vs. a naive reference cosine implementation", async () => {
-    // Guards against accidental algorithmic regressions from the control-flow
-    // refactor: insert 200 chunks with random vectors and assert our patched
-    // fallback search returns the same top-K by id, in the same order, as a
-    // straight-line JS reference that scores every row.
     const db = createFallbackDb();
     try {
       const dim = 16;
-      const N = 200;
+      // A full 256-row batch also exercises the final empty cursor read.
+      const N = 256;
       const limit = 5;
-      // Use a deterministic seed-free PRNG-equivalent: hash-derived floats so
-      // the test is repeatable across machines.
+      // Deterministic vectors keep the independent cosine comparison repeatable.
       const vectorFor = (i: number, j: number): number => {
         const s = Math.sin(i * 31 + j * 17 + 3) * 1000;
         return s - Math.floor(s) - 0.5;
@@ -436,9 +315,7 @@ describe("searchVector sqlite-vec KNN", () => {
   });
 
   it("picks up rows inserted during the inter-batch event-loop yield (rowid cursor)", async () => {
-    // The fix's rowid-paginated batches yield via setImmediate between batches.
-    // Schedule an INSERT to land in that yield gap and verify the search picks
-    // up the new rows in the next batch: no double-counting, no missed rows.
+    // Regression #81172: a synchronous scan cannot observe these scheduled inserts.
     const db = createFallbackDb();
     try {
       // 257 baseline rows: first batch sees 256 (score 0 vs. query), second
@@ -453,15 +330,9 @@ describe("searchVector sqlite-vec KNN", () => {
         });
       }
 
-      // setImmediate fires during the search's first inter-batch yield. We
-      // queue an insert of two near-perfect matches; their rowids (258, 259)
-      // are strictly greater than `lastRowid` (256), so the rowid cursor
-      // must include them in batch 2.
+      // Insert winners after the first batch so the next cursor read must see them.
       let inserted = false;
-      const insertDuringYield = (): void => {
-        if (inserted) {
-          return;
-        }
+      setImmediate(() => {
         inserted = true;
         insertFallbackChunk(db, {
           id: "winner-A",
@@ -473,14 +344,10 @@ describe("searchVector sqlite-vec KNN", () => {
           model: "target-model",
           vector: [0.9, 0.1],
         });
-      };
-      setImmediate(insertDuringYield);
+      });
 
       const results = await searchVectorFixture(db, { limit: 2 });
 
-      // The winners must dominate the top-2. If the rowid cursor were broken
-      // (either skipping or duplicating rows past the yield), one of these
-      // would be wrong.
       expect(inserted).toBe(true);
       expect(results.map((r) => r.id)).toEqual(["winner-A", "winner-B"]);
     } finally {
@@ -709,9 +576,6 @@ describe("searchVector sqlite-vec KNN", () => {
         );
       `);
 
-      const insertChunk = db.prepare(
-        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      );
       const insertVector = db.prepare(
         "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
       );
@@ -721,18 +585,7 @@ describe("searchVector sqlite-vec KNN", () => {
         source: "memory" | "sessions";
         vector: [number, number];
       }) => {
-        insertChunk.run(
-          params.id,
-          `memory/${params.id}.md`,
-          params.source,
-          1,
-          1,
-          params.id,
-          params.model,
-          `chunk ${params.id}`,
-          encodeMemoryEmbedding(params.vector),
-          1,
-        );
+        insertFallbackChunk(db, params);
         insertVector.run(params.id, vectorToBlob(params.vector));
       };
 

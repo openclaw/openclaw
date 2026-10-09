@@ -5,7 +5,7 @@ import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
-import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -73,6 +73,8 @@ vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOrigin
 }));
 
 beforeEach(() => {
+  vi.stubEnv("CODEX_API_KEY", undefined);
+  vi.stubEnv("OPENAI_API_KEY", undefined);
   vi.spyOn(preparedCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
     async (params) => {
       if (!params?.config) {
@@ -86,7 +88,7 @@ beforeEach(() => {
         modelCatalog: { ...baseOwner.modelCatalog, providerOutcomes },
         metadataSnapshot: pluginMetadataMocks.getCurrent(),
       };
-      setPreparedModelRuntimeAuthStore(owner, authStore);
+      bindPreparedModelRuntimeAuth(owner, { store: authStore });
       return owner;
     },
   );
@@ -232,6 +234,7 @@ describe("handleModelsCommand", () => {
     expect(allListResult?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
+    expect(allListResult?.reply?.text).toContain("Switch: /model <provider/model>");
   });
 
   it.each([
@@ -248,7 +251,7 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain(recovery);
   });
 
-  it("offers a connection action for an unconfirmed captured CLI login", async () => {
+  it("reports sign-in needed for a logged-out configured CLI runtime", async () => {
     setCredentials([]);
     const params = buildParams("/models anthropic", {
       agents: {
@@ -259,10 +262,11 @@ describe("handleModelsCommand", () => {
       },
     });
     const result = await handleModelsCommand(params, true);
-    expect(result?.reply?.text).toContain("Connection not confirmed");
+    expect(result?.reply?.text).toContain("Sign-in needed");
     expect(result?.reply?.text).toContain(
-      "Connect with /login anthropic, or choose another model.",
+      "If Claude Code is signed out, run claude auth login on the Gateway host, or choose another model.",
     );
+    expect(result?.reply?.text).not.toContain("/login anthropic");
   });
 
   it.each([

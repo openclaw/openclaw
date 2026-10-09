@@ -6,6 +6,11 @@ import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 
+/** Bun's native plugin resolver remains the owner even when Node hooks are available. */
+export function useNodeModuleHooks(): boolean {
+  return !process.versions.bun && typeof Module.registerHooks === "function";
+}
+
 // Resolution and Jiti must accept the same source family, including typed JSX variants.
 export const PLUGIN_SOURCE_MODULE_EXTENSIONS: readonly string[] = [
   ".ts",
@@ -23,7 +28,7 @@ export function isPluginSourceModulePath(modulePath: string): boolean {
 // Failed ESM jobs survive require-cache eviction. Preserve an observed terminal error
 // if a retry hits that job, rather than transforming its rejected graph through Jiti.
 const nativeModuleLoadFailures = new Map<string, unknown>();
-type ResolveFilename = (
+export type ResolveFilename = (
   request: string,
   parent: NodeJS.Module | undefined,
   isMain: boolean,
@@ -254,33 +259,20 @@ export function isJavaScriptModulePath(modulePath: string): boolean {
   return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
 }
 
-function isBundledPluginDistModulePath(modulePath: string): boolean {
-  return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
-}
-
-function shouldPreferNativeModuleLoad(modulePath: string): boolean {
-  switch (path.extname(modulePath).trim().toLowerCase()) {
-    case ".js":
-    case ".mjs":
-    case ".cjs":
-    case ".json":
-      return true;
-    default:
-      return false;
-  }
-}
-
 export function resolvePluginLoaderTryNative(
   modulePath: string,
   options?: {
     preferBuiltDist?: boolean;
   },
 ): boolean {
-  if (isBundledPluginDistModulePath(modulePath)) {
-    return shouldPreferNativeModuleLoad(modulePath);
+  const nativeExtension = [".js", ".mjs", ".cjs", ".json"].includes(
+    path.extname(modulePath).trim().toLowerCase(),
+  );
+  if (modulePath.replace(/\\/g, "/").includes("/dist/extensions/")) {
+    return nativeExtension;
   }
   return (
-    shouldPreferNativeModuleLoad(modulePath) ||
+    nativeExtension ||
     (options?.preferBuiltDist === true && modulePath.includes(`${path.sep}dist${path.sep}`))
   );
 }
@@ -346,21 +338,9 @@ export function tryNativeRequireModule(
   ) {
     return { ok: false };
   }
-  let resolvedPath: string;
+  let resolvedPath: string | undefined;
   try {
     resolvedPath = withNativeRequireAliases(options.aliasMap, () => require.resolve(modulePath));
-  } catch (error) {
-    const code = error && typeof error === "object" ? Reflect.get(error, "code") : undefined;
-    if (
-      isSourceTransformFallbackError(error, modulePath) ||
-      (options.fallbackOnMissingDependency === true &&
-        (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
-    ) {
-      return { ok: false };
-    }
-    throw error;
-  }
-  try {
     // Requiring the resolved target could apply a second alias to the same request.
     const moduleExport = withNativeRequireAliases(options.aliasMap, () => require(modulePath));
     nativeModuleLoadFailures.delete(resolvedPath);
@@ -368,15 +348,23 @@ export function tryNativeRequireModule(
   } catch (error) {
     const code = error && typeof error === "object" ? Reflect.get(error, "code") : undefined;
     if (
+      resolvedPath !== undefined &&
       nativeModuleLoadFailures.has(resolvedPath) &&
       (code === "ERR_REQUIRE_ESM_RACE_CONDITION" || code === "ERR_INTERNAL_ASSERTION")
     ) {
       throw nativeModuleLoadFailures.get(resolvedPath);
     }
-    if (isSourceTransformFallbackError(error, modulePath)) {
+    if (
+      isSourceTransformFallbackError(error, modulePath) ||
+      (resolvedPath === undefined &&
+        options.fallbackOnMissingDependency === true &&
+        (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
+    ) {
       return { ok: false };
     }
-    nativeModuleLoadFailures.set(resolvedPath, error);
+    if (resolvedPath !== undefined) {
+      nativeModuleLoadFailures.set(resolvedPath, error);
+    }
     throw error;
   }
 }
@@ -421,21 +409,19 @@ function withNativeRequireAliases<T>(
   const resolveAlias =
     typeof aliasMap === "function" ? aliasMap : (specifier: string) => aliasMap[specifier];
   const originalResolveFilename = moduleWithResolver["_resolveFilename"];
-  const esmHooks = moduleWithResolver.registerHooks?.({
-    resolve(specifier, context, nextResolve) {
-      const parent = context.parentURL?.startsWith("file:")
-        ? fileURLToPath(context.parentURL)
-        : undefined;
-      const aliasTarget = resolveAlias(specifier, parent);
-      if (aliasTarget) {
-        return {
-          shortCircuit: true,
-          url: pathToFileURL(aliasTarget).href,
-        };
-      }
-      return nextResolve(specifier, context);
-    },
-  });
+  const esmHooks = useNodeModuleHooks()
+    ? Module.registerHooks({
+        resolve(specifier, context, nextResolve) {
+          const parent = context.parentURL?.startsWith("file:")
+            ? fileURLToPath(context.parentURL)
+            : undefined;
+          const aliasTarget = resolveAlias(specifier, parent);
+          return aliasTarget
+            ? { shortCircuit: true, url: pathToFileURL(aliasTarget).href }
+            : nextResolve(specifier, context);
+        },
+      })
+    : undefined;
   moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
     const aliasTarget = resolveAlias(request, parent?.filename);
     if (aliasTarget) {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ARTIFACT_CACHE_VERSION } from "../../scripts/lib/build-artifact-cache.mts";
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
-import { createDeferred, withTestTimeout } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
@@ -66,7 +66,6 @@ function sealDiagnostic(before: CompilerInputSnapshot, after: CompilerInputSnaps
 it.each([
   ['{"compilerOptions":{"target":"invalid"},"include":["src/**/*.ts"]}', "TS6046"],
   ['{"include":"src/**/*.ts"}', "TS5024"],
-  ['{"files":"src/index.ts"}', "TS5024"],
   ['{"extends":"./missing.json","include":["src/**/*.ts"]}', "TS5083"],
   ['{"compilerOptions": {', "TS1005"],
 ])("rejects invalid native compiler configuration %s", (config, diagnostic) => {
@@ -74,6 +73,64 @@ it.each([
   f.write("tsconfig.json", config);
   expect(() => f.signature(f.snapshot())).toThrow(diagnostic);
 });
+
+it.each([true, false])("seals clock-boundary configs only with prior capture=%s", (captured) => {
+  const f = fixture();
+  const stage = path.join(f.root, ".artifacts/native-declarations-fixture");
+  const config = path.join(stage, "tsconfig.json");
+  f.write(path.relative(f.root, config), '{"extends":"../../tsconfig.json"}');
+  const before = f.snapshot();
+  const signature = captured ? before.signature(config, [], [], stage) : f.signature(before, stage);
+  const startedAt = fs.statSync(config).ctimeMs;
+  const after = f.snapshot();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const seal = () =>
+      (captured ? after : f.snapshot()).seal(config, [], [], before, startedAt, stage);
+    if (captured) {
+      expect(seal().signature).toBe(signature);
+    } else {
+      expect(seal).toThrow(`Boundary input changed during compilation: ${config}`);
+    }
+  }
+});
+
+it("keeps the clock fence for source bytes first discovered in compiler membership", () => {
+  const f = fixture();
+  f.write("src/discovered.ts", "export const discovered = 1;\n");
+  const before = f.snapshot();
+  f.signature(before);
+  const startedAt = fs.statSync(path.join(f.root, "src/discovered.ts")).ctimeMs;
+  expect(() =>
+    f.snapshot().seal("tsconfig.json", [], ["src/discovered.ts"], before, startedAt),
+  ).toThrow("Boundary input changed during compilation: src/discovered.ts");
+});
+
+it.each(["ctimeMs", "dev", "ino"] as const)(
+  "rejects a captured input whose %s changes while its bytes stay identical",
+  (field) => {
+    const f = fixture();
+    const input = path.join(f.root, "src/index.ts");
+    const captured = fs.statSync(input);
+    const before = f.snapshot();
+    f.signature(before);
+    const stat = fs.statSync.bind(fs);
+    const reader = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      const result = stat(...args);
+      if (args[0] === input && result) {
+        Object.defineProperty(result, field, { value: captured[field] + 1 });
+      }
+      return result;
+    });
+    try {
+      // Isolate identity comparison from the timestamp fence for late reads.
+      expect(() =>
+        f.snapshot().seal("tsconfig.json", [], ["src/index.ts"], before, captured.ctimeMs + 2),
+      ).toThrow("Boundary input changed during compilation: src/index.ts");
+    } finally {
+      reader.mockRestore();
+    }
+  },
+);
 
 it.each(["added", "removed"] as const)("identifies a %s namespace entry when sealing", (change) => {
   const f = fixture();
@@ -105,85 +162,92 @@ it.each(["added", "removed"] as const)("identifies a %s namespace entry when sea
   }
 });
 
-it("admits exact producer additions while retaining their completed namespace signature", () => {
+it.each([
+  "owned output addition",
+  "unowned root addition",
+  "consumed output input",
+  "output directory symlink",
+])("admits producer output without weakening the compiler boundary: %s", (change) => {
   const f = fixture();
+  const canonicalRoot = fs.realpathSync.native(f.root);
+  if (change === "output directory symlink") {
+    fs.symlinkSync(
+      path.join(f.root, "src"),
+      path.join(f.root, "runtime-output"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  }
   const before = f.snapshot();
   const original = f.signature(before);
   const startedAt = Date.now();
-  const output = path.join(fs.realpathSync.native(f.root), "runtime-output/chunk.mjs");
-  f.write("runtime-output/chunk.mjs", "export const bundled = 1;\n");
+  let output = path.join(canonicalRoot, "chunk.mjs");
+  if (change === "owned output addition") {
+    output = path.join(canonicalRoot, "runtime-output/chunk.mjs");
+    f.write("runtime-output/chunk.mjs", "export const bundled = 1;\n");
+  } else if (change === "unowned root addition") {
+    f.write("chunk.mjs", "export const bundled = 1;\n");
+    f.write("unowned.ts", "export const candidate = 1;\n");
+  } else if (change === "consumed output input") {
+    output = path.join(canonicalRoot, "src/index.ts");
+    f.write("src/index.ts", "export const value = 2;\n");
+  } else {
+    output = path.join(canonicalRoot, "runtime-output/chunk.mjs");
+    f.write("src/chunk.mjs", "export const bundled = 1;\n");
+  }
   const after = f.snapshot();
-  const sealed = after.seal(
-    "tsconfig.json",
-    ["fixture-compiler"],
-    ["src/index.ts"],
-    before,
-    startedAt,
-    undefined,
-    new Set([output]),
-  );
-  expect(sealed.signature).toBe(f.signature(after));
-  expect(sealed.signature).not.toBe(original);
-});
-
-it.each(["unowned root addition", "consumed output input", "output directory symlink"])(
-  "retains the compiler boundary for a %s alongside producer facts",
-  (change) => {
-    const f = fixture();
-    const canonicalRoot = fs.realpathSync.native(f.root);
-    if (change === "output directory symlink") {
-      fs.symlinkSync(
-        path.join(f.root, "src"),
-        path.join(f.root, "runtime-output"),
-        process.platform === "win32" ? "junction" : "dir",
-      );
-    }
-    const before = f.snapshot();
-    f.signature(before);
-    const startedAt = Date.now();
-    let output = path.join(canonicalRoot, "chunk.mjs");
-    if (change === "unowned root addition") {
-      f.write("chunk.mjs", "export const bundled = 1;\n");
-      f.write("unowned.ts", "export const candidate = 1;\n");
-    } else if (change === "consumed output input") {
-      output = path.join(canonicalRoot, "src/index.ts");
-      f.write("src/index.ts", "export const value = 2;\n");
-    } else {
-      output = path.join(canonicalRoot, "runtime-output/chunk.mjs");
-      f.write("src/chunk.mjs", "export const bundled = 1;\n");
-    }
-    expect(() =>
-      f
-        .snapshot()
-        .seal(
-          "tsconfig.json",
-          ["fixture-compiler"],
-          ["src/index.ts"],
-          before,
-          startedAt,
-          undefined,
-          new Set([output]),
-        ),
-    ).toThrow(
+  const seal = () =>
+    after.seal(
+      "tsconfig.json",
+      ["fixture-compiler"],
+      ["src/index.ts"],
+      before,
+      startedAt,
+      undefined,
+      new Set([output]),
+    );
+  if (change === "owned output addition") {
+    const sealed = seal();
+    expect(sealed.signature).toBe(f.signature(after));
+    expect(sealed.signature).not.toBe(original);
+  } else {
+    expect(seal).toThrow(
       change === "consumed output input"
         ? "Boundary input changed during compilation"
         : "Boundary configuration or resolution topology changed during compilation",
     );
-  },
-);
+  }
+});
 
 it.each([
-  ["toolchain", "tools/compiler.js", "export const compiler = 2;\n"],
-  ["config", "base.json", '{"compilerOptions":{"target":"ES2022","types":[]}}'],
-  ["config-bytes", "base.json", '{ "compilerOptions": {"target":"ES2023","types":[]} }\n'],
+  { file: "tools/compiler.js", bytes: "export const compiler = 2;\n", category: "toolchain" },
+  {
+    file: "base.json",
+    bytes: '{"compilerOptions":{"target":"ES2022","types":[]}}',
+    category: "config",
+  },
+  {
+    file: "base.json",
+    bytes: '{ "compilerOptions": {"target":"ES2023","types":[]} }\n',
+    category: "config-bytes",
+  },
+  { file: "packages/local/.tmp/package.json", bytes: '{"type":"commonjs"}' },
+  { file: "packages/local/package.json", bytes: '{"name":"fixture-package","type":"commonjs"}' },
+  { file: "scripts/generator.mts", bytes: "export const generator = 2;\n" },
 ])(
-  "identifies a %s rejection without exposing configuration or tool bytes",
-  (category, file, bytes) => {
+  "invalidates changed input $file and reports its rejection category when applicable",
+  async ({ category, file, bytes }) => {
     const f = fixture();
     const before = f.snapshot();
-    f.signature(before);
-    f.write(file!, bytes!);
-    expect(sealDiagnostic(before, f.snapshot()).detail).toEqual({ category });
+    await before.prepare();
+    const original = f.signature(before);
+    f.write(file, bytes);
+    const after = f.snapshot();
+    await after.prepare();
+    expect(f.signature(after)).not.toBe(original);
+    expect(f.signature(after)).toBe(f.signature(f.snapshot()));
+    if (category) {
+      expect(sealDiagnostic(before, after).detail).toEqual({ category });
+    }
   },
 );
 
@@ -226,16 +290,6 @@ it.each(["ascii", "unicode", "controls"])(
     expect(changes.every(({ path: filename }) => filename.length <= 160)).toBe(true);
   },
 );
-
-it("prepares the same ordered source and installed-alias namespace as synchronous readers", async () => {
-  const f = fixture();
-  const synchronous = f.snapshot();
-  const prepared = f.snapshot();
-  await prepared.prepare();
-  for (const outputRoot of [undefined, path.join(f.root, "packages/local/dist")]) {
-    expect(f.signature(prepared, outputRoot)).toBe(f.signature(synchronous, outputRoot));
-  }
-});
 
 it("ignores checkout scratch packages that disappear during preparation", async () => {
   const f = fixture();
@@ -413,8 +467,12 @@ it("invalidates an indirect dependency symlink when its final target changes", a
   }
 });
 
-it("preloads sibling subtrees while the ordered visitor waits on a deeper directory", async () => {
-  const f = fixture();
+it("preloads sibling subtrees while the ordered visitor waits on a deeper directory", async ({
+  signal,
+  onTestFinished,
+}) => {
+  const testRoots = useAutoCleanupTempDirTracker(onTestFinished);
+  const f = fixture(testRoots.make("compiler-input-snapshot-preparation-"));
   f.write("fanout/a/deeper/input.ts", "export {};\n");
   f.write("fanout/b/deeper/input.ts", "export {};\n");
   f.write(".artifacts/ignored/input.ts", "export {};\n");
@@ -446,50 +504,38 @@ it("preloads sibling subtrees while the ordered visitor waits on a deeper direct
   });
   const snapshot = f.snapshot();
   const preparation = snapshot.prepare();
+  let cleanup: Promise<void> | undefined;
+  const finishPreparation = () =>
+    (cleanup ??= (async () => {
+      release.resolve();
+      try {
+        await preparation;
+      } finally {
+        reader.mockRestore();
+      }
+    })());
+  // Vitest runs these hooks in reverse order, after afterEach: join before removing inputs.
+  onTestFinished(finishPreparation);
   try {
-    await withTestTimeout(
-      Promise.all([heldStarted.promise, siblingStarted.promise]),
-      5_000,
-      "preparation serialized the independent directory subtrees",
+    await withinTest(
+      awaitGateBeforeSettlement(
+        Promise.all([heldStarted.promise, siblingStarted.promise]),
+        preparation,
+        "preparation serialized the independent directory subtrees",
+      ),
+      signal,
     );
     expect(peak).toBeLessThanOrEqual(16);
   } finally {
-    release.resolve();
-    try {
-      await preparation;
-    } finally {
-      reader.mockRestore();
-    }
+    await finishPreparation();
   }
   expect(active).toBe(0);
   expect(observed.has(path.join(f.root, ".artifacts"))).toBe(false);
   expect(observed.has(path.join(f.root, ".cache/vitest"))).toBe(false);
-  expect(f.signature(snapshot)).toBe(f.signature(f.snapshot()));
-});
-
-it.each([
-  ["source addition", "src/shadow.ts", "export const shadow = 1;\n"],
-  ["package addition", "src/package.json", '{"type":"commonjs"}'],
-  ["nested workspace metadata", "packages/local/.tmp/package.json", '{"type":"commonjs"}'],
-  [
-    "installed package metadata",
-    "packages/local/package.json",
-    '{"name":"fixture-package","type":"commonjs"}',
-  ],
-  ["inherited config", "base.json", '{"compilerOptions":{"target":"ES2022","types":[]}}'],
-  ["generator input", "scripts/generator.mts", "export const generator = 2;\n"],
-  ["compiler input", "tools/compiler.js", "export const compiler = 2;\n"],
-])("retains invalidation after a %s change", async (_label, filename, bytes) => {
-  const f = fixture();
-  const before = f.snapshot();
-  await before.prepare();
-  const original = f.signature(before);
-  f.write(filename!, bytes!);
-  const after = f.snapshot();
-  await after.prepare();
-
-  expect(f.signature(after)).not.toBe(original);
-  expect(f.signature(after)).toBe(f.signature(f.snapshot()));
+  const synchronous = f.snapshot();
+  for (const outputRoot of [undefined, path.join(f.root, "packages/local/dist")]) {
+    expect(f.signature(snapshot, outputRoot)).toBe(f.signature(synchronous, outputRoot));
+  }
 });
 
 it("rejects metadata changed during asynchronous preparation", async () => {

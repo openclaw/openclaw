@@ -219,6 +219,23 @@ export function releaseNativeDirectChild(child: ChildState): void {
   release?.();
 }
 
+export function admitNativeChildModelExecution(
+  child: ChildState,
+  owner: ParentOwner,
+  known: KnownChild | undefined,
+): void {
+  if (known) {
+    known.configurationQualification = owner.configurationQualification;
+  }
+  child.modelExecution ??= retainNativeModelExecution(
+    owner,
+    child.nativeTurnId,
+    child.childThreadId,
+    child.completionCustody,
+  );
+  owner.onDirectChildAccepted?.();
+}
+
 export function consumeNativeChildModelAdmission(
   evidence: Extract<NativeChildAdmissionEvidence, { kind: "interaction" }>,
 ): void {
@@ -259,26 +276,23 @@ export function bindNativeChildModelAdmission(
   if (!turnId) {
     return true;
   }
+  const retainExecution = () =>
+    retainNativeModelExecution(
+      source.owner,
+      turnId,
+      evidence.childThreadId,
+      evidence.completionCustody,
+    );
   const pending = known.pendingTurns.find((entry) => entry.turnId === turnId);
   if (pending) {
     if (!pending.state || pending.state === "active") {
       pending.completionCustody ??= evidence.completionCustody?.retain();
-      pending.modelSource ??= retainNativeModelExecution(
-        source.owner,
-        turnId,
-        evidence.childThreadId,
-        evidence.completionCustody,
-      );
+      pending.modelSource ??= retainExecution();
     }
   } else if (child?.nativeTurnId === turnId) {
     if (!child.terminal && !child.settledWithoutCompletion) {
       child.completionCustody ??= evidence.completionCustody?.retain();
-      child.modelExecution ??= retainNativeModelExecution(
-        source.owner,
-        turnId,
-        evidence.childThreadId,
-        evidence.completionCustody,
-      );
+      child.modelExecution ??= retainExecution();
     }
   } else {
     return true;
@@ -327,11 +341,11 @@ export function releaseNativeParentModelSources(
 
 export function associateNativeChildInteraction(
   known: KnownChild,
-  threadId: string,
   nativeTurnId: string,
   admissions: ReadonlyMap<string, NativeChildAdmissionEvidence[]>,
   drain: (owner: ParentOwner, turnId: string) => void,
 ): void {
+  const threadId = known.assignment.childThreadId;
   for (const [parentTurnId, pending] of admissions) {
     const interaction = pending.find(
       (evidence) =>
@@ -364,7 +378,7 @@ type ModelSourceDependencies = {
   isCurrent: (state: ParentState) => boolean;
   assertInputCurrent: (threadId: string, owner: ParentOwner) => void;
   hasPendingInput: (request: NativeModelSourceRequest) => boolean;
-  onExecutionAdmitted: (known: KnownChild, threadId: string) => void;
+  onExecutionAdmitted: (known: KnownChild) => void;
   registerChildExecution: (
     state: ParentState,
     request: NativeModelSourceRequest,
@@ -386,6 +400,13 @@ function captureExecutionOwner(
   }
   let released = false;
   const reviewRequirement = (owner.nativeReviewRequirement ??= { required: false });
+  const assertCurrent = () => {
+    capture.assertCurrent();
+    if (owner.modelExecutionCancelled) {
+      throw new Error("Codex native model execution was cancelled");
+    }
+    assertInputCurrent();
+  };
   return {
     ...capture,
     modelMapping: owner.modelMapping,
@@ -393,22 +414,12 @@ function captureExecutionOwner(
       return reviewRequirement.required;
     },
     recordNativeReviewRequirement: (required) => {
-      capture.assertCurrent();
-      if (owner.modelExecutionCancelled) {
-        throw new Error("Codex native model execution was cancelled");
-      }
-      assertInputCurrent();
+      assertCurrent();
       if (required) {
         reviewRequirement.required = true;
       }
     },
-    assertCurrent: () => {
-      capture.assertCurrent();
-      if (owner.modelExecutionCancelled) {
-        throw new Error("Codex native model execution was cancelled");
-      }
-      assertInputCurrent();
-    },
+    assertCurrent,
     cancel: () => {
       if (!released) {
         owner.modelExecutionCancelled = true;
@@ -475,6 +486,12 @@ function executionOwner(
       execution.bindTurn(request.turnId);
     }
     if (execution.executionOwner.turnId === request.turnId) {
+      if (!child.nativeTurnId && !known.assignment.unanchored) {
+        // Direct spawn already retained this execution before turn/started.
+        // Pin the admitted inference locator on that same initial assignment.
+        child.nativeTurnId = request.turnId;
+        known.assignment.nativeTurnId = request.turnId;
+      }
       return execution.executionOwner;
     }
   }
@@ -509,10 +526,16 @@ function executionOwner(
     return undefined;
   }
   if (
-    child?.nativeTurnId === request.turnId &&
+    child &&
+    (!child.nativeTurnId || child.nativeTurnId === request.turnId) &&
     !child.terminal &&
-    !child.settledWithoutCompletion
+    !child.settledWithoutCompletion &&
+    !known.assignment.unanchored
   ) {
+    // An admitted inference carries the exact initial child turn even when its
+    // turn/started notification was lost. Never recover this locator by history subtraction.
+    child.nativeTurnId = request.turnId;
+    known.assignment.nativeTurnId = request.turnId;
     child.modelExecution = modelSource;
     child.completionCustody ??= completionCustody?.retain();
   } else if (pending) {
@@ -527,12 +550,12 @@ function executionOwner(
     });
   }
   for (const entry of admitted) {
-    if (entry.kind === "interaction" && entry.modelSource?.owner === owner) {
+    if (entry.modelSource?.owner === owner) {
       consumeNativeChildModelAdmission(entry);
     }
   }
   if (pending?.state === "active" || child?.nativeTurnId === request.turnId) {
-    dependencies.onExecutionAdmitted(known, request.threadId);
+    dependencies.onExecutionAdmitted(known);
   }
   return modelSource.executionOwner;
 }
@@ -597,32 +620,31 @@ export async function captureNativeModelSource(
     const immediate = unqualified.filter((candidate) => candidate.turnId === request.parentTurnId);
     const waitingOwners = immediate.length > 0 ? immediate : unqualified;
     const waitingOwner = waitingOwners.length === 1 ? waitingOwners[0] : undefined;
-    if (waitingOwner) {
-      const capture = waitingOwner.modelSource?.capture();
-      let binding: NativeModelBinding | undefined;
-      try {
+    const capture = waitingOwner?.modelSource?.capture();
+    let binding: NativeModelBinding | undefined;
+    try {
+      if (waitingOwner) {
         binding = capture?.source?.bindModelExecution?.(undefined);
         if (!binding) {
           return undefined;
         }
         binding.assertCurrent();
-        await waitForModelSourceChange(
-          state,
-          request.signal ? AbortSignal.any([request.signal, binding.signal]) : binding.signal,
-        );
-      } finally {
-        binding?.release();
-        capture?.release();
+      } else if (
+        !pending &&
+        !dependencies.hasPendingInput(request) &&
+        !(observedChildTurn && parentExecution && matchingCause(parentExecution, request))
+      ) {
+        return undefined;
       }
-      continue;
+      await waitForModelSourceChange(
+        state,
+        binding && request.signal
+          ? AbortSignal.any([request.signal, binding.signal])
+          : (binding?.signal ?? request.signal),
+      );
+    } finally {
+      binding?.release();
+      capture?.release();
     }
-    if (
-      !pending &&
-      !dependencies.hasPendingInput(request) &&
-      !(observedChildTurn && parentExecution && matchingCause(parentExecution, request))
-    ) {
-      return undefined;
-    }
-    await waitForModelSourceChange(state, request.signal);
   }
 }

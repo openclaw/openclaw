@@ -1,6 +1,7 @@
 /** Serializes this Gateway's native config writes with its config-loading requests. */
 
-type CodexNativeConfigFenceState = Map<string, Promise<void>>;
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 
 type CodexNativeConfigFenceOptions = {
   signal?: AbortSignal;
@@ -11,42 +12,17 @@ type CodexNativeConfigFenceOptions = {
 
 const CODEX_NATIVE_CONFIG_FENCE_STATE = Symbol.for("openclaw.codexNativeConfigFenceState");
 
-function getFenceState(): CodexNativeConfigFenceState {
-  const globalState = globalThis as typeof globalThis & {
-    [CODEX_NATIVE_CONFIG_FENCE_STATE]?: CodexNativeConfigFenceState;
-  };
-  globalState[CODEX_NATIVE_CONFIG_FENCE_STATE] ??= new Map();
-  return globalState[CODEX_NATIVE_CONFIG_FENCE_STATE];
-}
-
 /** Acquires the per-CODEX_HOME fence and returns an idempotent release. */
 export async function acquireCodexNativeConfigFence(
   key: string,
   options: CodexNativeConfigFenceOptions = {},
 ): Promise<() => void> {
-  const state = getFenceState();
+  const state = resolveGlobalMap<string, Promise<void>>(CODEX_NATIVE_CONFIG_FENCE_STATE);
   const previous = state.get(key) ?? Promise.resolve();
-  let resolveCurrent: () => void = () => undefined;
-  const current = new Promise<void>((resolve) => {
-    resolveCurrent = resolve;
-  });
+  const { promise: current, resolve: resolveCurrent } = createDeferred<void>();
   state.set(key, current);
-  try {
-    await waitForPreviousFence(previous, options);
-  } catch (error) {
-    // Preserve FIFO exclusion for later waiters even though this caller leaves
-    // the queue before its predecessor releases.
-    void previous.then(() => {
-      resolveCurrent();
-      if (state.get(key) === current) {
-        state.delete(key);
-      }
-    });
-    throw error;
-  }
-
   let released = false;
-  return () => {
+  const release = () => {
     if (released) {
       return;
     }
@@ -56,6 +32,15 @@ export async function acquireCodexNativeConfigFence(
       state.delete(key);
     }
   };
+  try {
+    await waitForPreviousFence(previous, options);
+  } catch (error) {
+    // Preserve FIFO exclusion for later waiters even though this caller leaves
+    // the queue before its predecessor releases.
+    void previous.then(release);
+    throw error;
+  }
+  return release;
 }
 
 async function waitForPreviousFence(
@@ -71,29 +56,19 @@ async function waitForPreviousFence(
   }
   await new Promise<void>((resolve, reject) => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    const cleanup = () => {
-      if (timeout) {
-        clearTimeout(timeout);
-        timeout = undefined;
-      }
+    const settle = (error?: Error) => {
+      clearTimeout(timeout);
+      timeout = undefined;
       options.signal?.removeEventListener("abort", onAbort);
-    };
-    const settle = (run: () => void) => {
-      cleanup();
-      run();
+      return error ? reject(error) : resolve();
     };
     const onAbort = () =>
-      settle(() => reject(new Error(options.abortMessage ?? "Codex native config fence aborted")));
-    void previous.then(() => settle(resolve));
-    if (options.signal) {
-      options.signal.addEventListener("abort", onAbort, { once: true });
-    }
+      settle(new Error(options.abortMessage ?? "Codex native config fence aborted"));
+    void previous.then(() => settle());
+    options.signal?.addEventListener("abort", onAbort, { once: true });
     if (options.timeoutMs !== undefined) {
       timeout = setTimeout(
-        () =>
-          settle(() =>
-            reject(new Error(options.timeoutMessage ?? "Codex native config fence timed out")),
-          ),
+        () => settle(new Error(options.timeoutMessage ?? "Codex native config fence timed out")),
         Math.max(1, options.timeoutMs),
       );
       timeout.unref?.();

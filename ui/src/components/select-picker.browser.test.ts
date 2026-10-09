@@ -1,46 +1,122 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderDecisionModelPicker } from "./decision-model-picker.ts";
-import { renderModelPicker } from "./model-picker.ts";
-import type { SelectPicker } from "./select-picker.ts";
+import { renderModelPicker, type ModelPickerOption } from "./model-picker.ts";
+import { renderPicker, type SelectPicker } from "./select-picker.ts";
+import { renderSettingsRow } from "./settings-ui.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../styles/base.css";
 import "../styles/settings-controls.css";
+import "../styles/settings.css";
 
 afterEach(() => document.body.replaceChildren());
 
+function mountHost(style = "") {
+  const host = document.createElement("div");
+  host.style.cssText = style;
+  document.body.append(host);
+  return host;
+}
+
+function fixtureModels(labels: string[]): ModelPickerOption[] {
+  return labels.map((label) => ({
+    value: `fixture/${label.toLowerCase().replaceAll(" ", "-")}`,
+    label,
+    provider: "fixture",
+  }));
+}
+
+async function mountModel(
+  params: Omit<Parameters<typeof renderModelPicker>[0], "label" | "onChange">,
+  style: string,
+) {
+  const host = mountHost(style);
+  const onChange = vi.fn();
+  render(renderModelPicker({ label: "Model", onChange, ...params }), host);
+  const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
+  await picker.updateComplete;
+  return { picker, onChange };
+}
+
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
+  it.each([
+    { width: 1280, direction: "ltr" },
+    { width: 390, direction: "ltr" },
+    { width: 1280, direction: "rtl" },
+    { width: 390, direction: "rtl" },
+  ])(
+    "starts picker searches at the writing edge in $direction at $width pixels",
+    async ({ width, direction }) => {
+      const { page, userEvent } = await import("vitest/browser");
+      await page.viewport(width, 844);
+      const host = mountHost();
+      host.dir = direction;
+      const options = Array.from({ length: 9 }, (_, index) => ({
+        value: `fixture/model-${index}`,
+        label: `Model ${index}`,
+      }));
+      const onChange = vi.fn();
+      const shared = renderPicker({
+        label: "Shared",
+        value: "fixture/model-0",
+        options,
+        searchable: true,
+        onChange,
+      });
+      render(
+        html`
+          ${renderSettingsRow({ title: "Primary", control: renderModelPicker({ label: "Primary", value: "fixture/model-0", options, onChange }) })}
+          ${renderSettingsRow({ title: "Decision", control: renderDecisionModelPicker({ id: "alignment-decision", models: [{ provider: "fixture", id: "one", name: "Decision one", pluginId: "fixture" }], value: "fixture/one", disabled: false, onChange }) })}
+          ${renderSettingsRow({ title: "Shared", control: shared })} ${shared}
+          ${renderSettingsRow({ title: "Value", control: html`<input class="settings-input" aria-label="Value" value="42" /><span class="settings-secret"><input class="settings-input" aria-label="Nested value" value="example" /></span>` })}
+        `,
+        host,
+      );
+      for (const picker of host.querySelectorAll<SelectPicker>("openclaw-select-picker")) {
+        await picker.updateComplete;
+        const trigger = picker.querySelector<HTMLButtonElement>("button")!;
+        await page.elementLocator(trigger).click();
+        const search = picker.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+        await expect.element(search).toHaveFocus();
+        expect(getComputedStyle(search).direction).toBe(direction);
+        expect(getComputedStyle(search).textAlign).toBe("start");
+        await page.elementLocator(search).fill("one");
+        expect(getComputedStyle(search).textAlign).toBe("start");
+        await userEvent.keyboard("{Escape}");
+        await expect.element(trigger).toHaveFocus();
+      }
+      for (const label of ["Value", "Nested value"]) {
+        const input = host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+        expect(getComputedStyle(input).textAlign).toBe("right");
+      }
+      expect(onChange).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { width: 1280, placement: "bottom" as const },
     { width: 390, placement: "top" as const },
   ])("keeps distinct model labels readable at $width pixels", async ({ width, placement }) => {
     const { page } = await import("vitest/browser");
     await page.viewport(width, 844);
-    const host = document.createElement("div");
-    host.style.cssText = `position:fixed;right:12px;${placement === "top" ? "bottom" : "top"}:32px;width:120px`;
-    document.body.append(host);
-    const onChange = vi.fn();
-    render(
-      renderModelPicker({
-        label: "Model",
+    const { picker, onChange } = await mountModel(
+      {
         value: "fixture/anchor",
         placement,
-        options: [
-          { value: "fixture/anchor", label: "Anchor", provider: "fixture" },
-          { value: "fixture/aurora-large", label: "Aurora Large", provider: "fixture" },
-          { value: "fixture/aurora-small", label: "Aurora Small", provider: "fixture" },
-          ...["Birch", "Cedar", "Delta", "Elm", "Forest", "Granite"].map((label) => ({
-            value: `fixture/${label.toLowerCase()}`,
-            label,
-            provider: "fixture",
-          })),
-        ],
-        onChange,
-      }),
-      host,
+        options: fixtureModels([
+          "Anchor",
+          "Aurora Large",
+          "Aurora Small",
+          "Birch",
+          "Cedar",
+          "Delta",
+          "Elm",
+          "Forest",
+          "Granite",
+        ]),
+      },
+      `position:fixed;right:12px;${placement === "top" ? "bottom" : "top"}:32px;width:120px`,
     );
-    const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
-    await picker.updateComplete;
     await page.getByRole("button", { name: "Model: Anchor", exact: true }).click();
     const row = picker.querySelector<HTMLElement>('[data-value="fixture/aurora-large"]')!;
     await expect.element(row).toBeVisible();
@@ -55,64 +131,146 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     await page.getByRole("combobox", { name: "Search", exact: true }).fill("Aurora Large");
     expect(onChange).not.toHaveBeenCalled();
     await picker.updateComplete;
+    expect(
+      picker.querySelector<HTMLElement>('[data-value="fixture/anchor"]')?.checkVisibility() ??
+        false,
+    ).toBe(false);
     await page
       .elementLocator(picker.querySelector<HTMLElement>('[data-value="fixture/aurora-large"]')!)
       .click();
     expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/aurora-large");
   });
 
-  it.each([
-    { width: 1280, placement: "bottom" as const },
-    { width: 390, placement: "top" as const },
+  it.each<{
+    name: string;
+    width: number;
+    style: string;
+    params: Omit<Parameters<typeof renderModelPicker>[0], "label" | "onChange">;
+    selected: string;
+    sizing: "custom" | "viewport" | "trigger" | "wrap";
+  }>([
+    ...(["bottom", "top"] as const).map((placement) => ({
+      name: `custom labels opening ${placement}`,
+      width: placement === "bottom" ? 1280 : 390,
+      style: `position:fixed;right:12px;${placement === "top" ? "bottom" : "top"}:32px;width:90px`,
+      params: {
+        value: "",
+        placement,
+        options: [
+          { value: "", label: "Default" },
+          { value: "fixture/anchor", label: "fixture/anchor", provider: "fixture" },
+        ],
+        custom: { label: "Custom model…" },
+      },
+      selected: "Default",
+      sizing: "custom" as const,
+    })),
+    {
+      name: "long reference capped to the phone viewport",
+      width: 390,
+      style: "position:fixed;right:12px;top:32px;width:90px",
+      params: {
+        value: "",
+        options: [
+          { value: "", label: "Default" },
+          {
+            value: "fixture/very-long-context-model-reference-for-a-narrow-phone-viewport",
+            label: "fixture/very-long-context-model-reference-for-a-narrow-phone-viewport",
+          },
+        ],
+      },
+      selected: "Default",
+      sizing: "viewport",
+    },
+    {
+      name: "short menu fitted to its trigger",
+      width: 390,
+      style: "width:160px;padding:24px",
+      params: {
+        value: "auto",
+        options: [
+          { value: "auto", label: "Auto" },
+          { value: "off", label: "Off" },
+        ],
+      },
+      selected: "Auto",
+      sizing: "trigger",
+    },
+    {
+      name: "long model labels wrapping instead of single-line truncation",
+      width: 390,
+      style: "position:fixed;right:12px;top:32px;width:120px",
+      params: {
+        value: "deepseek/deepseek-r1-0528",
+        options: [
+          {
+            value: "deepseek/deepseek-r1-0528",
+            label: "DeepSeek: DeepSeek-R1-0528",
+            provider: "deepseek",
+          },
+          {
+            value: "deepseek/deepseek-r1-distill",
+            label: "DeepSeek: DeepSeek-R1-Distill",
+            provider: "deepseek",
+          },
+        ],
+      },
+      selected: "DeepSeek: DeepSeek-R1-0528",
+      sizing: "wrap",
+    },
   ])(
-    "keeps compact model and custom labels readable at $width pixels",
-    async ({ width, placement }) => {
+    "keeps compact model menus readable: $name",
+    async ({ width, style, params, selected, sizing }) => {
       const { page, userEvent } = await import("vitest/browser");
       await page.viewport(width, 844);
-      const host = document.createElement("div");
-      host.style.cssText = `position:fixed;right:12px;${placement === "top" ? "bottom" : "top"}:32px;width:90px`;
-      document.body.append(host);
-      const onChange = vi.fn();
-      render(
-        renderModelPicker({
-          label: "Model",
-          value: "",
-          placement,
-          options: [
-            { value: "", label: "Default" },
-            { value: "fixture/anchor", label: "fixture/anchor", provider: "fixture" },
-          ],
-          custom: { label: "Custom model…" },
-          onChange,
-        }),
-        host,
-      );
-      const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
-      await picker.updateComplete;
-      await page.getByRole("button", { name: "Model: Default", exact: true }).click();
-      await expect.element(page.getByRole("listbox", { name: "Model", exact: true })).toBeVisible();
-      for (const label of picker.querySelectorAll<HTMLElement>(
-        "[role=option] .picker-select__label",
-      )) {
-        expect(label.scrollWidth, label.textContent ?? "").toBeLessThanOrEqual(label.clientWidth);
+      const { picker, onChange } = await mountModel(params, style);
+      await page.getByRole("button", { name: `Model: ${selected}`, exact: true }).click();
+      if (sizing === "trigger") {
+        await expect.element(page.getByRole("option", { name: "Off", exact: true })).toBeVisible();
+        expect(picker.querySelector("input")).toBeNull();
+      } else if (sizing !== "wrap") {
+        await expect
+          .element(page.getByRole("listbox", { name: "Model", exact: true }))
+          .toBeVisible();
       }
-      expect(picker.querySelector(".picker-select__search")).toBeNull();
-      const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
-      const bounds = menu.getBoundingClientRect();
-      expect(bounds.left).toBeGreaterThanOrEqual(0);
-      expect(bounds.right).toBeLessThanOrEqual(innerWidth);
-      expect(bounds.top).toBeGreaterThanOrEqual(0);
-      expect(bounds.bottom).toBeLessThanOrEqual(innerHeight);
-      await userEvent.keyboard("{ArrowDown}{Enter}");
-      expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/anchor");
+      const bounds = picker.querySelector(".picker-select__menu")!.getBoundingClientRect();
+      if (sizing === "custom" || sizing === "viewport") {
+        expect(bounds.left).toBeGreaterThanOrEqual(0);
+        expect(bounds.right).toBeLessThanOrEqual(innerWidth);
+      }
+      if (sizing === "viewport") {
+        expect(bounds.width).toBeGreaterThan(90);
+      } else if (sizing === "trigger") {
+        expect(bounds.width).toBeCloseTo(
+          picker.querySelector("button")!.getBoundingClientRect().width,
+          0,
+        );
+      } else {
+        for (const label of picker.querySelectorAll<HTMLElement>(
+          "[role=option] .picker-select__label",
+        )) {
+          if (sizing === "wrap") {
+            expect(getComputedStyle(label).whiteSpace).toBe("normal");
+          } else {
+            expect(label.scrollWidth, label.textContent ?? "").toBeLessThanOrEqual(
+              label.clientWidth,
+            );
+          }
+        }
+        if (sizing === "custom") {
+          expect(picker.querySelector(".picker-select__search")).toBeNull();
+          expect(bounds.top).toBeGreaterThanOrEqual(0);
+          expect(bounds.bottom).toBeLessThanOrEqual(innerHeight);
+          await userEvent.keyboard("{ArrowDown}{Enter}");
+          expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/anchor");
+        }
+      }
     },
   );
 
   it("displays a saved disabled utility model without making it selectable as primary", async () => {
     const { page, userEvent } = await import("vitest/browser");
-    const host = document.createElement("div");
-    host.style.cssText = "width:320px;padding:24px";
-    document.body.append(host);
+    const host = mountHost("width:320px;padding:24px");
     const available = [
       "agent-backup",
       "fallback-one",
@@ -179,50 +337,13 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     expect(primaryChange).toHaveBeenCalledExactlyOnceWith("fixture/global-two");
   });
 
-  it("caps an intrinsic compact menu at the phone viewport", async () => {
-    const { page } = await import("vitest/browser");
-    await page.viewport(390, 844);
-    const host = document.createElement("div");
-    host.style.cssText = "position:fixed;right:12px;top:32px;width:90px";
-    document.body.append(host);
-    render(
-      renderModelPicker({
-        label: "Model",
-        value: "",
-        options: [
-          { value: "", label: "Default" },
-          {
-            value: "fixture/very-long-context-model-reference-for-a-narrow-phone-viewport",
-            label: "fixture/very-long-context-model-reference-for-a-narrow-phone-viewport",
-          },
-        ],
-        onChange: vi.fn(),
-      }),
-      host,
-    );
-    const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
-    await picker.updateComplete;
-    await page.getByRole("button", { name: "Model: Default", exact: true }).click();
-    await expect.element(page.getByRole("listbox", { name: "Model", exact: true })).toBeVisible();
-    const bounds = picker.querySelector(".picker-select__menu")!.getBoundingClientRect();
-    expect(bounds.left).toBeGreaterThanOrEqual(0);
-    expect(bounds.right).toBeLessThanOrEqual(innerWidth);
-    expect(bounds.width).toBeGreaterThan(90);
-  });
-
   it.each([390, 1280])(
     "keeps the page still when a positioned menu reopens from %i pixels",
     async (initialWidth) => {
       const { page, userEvent } = await import("vitest/browser");
       await page.viewport(initialWidth, 844);
-      const host = document.createElement("div");
-      host.style.cssText =
-        "width:min(320px,calc(100vw - 48px));margin-inline:auto 24px;margin-top:300px";
-      document.body.append(host);
-      const onChange = vi.fn();
-      render(
-        renderModelPicker({
-          label: "Model",
+      const { picker, onChange } = await mountModel(
+        {
           value: "fixture/anchor",
           options: [
             "anchor",
@@ -235,12 +356,9 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
             "forest",
             "granite",
           ].map((id) => ({ value: "fixture/" + id, label: id })),
-          onChange,
-        }),
-        host,
+        },
+        "width:min(320px,calc(100vw - 48px));margin-inline:auto 24px;margin-top:300px",
       );
-      const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
-      await picker.updateComplete;
       const trigger = page.getByRole("button", { name: "Model: anchor", exact: true });
       await trigger.click();
       await expect
@@ -261,61 +379,31 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     },
   );
 
-  it("keeps a short menu fitted to its trigger", async () => {
-    const { page } = await import("vitest/browser");
-    await page.viewport(390, 844);
-    const host = document.createElement("div");
-    host.style.cssText = "width:160px;padding:24px";
-    document.body.append(host);
-    render(
-      renderModelPicker({
-        label: "Model",
-        value: "auto",
-        options: [
-          { value: "auto", label: "Auto" },
-          { value: "off", label: "Off" },
-        ],
-        onChange: vi.fn(),
-      }),
-      host,
-    );
-    const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
-    await picker.updateComplete;
-    const trigger = page.getByRole("button", { name: "Model: Auto", exact: true });
-    await trigger.click();
-    await expect.element(page.getByRole("option", { name: "Off", exact: true })).toBeVisible();
-    expect(picker.querySelector("input")).toBeNull();
-    const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
-    expect(menu.getBoundingClientRect().width).toBeCloseTo(
-      picker.querySelector("button")!.getBoundingClientRect().width,
-      0,
-    );
-  });
   it.each([390, 1280])(
     "fits grouped decisions and supports native header keyboard controls at %i pixels",
     async (width) => {
       const { page, userEvent } = await import("vitest/browser");
       await page.viewport(width, 844);
-      const host = document.createElement("div");
-      host.style.cssText = "position:fixed;right:12px;top:32px;width:90px";
-      document.body.append(host);
+      const host = mountHost("position:fixed;right:12px;top:32px;width:90px");
       const onChange = vi.fn();
-      render(
-        html`${renderDecisionModelPicker({
-            id: "decisions",
-            models: [
-              { provider: "alpha", id: "one", name: "Alpha decision model", pluginId: "alpha" },
-              { provider: "beta", id: "two", name: "Beta decision model", pluginId: "beta" },
-            ],
-            value: "alpha/one",
-            disabled: false,
-            onChange,
-          })}<button id="after-picker">Next field</button>`,
-        host,
-      );
+      const renderDecision = (value: string) =>
+        render(
+          html`${renderDecisionModelPicker({
+              id: "decisions",
+              models: [
+                { provider: "alpha", id: "one", name: "Alpha decision model", pluginId: "alpha" },
+                { provider: "beta", id: "two", name: "Beta decision model", pluginId: "beta" },
+              ],
+              value,
+              disabled: false,
+              onChange,
+            })}<button id="after-picker">Next field</button>`,
+          host,
+        );
+      renderDecision("alpha/one");
       const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
       await picker.updateComplete;
-      const trigger = page.getByRole("button", {
+      let trigger = page.getByRole("button", {
         name: "Decision Model: Alpha decision model",
         exact: true,
       });
@@ -340,6 +428,17 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       )) {
         expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
       }
+      renderDecision("beta/two");
+      await picker.updateComplete;
+      trigger = page.getByRole("button", {
+        name: "Decision Model: Beta decision model",
+        exact: true,
+      });
+      expect(document.activeElement).toBe(
+        picker.querySelector('[role="group"][aria-label="Beta"] button'),
+      );
+      await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+      expect(onChange).not.toHaveBeenCalled();
       await userEvent.keyboard("{Tab}{Tab}");
       await expect
         .element(page.getByRole("button", { name: "Next field", exact: true }))

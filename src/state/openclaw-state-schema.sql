@@ -80,71 +80,21 @@ CREATE TABLE IF NOT EXISTS skill_library_uploads (
 ) STRICT;
 -- End profile-owned skill library.
 
-CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
-  proposal_id TEXT NOT NULL PRIMARY KEY,
-  record_json TEXT NOT NULL,
-  owner_agent_id TEXT,
-  kind TEXT NOT NULL CHECK (kind IN ('create', 'update')),
-  status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected', 'quarantined', 'stale')),
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  draft_hash TEXT NOT NULL,
-  origin_agent_id TEXT,
-  origin_session_key TEXT,
-  origin_run_id TEXT,
-  origin_message_id TEXT,
-  applied_at TEXT,
-  rejected_at TEXT,
-  quarantined_at TEXT,
-  stale_at TEXT,
-  status_reason TEXT
+CREATE TABLE IF NOT EXISTS skill_workshop_changes (
+  change_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('create', 'patch', 'write_file', 'remove_file', 'archive', 'restore')),
+  actor TEXT NOT NULL CHECK (actor IN ('agent', 'review', 'curator', 'user')),
+  summary TEXT NOT NULL,
+  version_id TEXT,
+  session_key TEXT,
+  run_id TEXT,
+  created_at_ms INTEGER NOT NULL
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (
-  review_id TEXT NOT NULL PRIMARY KEY,
-  owner_agent_id TEXT NOT NULL,
-  backup_id TEXT NOT NULL,
-  create_time INTEGER NOT NULL,
-  kept_names_json TEXT NOT NULL,
-  written_names_json TEXT NOT NULL,
-  dropped_json TEXT NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_skill_workshop_collection_reviews_owner_time
-  ON skill_workshop_collection_reviews(owner_agent_id, create_time DESC, review_id);
-
-CREATE TABLE IF NOT EXISTS skill_workshop_proposal_rollbacks (
-  proposal_id TEXT NOT NULL PRIMARY KEY,
-  written_at TEXT NOT NULL,
-  target_skill_file TEXT NOT NULL,
-  action TEXT NOT NULL CHECK (action IN ('create', 'update')),
-  previous_content_hash TEXT,
-  previous_content TEXT,
-  support_files_json TEXT,
-  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS skill_workshop_proposal_events (
-  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-  event_id TEXT NOT NULL UNIQUE,
-  proposal_id TEXT NOT NULL,
-  proposed_version TEXT NOT NULL,
-  revision_hash TEXT NOT NULL,
-  event_type TEXT NOT NULL CHECK (event_type IN (
-    'created',
-    'revised',
-    'evaluation_completed',
-    'applied',
-    'rejected',
-    'quarantined',
-    'stale'
-  )),
-  occurred_at TEXT NOT NULL,
-  actor_json TEXT NOT NULL,
-  correlation_id TEXT,
-  payload_json TEXT,
-  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
-) STRICT;
+CREATE INDEX IF NOT EXISTS idx_skill_workshop_changes_agent_time
+  ON skill_workshop_changes(agent_id, created_at_ms);
 
 CREATE TABLE IF NOT EXISTS audit_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -988,6 +938,14 @@ CREATE TABLE IF NOT EXISTS node_worker_launch_cleanup (
   lineage_settled INTEGER CHECK (lineage_settled IS NULL OR lineage_settled = 1)
 ) STRICT;
 
+-- Older readers retain owned-anchor custody: lineage EOF is not this certificate.
+CREATE TABLE IF NOT EXISTS node_worker_launch_process_scopes (
+  launch_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES node_worker_launches(launch_id) ON DELETE CASCADE,
+  scope_kind TEXT NOT NULL CHECK (scope_kind = 'linux-subreaper'),
+  descendants_reaped INTEGER CHECK (descendants_reaped IS NULL OR descendants_reaped = 1)
+) STRICT;
+
 -- Turn receipts have a shorter lifetime than their physical worker owner.
 -- Keeping the launch running preserves capacity and predecessor cleanup semantics.
 CREATE TABLE IF NOT EXISTS node_worker_turns (
@@ -1200,6 +1158,14 @@ CREATE INDEX IF NOT EXISTS idx_acp_sessions_state_activity
 CREATE INDEX IF NOT EXISTS idx_acp_sessions_agent_activity
   ON acp_sessions(agent, last_activity_at DESC, session_key);
 
+CREATE INDEX IF NOT EXISTS idx_acp_sessions_resume_agent
+  ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.agentSessionId'),
+    char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
+
+CREATE INDEX IF NOT EXISTS idx_acp_sessions_resume_acpx
+  ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.acpxSessionId'),
+    char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
+
 CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
@@ -1270,7 +1236,8 @@ CREATE TABLE IF NOT EXISTS agent_database_leases (
   path TEXT NOT NULL,
   owner_pid INTEGER NOT NULL,
   owner_start_time INTEGER,
-  opened_at INTEGER NOT NULL
+  opened_at INTEGER NOT NULL,
+  provenance TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS plugin_state_entries (
@@ -1490,6 +1457,7 @@ CREATE TABLE IF NOT EXISTS cron_run_receipts (
   config_revision TEXT NOT NULL,
   agent_id TEXT NOT NULL,
   request_run_id TEXT,
+  delivery_attempt_state TEXT NOT NULL DEFAULT 'unknown' CHECK (delivery_attempt_state IN ('unknown', 'not-started', 'started')),
   status TEXT NOT NULL,
   owner_pid INTEGER NOT NULL,
   owner_start_time INTEGER,
@@ -1580,7 +1548,7 @@ CREATE INDEX IF NOT EXISTS idx_delivery_queue_pending
   ON delivery_queue_entries(queue_name, status, enqueued_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_failed
-  ON delivery_queue_entries(queue_name, status, failed_at, id);
+  ON delivery_queue_entries(status, queue_name, failed_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_session
   ON delivery_queue_entries(queue_name, status, session_key, enqueued_at, id)
@@ -1780,6 +1748,10 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_utterances (
     ON DELETE CASCADE
 ) STRICT;
 
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_utterances_id
+  ON meeting_transcript_utterances(session_id, session_started_at, utterance_id)
+  WHERE utterance_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS meeting_transcript_summaries (
   session_id TEXT NOT NULL,
   session_started_at TEXT NOT NULL,
@@ -1852,7 +1824,8 @@ CREATE TABLE IF NOT EXISTS worktrees (
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
   removed_at INTEGER,
-  run_end_cleanup_json TEXT
+  run_end_cleanup_json TEXT,
+  gc_protection_json TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
@@ -2589,16 +2562,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_inference_turns_pending_run
   ON worker_inference_turns(session_id, run_epoch, run_id)
   WHERE state = 'pending';
 
-CREATE TABLE IF NOT EXISTS fleet_cells (
-  tenant_id TEXT NOT NULL PRIMARY KEY,
-  created_at_ms INTEGER NOT NULL,
-  image TEXT NOT NULL,
-  runtime TEXT NOT NULL,
-  host_port INTEGER NOT NULL,
-  container_name TEXT NOT NULL,
-  data_dir TEXT NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS claw_installs (
   agent_id TEXT NOT NULL PRIMARY KEY,
   schema_version TEXT NOT NULL,
@@ -2689,6 +2652,21 @@ CREATE TABLE IF NOT EXISTS claw_mcp_server_refs (
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (agent_id, name)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS user_profile_identities (
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  canonical_login TEXT,
+  created_at INTEGER NOT NULL,
+  authorization_id TEXT,
+  authorization_basis_json TEXT,
+  PRIMARY KEY (provider, subject)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_user_profile_identities_profile_id
+  ON user_profile_identities(profile_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profile_identities_authorization
+  ON user_profile_identities(authorization_id);
 
 CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   realpath TEXT NOT NULL PRIMARY KEY,

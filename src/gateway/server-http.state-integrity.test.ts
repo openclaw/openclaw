@@ -12,7 +12,7 @@ import {
 } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import { createGatewayRequest } from "./hooks-test-helpers.js";
 import { handleGatewayProbeRequest } from "./server-http-probes.js";
@@ -39,8 +39,8 @@ describe("Gateway shared-state integrity readiness", () => {
     paths.add(pathname);
     const read = () =>
       executeOpenClawStateWorker(capture(), {
-        type: "tasks.list",
-        input: { ownerKey: "agent:main:main" },
+        type: "plugins.conversationBindingApprovals.read",
+        input: undefined,
       });
     expect(await read()).toEqual([]);
     await closeOpenClawStateDatabaseAsync();

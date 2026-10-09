@@ -30,9 +30,6 @@ type CollectFileViolationsParams<Violation extends object> = {
   sourceRoots: string[];
 };
 
-/**
- * Converts repo-relative source roots into absolute paths.
- */
 export function resolveSourceRoots(repoRoot: string, relativeRoots: string[]) {
   return relativeRoots.map((root) => path.join(repoRoot, ...root.split("/").filter(Boolean)));
 }
@@ -41,10 +38,7 @@ export function isTestLikeTypeScriptFile(filePath: string, extraTestSuffixes: st
   return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) => filePath.endsWith(suffix));
 }
 
-/**
- * Recursively collects TypeScript files under a file or directory target.
- */
-export async function collectTypeScriptFiles(
+async function collectTypeScriptFiles(
   targetPath: string,
   options: CollectTypeScriptFilesOptions = {},
 ): Promise<string[]> {
@@ -117,20 +111,11 @@ export async function collectTypeScriptFilesFromRoots(
 ) {
   return (
     await Promise.all(
-      sourceRoots.map(
-        async (root) =>
-          await collectTypeScriptFiles(root, {
-            ignoreMissing: true,
-            ...options,
-          }),
-      ),
+      sourceRoots.map((root) => collectTypeScriptFiles(root, { ignoreMissing: true, ...options })),
     )
   ).flat();
 }
 
-/**
- * Runs a guard's violation scanner across collected TypeScript source files.
- */
 export async function collectFileViolations<Violation extends object>(
   params: CollectFileViolationsParams<Violation>,
 ) {
@@ -141,22 +126,33 @@ export async function collectFileViolations<Violation extends object>(
 
   const violations: Array<Violation & { path: string }> = [];
   using parser = createNativeTypeScriptParser({ cwd: params.repoRoot });
-  for (const filePath of files) {
-    if (params.skipFile?.(filePath)) {
-      continue;
+  // Native snapshots reload their root list. Bound retained trees while amortizing that reload.
+  const batchSize = 32;
+  for (let offset = 0; offset < files.length; offset += batchSize) {
+    const sources: Array<{ fileName: string; text: string }> = [];
+    let readFailure: { error: unknown } | undefined;
+    for (const filePath of files.slice(offset, offset + batchSize)) {
+      if (params.skipFile?.(filePath)) {
+        continue;
+      }
+      try {
+        sources.push({ fileName: filePath, text: await fs.readFile(filePath, "utf8") });
+      } catch (error) {
+        readFailure = { error };
+        break;
+      }
     }
-    const content = await fs.readFile(filePath, "utf8");
-    const fileViolations = params.findViolations(
-      content,
-      filePath,
-      parser.parseSourceFile(filePath, content),
-      parser,
-    );
-    for (const violation of fileViolations) {
-      violations.push({
-        path: path.relative(params.repoRoot, filePath),
-        ...violation,
-      });
+    for (const [index, sourceFile] of parser.parseSourceFiles(sources).entries()) {
+      const { fileName, text } = sources[index]!;
+      for (const violation of params.findViolations(text, fileName, sourceFile, parser)) {
+        violations.push({
+          path: path.relative(params.repoRoot, fileName),
+          ...violation,
+        });
+      }
+    }
+    if (readFailure) {
+      throw readFailure.error;
     }
   }
   return violations;
@@ -283,15 +279,12 @@ export function getPropertyNameText(name: ts.PropertyName) {
 export function unwrapExpression(expression: ts.Expression) {
   let current = expression;
   while (true) {
-    if (ts.isParenthesizedExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isAsExpression(current) || ts.isTypeAssertion(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isNonNullExpression(current)) {
+    if (
+      ts.isParenthesizedExpression(current) ||
+      ts.isAsExpression(current) ||
+      ts.isTypeAssertion(current) ||
+      ts.isNonNullExpression(current)
+    ) {
       current = current.expression;
       continue;
     }
@@ -299,11 +292,13 @@ export function unwrapExpression(expression: ts.Expression) {
   }
 }
 
-export function collectTypeScriptCommentRanges(
+/** Walk literal spans and scanned gaps without interpreting literal text as trivia. */
+export function walkTypeScriptTokens(
   sourceFile: ts.SourceFile,
-): Iterable<ts.CommentRange> {
+  onToken: (kind: ts.SyntaxKind, pos: number, end: number) => void,
+): void {
   const source = sourceFile.getFullText();
-  const literals: Array<{ pos: number; end: number }> = [];
+  const literals: Array<{ kind: ts.SyntaxKind; pos: number; end: number }> = [];
   const visit = (node: ts.Node): void => {
     if (
       ts.isStringLiteralLikeNode(node) ||
@@ -313,23 +308,21 @@ export function collectTypeScriptCommentRanges(
       node.kind === ts.SyntaxKind.TemplateTail ||
       node.kind === ts.SyntaxKind.JsxText
     ) {
-      literals.push({ pos: node.getStart(sourceFile), end: node.end });
+      literals.push({
+        kind: node.kind,
+        pos: node.kind === ts.SyntaxKind.JsxText ? node.pos : node.getStart(sourceFile),
+        end: node.end,
+      });
       return;
     }
     node.forEachChild(visit);
   };
   visit(sourceFile);
   const scanner = ts.createScanner(false);
-  const comments: ts.CommentRange[] = [];
   const scanGap = (start: number, end: number): void => {
     scanner.setText(source, start, end - start);
     for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFile; kind = scanner.scan()) {
-      if (
-        kind === ts.SyntaxKind.SingleLineCommentTrivia ||
-        kind === ts.SyntaxKind.MultiLineCommentTrivia
-      ) {
-        comments.push({ kind, pos: scanner.getTokenStart(), end: scanner.getTokenEnd() });
-      }
+      onToken(kind, scanner.getTokenStart(), scanner.getTokenEnd());
     }
   };
   let end = 0;
@@ -337,9 +330,24 @@ export function collectTypeScriptCommentRanges(
   // Literal spans come from the parser so regexp and template text cannot invent comments.
   for (const literal of literals.toSorted((left, right) => left.pos - right.pos)) {
     scanGap(end, literal.pos);
+    onToken(literal.kind, literal.pos, literal.end);
     end = literal.end;
   }
   scanGap(end, source.length);
+}
+
+export function collectTypeScriptCommentRanges(
+  sourceFile: ts.SourceFile,
+): Iterable<ts.CommentRange> {
+  const comments: ts.CommentRange[] = [];
+  walkTypeScriptTokens(sourceFile, (kind, pos, end) => {
+    if (
+      kind === ts.SyntaxKind.SingleLineCommentTrivia ||
+      kind === ts.SyntaxKind.MultiLineCommentTrivia
+    ) {
+      comments.push({ kind, pos, end });
+    }
+  });
   return comments;
 }
 
@@ -364,19 +372,11 @@ export function collectCallExpressionLines(
   return lines;
 }
 
-function isDirectExecution(importMetaUrl: string) {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  return path.resolve(entry) === fileURLToPath(importMetaUrl);
-}
-
 /**
  * Runs a script main function only when the module is the direct entrypoint.
  */
 export function runAsScript(importMetaUrl: string, main: () => Promise<unknown>) {
-  if (!isDirectExecution(importMetaUrl)) {
+  if (!process.argv[1] || path.resolve(process.argv[1]) !== fileURLToPath(importMetaUrl)) {
     return;
   }
   main().catch((error: unknown) => {

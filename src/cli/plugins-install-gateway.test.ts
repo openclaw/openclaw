@@ -72,16 +72,24 @@ describe("Gateway plugin installation outcomes", () => {
     expect(gateway).toHaveBeenCalledOnce();
   });
 
-  it("returns the Gateway's applied generation and install result", async () => {
-    const plugin = { id: "demo", name: "Demo", installed: true, enabled: true, state: "enabled" };
+  it("preserves install-only intent and the Gateway's disabled result", async () => {
+    const installOnlyRequest = { ...request, enable: false };
+    const plugin = { id: "demo", name: "Demo", installed: true, enabled: false, state: "disabled" };
     const runtime = { operationId: "installed-demo", generation: 7, pluginIds: ["demo"] };
     const gateway = vi.fn<PluginLifecycleGateway>().mockResolvedValue({ plugin, runtime });
     await expect(
-      createGatewayPluginInstaller(gateway as PluginLifecycleGateway)({ request }),
+      createGatewayPluginInstaller(gateway as PluginLifecycleGateway)({
+        request: installOnlyRequest,
+      }),
     ).resolves.toEqual({
       plugin,
       application: runtime,
       warnings: undefined,
     });
+    expect(gateway).toHaveBeenCalledExactlyOnceWith(
+      "plugins.install",
+      installOnlyRequest,
+      undefined,
+    );
   });
 });

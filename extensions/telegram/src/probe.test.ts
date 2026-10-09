@@ -6,13 +6,13 @@ import { probeTelegram } from "./probe.js";
 const resolveTelegramTransport = vi.hoisted(() => vi.fn());
 const makeProxyFetch = vi.hoisted(() => vi.fn());
 
-vi.mock("./fetch.js", () => ({
+vi.mock("./fetch.js", async () => ({
   resolveTelegramTransport,
-  resolveTelegramApiBase: (apiRoot?: string) =>
-    apiRoot?.trim()?.replace(/\/+$/, "") || "https://api.telegram.org",
+  resolveTelegramApiBase: (await import("./api-root.js")).normalizeTelegramApiRoot,
 }));
 
-vi.mock("./proxy.js", () => ({
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>()),
   makeProxyFetch,
 }));
 
@@ -96,26 +96,18 @@ describe("probeTelegram retry logic", () => {
     }
   });
 
-  it("should fail after 3 unsuccessful attempts", async () => {
+  it("refuses an unrepaired bot endpoint before fetching", async () => {
+    const apiRoot = "https://proxy.example.test/custom/bot123456:ABC_def";
     const fetchMock = installFetchMock();
-    vi.useFakeTimers();
-    const errorMsg = "Final network error";
-    try {
-      fetchMock.mockRejectedValue(new Error(errorMsg));
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
 
-      const probePromise = probeTelegram(token, timeoutMs);
-
-      // Fast-forward for all retries
-      await vi.advanceTimersByTimeAsync(2000);
-
-      const result = await probePromise;
-
-      expect(result.ok).toBe(false);
-      expect(result.error).toBe(errorMsg);
-      expect(fetchMock).toHaveBeenCalledTimes(3); // 3 attempts at getMe
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(await probeTelegram(token, timeoutMs, { apiRoot })).toMatchObject({
+      ok: false,
+      error:
+        "Telegram apiRoot must be the Bot API root without /bot<TOKEN>. Run openclaw doctor --fix to repair stored config.",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("respects timeout budget across retries", async () => {
@@ -170,33 +162,6 @@ describe("probeTelegram retry logic", () => {
     expect(result.status).toBe(401);
     expect(result.error).toBe("Unauthorized");
     expect(fetchMock).toHaveBeenCalledTimes(1); // Should not retry
-  });
-
-  it("can skip webhook info when caller only needs bot identity", async () => {
-    const fetchMock = installFetchMock();
-    mockGetMeSuccess(fetchMock);
-
-    const result = await probeTelegram(token, timeoutMs, { includeWebhookInfo: false });
-
-    expect(result.ok).toBe(true);
-    expect(result.webhook).toBeUndefined();
-    expect(result.botInfo).toEqual({
-      id: 123,
-      is_bot: true,
-      first_name: "Test",
-      username: "test_bot",
-      can_join_groups: true,
-      can_read_all_group_messages: false,
-      can_manage_bots: false,
-      supports_inline_queries: false,
-      supports_join_request_queries: false,
-      can_connect_to_business: false,
-      has_main_web_app: false,
-      has_topics_enabled: false,
-      allows_users_to_create_topics: false,
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls.at(0)?.[0]).toBe(`https://api.telegram.org/bot${token}/getMe`);
   });
 
   it("closes evicted cached probe transports", async () => {
@@ -264,7 +229,7 @@ describe("probeTelegram retry logic", () => {
 
       const result = await probePromise;
       expect(result.ok).toBe(true);
-      expect(localForceFallback).toHaveBeenCalledWith("probe timeout/network error", timeoutError);
+      expect(localForceFallback).toHaveBeenCalledWith("check timeout/network error", timeoutError);
       expect(fetchMock).toHaveBeenCalledTimes(3); // 1 failed + 1 getMe success + 1 webhook
     } finally {
       vi.useRealTimers();

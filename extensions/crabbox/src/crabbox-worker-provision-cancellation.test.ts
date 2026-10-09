@@ -1,13 +1,13 @@
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
+import { openWarmImageStore } from "./crabbox-state.test-support.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
   captureWarmImage,
-  commandResult,
   createProjectOptions,
   createWarmProvider,
-  openWarmImageStore,
   provisionWarmProfile,
   LEASE_ID,
   OPERATION_ID,

@@ -4,6 +4,7 @@ import { html as staticHtml, literal } from "lit/static-html.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icons } from "../../components/icons.ts";
 import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -34,40 +35,16 @@ export type DashboardGalleryFilters = {
 };
 
 export type DashboardGalleryHandlers = {
-  onQueryChange: (value: string) => void;
-  onOwnerChange: (value: string) => void;
-  onSortChange: (value: DashboardGalleryFilters["sort"]) => void;
+  onFilterChange: (filter: Partial<DashboardGalleryFilters>) => void;
   onNavigate?: ApplicationContext["navigate"];
 };
 
 type DashboardRow = SessionsListResult["sessions"][number];
 
-const DEFAULT_FILTERS: DashboardGalleryFilters = { query: "", ownerId: "", sort: "updated" };
-const NOOP_HANDLERS: DashboardGalleryHandlers = {
-  onQueryChange: () => undefined,
-  onOwnerChange: () => undefined,
-  onSortChange: () => undefined,
-};
-
 function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
   const actor = row.createdActor ?? row.owner?.actor;
   const id = actor?.id?.trim() || row.agentId?.trim() || fallbackAgentId;
   return { id, label: actor?.label?.trim() || id };
-}
-
-function renderDashboardPreview(
-  row: DashboardRow,
-  gatewaySnapshot: ApplicationGatewaySnapshot | undefined,
-  error: string | null,
-) {
-  return html`<div class="dashboard-preview" aria-hidden="true" inert>
-    <openclaw-dashboard-preview
-      .gatewaySnapshot=${gatewaySnapshot}
-      .sessionKey=${row.key}
-      .agentId=${row.agentId}
-      .error=${error}
-    ></openclaw-dashboard-preview>
-  </div>`;
 }
 
 function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalleryFilters) {
@@ -128,7 +105,14 @@ function renderDashboardCard(
         }
       }}
     >
-      ${renderDashboardPreview(row, gatewaySnapshot, previewError)}
+      ${html`<div class="dashboard-preview" aria-hidden="true" inert>
+        <openclaw-dashboard-preview
+          .gatewaySnapshot=${gatewaySnapshot}
+          .sessionKey=${row.key}
+          .agentId=${row.agentId}
+          .error=${previewError}
+        ></openclaw-dashboard-preview>
+      </div>`}
       <div class="dashboard-card__body">
         <div class="dashboard-card__heading">
           <h2>${title}</h2>
@@ -194,7 +178,7 @@ function renderDashboardList(
           placeholder=${t("dashboardsPage.searchPlaceholder")}
           @input=${(event: Event) => {
             if (event.currentTarget instanceof HTMLInputElement) {
-              handlers.onQueryChange(event.currentTarget.value);
+              handlers.onFilterChange({ query: event.currentTarget.value });
             }
           }}
         />
@@ -205,7 +189,7 @@ function renderDashboardList(
           .value=${filters.ownerId}
           @change=${(event: Event) => {
             if (event.currentTarget instanceof HTMLSelectElement) {
-              handlers.onOwnerChange(event.currentTarget.value);
+              handlers.onFilterChange({ ownerId: event.currentTarget.value });
             }
           }}
         >
@@ -222,7 +206,7 @@ function renderDashboardList(
               event.currentTarget instanceof HTMLSelectElement &&
               (event.currentTarget.value === "updated" || event.currentTarget.value === "title")
             ) {
-              handlers.onSortChange(event.currentTarget.value);
+              handlers.onFilterChange({ sort: event.currentTarget.value });
             }
           }}
         >
@@ -294,8 +278,8 @@ function renderDashboardGallerySkeleton() {
 
 export function renderDashboards(
   data: DashboardsRouteData | undefined,
-  filters: DashboardGalleryFilters = DEFAULT_FILTERS,
-  handlers: DashboardGalleryHandlers = NOOP_HANDLERS,
+  filters: DashboardGalleryFilters,
+  handlers: DashboardGalleryHandlers,
   gatewaySnapshot?: ApplicationGatewaySnapshot,
   previewError: string | null = null,
 ) {
@@ -317,7 +301,7 @@ export function renderDashboards(
         `
       : renderDashboardGallerySkeleton();
   return html`
-    <section class="content-header dashboards-header">
+    <section class="content-header dashboards-header" ${shellLayoutTraits({ toolbarHeader: true })}>
       <div>
         <h1 class="page-title">${titleForRoute("dashboards")}</h1>
         <div class="page-subtitle">${t("subtitles.dashboards")}</div>

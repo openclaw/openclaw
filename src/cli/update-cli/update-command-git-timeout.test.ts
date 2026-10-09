@@ -12,7 +12,7 @@ import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as snapshotCapacity from "../../infra/update-candidate-snapshot.js";
 import * as globalUpdate from "../../infra/update-global.js";
 import * as gitRunner from "../../infra/update-runner-git.js";
-import type { UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import * as processRunner from "../../process/exec.js";
 import * as shared from "./shared.js";
 import { updateGitInstall } from "./update-command-git.js";
@@ -23,7 +23,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each(
   (["git", "package-to-git"] as const).flatMap((route) => [
-    { route, timeout: "omitted", timeoutMs: undefined, expectedTimeoutMs: 30 * 60_000 },
+    { route, timeout: "omitted", timeoutMs: undefined, expectedTimeoutMs: undefined },
     { route, timeout: "explicit", timeoutMs: 42_000, expectedTimeoutMs: 42_000 },
   ]),
 )(
