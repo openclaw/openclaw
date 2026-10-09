@@ -459,6 +459,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           try {
             return await attemptExecutionRuntime.runAgentAttempt({
               ...runOptions,
+              isAdmittedHarnessCompletion: params.isAdmittedHarnessCompletion,
               preparedRunAdmission: params.preparedRunAdmission,
               providerOverride,
               modelOverride,

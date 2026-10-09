@@ -51,6 +51,7 @@ export function resolveCommandReplyExpectation(params: {
   sessionKey?: string;
   sessionEntry?: Pick<SessionEntry, "chatType">;
   messageChannel?: string;
+  isAdmittedHarnessCompletion?: boolean;
   opts: { lane?: string; privateCompletion?: true; inputProvenance?: InputProvenance };
 }): ReplyExpectation | undefined {
   if (
@@ -60,6 +61,9 @@ export function resolveCommandReplyExpectation(params: {
     !isDeliverableMessageChannel(params.messageChannel ?? "")
   ) {
     return "required";
+  }
+  if (params.isAdmittedHarnessCompletion) {
+    return "optional";
   }
   if (params.opts.inputProvenance?.kind !== "inter_session") {
     return undefined;

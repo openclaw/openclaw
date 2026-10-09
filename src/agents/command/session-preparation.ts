@@ -22,6 +22,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
   prepareCommandHarnessCompletionRecovery,
+  shouldPersistRestartRecoveryContextClaim,
 } from "../agent-command-restart-recovery.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { createRestartRecoveryOperatorSource } from "../operator-run-recovery-source.js";
@@ -41,6 +42,7 @@ export function prepareCommandSessionRecoveryEntry(
     now: number;
     lifecycleGeneration: string;
     isSessionRollover: boolean;
+    allowCreateRestartRecoveryEntry: boolean;
   },
 ) {
   const { entry, sessionId, runId, opts, now, isSessionRollover } = params;
@@ -64,7 +66,16 @@ export function prepareCommandSessionRecoveryEntry(
       : undefined;
   return {
     guardedHarnessCompletion,
-    isCompletionCurrent,
+    shouldPersist: (current: SessionEntry | undefined) =>
+      isCompletionCurrent(current) &&
+      (isSessionRollover
+        ? current?.sessionId === entry.sessionId
+        : shouldPersistRestartRecoveryContextClaim(
+            current,
+            sessionId,
+            runId,
+            params.allowCreateRestartRecoveryEntry,
+          )),
     nextEntry: {
       ...entry,
       sessionId,

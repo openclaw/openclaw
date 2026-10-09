@@ -154,6 +154,12 @@ receives its own `options.currentInboundContext`; do not reuse the initial
 turn's context. Keep context out of the original user transcript and pending
 question answer text. Conversation fields are model context, not tool authority.
 
+At the plugin handoff, the host projects task-completion events and supplemental
+runtime fragments into `currentInboundContext`, preserving instruction fragments
+and quoting result data. It clears the raw event inputs in that prepared copy so
+plugins do not project them again. The original user transcript and the built-in
+harness's event projection are unchanged.
+
 `resolveAgentHarnessBeforePromptBuildResult` from
 `openclaw/plugin-sdk/agent-harness-runtime` runs prompt hooks with prepared history
 and tool authority. Pass the admitted message as `currentUserMessage`; the helper
