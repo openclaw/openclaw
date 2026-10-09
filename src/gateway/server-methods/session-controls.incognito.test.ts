@@ -51,6 +51,7 @@ const { cfg, heartbeat, prepareRegistry, ingress } = vi.hoisted(() => ({
   ingress: vi.fn(async () => {}),
   prepareRegistry: vi.fn(async () => false),
 }));
+// mock-isolation: Exercise Gateway admission and actor persistence without running a model turn.
 vi.mock("../../commands/agent.js", () => ({ agentCommandFromIngress: ingress }));
 vi.mock("../../config/io.js", async (original) => ({
   ...(await original<typeof import("../../config/io.js")>()),
