@@ -5,6 +5,7 @@ import { icons } from "../../components/icons.ts";
 import { renderWorkboardToast } from "../../components/toast.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { groupWorkboardCardsByStatus } from "../../lib/workboard/derived.ts";
 import "../../styles/workboard.css";
 import {
   dispatchWorkboard,
@@ -13,8 +14,6 @@ import {
   getWorkboardState,
   workboardHasActiveWrites,
   WORKBOARD_PRIORITIES,
-  type WorkboardCard,
-  type WorkboardStatus,
 } from "../../lib/workboard/index.ts";
 import {
   agentDisplayName,
@@ -83,13 +82,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
   const visibleError = workboardErrorMessage(state, props.pageError);
   const writable = canMutate(props);
   const selectedCards = state.cards.filter((card) => state.selectedCardIds.has(card.id));
-  const byStatus = new Map<WorkboardStatus, WorkboardCard[]>();
-  for (const status of state.statuses) {
-    byStatus.set(status, []);
-  }
-  for (const card of filtered) {
-    byStatus.get(card.status)?.push(card);
-  }
+  const byStatus = groupWorkboardCardsByStatus(filtered, state.statuses);
   const visibleStatuses = state.statuses.filter(
     (status) =>
       (!state.statusFilter.size || state.statusFilter.has(status)) &&
