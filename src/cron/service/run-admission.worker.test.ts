@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -13,13 +14,15 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   beginAgentDeletionJournal,
   removeAgentDeletionJournal,
 } from "../../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { clearCronJobActive } from "../active-jobs.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import { loadCronStore, saveCronStore, removeStaleCronJobFamilyRows } from "../store.js";
 import * as cronStore from "../store.js";
 import {
   findActiveCronRunReceiptInDatabase,
@@ -41,6 +44,7 @@ import {
   reserveQueuedCronRun,
   supersedeActivatedCronRun,
 } from "./run-admission.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 
 async function withReservation(
   run: (fixture: {
@@ -128,6 +132,59 @@ function duringPreparation(
   });
   return { restore: () => spy.mockRestore(), observed: () => observed };
 }
+
+it.each(["activation", "cleanup", "family", "worker control"] as const)(
+  "services gateway events while cron %s waits for a writer",
+  async (surface) => {
+    await withReservation(async ({ state, job, identity, readJob }) => {
+      const context = captureOpenClawStateWorkerContext();
+      expect(context.admission.databasePath).toBe(openOpenClawStateDatabase().path);
+      const holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 300);
+      let pending: Promise<unknown> | undefined;
+      try {
+        await holder.ready;
+        const heartbeat = nextTurn().then(() => Atomics.load(holder.released, 0));
+        pending =
+          surface === "activation"
+            ? activateQueuedCronRun({ state, job, reservationIdentity: identity })
+            : surface === "cleanup"
+              ? cleanupQueuedCronRunReservations({
+                  state,
+                  reservations: [{ jobId: job.id, reservationIdentity: identity }],
+                })
+              : surface === "family"
+                ? Promise.resolve(
+                    removeStaleCronJobFamilyRows(state.deps.storePath, {
+                      declarationKey: "synthetic",
+                      name: "synthetic",
+                      ownerPluginTag: "synthetic",
+                    }),
+                  )
+                : recomputeUnownedCronSchedules(state);
+        const releasedAtHeartbeat = await heartbeat;
+        holder.release();
+        const result = await pending;
+        if (surface === "activation") {
+          expect(result).toMatchObject({ kind: "activated", job: { id: job.id } });
+        }
+        if (surface === "cleanup") {
+          expect((await readJob())?.state.queuedAtMs).toBeUndefined();
+        }
+        if (surface === "family") {
+          expect(result).toBe(0);
+        }
+        expect(
+          releasedAtHeartbeat,
+          "gateway heartbeat must run before the holder's bounded fallback releases contention",
+        ).toBe(0);
+      } finally {
+        holder.release();
+        await holder.joined;
+        await pending?.catch(() => undefined);
+      }
+    });
+  },
+);
 
 it.each([false, true])(
   "preserves authored rows and SQL ownership when the worker reserves onExit=%s",
