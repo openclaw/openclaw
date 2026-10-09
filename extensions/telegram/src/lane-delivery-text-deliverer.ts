@@ -15,6 +15,7 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import { applyTextToPayload } from "./interactive-fallback.js";
@@ -98,8 +99,6 @@ type DeliverLaneTextParams = Omit<
   laneName: LaneName;
   text: string;
   payload: ReplyPayload;
-  /** Target before caller-side recovery; omitted uses the incoming payload. */
-  replyTargetBeforeRecovery?: Readonly<Pick<ReplyPayload, "replyToId">>;
   infoKind: string;
   buttons?: TelegramInlineButtons;
   finalizePreview?: boolean;
@@ -122,7 +121,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     laneName,
     text: initialText,
     payload: initialPayload,
-    replyTargetBeforeRecovery = initialPayload,
     infoKind,
     buttons,
     finalizePreview: requestedFinalizePreview,
@@ -139,7 +137,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     const lane = params.lanes[laneName];
     const promptContextSequence =
       suppliedPromptContextSequence ?? params.createPromptContextSequence();
-    const originalReplyToId = replyTargetBeforeRecovery.replyToId;
     let reply = resolveSendableOutboundReplyParts(payload, { text });
     const isDurableFinal = infoKind === "final";
     const finalizePreview = requestedFinalizePreview ?? isDurableFinal;
@@ -206,8 +203,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         streamedErrorDraftText = streamedErrorDraftText === undefined ? undefined : text;
       }
     }
+    // Telegram edits cannot retarget an already-sent preview.
     const preservesPreviewReplyTarget =
-      payload.replyToId === undefined || payload.replyToId === originalReplyToId;
+      payload.replyToId === undefined ||
+      resolveTelegramReplyId(payload.replyToId) ===
+        lane.stream?.currentMessageSnapshot()?.replyToMessageId;
     const canFinalizeMediaPreview =
       finalizePreview &&
       lane.stream &&

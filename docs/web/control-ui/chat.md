@@ -337,6 +337,10 @@ When you open a short chat link, identity prepared during the current connection
 can make the composer ready sooner. The original link stays in place until the
 session lookup confirms the same conversation and its current title.
 
+Other conversations warm only when you hover or focus their navigation entry,
+after the visible transcript is ready. Simply connecting does not fetch unopened
+conversations.
+
 Background refreshes for saved sidebar filters, groups, automation status, and the
 Inbox wait until the conversation appears. Task suggestions and the progress
 card then refresh after the transcript paints. Changing a filter or opening a
