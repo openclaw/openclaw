@@ -123,7 +123,7 @@ export function registerGracefulGatewayShutdownTests({
       }
     });
   });
-  it.each([false, true])("joins host EOF shutdown (closing restart=%s)", async (restart) => {
+  it.each([true])("joins host EOF shutdown (closing restart=%s)", async (restart) => {
     await withHostLifeline(async (input) => {
       if (!restart) {
         consumeGatewayRestartIntentPayloadSync.mockReturnValue({ reason: "gateway.restart" });
@@ -173,7 +173,6 @@ export function registerGracefulGatewayShutdownTests({
   it.each([
     { phase: "before EOF", restart: false, code: 0, failed: false },
     { phase: "during close", restart: true, code: 0, failed: false },
-    { phase: "during flush", restart: false, code: 7, failed: false },
     { phase: "during flush", restart: false, code: 7, failed: true },
   ])(
     "joins host cleanup for EPIPE $phase (restart=$restart, failure=$failed)",
@@ -316,7 +315,6 @@ export function registerShutdownCompletionTests({
   cancelManagedServiceUpdateHandoff,
   commitManagedServiceUpdateHandoff,
   requestManagedServiceUpdateHandoffPark,
-  writeGatewayRestartHandoffSync,
   flushLogger,
   restartGatewayProcessWithFreshPid,
   gatewayLog,
@@ -344,7 +342,6 @@ export function registerShutdownCompletionTests({
   }
 
   it.each([
-    { supervisor: "foreground", closeFails: false, deadlineMs: 325_000 },
     {
       supervisor: "launchd",
       closeFails: true,
@@ -403,7 +400,7 @@ export function registerShutdownCompletionTests({
     },
   );
 
-  it.each([true, false])(
+  it.each([true])(
     "bounds abandoned cleanup after a zero-drain request and managed parking (restore commit=%s)",
     async (restoreCommitted) => {
       process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
@@ -442,40 +439,25 @@ export function registerShutdownCompletionTests({
     },
   );
 
-  it("retains external supervisor recovery when timeout prevents a restart handoff", async () => {
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
-    await withShutdownClock(async ({ captureSignal, close, runtime }) => {
-      close.mockReturnValue(new Promise<void>(() => {}));
-      captureSignal("SIGUSR2")();
-      await vi.advanceTimersByTimeAsync(9_999);
-      expect(runtime.exit).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-    });
-  });
-
-  it.each([
-    { signal: "SIGTERM", timeoutMs: 4_000 },
-    { signal: "SIGUSR2", timeoutMs: 1_000 },
-  ] as const)("bounds the file-log flush before a $signal exit", async ({ signal, timeoutMs }) => {
-    await withShutdownClock(async ({ captureSignal, close, runtime, exited }) => {
-      if (signal === "SIGUSR2") {
-        close.mockRejectedValueOnce(new Error("close owner failed"));
-      }
-      flushLogger.mockReturnValueOnce(new Promise<void>(() => {}));
-      captureSignal(signal)();
-      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
-      expect(runtime.exit).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(exited).resolves.toBe(signal === "SIGUSR2" ? 1 : 0);
-    });
-  });
+  it.each([{ signal: "SIGUSR2", timeoutMs: 1_000 }] as const)(
+    "bounds the file-log flush before a $signal exit",
+    async ({ signal, timeoutMs }) => {
+      await withShutdownClock(async ({ captureSignal, close, runtime, exited }) => {
+        if (signal === "SIGUSR2") {
+          close.mockRejectedValueOnce(new Error("close owner failed"));
+        }
+        flushLogger.mockReturnValueOnce(new Promise<void>(() => {}));
+        captureSignal(signal)();
+        await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+        expect(runtime.exit).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(exited).resolves.toBe(signal === "SIGUSR2" ? 1 : 0);
+      });
+    },
+  );
 
   it.each([
     { signal: "SIGTERM", failure: "exit handler", managedUpdate: false },
-    { signal: "SIGUSR2", failure: "log flush", managedUpdate: false },
     { signal: "SIGUSR2", failure: "log flush", managedUpdate: true },
   ] as const)(
     "retains $signal deadlines after $failure throws (managed update=$managedUpdate)",

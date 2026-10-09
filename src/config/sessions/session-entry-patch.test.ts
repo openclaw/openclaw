@@ -37,6 +37,7 @@ import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import { createSessionEntryPatchFixture as fixture } from "./session-entry-patch.test-support.js";
 import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
 import { readSessionEntryInWorker } from "./session-entry-read-runtime.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
@@ -54,6 +55,7 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 const delivery = vi.hoisted(() => ({
+  afterPrepare: undefined as (() => void) | undefined,
   afterCommit: undefined as (() => void) | undefined,
   beforeCommit: undefined as (() => void) | undefined,
   commands: [] as string[],
@@ -82,6 +84,9 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
                     delivery.beforeCommit?.();
                   }
                   const result = await worker.execute(command, commandOptions);
+                  if (command.type === "session.entry.patch.prepare") {
+                    delivery.afterPrepare?.();
+                  }
                   if (command.type === "session.entry.patch.commit") {
                     delivery.afterCommit?.();
                   }
@@ -96,32 +101,57 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
 });
 
 afterEach(() => {
+  delivery.afterPrepare = undefined;
   delivery.afterCommit = undefined;
   delivery.beforeCommit = undefined;
   delivery.commands = [];
   vi.restoreAllMocks();
 });
 
-function fixture() {
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const scope = {
-    agentId: "main",
-    storePath: database.path,
-    sessionKey: "agent:main:patch-worker",
-  };
-  replaceSessionEntrySync(scope, { sessionId: "original", updatedAt: 1, label: "initial" });
-  return {
-    database,
-    scope,
-    read: () => readExactSessionEntryRow(database, scope.sessionKey)?.entry,
-  };
-}
-
 function patchSessionEntryCore(
   ...[scope, update, options]: Parameters<typeof patchInternalSessionEntry>
 ) {
   return patchInternalSessionEntry(scope, update, { workerGuard: {}, ...options });
 }
+
+it("ends an absent live-switch selection without committing and keeps newer flags and callback CAS", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const initial = f.read()!;
+    const newer = { ...initial, liveModelSwitchPending: true, modelOverride: "new-selection" };
+    const update = vi.fn(() => ({ liveModelSwitchPending: undefined }));
+    const onCommitted = vi.fn();
+    const options = {
+      skipMaintenance: true,
+      prepareIf: { kind: "live-model-switch-pending" as const },
+      onCommitted,
+    };
+    delivery.afterPrepare = () => {
+      delivery.afterPrepare = undefined;
+      replaceSessionEntrySync(f.scope, newer);
+    };
+
+    await expect(patchSessionEntryCore(f.scope, update, options)).resolves.toBeNull();
+    expect(delivery.commands).toEqual(["session.entry.patch.prepare"]);
+    expect(update).not.toHaveBeenCalled();
+    expect(onCommitted).not.toHaveBeenCalled();
+    expect(f.read()).toMatchObject(newer);
+
+    delivery.beforeCommit = () => {
+      delivery.beforeCommit = undefined;
+      replaceSessionEntrySync(f.scope, { ...newer, modelOverride: "latest-selection" });
+    };
+    await expect(patchSessionEntryCore(f.scope, update, options)).rejects.toBeInstanceOf(
+      SqliteSessionMutationConflictError,
+    );
+    expect(update).toHaveBeenCalledOnce();
+    expect(onCommitted).not.toHaveBeenCalled();
+    expect(f.read()).toMatchObject({
+      liveModelSwitchPending: true,
+      modelOverride: "latest-selection",
+    });
+  });
+});
 
 it("reduces a fixed patch against the current row in one worker request without losing foreign metadata", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

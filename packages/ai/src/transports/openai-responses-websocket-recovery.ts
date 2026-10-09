@@ -58,9 +58,8 @@ export function createRecoverableResponsesWebSocketStream<
   } = params;
   return {
     async *[Symbol.asyncIterator]() {
-      let providerAccepted = false;
+      let acceptance: "pending" | "observing" | "accepted" = "pending";
       let outputObserved = false;
-      let responseHookFailed = false;
       try {
         for await (const event of trackedWebSocketStream) {
           const failure =
@@ -94,17 +93,13 @@ export function createRecoverableResponsesWebSocketStream<
           ) {
             outputObserved = true;
           }
-          if (!providerAccepted) {
-            providerAccepted = true;
-            try {
-              await notifyProviderStreamOpened({
-                options,
-                cancelStream: () => websocket.finish({ keep: false }),
-              });
-            } catch (error) {
-              responseHookFailed = true;
-              throw error;
-            }
+          if (acceptance === "pending") {
+            acceptance = "observing";
+            await notifyProviderStreamOpened({
+              options,
+              cancelStream: () => websocket.finish({ keep: false }),
+            });
+            acceptance = "accepted";
           }
           startStream();
           yield event;
@@ -116,7 +111,7 @@ export function createRecoverableResponsesWebSocketStream<
             if (
               !nextTier ||
               outputObserved ||
-              responseHookFailed ||
+              acceptance === "observing" ||
               output.content.length ||
               websocketSignal.aborted ||
               websocket.hasActiveResponse

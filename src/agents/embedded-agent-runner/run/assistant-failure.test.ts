@@ -109,7 +109,6 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
       maybeMarkAuthProfileFailure,
       transientRetryCount: 0,
       advanceAuthProfile,
-      advanceRateLimitAuthProfile: vi.fn(async () => true),
     },
     traceAttempts,
     suspensionSessionId: "session:credential-enoent",
@@ -151,7 +150,6 @@ function makeIdleTimeoutFailureInput(options?: { replaySafe?: boolean }) {
   });
   fixture.input.emptyErrorRetries = 0;
   fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
-  fixture.input.failover.advanceRateLimitAuthProfile = vi.fn(async () => true);
   return fixture;
 }
 
@@ -282,7 +280,6 @@ describe("handleEmbeddedAssistantFailure", () => {
       fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
     ).not.toHaveBeenCalled();
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.input.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
     expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
     expect(fixture.traceAttempts).toEqual([]);
   });
@@ -630,7 +627,6 @@ describe("handleEmbeddedAssistantFailure", () => {
       fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
     ).not.toHaveBeenCalled();
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.input.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
     expect(fixture.traceAttempts).toEqual([]);
   });
 
@@ -730,7 +726,6 @@ describe("handleEmbeddedAssistantFailure", () => {
         fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
       ).not.toHaveBeenCalled();
       expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(fixture.input.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
       expect(fixture.traceAttempts).toEqual([]);
     },
   );

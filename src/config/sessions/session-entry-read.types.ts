@@ -10,6 +10,7 @@ import type {
   SessionEntryReadScope,
   SessionEntrySummary,
   SessionTranscriptRuntimeScope,
+  SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
@@ -106,6 +107,8 @@ export type SessionEntryCohortRequest = Pick<
   | "lifecycleSessionKey"
 > & {
   sessionKeys: readonly string[];
+  includeAuthProfileSource?: boolean;
+  runtimeTarget?: Pick<SessionTranscriptRuntimeTarget, "agentId" | "sessionId" | "sessionKey">;
   includeColdMetadata?: boolean;
   expected?: {
     /** Native incarnation returned by this cohort, independent of the host execution claim. */
@@ -156,9 +159,11 @@ export type SessionExactEntriesWorkerResult = {
 };
 
 export type SessionEntryCohortResult = SessionExactEntriesWorkerResult & {
+  runtimeTarget?: SessionTranscriptRuntimeTarget;
   coldArchives?: Array<Omit<SessionColdArchive, "archive_blob">>;
   source: NonNullable<SessionExactEntriesWorkerResult["source"]>;
   databaseIdentity: NonNullable<SessionExactEntriesWorkerResult["databaseIdentity"]>;
+  authProfileSource?: boolean;
 };
 
 export type SessionRuntimeTargetWorkerInput = {

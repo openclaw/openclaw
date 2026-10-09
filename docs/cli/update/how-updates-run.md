@@ -136,6 +136,14 @@ installed name as the same selection, including names with or without the
 `.service` suffix. The updater still rechecks service ownership before stopping
 the Gateway.
 
+Linux user-service stops use the same sequence during updates and standalone
+`openclaw gateway stop`: inspect the manager route, check current custody, then
+stop the selected unit. Manager inspection has its own 60-second allowance and
+retries one transient timeout with a recorded warning. A second timeout names
+the stalled check and leaves the original Gateway running; ownership refusals
+are never retried. The installed updater owns this sequence, so a candidate
+cannot change an older updater's stop behavior during its first update.
+
 Unavailable service inspection produces a recorded `managed-service` warning,
 including the manual restart action. A stale, uninspectable service record cannot
 select the update's package root, Node executable, or state directory. Staging,
@@ -190,6 +198,12 @@ repeatedly hashing both generations. Retirement verifies the live package before
 deleting obsolete backups; rollback still hashes a backup before restoring it
 and verifies the restored bytes. These improvements belong to the installed
 updater and do not change an older updater already running.
+
+Retaining the updater's runtime skips package recovery anchors, control journals,
+and settled evidence beside installed packages. Even hard-linking unchanged
+recovery files would change their metadata and could invalidate an older sealed
+helper's fingerprint. Explicit runtime links into those recovery artifacts are
+rejected; the evidence remains untouched for its recovery owner.
 
 Candidate verification uses the same best-effort contract when its scan reaches
 the resource limits: activation and publication continue with directory identity,

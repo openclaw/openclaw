@@ -451,12 +451,9 @@ export async function migrateLegacyPendingOutboundDeliveries(params: {
   );
 }
 
-async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
-  cfg: OpenClawConfig;
-  log: RecoveryLogger;
-  stateDir?: string;
-  hookRunner?: HookRunner;
-}): Promise<LegacyOutboundDeliveryMigrationResult> {
+async function migrateLegacyPendingOutboundDeliveriesOwned(
+  params: Parameters<typeof migrateLegacyPendingOutboundDeliveries>[0],
+): Promise<LegacyOutboundDeliveryMigrationResult> {
   let moved = 0;
   let skipped = 0;
   const ownerId = randomUUID();

@@ -368,6 +368,17 @@ function wrapLine(text: string, width: number): string[] {
   return lines.length > 0 ? lines : [""];
 }
 
+function naturalCellWidth(text: string): number {
+  if (!text.includes("\n") && !text.includes("\r")) {
+    return visibleWidth(text);
+  }
+  // Use the renderer's logical lines so newlines inside ANSI payloads stay atomic.
+  return wrapLine(text, Number.POSITIVE_INFINITY).reduce(
+    (max, line) => Math.max(max, visibleWidth(line)),
+    0,
+  );
+}
+
 export function getTerminalTableWidth(minWidth = 60, fallbackWidth = 120): number {
   return Math.max(minWidth, process.stdout.columns ?? fallbackWidth);
 }
@@ -409,8 +420,8 @@ export function renderTable(opts: RenderTableOptions): string {
   const columns = opts.columns;
 
   const metrics = columns.map((c) => {
-    const headerW = visibleWidth(c.header);
-    const cellW = rows.reduce((max, row) => Math.max(max, visibleWidth(row[c.key] ?? "")), 0);
+    const headerW = naturalCellWidth(c.header);
+    const cellW = rows.reduce((max, row) => Math.max(max, naturalCellWidth(row[c.key] ?? "")), 0);
     return { headerW, cellW };
   });
 

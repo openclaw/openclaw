@@ -120,11 +120,7 @@ export function buildUsageAgentMetaFields(params: {
 }): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens" | "costUsd"> {
   const usage = toNormalizedUsage(params.usageAccumulator);
   const latestUsage = normalizeUsage(params.latestUsage);
-  const lastCallUsage = hasNonzeroUsage(latestUsage)
-    ? latestUsage
-    : hasNonzeroUsage(params.lastRunPromptUsage)
-      ? params.lastRunPromptUsage
-      : undefined;
+  const lastCallUsage = [latestUsage, params.lastRunPromptUsage].find(hasNonzeroUsage);
   const promptTokens = deriveContextPromptTokens({
     lastCallUsage,
   });

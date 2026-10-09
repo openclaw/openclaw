@@ -695,6 +695,13 @@ async function inspectOrMigrateTarget(params: {
     archivedLegacyStoreFiles: [],
     issues,
   });
+  const updateManifest = (validationBeforeArchive?: "passed" | "failed") =>
+    updateMigrationManifestTarget(
+      params.activeRun,
+      createMigrationTargetInput(params.target),
+      report.issues,
+      { validationBeforeArchive },
+    );
   const retained = await prepareRetainedSessionImport(params, report);
   if (!retained) {
     return report;
@@ -866,20 +873,11 @@ async function inspectOrMigrateTarget(params: {
     if (issues.length === 0) {
       report.sqliteEntries = 0;
     }
-    updateMigrationManifestTarget(
-      params.activeRun,
-      createMigrationTargetInput(params.target),
-      issues,
-    );
+    updateManifest();
     return report;
   }
   if (!retainedImport && params.verifyMissingIndex(report)) {
-    updateMigrationManifestTarget(
-      params.activeRun,
-      createMigrationTargetInput(params.target),
-      report.issues,
-      { validationBeforeArchive: "passed" },
-    );
+    updateManifest("passed");
     return report;
   }
   if (retainedImport) {
@@ -896,14 +894,7 @@ async function inspectOrMigrateTarget(params: {
   let validationPassed = retainedImport !== undefined;
   if (params.mode === "import" && retainedImport) {
     // Exact source and database identities carry the earlier verified import into archival.
-    updateMigrationManifestTarget(
-      params.activeRun,
-      createMigrationTargetInput(params.target),
-      report.issues,
-      {
-        validationBeforeArchive: "passed",
-      },
-    );
+    updateManifest("passed");
   }
   if (
     params.mode === "import" &&
@@ -917,14 +908,7 @@ async function inspectOrMigrateTarget(params: {
       "before-archive",
       params.env,
     );
-    updateMigrationManifestTarget(
-      params.activeRun,
-      createMigrationTargetInput(params.target),
-      report.issues,
-      {
-        validationBeforeArchive: validationPassed ? "passed" : "failed",
-      },
-    );
+    updateManifest(validationPassed ? "passed" : "failed");
     if (validationPassed && params.activeRun) {
       const recoveredMoves = records.flatMap((record) =>
         record.historical?.archiveMove && record.recovery?.complete
@@ -1053,11 +1037,7 @@ async function inspectOrMigrateTarget(params: {
   if (params.mode !== "import") {
     appendActiveSqliteTranscriptFileIssues(params.target, report, retainedSourcePaths);
   }
-  updateMigrationManifestTarget(
-    params.activeRun,
-    createMigrationTargetInput(params.target),
-    report.issues,
-  );
+  updateManifest();
   return report;
 }
 

@@ -548,6 +548,11 @@ type CodexAppServerRequests = {
   "app/list": CodexRequestContract<Control.CodexAppsListParams, Control.CodexAppsListResponse>;
   "app/read": CodexRequestContract<Control.CodexAppsReadParams, Control.CodexAppsReadResponse>;
   "command/exec": CodexRequestContract<CodexCommandExecParams, CodexCommandExecResponse>;
+  "fs/writeFile": CodexRequestContract<{ path: string; dataBase64: string }, JsonObject>;
+  "fs/remove": CodexRequestContract<
+    { path: string; force?: boolean; recursive?: boolean },
+    JsonObject
+  >;
   "config/batchWrite": CodexRequestContract<
     Control.CodexConfigBatchWriteParams,
     Control.CodexConfigWriteResponse

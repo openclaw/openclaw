@@ -25,6 +25,7 @@ import { isPidAlive } from "../shared/pid-alive.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { shortenHomePath } from "../utils.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
+import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
 
 const LEGACY_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
@@ -451,9 +452,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         );
       }
     }
-    if (warnings.length > 0) {
-      note(warnings.join("\n"), "Doctor warnings");
-    }
+    noteDoctorMigrationResult({ warnings });
     return { changes, warnings };
   }
 
@@ -672,11 +671,6 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     }
   }
 
-  if (changes.length > 0) {
-    note(changes.join("\n"), "Doctor changes");
-  }
-  if (warnings.length > 0) {
-    note(warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorMigrationResult({ changes, warnings });
   return { changes, warnings };
 }

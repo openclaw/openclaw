@@ -23,6 +23,7 @@ type SessionMaintenancePlanningWorkerResponse = {
 };
 
 export function observeSessionMaintenancePlanningWorker(hooks: {
+  onRead?: (kind: "maintenance-plan" | "maintenance-age") => void;
   beforeExecute?: () => void;
   beforeAdmission?: (request: admission.SqliteWorkerAdmissionRequest) => void;
   afterPrepare?: (
@@ -66,6 +67,14 @@ export function observeSessionMaintenancePlanningWorker(hooks: {
                   command.type === "session.maintenance.read" &&
                   isRecord(command.input) &&
                   command.input.kind === "maintenance-plan";
+                if (
+                  command.type === "session.maintenance.read" &&
+                  isRecord(command.input) &&
+                  (command.input.kind === "maintenance-plan" ||
+                    command.input.kind === "maintenance-age")
+                ) {
+                  hooks.onRead?.(command.input.kind);
+                }
                 if (planning || reading) {
                   hooks.beforeExecute?.();
                 }

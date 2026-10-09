@@ -19,7 +19,6 @@ import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import { getChatRunOwner } from "./history-merge.ts";
-import { latestStreamBoundaryRunId } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { handlePreambleProgress } from "./tool-stream-preamble.ts";
@@ -135,8 +134,6 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     role: "assistant",
     toolCallId: entry.toolCallId,
     runId: entry.runId,
-    ...(entry.afterBoundaryRunId ? { afterBoundaryRunId: entry.afterBoundaryRunId } : {}),
-    ...(entry.boundaryRunId ? { boundaryRunId: entry.boundaryRunId } : {}),
     ...(entry.activity ? { activity: entry.activity } : {}),
     content,
     timestamp: entry.startedAt,
@@ -526,8 +523,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
         name: item.name ?? item.title,
         startedAt: item.startedAt ?? payload.ts,
         receivedAt: Date.now(),
-        afterBoundaryRunId:
-          payload.runId === host.chatRunId ? latestStreamBoundaryRunId(host) : undefined,
         message: {},
       };
       host.toolStreamById.set(identity, entry);
@@ -606,8 +601,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       name,
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       receivedAt: now,
-      afterBoundaryRunId:
-        payload.runId === host.chatRunId ? latestStreamBoundaryRunId(host) : undefined,
       message: {},
     };
     host.toolStreamById.set(toolStreamIdentity, entry);

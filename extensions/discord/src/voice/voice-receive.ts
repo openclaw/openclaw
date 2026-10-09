@@ -490,7 +490,7 @@ export class DiscordVoiceReceive {
   async runDiscordRealtimeAgentTurn(
     params: VoiceRealtimeAgentTurnParams & { entry: VoiceSessionEntry },
   ): Promise<string> {
-    const { context, entry, message, toolsAllow, userId } = params;
+    const { context, entry, message, userId } = params;
     params.signal?.throwIfAborted();
     const currentContext = await this.resolveDiscordVoiceIngressContext(entry, userId);
     params.signal?.throwIfAborted();
@@ -510,16 +510,9 @@ export class DiscordVoiceReceive {
       `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} speaker=${context.speakerLabel} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} message=${formatVoiceLogPreview(message)}`,
     );
     const text = await runDiscordVoiceAgentTurn({
-      entry,
-      accountId: this.params.accountId,
-      userId,
-      message,
-      discordConfig: this.params.discordConfig,
-      runtime: this.params.runtime,
+      ...this.params,
+      ...params,
       context: currentContext,
-      toolsAllow,
-      voiceSelection: params.voiceSelection,
-      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (text === null) {
       logVoiceVerbose(

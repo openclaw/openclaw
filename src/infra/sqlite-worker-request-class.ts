@@ -47,7 +47,6 @@ const families = [
   "doctor",
   "exec-approvals",
   "execApprovals",
-  "fleet",
   "generatedHtmlProvenance",
   "githubPublication",
   "githubRepository",

@@ -72,6 +72,7 @@ import { readWarmChatStartup } from "./server-chat-startup.test-support.js";
 import {
   createChatVisionModelCatalogSnapshot,
   createDirectChatContext,
+  createOversizedReplayTranscriptEvent,
   createTextTranscriptEvent,
   registerChatConnectionIdentityTest,
 } from "./server-chat.agent-events.test-helpers.js";
@@ -94,8 +95,13 @@ import {
 } from "./server.chat-response.test-support.js";
 import {
   createDirectChatSessionStoreFixture,
+  futureFixtureUpdatedAt,
+  prepareMainHistoryHarness,
+  writeMainSessionStore,
+  writeStoredMainSession,
   writeMainChatSessionTranscript as writeMainSessionTranscript,
   type ChatSessionDirectoryOptions,
+  type StoredChatSessionEntry as StoredSessionEntry,
 } from "./server.chat-session-store.test-support.js";
 import type { GatewaySessionsDefaults } from "./session-utils.types.js";
 import {
@@ -213,19 +219,10 @@ function testSessionFilePath(sessionDir: string, sessionId: string): string {
   return path.join(sessionDir, `${sessionId}.jsonl`);
 }
 
-async function writeMainSessionStore(sessionId = "sess-main") {
-  await writeStoredMainSession({
-    sessionId,
-    updatedAt: futureFixtureUpdatedAt(),
-  });
-}
-
-function futureFixtureUpdatedAt(): number {
-  return Date.now() + 60_000;
-}
-
 type HistoryPage = {
-  messages?: Array<{ __openclaw?: { seq?: number } }>;
+  messages?: Array<{
+    __openclaw?: { id?: string; seq?: number; truncated?: boolean; reason?: string };
+  }>;
   nextOffset?: number;
   hasMore?: boolean;
   totalMessages?: number;
@@ -264,8 +261,6 @@ async function withDirectChatSession(
   }
 }
 
-type StoredSessionEntry = Parameters<typeof writeSessionStore>[0]["entries"][string];
-
 function getDirectChatSessionWorkRelease(sessionKey = "agent:main:main") {
   return getSessionWorkAdmissionRelease({
     scope: resolveSessionStorePathForScope({ sessionKey }, getRuntimeConfig()),
@@ -278,18 +273,6 @@ async function resetDirectChatSession() {
   await sessionStoreFixture.reset();
   dispatchInboundMessageMock.mockReset();
   resetConfigRuntimeState();
-}
-
-async function writeStoredMainSession(entry: StoredSessionEntry = {}) {
-  await writeSessionStore({
-    entries: {
-      main: {
-        sessionId: "sess-main",
-        updatedAt: Date.now(),
-        ...entry,
-      },
-    },
-  });
 }
 
 type DirectChatMethod = "chat.abort" | "chat.history" | "chat.send" | "chat.startup";
@@ -560,18 +543,6 @@ const configuredImageModelCases: ConfiguredImageModelCase[] = [
   },
 ];
 
-async function prepareMainHistoryHarness(params: {
-  ws: GatewaySocket;
-  createSessionDir: (options?: ChatSessionDirectoryOptions) => Promise<string>;
-  freshStore?: boolean;
-  sessionId?: string;
-}) {
-  await connectOk(params.ws);
-  const sessionDir = await params.createSessionDir({ fresh: params.freshStore });
-  await writeMainSessionStore(params.sessionId);
-  return sessionDir;
-}
-
 async function prepareUnconfiguredAcpHarnessSession(options?: { withMetadata?: boolean }) {
   openDirectChatSession({ fresh: true });
   const sessionKey = `agent:codex:acp:${randomUUID()}`;
@@ -690,51 +661,47 @@ describe("gateway server chat", () => {
     "%s projects the session's durable worker placement",
     async (method) => {
       openDirectChatSession();
-      try {
-        await writeMainSessionStore();
-        const placement = {
-          sessionId: "sess-main",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          executionMode: "worker-turn",
-          state: "active",
-          environmentId: "env-placement",
-          generation: 7,
-          activeOwnerEpoch: 12,
-          workspaceBaseManifestRef: "manifest-base",
-          remoteWorkspaceDir: "/workspace/main",
-          workerBundleHash: "ab".repeat(32),
-          recoveryError: null,
-          terminalReason: null,
-          terminalAtMs: null,
-          turnClaim: null,
-          createdAtMs: 100,
-          updatedAtMs: 300,
-          stateChangedAtMs: 200,
-        };
-        const context = createDirectChatContext({
-          workerSessionPlacementService: {
-            getMany: () => new Map([[placement.sessionId, placement]]),
-          },
-        } as unknown as Partial<GatewayRequestContext>);
-        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-        await callDirectChat(method, {
-          id: method,
-          params: makeMainSessionParams(),
-          respond: captureChatResult(responses),
-          context,
-        });
+      await writeMainSessionStore();
+      const placement = {
+        sessionId: "sess-main",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        executionMode: "worker-turn",
+        state: "active",
+        environmentId: "env-placement",
+        generation: 7,
+        activeOwnerEpoch: 12,
+        workspaceBaseManifestRef: "manifest-base",
+        remoteWorkspaceDir: "/workspace/main",
+        workerBundleHash: "ab".repeat(32),
+        recoveryError: null,
+        terminalReason: null,
+        terminalAtMs: null,
+        turnClaim: null,
+        createdAtMs: 100,
+        updatedAtMs: 300,
+        stateChangedAtMs: 200,
+      };
+      const context = createDirectChatContext({
+        workerSessionPlacementService: {
+          getMany: () => new Map([[placement.sessionId, placement]]),
+        },
+      } as unknown as Partial<GatewayRequestContext>);
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      await callDirectChat(method, {
+        id: method,
+        params: makeMainSessionParams(),
+        respond: captureChatResult(responses),
+        context,
+      });
 
-        expect(responses[0]?.ok).toBe(true);
-        // Clients merge this row into the same store sessions.list fills, so a
-        // missing placement here silently erases a live worker placement.
-        expect(
-          (responses[0]?.payload as { sessionInfo?: { placement?: { state?: string } } })
-            ?.sessionInfo?.placement,
-        ).toMatchObject({ state: "active", environmentId: "env-placement" });
-      } finally {
-        testState.sessionStorePath = undefined;
-      }
+      expect(responses[0]?.ok).toBe(true);
+      // Clients merge this row into the same store sessions.list fills, so a
+      // missing placement here silently erases a live worker placement.
+      expect(
+        (responses[0]?.payload as { sessionInfo?: { placement?: { state?: string } } })?.sessionInfo
+          ?.placement,
+      ).toMatchObject({ state: "active", environmentId: "env-placement" });
     },
   );
 
@@ -918,7 +885,6 @@ describe("gateway server chat", () => {
         expect(JSON.stringify(inFlightRun)).not.toContain("SECRET");
       } finally {
         clearActiveEmbeddedRun("sess-main", handle, "main");
-        testState.sessionStorePath = undefined;
       }
     },
   );
@@ -1193,7 +1159,6 @@ describe("gateway server chat", () => {
         });
       } finally {
         await handler.dispose();
-        testState.sessionStorePath = undefined;
       }
     },
   );
@@ -1389,7 +1354,6 @@ describe("gateway server chat", () => {
         }
       } finally {
         testState.agentConfig = undefined;
-        testState.sessionStorePath = undefined;
       }
     },
   );
@@ -1641,7 +1605,6 @@ describe("gateway server chat", () => {
       preparedThinkingPolicy.fallback = "off";
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
-      testState.sessionStorePath = undefined;
     }
   });
 
@@ -3094,7 +3057,6 @@ describe("gateway server chat", () => {
     } finally {
       dispatchInboundMessageMock.mockReset();
       testState.agentConfig = undefined;
-      testState.sessionStorePath = undefined;
     }
   });
 
@@ -3199,7 +3161,6 @@ describe("gateway server chat", () => {
       } finally {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
-        testState.sessionStorePath = undefined;
       }
     },
   );
@@ -5622,10 +5583,13 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history advances past a replay boundary that cannot fit all projected siblings", async () => {
+  test("chat.history keeps older messages reachable past an oversized projected source row", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       const projectedSiblingCount = 70;
+      const projectedMessageId = "oversized-history-source";
+      const olderMessageId = "history-older-message";
+      const maxBytes = 512 * 1024;
       const captured: Extract<DiagnosticEventPayload, { type: "payload.large" }>[] = [];
       const unsubscribe = onDiagnosticEvent((event) => {
         if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
@@ -5634,23 +5598,18 @@ describe("gateway server chat", () => {
       });
       try {
         await writeMainSessionTranscript([
-          createTextTranscriptEvent("user", "reachable older message", { timestamp: Date.now() }),
-          JSON.stringify({
-            id: "oversized-history-source",
-            message: {
-              role: "assistant",
-              // Replay metadata repeats the text; keep each row below the per-message byte cap.
-              content: Array.from({ length: projectedSiblingCount }, (_, index) => ({
-                type: "text",
-                text: `projected sibling ${index + 1} ${"x".repeat(50_000)}`,
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: `history-progress-${index}`,
-                  phase: "commentary",
-                }),
-              })),
-              timestamp: Date.now() + 1,
-            },
+          {
+            type: "message",
+            ...createTextTranscriptEvent("user", "reachable older message", {
+              id: olderMessageId,
+              parentId: null,
+              timestamp: Date.now(),
+            }),
+          },
+          createOversizedReplayTranscriptEvent({
+            id: projectedMessageId,
+            parentId: olderMessageId,
+            siblingCount: projectedSiblingCount,
           }),
         ]);
 
@@ -5662,17 +5621,16 @@ describe("gateway server chat", () => {
             limit: projectedSiblingCount,
             offset: 0,
             maxChars: 100_000,
+            maxBytes,
           }),
         );
         expect(firstPage.ok).toBe(true);
-        const firstPageSequences = firstPage.payload?.messages?.map(readOpenClawSeq) ?? [];
-        expect(firstPageSequences.length).toBeGreaterThan(0);
-        expect(firstPageSequences.every((seq) => seq === 2)).toBe(true);
+        const firstMessages = firstPage.payload?.messages;
+        expect(firstMessages).toHaveLength(1);
         expect(firstPage.payload?.messages).toMatchObject([
           {
             __openclaw: {
-              id: "oversized-history-source",
-              seq: 2,
+              id: projectedMessageId,
               truncated: true,
               reason: "oversized",
             },
@@ -5684,28 +5642,39 @@ describe("gateway server chat", () => {
           captured.some((event) => event.action === "truncated" && (event.count ?? 0) > 0),
         ).toBe(true);
 
-        let offset = expectDefined(firstPage.payload?.nextOffset, "second page offset");
-        const olderMessages: unknown[] = [];
+        let page = firstPage;
+        let offset = 0;
+        let complete = false;
+        const messages: NonNullable<HistoryPage["messages"]> = [];
         for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
-          const page = await rpcReq<HistoryPage>(
-            ws,
-            "chat.history",
-            makeMainSessionParams({
-              limit: 2,
-              offset,
-            }),
-          );
           expect(page.ok).toBe(true);
-          olderMessages.push(...(page.payload?.messages ?? []));
+          const pageMessages = page.payload?.messages ?? [];
+          expect(Buffer.byteLength(JSON.stringify(pageMessages))).toBeLessThanOrEqual(maxBytes);
+          messages.push(...pageMessages);
           const nextOffset = page.payload?.nextOffset;
           if (nextOffset === undefined) {
             expect(page.payload?.hasMore).toBe(false);
+            complete = true;
             break;
           }
+          expect(page.payload?.hasMore).toBe(true);
           expect(nextOffset).toBeGreaterThan(offset);
           offset = nextOffset;
+          page = await rpcReq<HistoryPage>(
+            ws,
+            "chat.history",
+            makeMainSessionParams({ limit: 2, offset, maxBytes }),
+          );
         }
+        expect(complete).toBe(true);
+        const olderMessages = messages.filter(
+          (message) => message["__openclaw"]?.id === olderMessageId,
+        );
+        expect(olderMessages).toHaveLength(1);
         expect(JSON.stringify(olderMessages)).toContain("reachable older message");
+        expect(
+          messages.filter((message) => message["__openclaw"]?.id === projectedMessageId),
+        ).toHaveLength(1);
       } finally {
         unsubscribe();
       }

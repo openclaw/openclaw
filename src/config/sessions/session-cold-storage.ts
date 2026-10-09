@@ -46,16 +46,16 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import type { SessionColdRestorationGuard } from "./session-cold-storage-guard.types.js";
 import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import type {
   SessionColdMutationPlan,
   SessionColdBatchPrepared,
-  SessionColdMutationResult,
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
-  SessionColdTurnGuard,
 } from "./session-cold-storage-worker.js";
+import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
@@ -64,6 +64,10 @@ import {
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import {
+  parseTranscriptAppendRefusal,
+  SessionTranscriptWriterClaimReboundError,
+} from "./session-transcript-writer-claim-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { listConfiguredSessionStoreAgentIds } from "./targets.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -385,7 +389,7 @@ export async function restoreSessionColdTranscript(
   scope: SessionTranscriptReadScope,
   assertCurrent?: () => void,
   preparation?: SessionColdReadPreparation,
-  turnGuard?: SessionColdTurnGuard,
+  guard?: SessionColdRestorationGuard,
 ): Promise<void> {
   assertCurrent?.();
   const binding = captureIncognitoSessionBinding(scope);
@@ -463,7 +467,7 @@ export async function restoreSessionColdTranscript(
                 return metadata.archive;
               },
             },
-            turnGuard,
+            guard,
           );
         },
         projectionLane,
@@ -503,7 +507,7 @@ export async function restoreSessionColdTranscript(
         databaseOptions: workerDatabaseOptions(options),
         sessionId: resolved.sessionId,
         archive,
-        turnGuard,
+        guard,
       },
       assertCurrent,
     );
@@ -512,6 +516,13 @@ export async function restoreSessionColdTranscript(
     }
     if (result.refusedSource) {
       throw new SessionColdSourceReboundError(result.refusedSource);
+    }
+    if (result.writerRefusal !== undefined) {
+      const refusal = parseTranscriptAppendRefusal(result.writerRefusal);
+      if (!refusal) {
+        throw new Error("Cold transcript writer refusal has an invalid identity");
+      }
+      throw new SessionTranscriptWriterClaimReboundError(refusal);
     }
     assertCurrent?.();
     // Keep viewed history hot without changing canonical transcript timestamps or bytes.

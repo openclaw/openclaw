@@ -60,10 +60,8 @@ import {
   prepareSessionColdSourceGuard,
   SessionColdSourceRefusedError,
 } from "./session-cold-storage-source-guard.worker.js";
-import type {
-  SessionColdWorkerData,
-  SessionColdMutationResult,
-} from "./session-cold-storage-worker.js";
+import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
+import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 
 const WORKER_CLOSE_MAX_ATTEMPTS = 3;
 
@@ -136,7 +134,7 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
       : undefined;
   using sourceGuard = prepareSessionColdSourceGuard(
     data.plan.databaseOptions,
-    data.plan.kind === "cold-restore" ? data.plan.turnGuard?.sources : undefined,
+    data.plan.kind === "cold-restore" ? data.plan.guard?.sources : undefined,
   );
   const commitGate = data.commitGate;
   let result: SessionColdMutationResult;

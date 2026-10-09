@@ -108,15 +108,14 @@ function prepareSessionManagerIncognitoContext(
     actor.assertReadable();
   };
   const authority = { assertCurrent };
-  const check = <Value>(result: IncognitoContextReadResult<Value>) => {
+  const checked = async <Value>(pending: Promise<IncognitoContextReadResult<Value>>) => {
+    const result = await pending;
     assertCurrent();
     if (!result.ok) {
       throw new SessionTranscriptReadFenceError(result.message);
     }
     return result.value;
   };
-  const checked = async <Value>(pending: Promise<IncognitoContextReadResult<Value>>) =>
-    check(await pending);
   return {
     binding: { actor, authority, target: input },
     retain: async <T>(operation: () => Promise<T>) => {
@@ -135,25 +134,15 @@ function prepareSessionManagerIncognitoContext(
           signal,
         ),
       ),
-    validate: (
-      version?: SessionTranscriptContextVersion,
-      through?: TranscriptEntryAnchor,
-      onRead?: () => void,
-    ) =>
+    validate: (version?: SessionTranscriptContextVersion) =>
       checked(
         actor.sessions.history(
           authority,
           {
             type: "session.history.native-context-current",
-            input: { ...input, version, through },
+            input: { ...input, version },
           },
           signal,
-          onRead
-            ? (result) => {
-                check(result);
-                onRead();
-              }
-            : undefined,
         ),
       ),
     assertCurrent,

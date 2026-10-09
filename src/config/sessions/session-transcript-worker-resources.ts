@@ -3,10 +3,7 @@ import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
 import { encodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
-import {
-  captureSqliteWorkerClosePolicy,
-  ensureSqliteLibrarySelected,
-} from "../../infra/bun-sqlite-library.js";
+import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import {
@@ -16,11 +13,8 @@ import {
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
-import {
-  createOwnedWorkerTaskPool,
-  WorkerTaskError,
-  WorkerTaskPool,
-} from "../../infra/worker-task-pool.js";
+import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
+import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -48,56 +42,18 @@ import type {
   SessionStoreTargetReadResult,
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
-import type {
-  SessionHistoryWorkerInput,
-  SessionTranscriptWorkerReply,
-} from "./session-transcript-worker.types.js";
+import { createSessionTranscriptHistoryPool } from "./session-transcript-read-pools.js";
+import type { SessionHistoryWorkerInput } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-function createHistoryPool() {
-  let generation: { canCloseNativeResources: boolean } | undefined;
-  const pool = createOwnedWorkerTaskPool<
-    SessionHistoryWorkerInput,
-    SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
-  >({
-    workerUrl,
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-    maxWorkers: 1,
-    idleTimeoutMs: 0,
-    prepareWorker: () => {
-      ensureSqliteLibrarySelected();
-      // The worker inherits this same fact at creation; later admission cannot upgrade it.
-      const current = { canCloseNativeResources: captureSqliteWorkerClosePolicy() };
-      generation = current;
-      return {
-        options: {},
-        async releaseResources() {
-          if (generation === current) {
-            generation = undefined;
-          }
-        },
-      };
-    },
-    onRetirementFailure() {
-      generation = undefined;
-    },
-  });
-  return {
-    ...pool,
-    canCloseNativeResources: () => generation?.canCloseNativeResources === true,
-    rotate() {
-      generation = undefined;
-      return pool.rotate();
-    },
-  };
-}
 
 function createUsageCostPool(kind: "read" | "refresh") {
   return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
     workerUrl,
     workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-    maxWorkers: 1,
+    // A retired task releases lane-wide database custody, which requires one native worker.
+    workerClass: kind === "refresh" ? "writer" : "singleton",
     // Foreground reads must remain available while refresh awaits a host writer.
     sharedCompute: kind === "refresh",
     idleTimeoutMs: 0,
@@ -128,7 +84,7 @@ export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
 };
 
 export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
-  pool: ReturnType<typeof createHistoryPool>;
+  pool: ReturnType<typeof createSessionTranscriptHistoryPool>;
 };
 
 export type SessionDatabaseCleanup = { run: () => Promise<void> };
@@ -163,11 +119,32 @@ function createDatabaseWorkerLane<Pool extends SessionDatabaseWorkerLane["pool"]
   return { name, pool, nativeSequence: 0, retiredSequence: 0, pending: 0 };
 }
 
-export const historyLane = createDatabaseWorkerLane("Session history", createHistoryPool());
+export const historyLane = createDatabaseWorkerLane(
+  "Session history",
+  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS),
+);
+// Search retains its reader while the host checks writable index readiness.
+// It must never occupy the workers serving committed history and metadata.
+export const transcriptSearchLane = createDatabaseWorkerLane(
+  "Session transcript search",
+  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS),
+);
 // Keep list materialization independent of large history pages, with one extra reader per store.
-export const projectionLane = createDatabaseWorkerLane("Session projection", createHistoryPool());
+export const projectionLane = createDatabaseWorkerLane(
+  "Session projection",
+  createSessionTranscriptHistoryPool(),
+);
 // Full-store validation cannot yield its snapshot to a foreground history read.
-export const maintenanceLane = createDatabaseWorkerLane("Session maintenance", createHistoryPool());
+export const maintenanceLane = createDatabaseWorkerLane(
+  "Session maintenance",
+  createSessionTranscriptHistoryPool(),
+);
+// Writers retain FIFO admission through target discovery and cleanup. These reads
+// cannot share a worker with history tasks that await a host-side database write.
+export const targetDiscoveryLane = createDatabaseWorkerLane(
+  "Session target discovery",
+  createSessionTranscriptHistoryPool(),
+);
 export const costReadLane = createDatabaseWorkerLane(
   "Session usage read",
   createUsageCostPool("read"),
@@ -177,7 +154,13 @@ export const costRefreshLane = createDatabaseWorkerLane(
   createUsageCostPool("refresh"),
 );
 
-const historyWorkerLanes = [historyLane, projectionLane, maintenanceLane];
+const historyWorkerLanes = [
+  historyLane,
+  transcriptSearchLane,
+  projectionLane,
+  maintenanceLane,
+  targetDiscoveryLane,
+];
 const databaseWorkerLanes = [...historyWorkerLanes, costReadLane, costRefreshLane];
 const memoryPressure = channel("openclaw.memory.critical");
 let pressureSubscribed = false;
@@ -330,6 +313,18 @@ async function closeDatabaseWorkerResource(
   const sequence = resource.nativeSequences.get(lane);
   if (sequence !== undefined && sequence <= through) {
     resource.nativeSequences.delete(lane);
+  }
+}
+
+/** One worker's eviction requests pool-wide cleanup before releasing database custody. */
+export async function settleSessionHistoryWorkerEviction(
+  lane: SessionHistoryWorkerLane,
+  database: SessionHistoryDatabaseTarget,
+): Promise<void> {
+  const resource = historyDatabases.get(JSON.stringify(database));
+  if (resource) {
+    // Preparing tasks can own input before a worker exists to receive a native close.
+    await closeDatabaseWorkerResource(resource, lane, lane.pool.getSnapshot().activeTasks === 0);
   }
 }
 

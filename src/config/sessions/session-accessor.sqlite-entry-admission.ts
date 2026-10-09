@@ -47,19 +47,21 @@ import { captureSessionStoreReadCandidates } from "./session-store-target-invent
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-type SessionAdmissionEntryIdentity = Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
-export type SessionAdmissionInitialization = {
+type SessionAdmissionEntryIdentity = Readonly<
+  Pick<SessionEntry, "sessionId" | "lifecycleRevision">
+>;
+export type SessionAdmissionTransition = Readonly<{
   previous?: SessionAdmissionEntryIdentity;
   current: SessionAdmissionEntryIdentity;
-};
+}>;
 
 type WorkerSessionAdmissionClaim = {
   kind: "worker";
   identity: string;
   incarnation: string;
   reader?: SessionEntryCohortReader;
-  afterInitialization?(
-    initialized: SessionAdmissionInitialization,
+  afterTransition?(
+    transition: SessionAdmissionTransition,
     assertOwnerCurrent: () => void,
   ): Promise<WorkerSessionAdmissionClaim>;
   isCurrent(): boolean;
@@ -332,18 +334,18 @@ export async function loadSessionEntryForAdmission(
                     }
                   },
                   release: () => borrowed.release(),
-                  async afterInitialization({ previous, current }, assertOwnerCurrent) {
+                  async afterTransition({ previous, current }, assertOwnerCurrent) {
                     generation.assertCurrent();
                     assertOwnerCurrent();
                     if (
                       previous?.sessionId !== admitted?.sessionId ||
                       previous?.lifecycleRevision !== admitted?.lifecycleRevision
                     ) {
-                      throw new Error("Session initialization changed its admitted predecessor");
+                      throw new Error("Session transition changed its admitted predecessor");
                     }
                     const expectedIdentity = borrowed.fileIdentity;
                     if (!expectedIdentity) {
-                      throw new Error("Session initialization lost its admitted physical identity");
+                      throw new Error("Session transition lost its admitted physical identity");
                     }
                     const successor = captureOpenClawAgentDatabaseExecution(
                       { ...options, path: borrowed.path },
@@ -357,7 +359,7 @@ export async function loadSessionEntryForAdmission(
                         next.identity !== generation.identity ||
                         next.incarnation !== generation.incarnation
                       ) {
-                        throw new Error("Session initialization changed its native generation");
+                        throw new Error("Session transition changed its native generation");
                       }
                       generation.assertCurrent();
                       assertOwnerCurrent();

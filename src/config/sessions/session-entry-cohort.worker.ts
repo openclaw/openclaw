@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { hasAgentAuthProfileSourceInDatabase } from "../../agents/auth-profiles/sqlite-json.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -18,7 +19,10 @@ import {
 } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import {
+  readSessionEntryRow,
+  readSessionKeyBySessionIdInDatabase,
+} from "./session-accessor.sqlite-entry-read.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import {
   sessionColdArchiveMetadataColumns,
@@ -86,11 +90,19 @@ export function readSessionEntryCohort(
   input: SessionEntryCohortRequest,
   readEntries: (request: SessionExactEntriesWorkerInput) => SessionExactEntriesWorkerResult,
 ): SessionEntryCohortResult {
-  const { expected, transcript, includeColdMetadata, ...selection } = input;
+  const {
+    expected,
+    transcript,
+    runtimeTarget,
+    includeAuthProfileSource,
+    includeColdMetadata,
+    ...selection
+  } = input;
   const count =
     input.sessionKeys.length +
     (input.replyInitializationSessionKey ? 1 : 0) +
-    (transcript?.entryIds.length ?? 0);
+    (transcript?.entryIds.length ?? 0) +
+    (runtimeTarget ? 1 : 0);
   if (
     count > MAX_SESSION_ROW_FACTS_KEYS ||
     (expected?.sessions.length ?? 0) > MAX_SESSION_ROW_FACTS_KEYS
@@ -98,6 +110,9 @@ export function readSessionEntryCohort(
     throw new Error(
       `Session entry cohorts support at most ${MAX_SESSION_ROW_FACTS_KEYS} selected facts`,
     );
+  }
+  if (runtimeTarget && !input.sessionKeys.includes(runtimeTarget.sessionKey)) {
+    throw new Error("Session runtime target must belong to its entry cohort");
   }
   const source = readOpenClawAgentDatabaseIdentity(database);
   if (typeof source.identity !== "string" || !isOpenClawAgentDatabasePathCurrent(database)) {
@@ -157,9 +172,20 @@ export function readSessionEntryCohort(
             { ...transcript, entryIds: [...new Set(transcript.entryIds)] },
           )
         : { anchors: [] };
+    const authProfileSource = includeAuthProfileSource
+      ? hasAgentAuthProfileSourceInDatabase(database.db)
+      : undefined;
+    const preparedRuntimeTarget = runtimeTarget && {
+      ...runtimeTarget,
+      sessionKey:
+        readSessionKeyBySessionIdInDatabase(database, runtimeTarget.sessionId) ??
+        runtimeTarget.sessionKey,
+      storePath: database.path,
+    };
     assertSource();
     return {
       ...result,
+      ...(preparedRuntimeTarget ? { runtimeTarget: preparedRuntimeTarget } : {}),
       ...(includeColdMetadata
         ? {
             coldArchives: readSessionColdTranscripts(
@@ -186,6 +212,7 @@ export function readSessionEntryCohort(
           }
         : {}),
       ...(transcript ? { transcript: transcriptFacts } : {}),
+      ...(includeAuthProfileSource ? { authProfileSource } : {}),
     };
   };
   // The transaction owner performs the one fresh probe after BEGIN; nested kernels share it.

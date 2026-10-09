@@ -1,4 +1,8 @@
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import {
+  getSqliteReadScopeRevision,
+  readSqliteNativeMutationRevision,
+} from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
   openOpenClawAgentDatabase,
@@ -11,28 +15,16 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
-import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
+import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
-type ActiveTranscriptAnchorRead = {
+type TranscriptEntryRead = {
   database: Pick<OpenClawAgentDatabase, "db" | "path">;
   resolved: ResolvedTranscriptScope;
   entryId: string;
   message?: unknown;
 };
-
-/** Reads one active message identity from the caller's current SQLite transaction. */
-export function readActiveTranscriptEntryAnchorInTransaction(
-  params: ActiveTranscriptAnchorRead,
-): TranscriptEntryAnchor | undefined {
-  // Branch changes retain old projection rows until deferred reconciliation.
-  // An anchor must never certify those rows as the current active path.
-  if (sessionTranscriptIndexNeedsReconcile(params.database.db, params.resolved.sessionId)) {
-    return undefined;
-  }
-  return readActiveTranscriptEntryAnchorRow(params);
-}
 
 /** Borrow readiness only while the projection owner's synchronous snapshot remains open. */
 export function readActiveTranscriptEntryAnchorFromProjection(
@@ -45,42 +37,89 @@ export function readActiveTranscriptEntryAnchorFromProjection(
   if (!projection.database.db.isTransaction || !sessionKey) {
     throw new Error("Transcript anchor projection requires its selected session snapshot");
   }
-  return readActiveTranscriptEntryAnchorRow({
+  const params = {
     database: projection.database,
     resolved: { ...projection.resolved, sessionKey },
     entryId,
     message,
+  };
+  return createTranscriptEntryAnchor({
+    ...params,
+    row: readActiveTranscriptEntryFacts(params, projection),
   });
 }
 
-function readActiveTranscriptEntryAnchorRow(
-  params: ActiveTranscriptAnchorRead,
-): TranscriptEntryAnchor | undefined {
+function readActiveTranscriptEntryFacts(
+  params: TranscriptEntryRead,
+  projection?: CurrentTranscriptProjection,
+) {
   const db = getSessionKysely(params.database.db);
-  const row = executeSqliteQueryTakeFirstSync(
+  const query = db
+    .selectFrom("transcript_event_identities as identity")
+    .innerJoin("session_transcript_active_events as active", (join) =>
+      join
+        .onRef("active.session_id", "=", "identity.session_id")
+        .onRef("active.event_seq", "=", "identity.seq"),
+    )
+    .select([
+      "identity.seq",
+      "identity.parent_id",
+      "identity.message_idempotency_key",
+      "active.message_position",
+    ])
+    .where("identity.session_id", "=", params.resolved.sessionId)
+    .where("identity.event_id", "=", params.entryId)
+    .limit(1);
+  if (projection) {
+    const row = executeSqliteQueryTakeFirstSync(params.database.db, query);
+    return row
+      ? {
+          ...row,
+          generation: projection.generation ?? null,
+          latestSeq: projection.state.indexedSeq,
+        }
+      : undefined;
+  }
+  return executeSqliteQueryTakeFirstSync(
     params.database.db,
-    db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
+    query
       .innerJoin("transcript_rewrite_watermarks as rewrite", (join) =>
         join.onRef("rewrite.session_id", "=", "identity.session_id"),
       )
-      .select([
-        "identity.seq",
-        "identity.parent_id",
-        "identity.message_idempotency_key",
-        "active.message_position",
-        "rewrite.generation",
-      ])
-      .where("identity.session_id", "=", params.resolved.sessionId)
-      .where("identity.event_id", "=", params.entryId)
-      .limit(1),
+      .leftJoin(
+        selectSessionTranscriptIndexStatus(params.database.db, params.resolved.sessionId).as(
+          "status",
+        ),
+        (join) => join.onTrue(),
+      )
+      .select(["rewrite.generation", "status.latestSeq"])
+      // Branch changes retain old rows; readiness and the anchor share this statement's snapshot.
+      .where("status.needs_reconcile", "is not", 1),
   );
-  return createTranscriptEntryAnchor({ ...params, row });
+}
+
+/** Reads one active message identity from the caller's current SQLite transaction. */
+export function readActiveTranscriptEntryAnchorInTransaction(
+  params: TranscriptEntryRead,
+): TranscriptEntryAnchor | undefined {
+  return createTranscriptEntryAnchor({ ...params, row: readActiveTranscriptEntryFacts(params) });
+}
+
+/** The append receipt shares its anchor read with the subsequent visible-tail consumer. */
+export function readTranscriptMessageAppendMetadataInTransaction(params: TranscriptEntryRead) {
+  const revision = getSqliteReadScopeRevision(params.database.db)?.mutationRevision;
+  const row = readActiveTranscriptEntryFacts(params);
+  const anchor = createTranscriptEntryAnchor({ ...params, row });
+  return {
+    anchor,
+    visibleTailEntryId:
+      anchor &&
+      row?.seq === row?.latestSeq &&
+      revision !== undefined &&
+      readSqliteNativeMutationRevision(params.database.db) === revision
+        ? params.entryId
+        : undefined,
+  };
 }
 
 /** Projects anchor fields after the caller verifies readiness in the same snapshot. */

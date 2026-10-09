@@ -218,6 +218,16 @@ it("reads active anchors and raw tail facts without caller SQL, including cold d
           entryId: "question",
         }),
       ).resolves.toBeUndefined();
+      const consumeInitial = vi.fn();
+      await expect(
+        readSessionTranscriptAnchorsAsync(
+          { ...scope, storePath: absentPath },
+          { entryIds: [], replayValidation: { allowInitial: true } },
+          undefined,
+          consumeInitial,
+        ),
+      ).resolves.toEqual({ anchors: [], replayValidated: "initial" });
+      expect(consumeInitial).toHaveBeenCalledWith({ anchors: [], replayValidated: "initial" });
       expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();

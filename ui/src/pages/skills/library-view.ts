@@ -23,9 +23,7 @@ export function renderSkillLibrary(
     const scopeMatches =
       library.view === "mine"
         ? entry.ownerProfileId === list?.profileId
-        : library.view === "team"
-          ? entry.shared || entry.ownerProfileId === null
-          : true;
+        : library.view !== "team" || entry.shared || entry.ownerProfileId === null;
     return (
       scopeMatches &&
       (!query ||
@@ -125,13 +123,59 @@ export function renderSkillLibraryFeedback(library: SkillLibraryController) {
 export const renderSkillLibraryDialogs = (library: SkillLibraryController) =>
   html`${renderLibraryEditor(library)} ${renderLibraryImport(library)}`;
 
+function renderLibraryDialog(
+  library: SkillLibraryController,
+  content: TemplateResult,
+  editor?: { title: string; disabled: boolean },
+) {
+  const title = editor?.title ?? t("skillLibrary.import");
+  const onKeydown = (event: KeyboardEvent) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !editor?.disabled) {
+      event.preventDefault();
+      libraryEventControl(event, HTMLFormElement).requestSubmit();
+    }
+  };
+  return html`<openclaw-modal-dialog
+    label=${title}
+    style=${editor ? "--openclaw-modal-width: 960px;" : nothing}
+    @modal-cancel=${(event: Event) => {
+      // Native dismissal must not bypass the controller's busy and discard checks.
+      event.preventDefault();
+      library.close();
+    }}
+  >
+    <form
+      class="exec-approval-card skill-reader-dialog"
+      @submit=${(event: SubmitEvent) => {
+        event.preventDefault();
+        const source = library.importSource;
+        if (editor) {
+          void library.save();
+        } else if (source) {
+          void library.importClawHub(library.importSlug, source.slug, source.version);
+        } else {
+          void library.importFiles(library.importSelection);
+        }
+      }}
+      @keydown=${editor ? onKeydown : undefined}
+    >
+      ${renderLibraryDialogHeader(title, () => library.close(), library.busy)}
+      <div
+        class=${`skill-reader-dialog__body${editor ? "" : " skill-library-import"}`}
+        style=${editor ? "display: grid; gap: var(--space-4); min-width: 0;" : nothing}
+      >
+        ${content}
+      </div>
+    </form>
+  </openclaw-modal-dialog>`;
+}
+
 function renderLibraryEditor(library: SkillLibraryController) {
   const draft = library.draft;
   if (!draft) {
     return nothing;
   }
-  const pending = draft.proposal !== null;
-  const disabled = !library.canEdit || library.busy || library.loading || pending;
+  const disabled = !library.canEdit || library.busy || library.loading;
   const uploadBlocked = draft.importedFiles && !library.uploadsEnabled;
   const support = draft.files.find((file) => file.path === draft.selectedFile);
   const text =
@@ -150,8 +194,8 @@ function renderLibraryEditor(library: SkillLibraryController) {
     draft.dirty = true;
     library.changed();
   };
-  const editField = (field: "slug" | "description", event: Event) => {
-    draft[field] = libraryEventControl(event, HTMLInputElement).value;
+  const editSlug = (event: Event) => {
+    draft.slug = libraryEventControl(event, HTMLInputElement).value;
     draft.dirty = true;
     library.changed();
   };
@@ -165,288 +209,234 @@ function renderLibraryEditor(library: SkillLibraryController) {
     >
       ${t(`skillLibrary.${action}`)}
     </button>`;
-  return html` <openclaw-modal-dialog
-    label=${draft.entry?.slug ?? t("skillLibrary.create")}
-    style="--openclaw-modal-width: 960px;"
-    @modal-cancel=${(event: Event) => {
-      // Native dismissal must not bypass the controller's busy and discard checks.
-      event.preventDefault();
-      library.close();
-    }}
-  >
-    <form
-      class="exec-approval-card skill-reader-dialog"
-      @submit=${(event: SubmitEvent) => {
-        event.preventDefault();
-        void library.save();
-      }}
-      @keydown=${(event: KeyboardEvent) => {
-        if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !disabled) {
-          event.preventDefault();
-          libraryEventControl(event, HTMLFormElement).requestSubmit();
-        }
-      }}
-    >
-      ${renderLibraryDialogHeader(draft.entry?.slug ?? t("skillLibrary.create"), () => library.close(), library.busy)}
-      <div
-        class="skill-reader-dialog__body"
-        style="display: grid; gap: var(--space-4); min-width: 0;"
-      >
-        <p class="muted">
-          ${
-            draft.target === "workspace"
-              ? t("skillLibrary.workspaceTarget", { agent: draft.agentId ?? "" })
-              : draft.entry
-                ? t("skillLibrary.ownerRevision", {
-                    owner: draft.entry.ownerLabel,
-                    revision: draft.entry.revision.slice(0, 8),
-                  })
-                : t("skillLibrary.personalTarget")
-          }
-        </p>
-        ${draft.entry ? renderLibraryIdentity(draft.entry) : nothing}
-        ${!library.canEdit ? html`<p role="status">${t("skillLibrary.readOnly")}</p>` : nothing}
-        <label class="field"
-          ><span>${t("skillLibrary.slug")}</span
-          ><input
-            class="settings-input"
-            name="library-slug"
-            title=${t("skillLibrary.slugHelp")}
-            required
-            pattern="[a-z0-9][a-z0-9\\-]{0,62}"
-            maxlength="63"
-            ?disabled=${disabled}
-            .value=${live(draft.slug)}
-            @input=${(event: Event) => editField("slug", event)}
-        /></label>
+  return renderLibraryDialog(
+    library,
+    html`
+      <p class="muted">
         ${
-          draft.target === "workspace"
-            ? html`<label class="field"
-                ><span>${t("skillLibrary.description")}</span
-                ><input
-                  class="settings-input"
-                  name="library-description"
-                  required
-                  ?disabled=${disabled}
-                  .value=${draft.description}
-                  @input=${(event: Event) => editField("description", event)}
-              /></label>`
-            : nothing
+          draft.entry
+            ? t("skillLibrary.ownerRevision", {
+                owner: draft.entry.ownerLabel,
+                revision: draft.entry.revision.slice(0, 8),
+              })
+            : t("skillLibrary.personalTarget")
         }
-        <div class="plugins-toolbar">
-          <label class="field" style="min-width: 0; flex: 1;"
-            ><span>${t("skillLibrary.file")}</span
-            ><select
-              class="settings-select"
-              aria-label=${t("skillLibrary.file")}
-              .value=${draft.selectedFile}
-              @change=${(event: Event) => {
-                draft.selectedFile = libraryEventControl(event, HTMLSelectElement).value;
-                library.changed();
-              }}
-            >
-              <option value="SKILL.md" ?selected=${draft.selectedFile === "SKILL.md"}>
-                SKILL.md
-              </option>
-              ${draft.files.map(
-                (file) =>
-                  // select.value commits before this child part inserts a newly added option.
-                  html`<option value=${file.path} ?selected=${draft.selectedFile === file.path}>
-                    ${file.path}${file.executable ? " *" : ""}
-                  </option>`,
-              )}
-            </select></label
+      </p>
+      ${draft.entry ? renderLibraryIdentity(draft.entry) : nothing}
+      ${!library.canEdit ? html`<p role="status">${t("skillLibrary.readOnly")}</p>` : nothing}
+      <label class="field"
+        ><span>${t("skillLibrary.slug")}</span
+        ><input
+          class="settings-input"
+          name="library-slug"
+          title=${t("skillLibrary.slugHelp")}
+          required
+          pattern="[a-z0-9][a-z0-9\\-]{0,62}"
+          maxlength="63"
+          ?disabled=${disabled}
+          .value=${live(draft.slug)}
+          @input=${editSlug}
+      /></label>
+
+      <div class="plugins-toolbar">
+        <label class="field" style="min-width: 0; flex: 1;"
+          ><span>${t("skillLibrary.file")}</span
+          ><select
+            class="settings-select"
+            aria-label=${t("skillLibrary.file")}
+            .value=${draft.selectedFile}
+            @change=${(event: Event) => {
+              draft.selectedFile = libraryEventControl(event, HTMLSelectElement).value;
+              library.changed();
+            }}
           >
-          ${
-            support && library.canEdit
-              ? html`<button
-                  type="button"
-                  class="btn"
-                  ?disabled=${disabled}
-                  @click=${() => {
-                    if (
-                      !window.confirm(t("skillLibrary.deleteFileConfirm", { path: support.path }))
-                    ) {
-                      return;
-                    }
-                    draft.files = draft.files.filter((file) => file.path !== support.path);
-                    draft.selectedFile = "SKILL.md";
-                    draft.dirty = true;
-                    library.changed();
-                  }}
-                >
-                  ${t("skillLibrary.deleteFile")}
-                </button>`
-              : nothing
-          }
-        </div>
+            <option value="SKILL.md" ?selected=${draft.selectedFile === "SKILL.md"}>
+              SKILL.md
+            </option>
+            ${draft.files.map(
+              (file) =>
+                // select.value commits before this child part inserts a newly added option.
+                html`<option value=${file.path} ?selected=${draft.selectedFile === file.path}>
+                  ${file.path}${file.executable ? " *" : ""}
+                </option>`,
+            )}
+          </select></label
+        >
         ${
           support && library.canEdit
-            ? html`<label class="field checkbox"
-                ><input
-                  type="checkbox"
-                  name="library-file-executable"
-                  ?disabled=${disabled}
-                  .checked=${support.executable === true}
-                  @change=${(event: Event) => {
-                    const executable = libraryEventControl(event, HTMLInputElement).checked;
-                    draft.files = draft.files.map((file) =>
-                      file.path === support.path ? { ...file, executable } : file,
-                    );
-                    draft.dirty = true;
-                    library.changed();
-                  }}
-                /><span>${t("skillLibrary.executable")}</span></label
-              >`
-            : nothing
-        }
-        ${
-          text === null
-            ? html`<p class="muted">${t("skillLibrary.binary")}</p>`
-            : html`<label class="field"
-                ><span>${draft.selectedFile}</span
-                ><textarea
-                  name="library-content"
-                  class="settings-input"
-                  spellcheck="false"
-                  rows="18"
-                  style="font-family: var(--mono); min-width: 0; max-width: 100%; box-sizing: border-box; resize: vertical;"
-                  ?readonly=${disabled}
-                  .value=${live(text)}
-                  @input=${(event: Event) =>
-                    changeText(libraryEventControl(event, HTMLTextAreaElement).value)}
-                ></textarea>
-              </label>`
-        }
-        ${
-          !disabled
-            ? html`<div class="plugins-toolbar">
-                <label class="field" style="flex: 1; min-width: 0;"
-                  ><span>${t("skillLibrary.newFile")}</span
-                  ><input
-                    class="settings-input"
-                    name="library-file-path"
-                    .value=${library.newFilePath}
-                    @input=${(event: Event) => {
-                      library.newFilePath = libraryEventControl(event, HTMLInputElement).value;
-                      library.changed();
-                    }} /></label
-                ><button
-                  type="button"
-                  class="btn"
-                  ?disabled=${!library.newFilePath.trim()}
-                  @click=${() => {
-                    const path = library.newFilePath.trim();
-                    if (path === "SKILL.md" || draft.files.some((file) => file.path === path)) {
-                      library.error = t("skillLibrary.fileExists");
-                    } else {
-                      draft.files = [...draft.files, { path, content: "", encoding: "utf8" }];
-                      draft.selectedFile = path;
-                      draft.dirty = true;
-                      library.newFilePath = "";
-                    }
-                    library.changed();
-                  }}
-                >
-                  ${t("skillLibrary.addFile")}
-                </button>
-              </div>`
-            : nothing
-        }
-        ${renderLibraryFeedback(library.error, library.notice)}
-        <div class="plugins-toolbar">
-          ${
-            !library.canEdit
-              ? nothing
-              : pending
-                ? html`<button
-                    type="button"
-                    class="btn primary"
-                    ?disabled=${library.busy}
-                    @click=${() => void library.applyWorkspace()}
-                  >
-                    ${t("skillLibrary.apply")}
-                  </button>`
-                : html`<button
-                    type="submit"
-                    class="btn primary"
-                    ?disabled=${disabled || uploadBlocked || !draft.dirty || !draft.content.trim()}
-                  >
-                    ${
-                      library.busy
-                        ? t("common.loading")
-                        : draft.target === "workspace"
-                          ? t("skillLibrary.propose")
-                          : t("skillLibrary.save")
-                    }
-                  </button>`
-          }
-          ${
-            library.canEdit && draft.entry
-              ? html`
-                  ${mutationButton(draft.entry.enabled ? "disable" : "enable")}
-                  ${
-                    draft.entry.ownerProfileId
-                      ? mutationButton(draft.entry.shared ? "unshare" : "share")
-                      : nothing
+            ? html`<button
+                type="button"
+                class="btn"
+                ?disabled=${disabled}
+                @click=${() => {
+                  if (
+                    !window.confirm(t("skillLibrary.deleteFileConfirm", { path: support.path }))
+                  ) {
+                    return;
                   }
-                `
-              : nothing
-          }
-        </div>
-        ${
-          library.canEdit && draft.entry && draft.revisions.length > 1
-            ? html`<div class="plugins-toolbar">
-                <label class="field" style="flex: 1; min-width: 0;"
-                  ><span>${t("skillLibrary.revision")}</span
-                  ><select
-                    class="settings-select"
-                    aria-label=${t("skillLibrary.revision")}
-                    .value=${draft.rollbackRevision}
-                    ?disabled=${mutationLocked}
-                    @change=${(event: Event) => {
-                      draft.rollbackRevision = libraryEventControl(event, HTMLSelectElement).value;
-                      library.changed();
-                    }}
-                  >
-                    <option value="" ?selected=${draft.rollbackRevision === ""}>
-                      ${t("skillLibrary.selectRevision")}
-                    </option>
-                    ${draft.revisions
-                      .filter((revision) => revision.revision !== draft.entry?.revision)
-                      .map(
-                        (revision) =>
-                          html`<option
-                            value=${revision.revision}
-                            ?selected=${draft.rollbackRevision === revision.revision}
-                          >
-                            ${new Date(revision.createdAt).toLocaleString()} ·
-                            ${revision.revision.slice(0, 8)}
-                          </option>`,
-                      )}
-                  </select></label
-                >${mutationButton("rollback", mutationLocked || !draft.rollbackRevision)}
-              </div>`
-            : nothing
-        }
-        ${
-          library.canEdit && draft.entry
-            ? html`<div
-                class="plugins-toolbar"
-                style="border-top: 1px solid var(--border); padding-top: var(--space-4);"
+                  draft.files = draft.files.filter((file) => file.path !== support.path);
+                  draft.selectedFile = "SKILL.md";
+                  draft.dirty = true;
+                  library.changed();
+                }}
               >
-                ${
-                  library.canTransfer && draft.entry.ownerProfileId
-                    ? mutationButton("transfer")
-                    : nothing
-                }
-                ${mutationButton("remove")}
-              </div>`
+                ${t("skillLibrary.deleteFile")}
+              </button>`
             : nothing
         }
       </div>
-    </form>
-  </openclaw-modal-dialog>`;
+      ${
+        support && library.canEdit
+          ? html`<label class="field checkbox"
+              ><input
+                type="checkbox"
+                name="library-file-executable"
+                ?disabled=${disabled}
+                .checked=${support.executable === true}
+                @change=${(event: Event) => {
+                  const executable = libraryEventControl(event, HTMLInputElement).checked;
+                  draft.files = draft.files.map((file) =>
+                    file.path === support.path ? { ...file, executable } : file,
+                  );
+                  draft.dirty = true;
+                  library.changed();
+                }}
+              /><span>${t("skillLibrary.executable")}</span></label
+            >`
+          : nothing
+      }
+      ${
+        text === null
+          ? html`<p class="muted">${t("skillLibrary.binary")}</p>`
+          : html`<label class="field"
+              ><span>${draft.selectedFile}</span
+              ><textarea
+                name="library-content"
+                class="settings-input"
+                spellcheck="false"
+                rows="18"
+                style="font-family: var(--mono); min-width: 0; max-width: 100%; box-sizing: border-box; resize: vertical;"
+                ?readonly=${disabled}
+                .value=${live(text)}
+                @input=${(event: Event) =>
+                  changeText(libraryEventControl(event, HTMLTextAreaElement).value)}
+              ></textarea>
+            </label>`
+      }
+      ${
+        !disabled
+          ? html`<div class="plugins-toolbar">
+              <label class="field" style="flex: 1; min-width: 0;"
+                ><span>${t("skillLibrary.newFile")}</span
+                ><input
+                  class="settings-input"
+                  name="library-file-path"
+                  .value=${library.newFilePath}
+                  @input=${(event: Event) => {
+                    library.newFilePath = libraryEventControl(event, HTMLInputElement).value;
+                    library.changed();
+                  }} /></label
+              ><button
+                type="button"
+                class="btn"
+                ?disabled=${!library.newFilePath.trim()}
+                @click=${() => {
+                  const path = library.newFilePath.trim();
+                  if (path === "SKILL.md" || draft.files.some((file) => file.path === path)) {
+                    library.error = t("skillLibrary.fileExists");
+                  } else {
+                    draft.files = [...draft.files, { path, content: "", encoding: "utf8" }];
+                    draft.selectedFile = path;
+                    draft.dirty = true;
+                    library.newFilePath = "";
+                  }
+                  library.changed();
+                }}
+              >
+                ${t("skillLibrary.addFile")}
+              </button>
+            </div>`
+          : nothing
+      }
+      ${renderLibraryFeedback(library.error, library.notice)}
+      <div class="plugins-toolbar">
+        ${
+          !library.canEdit
+            ? nothing
+            : html`<button
+                type="submit"
+                class="btn primary"
+                ?disabled=${disabled || uploadBlocked || !draft.dirty || !draft.content.trim()}
+              >
+                ${library.busy ? t("common.loading") : t("skillLibrary.save")}
+              </button>`
+        }
+        ${
+          library.canEdit && draft.entry
+            ? html`
+                ${mutationButton(draft.entry.enabled ? "disable" : "enable")}
+                ${
+                  draft.entry.ownerProfileId
+                    ? mutationButton(draft.entry.shared ? "unshare" : "share")
+                    : nothing
+                }
+              `
+            : nothing
+        }
+      </div>
+      ${
+        library.canEdit && draft.entry && draft.revisions.length > 1
+          ? html`<div class="plugins-toolbar">
+              <label class="field" style="flex: 1; min-width: 0;"
+                ><span>${t("skillLibrary.revision")}</span
+                ><select
+                  class="settings-select"
+                  aria-label=${t("skillLibrary.revision")}
+                  .value=${draft.rollbackRevision}
+                  ?disabled=${mutationLocked}
+                  @change=${(event: Event) => {
+                    draft.rollbackRevision = libraryEventControl(event, HTMLSelectElement).value;
+                    library.changed();
+                  }}
+                >
+                  <option value="" ?selected=${draft.rollbackRevision === ""}>
+                    ${t("skillLibrary.selectRevision")}
+                  </option>
+                  ${draft.revisions
+                    .filter((revision) => revision.revision !== draft.entry?.revision)
+                    .map(
+                      (revision) =>
+                        html`<option
+                          value=${revision.revision}
+                          ?selected=${draft.rollbackRevision === revision.revision}
+                        >
+                          ${new Date(revision.createdAt).toLocaleString()} ·
+                          ${revision.revision.slice(0, 8)}
+                        </option>`,
+                    )}
+                </select></label
+              >${mutationButton("rollback", mutationLocked || !draft.rollbackRevision)}
+            </div>`
+          : nothing
+      }
+      ${
+        library.canEdit && draft.entry
+          ? html`<div
+              class="plugins-toolbar"
+              style="border-top: 1px solid var(--border); padding-top: var(--space-4);"
+            >
+              ${
+                library.canTransfer && draft.entry.ownerProfileId
+                  ? mutationButton("transfer")
+                  : nothing
+              }
+              ${mutationButton("remove")}
+            </div>`
+          : nothing
+      }
+    `,
+    { title: draft.entry?.slug ?? t("skillLibrary.create"), disabled },
+  );
 }
 
 function renderLibraryImport(library: SkillLibraryController) {
@@ -464,149 +454,116 @@ function renderLibraryImport(library: SkillLibraryController) {
             .join(", ") + (selectedFiles.length > 2 ? ", …" : ""),
       })
     : t("skillLibrary.noFilesSelected");
-  const close = () => library.close();
-  return html`<openclaw-modal-dialog
-    label=${t("skillLibrary.import")}
-    @modal-cancel=${(event: Event) => {
-      event.preventDefault();
-      close();
-    }}
-  >
-    <form
-      class="exec-approval-card skill-reader-dialog"
-      @submit=${(event: SubmitEvent) => {
-        event.preventDefault();
-        if (library.importSource) {
-          void library.importClawHub(
-            library.importSlug,
-            library.importSource.slug,
-            library.importSource.version,
-          );
-        } else {
-          void library.importFiles(library.importSelection);
-        }
-      }}
-    >
-      ${renderLibraryDialogHeader(t("skillLibrary.import"), close, library.busy)}
-      <div class="skill-reader-dialog__body skill-library-import">
-        ${!library.importSource && !library.uploadsEnabled ? html`<p role="status">${uploadsDisabledMessage()}</p>` : nothing}
-        <p class="muted">
-          ${
-            library.importSource
-              ? t("skillLibrary.importClawHub", { source: library.importSource.slug })
-              : library.createTarget === "workspace"
-                ? t("skillLibrary.importWorkspace")
-                : t("skillLibrary.importHelp")
-          }
-        </p>
-        <label class="field"
-          ><span>${t("skillLibrary.slug")}</span
-          ><input
-            class="settings-input"
-            required
-            name="library-import-slug"
-            title=${t("skillLibrary.slugHelp")}
-            pattern="[a-z0-9][a-z0-9\\-]{0,62}"
-            .value=${library.importSlug}
-            ?disabled=${library.busy}
-            @input=${(event: Event) => {
-              library.importSlug = libraryEventControl(event, HTMLInputElement).value;
-              library.changed();
-            }}
-        /></label>
+  return renderLibraryDialog(
+    library,
+    html`
+      ${!library.importSource && !library.uploadsEnabled ? html`<p role="status">${uploadsDisabledMessage()}</p>` : nothing}
+      <p class="muted">
         ${
-          !library.importSource && library.uploadsEnabled
-            ? html`<div class="field" role="group" aria-labelledby="library-import-files-label">
-                <span id="library-import-files-label">${t("skillLibrary.files")}</span>
-                <small id="library-import-files-help" class="settings-row__desc">
-                  ${t(
-                    library.createTarget === "workspace"
-                      ? "skillLibrary.workspaceFilesHelp"
-                      : "skillLibrary.filesHelp",
-                  )}
+          library.importSource
+            ? t("skillLibrary.importClawHub", { source: library.importSource.slug })
+            : t("skillLibrary.importHelp")
+        }
+      </p>
+      <label class="field"
+        ><span>${t("skillLibrary.slug")}</span
+        ><input
+          class="settings-input"
+          required
+          name="library-import-slug"
+          title=${t("skillLibrary.slugHelp")}
+          pattern="[a-z0-9][a-z0-9\\-]{0,62}"
+          .value=${library.importSlug}
+          ?disabled=${library.busy}
+          @input=${(event: Event) => {
+            library.importSlug = libraryEventControl(event, HTMLInputElement).value;
+            library.changed();
+          }}
+      /></label>
+      ${
+        !library.importSource && library.uploadsEnabled
+          ? html`<div class="field" role="group" aria-labelledby="library-import-files-label">
+              <span id="library-import-files-label">${t("skillLibrary.files")}</span>
+              <small id="library-import-files-help" class="settings-row__desc">
+                ${t("skillLibrary.filesHelp")}
+              </small>
+              <div class="plugins-toolbar skill-library-import__pickers">
+                ${[false, true].map(
+                  (directory) => html`
+                    <button
+                      type="button"
+                      class="btn"
+                      aria-describedby="library-import-files-help library-import-selection"
+                      ?disabled=${library.busy}
+                      @click=${(event: Event) => {
+                        if (!library.uploadsEnabled) {
+                          return;
+                        }
+                        const input = libraryEventControl(
+                          event,
+                          HTMLButtonElement,
+                        ).nextElementSibling;
+                        if (input instanceof HTMLInputElement) {
+                          input.click();
+                        }
+                      }}
+                    >
+                      ${t(
+                        directory
+                          ? "skillLibrary.chooseFolderButton"
+                          : "skillLibrary.chooseFilesButton",
+                      )}
+                    </button>
+                    <input
+                      type="file"
+                      hidden
+                      ?webkitdirectory=${directory}
+                      multiple
+                      name=${directory ? "library-import-directory" : "library-import-files"}
+                      ?disabled=${library.busy}
+                      @change=${(event: Event) => {
+                        const input = libraryEventControl(event, HTMLInputElement);
+                        library.importSelection = library.uploadsEnabled
+                          ? Array.from(input.files ?? [])
+                          : [];
+                        input.value = "";
+                        library.changed();
+                      }}
+                    />
+                  `,
+                )}
+              </div>
+              <div class="plugins-toolbar">
+                <small id="library-import-selection" class="settings-row__desc" aria-live="polite">
+                  ${selectionLabel}
                 </small>
-                <div class="plugins-toolbar skill-library-import__pickers">
-                  ${[false, true].map(
-                    (directory) => html`
-                      <button
+                ${
+                  selectedFiles.length
+                    ? html`<button
                         type="button"
-                        class="btn"
-                        aria-describedby="library-import-files-help library-import-selection"
+                        class="btn btn--sm btn--ghost"
                         ?disabled=${library.busy}
-                        @click=${(event: Event) => {
-                          if (!library.uploadsEnabled) {
-                            return;
-                          }
-                          const input = libraryEventControl(
-                            event,
-                            HTMLButtonElement,
-                          ).nextElementSibling;
-                          if (input instanceof HTMLInputElement) {
-                            input.click();
-                          }
-                        }}
-                      >
-                        ${t(
-                          directory
-                            ? "skillLibrary.chooseFolderButton"
-                            : "skillLibrary.chooseFilesButton",
-                        )}
-                      </button>
-                      <input
-                        type="file"
-                        hidden
-                        ?webkitdirectory=${directory}
-                        multiple
-                        name=${directory ? "library-import-directory" : "library-import-files"}
-                        ?disabled=${library.busy}
-                        @change=${(event: Event) => {
-                          const input = libraryEventControl(event, HTMLInputElement);
-                          library.importSelection = library.uploadsEnabled
-                            ? Array.from(input.files ?? [])
-                            : [];
-                          input.value = "";
+                        @click=${() => {
+                          library.importSelection = [];
                           library.changed();
                         }}
-                      />
-                    `,
-                  )}
-                </div>
-                <div class="plugins-toolbar">
-                  <small
-                    id="library-import-selection"
-                    class="settings-row__desc"
-                    aria-live="polite"
-                  >
-                    ${selectionLabel}
-                  </small>
-                  ${
-                    selectedFiles.length
-                      ? html`<button
-                          type="button"
-                          class="btn btn--sm btn--ghost"
-                          ?disabled=${library.busy}
-                          @click=${() => {
-                            library.importSelection = [];
-                            library.changed();
-                          }}
-                        >
-                          ${t("skillLibrary.clearSelection")}
-                        </button>`
-                      : nothing
-                  }
-                </div>
-              </div>`
-            : nothing
-        }
-        ${renderLibraryFeedback(library.error)}
-        <button
-          type="submit"
-          class="btn primary"
-          ?disabled=${library.busy || (!library.importSource && (!library.uploadsEnabled || selectedFiles.length === 0))}
-        >
-          ${library.busy ? t("common.loading") : t("skillLibrary.import")}
-        </button>
-      </div>
-    </form>
-  </openclaw-modal-dialog>`;
+                      >
+                        ${t("skillLibrary.clearSelection")}
+                      </button>`
+                    : nothing
+                }
+              </div>
+            </div>`
+          : nothing
+      }
+      ${renderLibraryFeedback(library.error)}
+      <button
+        type="submit"
+        class="btn primary"
+        ?disabled=${library.busy || (!library.importSource && (!library.uploadsEnabled || selectedFiles.length === 0))}
+      >
+        ${library.busy ? t("common.loading") : t("skillLibrary.import")}
+      </button>
+    `,
+  );
 }

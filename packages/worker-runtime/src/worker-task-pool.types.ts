@@ -60,11 +60,15 @@ type WorkerTaskExecutionSettlement = {
 export type WorkerTaskOptions<Input> = {
   /** Known retained input bytes, including inputs captured by a factory. No serialization pass. */
   inputBytes?: number;
-  /** When supplied, queueing and asynchronous preparation consume the execution deadline. */
+  /** Queueing, preparation, execution, and host callbacks consume this deadline. */
   timeoutMs?: number;
+  /** Only callbacks with their own deadline may replace the pool clock during host waits. */
+  hostTimeout?: "owner";
   signal?: AbortSignal;
   transferList?: (input: Input) => readonly Transferable[];
   onRequest?: (value: unknown, context: WorkerTaskRequestContext) => Promise<WorkerTaskResponse>;
+  /** Task-scoped observations; these do not settle work or renew its deadline. */
+  onNotification?: (value: unknown) => void;
   onInputConsumed?: () => void;
   /** Native task receipt before its result; async input preparation and host effects are not joined. */
   onExecutionSettled?: (settlement: WorkerTaskExecutionSettlement) => void;

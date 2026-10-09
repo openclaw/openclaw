@@ -1,5 +1,6 @@
 // Team secret store write transactions: batch upserts, kind inheritance,
 // CAS repair writes, and owner-checked rollback.
+import { expressionBuilder } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -12,7 +13,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { classifyHiddenGitHubStoreName } from "./secret-store-hidden-github.js";
-import { isMissingSecretStoreTableError } from "./secret-store-sqlite.js";
+import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
   assertSecretStoreMutationName,
@@ -24,12 +25,8 @@ import {
 
 type SecretStoreDatabase = Pick<OpenClawStateKyselyDatabase, "secret_store_entries">;
 
-export type SecretStoreWriteParams = SecretStoreWriteEntry & {
-  scope: SecretStoreScope;
-  inheritExistingKind?: boolean;
-  updatedBy: string | null;
-  database?: OpenClawStateDatabaseOptions;
-};
+export type SecretStoreWriteParams = SecretStoreWriteEntry &
+  Omit<SecretStoreBatchWriteParams, "entries">;
 
 export type SecretStoreWriteSnapshot = {
   value: string;
@@ -123,6 +120,12 @@ export function writeSecretStoreEntriesInDatabase(
       });
       for (const { entry, kind, allowedHosts, repair } of resolved) {
         const allowedHostsJson = allowedHosts?.length ? JSON.stringify(allowedHosts) : null;
+        const values = {
+          value: entry.value,
+          updated_at_ms: now,
+          updated_by: params.updatedBy,
+          deleted_at_ms: null,
+        };
         executeSqliteQuerySync(
           sqlite,
           db
@@ -131,21 +134,15 @@ export function writeSecretStoreEntriesInDatabase(
               scope_kind: "team",
               scope_id: "",
               name: entry.name,
-              value: entry.value,
+              ...values,
               kind,
               created_at_ms: now,
-              updated_at_ms: now,
-              updated_by: params.updatedBy,
-              deleted_at_ms: null,
               allowed_hosts: allowedHostsJson,
             })
             .onConflict((conflict) =>
               conflict.columns(["scope_kind", "scope_id", "name"]).doUpdateSet({
-                value: entry.value,
+                ...values,
                 ...(repair ? {} : { kind }),
-                updated_at_ms: now,
-                updated_by: params.updatedBy,
-                deleted_at_ms: null,
                 ...(repair
                   ? {}
                   : kind === "env"
@@ -190,7 +187,7 @@ export function rollbackSecretStoreEntryWriteInDatabase(
 ): boolean {
   assertSecretStoreMutationName(params.name);
   const { now } = params;
-  try {
+  return withMissingSecretStoreFallback(() => {
     return runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
         admit("transaction");
@@ -221,12 +218,7 @@ export function rollbackSecretStoreEntryWriteInDatabase(
       params.database,
       { operationLabel: "secrets.store.rollback-write" },
     );
-  } catch (error) {
-    if (isMissingSecretStoreTableError(error)) {
-      return false;
-    }
-    throw error;
-  }
+  }, false);
 }
 
 export function deleteSecretStoreEntryInDatabase(
@@ -241,34 +233,29 @@ export function deleteSecretStoreEntryInDatabase(
   assertSecretStoreMutationName(params.name);
   const state = openOpenClawStateDatabase(params.database);
   const { now } = params;
-  try {
+  return withMissingSecretStoreFallback(() => {
     runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
         admit("transaction");
         const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
+        const entry = expressionBuilder<SecretStoreDatabase, "secret_store_entries">().and({
+          scope_kind: "team",
+          scope_id: "",
+          name: params.name,
+        });
         const query =
           classifyHiddenGitHubStoreName(params.name) === "setup"
-            ? db
-                .deleteFrom("secret_store_entries")
-                .where("scope_kind", "=", "team")
-                .where("scope_id", "=", "")
-                .where("name", "=", params.name)
+            ? db.deleteFrom("secret_store_entries").where(entry)
             : db
                 .updateTable("secret_store_entries")
                 .set({ deleted_at_ms: now, updated_at_ms: now })
-                .where("scope_kind", "=", "team")
-                .where("scope_id", "=", "")
-                .where("name", "=", params.name)
-                .where("deleted_at_ms", "is", null);
+                .where("deleted_at_ms", "is", null)
+                .where(entry);
         executeSqliteQuerySync(sqlite, query);
         admit("commit");
       },
       { ...params.database, database: state },
       { operationLabel: "secrets.store.delete" },
     );
-  } catch (error) {
-    if (!isMissingSecretStoreTableError(error)) {
-      throw error;
-    }
-  }
+  }, undefined);
 }

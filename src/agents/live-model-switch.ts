@@ -234,7 +234,11 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
       delete next.liveModelSwitchPending;
       return next;
     },
-    { replaceEntry: true, workerGuard: {} },
+    {
+      replaceEntry: true,
+      workerGuard: {},
+      prepareIf: { kind: "live-model-switch-pending" },
+    },
   );
 }
 
@@ -279,6 +283,10 @@ export async function clearLiveModelSwitchPending(params: {
       delete next.liveModelSwitchPending;
       return next;
     },
-    { replaceEntry: true, workerGuard: {} },
+    {
+      replaceEntry: true,
+      workerGuard: {},
+      prepareIf: { kind: "live-model-switch-pending" },
+    },
   );
 }

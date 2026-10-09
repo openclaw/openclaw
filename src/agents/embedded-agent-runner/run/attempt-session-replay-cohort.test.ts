@@ -1,10 +1,10 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { loadTranscriptEventsSync } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import { SessionEntryChangedDuringReadError } from "../../../config/sessions/session-entry-read-errors.js";
+import * as transcriptReaders from "../../../config/sessions/session-transcript-execution-read.js";
 import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";
+import * as historyReaders from "../../../config/sessions/session-transcript-worker-readers.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../../state/openclaw-agent-db.js";
@@ -97,24 +97,26 @@ describe("transcript replay cohorts", () => {
         const reload = vi.spyOn(SessionManager.prototype, "reloadPersistedTranscriptAsync");
         let hydrationReads = 0;
         let messagePresenceReads = 0;
-        // oxlint-disable-next-line typescript/unbound-method -- Preserve the original pool receiver.
-        const run = WorkerTaskPoolCore.prototype.run;
+        const createReaders = historyReaders.createSessionHistoryWorkerReaders;
         const observeReads = vi
-          .spyOn(WorkerTaskPoolCore.prototype, "run")
-          .mockImplementation(async function (
-            this: WorkerTaskPoolCore<unknown, unknown>,
-            input,
-            options,
-          ) {
-            const reply = await run.call(this, input, options);
-            if (isRecord(reply) && reply.ok === true && isRecord(reply.value)) {
-              if (reply.value.kind === "bounded") {
-                hydrationReads++;
-              } else if (reply.value.kind === "transcript-message-presence") {
+          .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+          .mockImplementation((runRequest) => {
+            const readers = createReaders(runRequest);
+            return {
+              ...readers,
+              readTranscript: async (input, signal) => {
+                const prepared = await readers.readTranscript(input, signal);
+                if (prepared.kind === "bounded") {
+                  hydrationReads++;
+                }
+                return prepared;
+              },
+              readMessagePresence: async (input, signal) => {
+                const present = await readers.readMessagePresence(input, signal);
                 messagePresenceReads++;
-              }
-            }
-            return reply;
+                return present;
+              },
+            };
           });
         try {
           const prepared = await fixture.prepare();
@@ -213,31 +215,45 @@ describe("transcript replay cohorts", () => {
           const original = SessionManager.open(fixture.target);
           const validated = createDeferredCore();
           const release = createDeferredCore();
-          // oxlint-disable-next-line typescript/unbound-method -- Preserve the original pool receiver.
-          const run = WorkerTaskPoolCore.prototype.run;
-          const spy = vi
-            .spyOn(WorkerTaskPoolCore.prototype, "run")
-            .mockImplementation(async function (
-              this: WorkerTaskPoolCore<unknown, unknown>,
-              input,
-              options,
-            ) {
-              const reply = await run.call(this, input, options);
-              const value =
-                isRecord(reply) && reply.ok === true && isRecord(reply.value)
-                  ? reply.value
-                  : undefined;
-              const facts = isRecord(value?.facts)
-                ? value.facts
-                : isRecord(value?.transcript)
-                  ? value.transcript
-                  : undefined;
-              if (facts?.replayValidated === "current") {
-                validated.resolve();
-                await release.promise;
-              }
-              return reply;
-            });
+          const createPreparedReads = transcriptReaders.createPreparedSessionTranscriptReads;
+          const createHistoryReads = historyReaders.createSessionHistoryWorkerReaders;
+          const spy =
+            phase === "legacy-final"
+              ? vi
+                  .spyOn(transcriptReaders, "createPreparedSessionTranscriptReads")
+                  .mockImplementation((params) => {
+                    const readers = createPreparedReads(params);
+                    return {
+                      ...readers,
+                      readAnchors: async (input, signal) => {
+                        const facts = await readers.readAnchors(input, signal);
+                        if (facts.replayValidated === "current") {
+                          validated.resolve();
+                          await release.promise;
+                        }
+                        return facts;
+                      },
+                    };
+                  })
+              : vi
+                  .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+                  .mockImplementation((runRequest) => {
+                    const readers = createHistoryReads(runRequest);
+                    return {
+                      ...readers,
+                      readTranscript: async (input, signal) => {
+                        const prepared = await readers.readTranscript(input, signal);
+                        if (
+                          prepared.kind === "bounded" &&
+                          prepared.transcript?.replayValidated === "current"
+                        ) {
+                          validated.resolve();
+                          await release.promise;
+                        }
+                        return prepared;
+                      },
+                    };
+                  });
           const consume = vi.fn();
           const pending = phase === "selected-initial" ? fixture.prepare() : admit!(consume);
           let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;

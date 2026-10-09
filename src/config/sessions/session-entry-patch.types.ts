@@ -18,6 +18,23 @@ import type {
 } from "./session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
+export type SessionEntryUpdater = (
+  entry: SessionEntry,
+  context: SessionEntryPatchContext,
+) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+
+// Callback preparation precedes BEGIN; fixed operations evaluate the transaction's current rows.
+export type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
+  /** Audited internal updaters: no nested writer admission; guards retain only host authority. */
+  workerGuard?: SessionEntryPatchGuard;
+  /** A negative current-row selection ends this internal operation before callback preparation. */
+  prepareIf?: { kind: "live-model-switch-pending" };
+  /** Recheck owner cancellation after async preparation, immediately before committing. */
+  shouldCommit?: () => boolean;
+  /** Synchronous owner bookkeeping after COMMIT, before identity observers can cancel the caller. */
+  onCommitted?: SessionEntryPatchCommitObserver;
+};
+
 export type SessionEntryPatchSelection =
   | { kind: "entry"; sessionKey: string; exact: boolean }
   | { kind: "target"; target: { canonicalKey: string; storeKeys: string[] } };
@@ -75,20 +92,6 @@ export type SessionEntryPatchCommitObserver = (
   /** Historical predicate facts from the committed transaction, never current authority. */
   transcriptPredicate?: SessionEntryPatchCommitted["transcriptPredicate"],
 ) => void;
-
-export type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
-  /** Audited internal updaters: no nested writer admission; guards retain only host authority. */
-  workerGuard?: SessionEntryPatchGuard;
-  /** Recheck owner cancellation after async preparation, immediately before committing. */
-  shouldCommit?: () => boolean;
-  /** Synchronous owner bookkeeping after COMMIT, before identity observers can cancel the caller. */
-  onCommitted?: SessionEntryPatchCommitObserver;
-};
-
-export type SessionEntryUpdater = (
-  entry: SessionEntry,
-  context: SessionEntryPatchContext,
-) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
 
 export type SqliteSessionEntrySnapshotPatchParams = {
   capturedSource?: CapturedSessionEntryReadSource;

@@ -20,6 +20,7 @@ import {
   buildIMessageApprovalConversationKeyForInbound,
   enumerateApprovalTargetKeys,
   normalizeConversationKey,
+  resolveIMessageApprovalControlActor,
   type IMessageApprovalConversationKey,
 } from "./approval-target-keys.js";
 import { normalizeIMessageGuid } from "./message-guid.js";
@@ -309,21 +310,7 @@ function readPollVoteEvent(message: IMessagePayload): ApprovalPollVoteEvent | nu
       (typeof poll.poll_guid === "string" && poll.poll_guid) ||
       "",
   );
-  // chat.db authenticates received rows through sender. Released imsg fills an
-  // empty sender from destination_caller_id before serialization, so reject a
-  // received row when those identities are equal: its remote actor is
-  // indistinguishable from the local-account fallback. Paired-device self-sends
-  // may use destination_caller_id only when is_from_me is authoritative.
-  const sender = normalizeIMessageHandle(message.sender ?? "");
-  const destinationCallerId = normalizeIMessageHandle(message.destination_caller_id ?? "");
-  const receivedSenderIsLocalFallback =
-    message.is_from_me !== true &&
-    Boolean(sender) &&
-    Boolean(destinationCallerId) &&
-    sender === destinationCallerId;
-  const actorHandle =
-    (receivedSenderIsLocalFallback ? "" : sender) ||
-    (message.is_from_me === true ? destinationCallerId : "");
+  const actorHandle = resolveIMessageApprovalControlActor(message);
   if (!pollGuid || !actorHandle) {
     return null;
   }
@@ -356,13 +343,7 @@ function readPollVoteEvent(message: IMessagePayload): ApprovalPollVoteEvent | nu
       },
     ];
   });
-  const conversation = buildIMessageApprovalConversationKeyForInbound({
-    chatGuid: message.chat_guid,
-    chatIdentifier: message.chat_identifier,
-    chatId: message.chat_id,
-    isGroup: message.is_group,
-    actorHandle,
-  });
+  const conversation = buildIMessageApprovalConversationKeyForInbound(message, actorHandle);
   if (!normalizeConversationKey(conversation)) {
     return null;
   }

@@ -109,6 +109,20 @@ it("reads each in-transaction fence advance and restores the prior pair on rollb
     expect(read()).toEqual({ observedAt: 10, updatedAt: 20 });
     expect(() =>
       runOpenClawAgentWriteTransaction((current) => {
+        advanceTranscriptMutationAtInTransaction(current, "hot", 1);
+        expect(read()).toEqual({ observedAt: 10, updatedAt: 20 });
+        advanceTranscriptMutationAtInTransaction(current, "hot", 25.9);
+        expect(read()).toEqual({ observedAt: 10, updatedAt: 25 });
+        advanceTranscriptMutationAtInTransaction(current, "empty", 0);
+        expect(readTranscriptMutationStateInTransaction(current, "empty")).toEqual({
+          observedAt: 1,
+          updatedAt: 0,
+        });
+        advanceTranscriptMutationAtInTransaction(current, "empty", 0, { strictly: true });
+        expect(readTranscriptMutationStateInTransaction(current, "empty")).toEqual({
+          observedAt: 1,
+          updatedAt: 2,
+        });
         current.db
           .prepare("UPDATE session_windows SET transcript_observed_at = 100 WHERE session_id = ?")
           .run("hot");

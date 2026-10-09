@@ -52,18 +52,14 @@ export function resolveFinalDoctorHealthContributions(params: {
   runGatewayHealthChecks: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution[] {
   return [
-    createDoctorHealthContribution({
-      id: "doctor:gateway-services",
-      label: "Gateway services",
+    createDoctorHealthContribution("doctor:gateway-services", "Gateway services", {
       healthCheckIds: [
         "core/doctor/gateway-services/extra",
         "core/doctor/gateway-services/platform-notes",
       ],
       run: runGatewayServicesHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:host-desktop",
-      label: "Host desktop",
+    createDoctorHealthContribution("doctor:host-desktop", "Host desktop", {
       healthChecks: {
         description: "Gateway-host desktop enablement, reachability, and RFB security state.",
         defaultEnabled: false,
@@ -75,9 +71,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
       run: runHostDesktopHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:default-account-routing",
-      label: "Default account routing",
+    createDoctorHealthContribution("doctor:default-account-routing", "Default account routing", {
       updateWork: { kind: "inspection", scope: "run" },
       healthChecks: {
         description: "Multi-account channels have explicit default routing or complete bindings.",
@@ -98,97 +92,91 @@ export function resolveFinalDoctorHealthContributions(params: {
         },
       },
     }),
-    createDoctorHealthContribution({
-      id: "doctor:channel-package-state-capabilities",
-      label: "Channel package-state capabilities",
-      healthChecks: {
-        id: CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID,
-        description: "Declared channel package-state checker modules must load.",
-        defaultEnabled: true,
-        async detect(ctx) {
-          if (shouldDeferConfiguredPluginInstallRepair(ctx.env ?? process.env)) {
-            return [];
-          }
-          const { collectBundledChannelPackageStateLoadFailures } =
-            await import("../channels/plugins/package-state-probes.js");
-          return collectBundledChannelPackageStateLoadFailures().map((failure) => ({
-            checkId: CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID,
-            severity: "warning" as const,
-            message: `Plugin ${failure.pluginId} declared ${failure.metadataKey}, but its checker failed to load: ${failure.detail}`,
-            target: failure.pluginId,
-            requirement: "declared-channel-package-state-capability-loadable",
-            fixHint: `Rebuild or reinstall plugin ${failure.pluginId}, then rerun \`openclaw doctor\`.`,
-          }));
+    createDoctorHealthContribution(
+      "doctor:channel-package-state-capabilities",
+      "Channel package-state capabilities",
+      {
+        healthChecks: {
+          id: CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID,
+          description: "Declared channel package-state checker modules must load.",
+          defaultEnabled: true,
+          async detect(ctx) {
+            if (shouldDeferConfiguredPluginInstallRepair(ctx.env ?? process.env)) {
+              return [];
+            }
+            const { collectBundledChannelPackageStateLoadFailures } =
+              await import("../channels/plugins/package-state-probes.js");
+            return collectBundledChannelPackageStateLoadFailures().map((failure) => ({
+              checkId: CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID,
+              severity: "warning" as const,
+              message: `Plugin ${failure.pluginId} declared ${failure.metadataKey}, but its checker failed to load: ${failure.detail}`,
+              target: failure.pluginId,
+              requirement: "declared-channel-package-state-capability-loadable",
+              fixHint: `Rebuild or reinstall plugin ${failure.pluginId}, then rerun \`openclaw doctor\`.`,
+            }));
+          },
         },
       },
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:startup-channel-maintenance",
-      label: "Startup channel maintenance",
-      healthChecks: [
-        {
-          id: "core/doctor/channel-plugin-blockers",
-          description: "Configured channels must have loadable backing channel plugins.",
-          defaultEnabled: false,
-          async detect(ctx) {
-            const { channelPluginBlockerHitToHealthFinding, scanConfiguredChannelPluginBlockers } =
-              await import("../commands/doctor/shared/channel-plugin-blockers.js");
-            return scanConfiguredChannelPluginBlockers(ctx.cfg, process.env).map(
-              channelPluginBlockerHitToHealthFinding,
-            );
+    ),
+    createDoctorHealthContribution(
+      "doctor:startup-channel-maintenance",
+      "Startup channel maintenance",
+      {
+        healthChecks: [
+          {
+            id: "core/doctor/channel-plugin-blockers",
+            description: "Configured channels must have loadable backing channel plugins.",
+            defaultEnabled: false,
+            async detect(ctx) {
+              const {
+                channelPluginBlockerHitToHealthFinding,
+                scanConfiguredChannelPluginBlockers,
+              } = await import("../commands/doctor/shared/channel-plugin-blockers.js");
+              return scanConfiguredChannelPluginBlockers(ctx.cfg, process.env).map(
+                channelPluginBlockerHitToHealthFinding,
+              );
+            },
           },
-        },
-        {
-          id: "core/doctor/channel-preview-warnings",
-          description: "Channel doctor preview warnings are captured as structured findings.",
-          defaultEnabled: false,
-          async detect(ctx) {
-            const { collectChannelPreviewWarningHealthFindings } =
-              await import("./doctor-startup-channel-maintenance.js");
-            return collectChannelPreviewWarningHealthFindings({
-              cfg: ctx.cfg,
-              allowExec: ctx.allowExecSecretRefs === true,
-            });
+          {
+            id: "core/doctor/channel-preview-warnings",
+            description: "Channel doctor preview warnings are captured as structured findings.",
+            defaultEnabled: false,
+            async detect(ctx) {
+              const { collectChannelPreviewWarningHealthFindings } =
+                await import("./doctor-startup-channel-maintenance.js");
+              return collectChannelPreviewWarningHealthFindings({
+                cfg: ctx.cfg,
+                allowExec: ctx.allowExecSecretRefs === true,
+              });
+            },
           },
-        },
-      ],
-      run: runStartupChannelMaintenanceHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:security",
-      label: "Security",
+        ],
+        run: runStartupChannelMaintenanceHealth,
+      },
+    ),
+    createDoctorHealthContribution("doctor:security", "Security", {
       updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/security"],
       run: runSecurityHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:web-fetch-proxy",
-      label: "Web fetch proxy",
+    createDoctorHealthContribution("doctor:web-fetch-proxy", "Web fetch proxy", {
       updateWork: { kind: "inspection", scope: "run" },
       run: runWebFetchProxyHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:github-projects",
-      label: "GitHub projects",
+    createDoctorHealthContribution("doctor:github-projects", "GitHub projects", {
       updateWork: { kind: "standalone" },
       run: runGitHubProjectHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:browser",
-      label: "Browser",
+    createDoctorHealthContribution("doctor:browser", "Browser", {
       healthCheckIds: ["core/doctor/browser"],
       run: runBrowserHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:oauth-tls",
-      label: "OAuth TLS",
+    createDoctorHealthContribution("doctor:oauth-tls", "OAuth TLS", {
       updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/oauth-tls"],
       run: runOpenAIOAuthTlsHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:hooks-model",
-      label: "Hooks model",
+    createDoctorHealthContribution("doctor:hooks-model", "Hooks model", {
       updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/hooks-model"],
       run: runHooksModelHealth,
@@ -201,20 +189,15 @@ export function resolveFinalDoctorHealthContributions(params: {
         ["local-audio-acceleration", "Local audio acceleration", "run"],
         ["runtime-tool-schemas", "Runtime tool schemas", "agent"],
         ["skill-workshop-tool-policy", "Skill Workshop tool policy", "agent"],
-        ["skill-workshop-relocation", "Skill Workshop relocation"],
       ] as const
     ).map(([name, label, scope]) =>
-      createDoctorHealthContribution({
-        id: `doctor:${name}`,
-        label,
-        ...(scope ? { updateWork: { kind: "inspection", scope } as const } : {}),
+      createDoctorHealthContribution(`doctor:${name}`, label, {
+        updateWork: { kind: "inspection", scope },
         healthCheckIds: [`core/doctor/${name}`],
         run: (ctx) => runCoreHealthFindingNote(ctx, `core/doctor/${name}`),
       }),
     ),
-    createDoctorHealthContribution({
-      id: "doctor:systemd-linger",
-      label: "systemd linger",
+    createDoctorHealthContribution("doctor:systemd-linger", "systemd linger", {
       healthChecks: {
         description: "Disabled systemd user lingering is reported as a finding.",
         defaultEnabled: false,
@@ -222,9 +205,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
       run: params.runSystemdLingerHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:workspace-status",
-      label: "Workspace status",
+    createDoctorHealthContribution("doctor:workspace-status", "Workspace status", {
       updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Workspace plugin/status diagnostics are exposed as findings.",
@@ -248,17 +229,13 @@ export function resolveFinalDoctorHealthContributions(params: {
     }),
     ...(isExperimentalClawsEnabled()
       ? [
-          createDoctorHealthContribution({
-            id: "doctor:claws-state",
-            label: "Claws state",
+          createDoctorHealthContribution("doctor:claws-state", "Claws state", {
             healthCheckIds: ["core/doctor/claws-state"],
             run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/claws-state"),
           }),
         ]
       : []),
-    createDoctorHealthContribution({
-      id: "doctor:workspace-alias",
-      label: "Workspace alias",
+    createDoctorHealthContribution("doctor:workspace-alias", "Workspace alias", {
       healthChecks: {
         description:
           "Persisted workspace aliases must resolve to the canonical target that owns their stored state.",
@@ -271,51 +248,49 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
       run: runWorkspaceAliasHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:skills",
-      label: "Skills",
+    createDoctorHealthContribution("doctor:skills", "Skills", {
       updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthCheckIds: ["core/doctor/skills-readiness"],
       run: runSkillsHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:bootstrap-size",
-      label: "Bootstrap size",
+    createDoctorHealthContribution("doctor:bootstrap-size", "Bootstrap size", {
       updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/bootstrap-size"],
       run: runBootstrapSizeHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:heartbeat-cadence-migration",
-      label: "Heartbeat cadence migration",
-      healthChecks: {
-        description: "Heartbeat cadence config must be materialized in cron monitor rows.",
-        defaultEnabled: true,
-        async detect(ctx) {
-          const { collectHeartbeatCadenceMigrationFindings } =
-            await import("../commands/doctor-heartbeat-cadence-migration.js");
-          return collectHeartbeatCadenceMigrationFindings(ctx.cfg, ctx.env);
+    createDoctorHealthContribution(
+      "doctor:heartbeat-cadence-migration",
+      "Heartbeat cadence migration",
+      {
+        healthChecks: {
+          description: "Heartbeat cadence config must be materialized in cron monitor rows.",
+          defaultEnabled: true,
+          async detect(ctx) {
+            const { collectHeartbeatCadenceMigrationFindings } =
+              await import("../commands/doctor-heartbeat-cadence-migration.js");
+            return collectHeartbeatCadenceMigrationFindings(ctx.cfg, ctx.env);
+          },
         },
+        run: runHeartbeatCadenceMigrationHealth,
       },
-      run: runHeartbeatCadenceMigrationHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:heartbeat-scratch-migration",
-      label: "Heartbeat scratch migration",
-      healthChecks: {
-        description: "Workspace HEARTBEAT.md files must migrate into cron-owned scratch.",
-        defaultEnabled: true,
-        async detect(ctx) {
-          const { collectHeartbeatScratchMigrationFindings } =
-            await import("../commands/doctor-heartbeat-scratch-migration.js");
-          return collectHeartbeatScratchMigrationFindings(ctx.cfg);
+    ),
+    createDoctorHealthContribution(
+      "doctor:heartbeat-scratch-migration",
+      "Heartbeat scratch migration",
+      {
+        healthChecks: {
+          description: "Workspace HEARTBEAT.md files must migrate into cron-owned scratch.",
+          defaultEnabled: true,
+          async detect(ctx) {
+            const { collectHeartbeatScratchMigrationFindings } =
+              await import("../commands/doctor-heartbeat-scratch-migration.js");
+            return collectHeartbeatScratchMigrationFindings(ctx.cfg);
+          },
         },
+        run: runHeartbeatScratchMigrationHealth,
       },
-      run: runHeartbeatScratchMigrationHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:tools-md-migration",
-      label: "TOOLS.md migration",
+    ),
+    createDoctorHealthContribution("doctor:tools-md-migration", "TOOLS.md migration", {
       healthChecks: {
         description: "Workspace TOOLS.md notes must migrate into the AGENTS.md Tools section.",
         defaultEnabled: true,
@@ -327,35 +302,31 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
       run: runToolsMdMigrationHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:heartbeat-task-cron-migration",
-      label: "Heartbeat task cron migration",
-      healthChecks: {
-        description: "Heartbeat scratch task blocks must migrate into automations.",
-        defaultEnabled: true,
-        async detect(ctx) {
-          const { collectHeartbeatTaskMigrationFindings } =
-            await import("../commands/doctor-heartbeat-task-migration.js");
-          return collectHeartbeatTaskMigrationFindings(ctx.cfg, ctx.env);
+    createDoctorHealthContribution(
+      "doctor:heartbeat-task-cron-migration",
+      "Heartbeat task cron migration",
+      {
+        healthChecks: {
+          description: "Heartbeat scratch task blocks must migrate into automations.",
+          defaultEnabled: true,
+          async detect(ctx) {
+            const { collectHeartbeatTaskMigrationFindings } =
+              await import("../commands/doctor-heartbeat-task-migration.js");
+            return collectHeartbeatTaskMigrationFindings(ctx.cfg, ctx.env);
+          },
         },
+        run: runHeartbeatTaskMigrationHealth,
       },
-      run: runHeartbeatTaskMigrationHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:shell-completion",
-      label: "Shell completion",
+    ),
+    createDoctorHealthContribution("doctor:shell-completion", "Shell completion", {
       healthCheckIds: ["core/doctor/shell-completion"],
       run: params.runShellCompletionHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:gateway-health",
-      label: "Gateway health",
+    createDoctorHealthContribution("doctor:gateway-health", "Gateway health", {
       healthCheckIds: ["core/doctor/gateway-health"],
       run: params.runGatewayHealthChecks,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:whatsapp-responsiveness",
-      label: "WhatsApp responsiveness",
+    createDoctorHealthContribution("doctor:whatsapp-responsiveness", "WhatsApp responsiveness", {
       updateWork: { kind: "inspection", scope: "run" },
       healthChecks: {
         description: "Gateway pressure and local TUI observations when WhatsApp is enabled.",
@@ -389,9 +360,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
       run: runWhatsappResponsivenessHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:memory-search",
-      label: "Memory search",
+    createDoctorHealthContribution("doctor:memory-search", "Memory search", {
       updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthChecks: {
         description: "Memory search provider and backend readiness are captured as findings.",
@@ -404,9 +373,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
       run: runMemorySearchHealthContribution,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:device-pairing",
-      label: "Device pairing",
+    createDoctorHealthContribution("doctor:device-pairing", "Device pairing", {
       healthChecks: {
         description: "Device pairing requests and stale device-auth records are findings.",
         defaultEnabled: false,
@@ -422,15 +389,11 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
       run: runDevicePairingHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:gateway-daemon",
-      label: "Gateway daemon",
+    createDoctorHealthContribution("doctor:gateway-daemon", "Gateway daemon", {
       healthCheckIds: ["core/doctor/gateway-daemon"],
       run: runGatewayDaemonHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:write-config",
-      label: "Write config",
+    createDoctorHealthContribution("doctor:write-config", "Write config", {
       updateWork: { kind: "finalize" },
       healthChecks: {
         description: "Config write blockers are findings before doctor repair writes.",
@@ -441,16 +404,12 @@ export function resolveFinalDoctorHealthContributions(params: {
         await runWriteConfigHealth(ctx);
       },
     }),
-    createDoctorHealthContribution({
-      id: "doctor:workspace-suggestions",
-      label: "Workspace suggestions",
+    createDoctorHealthContribution("doctor:workspace-suggestions", "Workspace suggestions", {
       updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/workspace-suggestions"],
       run: runWorkspaceSuggestionsHealth,
     }),
-    createDoctorHealthContribution({
-      id: "doctor:final-config-validation",
-      label: "Final config validation",
+    createDoctorHealthContribution("doctor:final-config-validation", "Final config validation", {
       updateWork: { kind: "finalize" },
       healthCheckIds: ["core/doctor/final-config-validation"],
       run: runFinalConfigValidationHealth,

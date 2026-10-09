@@ -145,3 +145,43 @@ it("resolves provider-qualified aliases without cross-provider collisions", () =
     }),
   ).toEqual({ ref: { provider: "lmstudio-dense", model: "qwen3.6-27b" }, alias: "Local" });
 });
+
+it.each([
+  { raw: "fixture/reasoner", alias: "reasoner", expected: "reasoner" },
+  { raw: "fixture/reasoner@work", alias: "reasoner", expected: "reasoner" },
+  { raw: "fixture/reasoner", alias: "fixture/reasoner", expected: "reasoner" },
+  { raw: "fixture/reasoner@work", alias: "fixture/reasoner", expected: "reasoner" },
+  { raw: "reasoner", alias: "reasoner", expected: "backup" },
+  { raw: "fixture/friendly", alias: "friendly", expected: "backup" },
+])(
+  "keeps exact configured model identity for $raw with alias $alias",
+  ({ raw, alias, expected }) => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: raw, models: { "fixture/backup": { alias } } } },
+      models: {
+        providers: {
+          fixture: {
+            baseUrl: "http://127.0.0.1:8080/v1",
+            api: "openai-completions",
+            models: ["reasoner", "backup"].map((id) => ({
+              id,
+              name: id,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 32768,
+              maxTokens: 4096,
+            })),
+          },
+        },
+      },
+    };
+    const aliasIndex = buildModelAliasIndex({ ...context, cfg, defaultProvider: "openai" });
+
+    expect(resolveConfiguredRefForTest(cfg)).toEqual({ provider: "fixture", model: expected });
+    expect(
+      resolveModelRefFromString({ ...context, cfg, raw, defaultProvider: "openai", aliasIndex })
+        ?.ref,
+    ).toEqual({ provider: "fixture", model: expected });
+  },
+);

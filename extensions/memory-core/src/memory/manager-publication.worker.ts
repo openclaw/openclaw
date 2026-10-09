@@ -152,6 +152,13 @@ function createPublicationBackend(
     ): MemoryPublicationResult<T> => {
       let entered = false;
       let committed = false;
+      let restoredBusyTimeout = false;
+      const restoreBusyTimeout = () => {
+        if (!restoredBusyTimeout) {
+          db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
+          restoredBusyTimeout = true;
+        }
+      };
       try {
         assertPath();
         // Failed BEGIN is returned to the preparing host without sleeping here.
@@ -160,7 +167,7 @@ function createPublicationBackend(
         const value = run({
           onBegin: () => {
             entered = true;
-            db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
+            restoreBusyTimeout();
             assertPath();
             admit("transaction");
           },
@@ -176,7 +183,7 @@ function createPublicationBackend(
         return { ok: false, error: failure(error), entered, committed };
       } finally {
         if (db.isOpen) {
-          db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
+          restoreBusyTimeout();
         }
       }
     };

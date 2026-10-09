@@ -1,5 +1,4 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
@@ -14,15 +13,13 @@ import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
-import {
-  hasSessionTranscriptMessageInDatabase,
-  loadTranscriptEventRowsAfterSeqInDatabase,
-} from "./session-accessor.sqlite-read.js";
+import { hasSessionTranscriptMessageInDatabase } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
   readActiveTranscriptEntryAnchorFromProjection,
   readActiveTranscriptEntryAnchorInTransaction,
 } from "./session-accessor.sqlite-transcript-anchor.js";
+import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-transcript-incremental-read.js";
 import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
@@ -266,7 +263,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
     return readAnchors();
   };
   return database.db.isTransaction
-    ? runSqliteReadOperationSync(database.db, read)
+    ? read()
     : runSqliteDeferredTransactionSync(database.db, read, {
         databaseLabel: database.path,
         operationLabel: "session transcript anchors read",

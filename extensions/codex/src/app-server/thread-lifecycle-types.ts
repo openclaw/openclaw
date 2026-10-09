@@ -79,11 +79,10 @@ export type CodexStartOrResumeThreadParams = Omit<
   dynamicTools: CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
   agentWorkspaceDeveloperInstructions?: string;
-  finalConfigPatch?: JsonObject;
   buildFinalConfigPatch?: (
     decision: CodexThreadFinalConfigPatchDecision,
+    client: CodexAppServerClient,
   ) => CodexThreadFinalConfigPatchResult | Promise<CodexThreadFinalConfigPatchResult>;
-  nativeHookRelayGeneration?: string;
   /** Session-layer PreToolUse hooks must survive authoritative managed hook requirements. */
   nativeHookRelayRequired?: boolean;
   /** A retained operator source can keep legacy hooks off only while its model policy is absent. */

@@ -4,6 +4,7 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
@@ -14,9 +15,16 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
+import { waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
+import {
+  acknowledgeReplySessionTransition,
+  captureReplyOperationSessionReader,
+  getReplyOperationSessionReader,
+} from "./reply-run-registry.state.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
 
 afterEach(() => {
   testing.resetReplyRunRegistry();
@@ -84,7 +92,7 @@ it("prepares embedded tool authority without caller-thread SQL and refuses a clo
 });
 
 it.each(["main", "policy", "borrowed"] as const)(
-  "rereads %s-agent sandbox policy after a foreign commit before projecting steering",
+  "retains the %s-agent source while rereading foreign sandbox policy before steering",
   async (policyAgent) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const policyAgentId = policyAgent === "borrowed" ? "main" : policyAgent;
@@ -121,7 +129,7 @@ it.each(["main", "policy", "borrowed"] as const)(
         throw new Error("Expected admitted session reader");
       }
       const discovery = vi.spyOn(sessionReaders, "prepareGatewaySessionEntryReadOnlyInWorker");
-      const snapshot = prepareReplyToolAuthority(run, undefined, reader);
+      const snapshot = prepareReplyToolAuthority(run, undefined, () => reader);
       try {
         const operation = createTestReplyOperation({
           sessionKey: executionKey,
@@ -170,6 +178,7 @@ it.each(["main", "policy", "borrowed"] as const)(
           if (reader) {
             expect(discovery).not.toHaveBeenCalled();
           }
+          discovery.mockClear();
           await expect(
             operation.projectToolAuthorityFingerprintAsync({
               senderIsOwner: run.run.senderIsOwner === true,
@@ -178,7 +187,7 @@ it.each(["main", "policy", "borrowed"] as const)(
             }),
           ).resolves.toBeUndefined();
           calls.expectIdle();
-          expect(discovery).toHaveBeenCalled();
+          expect(discovery).not.toHaveBeenCalled();
           if (admission) {
             await admission.databaseClaim.release();
             discovery.mockClear();
@@ -191,6 +200,107 @@ it.each(["main", "policy", "borrowed"] as const)(
       } finally {
         discovery.mockRestore();
         await admission?.databaseClaim.release();
+      }
+    });
+  },
+);
+
+it.each(["execution", "separate"] as const)(
+  "retains frozen %s-policy authority across an acknowledged compaction reader handoff",
+  async (classification) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: executionKey,
+        storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+      };
+      const original = {
+        sessionId: "execution",
+        lifecycleRevision: "original",
+        updatedAt: Date.now(),
+      };
+      await upsertSessionEntryCore(scope, original);
+      if (classification === "separate") {
+        await upsertSessionEntryCore(
+          { ...scope, sessionKey: policyKey },
+          { sessionId: "policy", lifecycleRevision: "policy", updatedAt: Date.now() },
+        );
+      }
+      await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+      const admitted = await admitReplyTurn({
+        ...scope,
+        sessionId: original.sessionId,
+        kind: "visible",
+        resetTriggered: false,
+      });
+      if (admitted.status !== "owned") {
+        throw new Error("Fixture requires retained reply admission");
+      }
+      const run = createQueueTestRun({ prompt: "authority after compaction" });
+      Object.assign(run.run, {
+        agentId: "main",
+        sessionKey: executionKey,
+        sessionId: original.sessionId,
+        sessionFile: executionKey,
+        workspaceDir: state.workspaceDir,
+        runtimePolicySessionKey: classification === "separate" ? policyKey : executionKey,
+        config: {},
+      });
+      const reader = getReplyOperationSessionReader(admitted.operation);
+      if (!reader) {
+        throw new Error("Fixture requires an execution reader");
+      }
+      const snapshot = prepareReplyToolAuthority(
+        run,
+        undefined,
+        captureReplyOperationSessionReader(admitted.operation),
+      );
+      // Main's independent policy lookup already refuses a changed classification identity.
+      const independent = prepareReplyToolAuthority(run);
+      const discovery = vi.spyOn(sessionReaders, "prepareGatewaySessionEntryReadOnlyInWorker");
+      try {
+        await admitted.operation.bindToolAuthoritySnapshotAsync(snapshot);
+        const fingerprint = await admitted.operation.bindToolAuthorityRouteAsync(run.run);
+        await expect(independent.fingerprintAsync(run.run)).resolves.toBe(fingerprint);
+        const accepted = await acceptCompactionSuccessor({
+          currentTarget: { ...scope, sessionId: original.sessionId },
+          expectedEntry: { ...original, activeWriterRunId: undefined },
+          assertActive: () => admitted.operation.abortSignal.throwIfAborted(),
+          result: {
+            ok: true,
+            compacted: true,
+            result: { sessionId: "compacted-execution", tokensBefore: 0 },
+          },
+        });
+        if (!accepted.admissionTransition) {
+          throw new Error("Compaction must acknowledge the committed identity transition");
+        }
+        await acknowledgeReplySessionTransition(admitted.operation, accepted.admissionTransition);
+        admitted.operation.updateSessionId(accepted.sessionId);
+        expect(() => reader.assertCurrent()).toThrow(/released/u);
+        if (classification === "separate") {
+          await expect(independent.fingerprintAsync(run.run)).resolves.toBe(fingerprint);
+          await expect(snapshot.fingerprintAsync(run.run)).resolves.toBe(fingerprint);
+          await expect(admitted.operation.bindToolAuthorityRouteAsync(run.run)).resolves.toBe(
+            fingerprint,
+          );
+        } else {
+          await expect(independent.fingerprintAsync(run.run)).rejects.toThrow(
+            "Tool authority classification source changed",
+          );
+          await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow(
+            "Tool authority classification source changed",
+          );
+        }
+        admitted.operation.complete();
+        await waitForReplyRunSuccessorAdmission(executionKey, null);
+        discovery.mockClear();
+        await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
+        expect(discovery).not.toHaveBeenCalled();
+      } finally {
+        discovery.mockRestore();
+        admitted.operation.complete();
+        await waitForReplyRunSuccessorAdmission(executionKey, null);
       }
     });
   },

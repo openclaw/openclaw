@@ -49,6 +49,20 @@ to that thread with the person's existing permissions. Identity headers on the
 anonymous thread path do not authorize private access. Private and missing
 threads have the same anonymous unavailable response.
 
+In token/password deployments, the reader can recognize a browser-held session
+token or paired-device credential scoped to the current Gateway address and base
+path. After the protected probe returns `401`, that presence is only a navigation
+hint to open the app shell; the reader never sends the credential or authorizes
+session data. The app's existing WebSocket and bootstrap checks still apply.
+A `204` probe continues into the app, while `403` keeps the public reader even
+when local credentials exist. Trusted-proxy and external-login handoffs retain
+their existing authentication and permission checks.
+
+Loopback HTTP retains its public-reader support. On non-secure ingress where
+publication is unavailable, token/password chat links serve the app shell
+directly, without looking up or disclosing a transcript. Serving the shell grants
+no Gateway or session access.
+
 The public renderer includes only user messages and assistant final-answer text.
 It omits tools, reasoning, files, images, widgets, hidden messages, and internal
 metadata, and applies best-effort credential-pattern redaction. A restrictive

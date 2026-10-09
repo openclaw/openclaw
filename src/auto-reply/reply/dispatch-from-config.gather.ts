@@ -107,7 +107,9 @@ export async function gatherDispatchRequest(
   const state = {
     params: normalizedParams,
     messageAuditTerminal,
-    allowInboundHandlers: replyOperationRunState.heartbeat === undefined,
+    allowInboundHandlers:
+      replyOperationRunState.heartbeat === undefined &&
+      !params.replyOptions?.internalEventExecution,
     get inboundDedupeReplayUnsafe() {
       // Read the recorded input outcome even when source adoption or cleanup fails.
       // Queued followups have not transferred custody to the active run yet.
@@ -381,15 +383,10 @@ export async function gatherDispatchRequest(
   };
   const resolveOperationExpectedSessionId = () =>
     preparedOperationSessionBinding?.sessionId ?? operationSessionStoreEntry.entry?.sessionId;
-  const resolvePreparedTranscriptBinding = (mirrorSessionKey?: string) => {
-    if (
-      !preparedSessionBinding ||
-      !sessionKeysMatch(mirrorSessionKey, preparedSessionBinding.sessionKey)
-    ) {
-      return undefined;
-    }
-    return preparedSessionBinding;
-  };
+  const resolvePreparedTranscriptBinding = (mirrorSessionKey?: string) =>
+    preparedSessionBinding && sessionKeysMatch(mirrorSessionKey, preparedSessionBinding.sessionKey)
+      ? preparedSessionBinding
+      : undefined;
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: acpDispatchSessionKey,
     config: cfg,
@@ -446,6 +443,7 @@ export async function gatherDispatchRequest(
         const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
         return await loadPublishedGatewayReplyDispatchRuntime({
           agentId: preparedReplyDispatchAgentId,
+          demand: params.replyOptions?.isHeartbeat ? "scheduled" : "interactive",
           abortSignal: params.replyOptions?.abortSignal,
         });
       },

@@ -119,6 +119,21 @@ export function formatClawHubSkillRef(ref: ClawHubSkillRef): string {
   return ref.ownerHandle ? `@${ref.ownerHandle}/${ref.slug}` : ref.slug;
 }
 
+export function describeClawHubSkillRefMismatch(
+  requested: ClawHubSkillRef,
+  tracked: Pick<ClawHubSkillRef, "ownerHandle" | "requestedReference">,
+): string | undefined {
+  const { slug } = requested;
+  if (requested.ownerHandle && tracked.ownerHandle !== requested.ownerHandle) {
+    const trackedRef = formatClawHubSkillRef({ slug, ownerHandle: tracked.ownerHandle });
+    return `Skill "${slug}" is tracked as ${trackedRef}, not @${requested.ownerHandle}/${slug}.`;
+  }
+  if (requested.requestedReference && tracked.requestedReference !== requested.requestedReference) {
+    return `Skill "${slug}" is not tracked from ${requested.requestedReference}.`;
+  }
+  return undefined;
+}
+
 export function normalizeStoredRegistry(registry: string): string {
   const trimmed = registry.trim();
   return trimmed.replace(/\/+$/, "") || trimmed;

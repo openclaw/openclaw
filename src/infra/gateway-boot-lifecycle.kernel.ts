@@ -75,29 +75,21 @@ export function inspectGatewayCrashLoopBreakerInDatabase(db: DatabaseSync, nowMs
         ]),
       ),
   );
-  const latestBreaker = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("gateway_boot_lifecycle")
-      .select("started_at_ms as startedAtMs")
-      .where("startup_reason", "=", GATEWAY_CRASH_LOOP_BREAKER_REASON)
-      .orderBy("started_at_ms", "desc")
-      .limit(1),
-  );
-  const latestRecovery = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("gateway_boot_lifecycle")
-      .select("started_at_ms as startedAtMs")
-      .where("startup_reason", "=", GATEWAY_CRASH_LOOP_RECOVERED_REASON)
-      .orderBy("started_at_ms", "desc")
-      .limit(1),
-  );
+  const latestStartedAt = (reason: string) =>
+    executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("gateway_boot_lifecycle")
+        .select("started_at_ms as startedAtMs")
+        .where("startup_reason", "=", reason)
+        .orderBy("started_at_ms", "desc")
+        .limit(1),
+    )?.startedAtMs;
   return buildGatewayCrashLoopBreakerDecision({
     uncleanBoots: uncleanRow?.count ?? 0,
     latestUncleanAtMs: uncleanRow?.latestUncleanAtMs,
-    latestBreakerStartedAtMs: latestBreaker?.startedAtMs,
-    latestRecoveryStartedAtMs: latestRecovery?.startedAtMs,
+    latestBreakerStartedAtMs: latestStartedAt(GATEWAY_CRASH_LOOP_BREAKER_REASON),
+    latestRecoveryStartedAtMs: latestStartedAt(GATEWAY_CRASH_LOOP_RECOVERED_REASON),
   });
 }
 

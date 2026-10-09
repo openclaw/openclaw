@@ -15,6 +15,7 @@ export function publication(overrides: Partial<GitHubPublicationView> = {}): Git
     result: null,
     confirmation: null,
     error: null,
+    optionsUnavailable: false,
     personalReady: true,
     onPublish: () => {},
     onRefresh: () => {},

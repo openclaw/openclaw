@@ -416,8 +416,7 @@ async fn run_check(app: AppHandle, manual: bool) {
     refresh_action(&app);
     let install_kind = install_kind();
     if install_kind == InstallKind::NotifyOnly {
-        let version = info.version.clone();
-        let notification_body = manual_notification_body(&version);
+        let notification_body = manual_notification_body(&info.version);
         deliver_result(
             &app,
             manual_requested(),
@@ -433,8 +432,7 @@ async fn run_check(app: AppHandle, manual: bool) {
     }
 
     emit(&app, AVAILABLE_EVENT, info.clone());
-    let result = update.download(progress_callback(app.clone()), || {}).await;
-    let result = match result {
+    let result = match update.download(progress_callback(app.clone()), || {}).await {
         Ok(bytes) if install_kind == InstallKind::SelfInstall => {
             let admitted = app.state::<UpdaterState>().lifecycle().begin_self_install();
             if !admitted {
@@ -458,8 +456,7 @@ async fn run_check(app: AppHandle, manual: bool) {
     };
     match result {
         Ok(()) => {
-            let version = info.version.clone();
-            let notification_body = ready_notification_body(&version);
+            let notification_body = ready_notification_body(&info.version);
             deliver_result(
                 &app,
                 manual_requested(),

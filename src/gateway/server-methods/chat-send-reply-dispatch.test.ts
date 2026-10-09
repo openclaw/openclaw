@@ -221,6 +221,7 @@ describe("chat delivery watermark preparation", () => {
       ).toMatchObject({
         maxSeq: 1,
       });
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
       const createReaders = historyReaders.createSessionHistoryWorkerReaders;
       const readerSpy = vi
         .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
