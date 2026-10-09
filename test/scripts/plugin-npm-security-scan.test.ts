@@ -15,17 +15,17 @@ function writeTarOctal(header: Buffer, offset: number, length: number, value: nu
   writeTarString(header, offset, length, `${raw} \0`);
 }
 
-function tarEntry(path: string, value: string): Buffer {
+function tarEntry(path: string, value: string, mode = 0o644, type: "0" | "5" = "0"): Buffer {
   const content = Buffer.from(value, "utf8");
   const header = Buffer.alloc(512);
   writeTarString(header, 0, 100, path);
-  writeTarOctal(header, 100, 8, 0o644);
+  writeTarOctal(header, 100, 8, mode);
   writeTarOctal(header, 108, 8, 0);
   writeTarOctal(header, 116, 8, 0);
   writeTarOctal(header, 124, 12, content.length);
   writeTarOctal(header, 136, 12, 0);
   header.fill(0x20, 148, 156);
-  header[156] = "0".charCodeAt(0);
+  header[156] = type.charCodeAt(0);
   writeTarString(header, 257, 6, "ustar\0");
   writeTarString(header, 263, 2, "00");
   writeTarOctal(header, 329, 8, 0);
@@ -43,6 +43,8 @@ function packageTarball(
   packageName: string,
   files: Record<string, string>,
   manifest: Record<string, unknown> = {},
+  modes: Record<string, number> = {},
+  directories: Array<{ path: string; mode: number }> = [],
 ): Buffer {
   const entries = {
     "package/package.json": JSON.stringify({ name: packageName, version: "1.0.0", ...manifest }),
@@ -51,7 +53,10 @@ function packageTarball(
   };
   return gzipSync(
     Buffer.concat([
-      ...Object.entries(entries).map(([path, value]) => tarEntry(path, value)),
+      ...directories.map(({ path, mode }) => tarEntry(`package/${path}/`, "", mode, "5")),
+      ...Object.entries(entries).map(([path, value]) =>
+        tarEntry(path, value, modes[path.replace(/^package\//u, "")]),
+      ),
       Buffer.alloc(1024),
     ]),
   );
@@ -65,6 +70,90 @@ exec(value);
 `;
 
 describe("plugin npm artifact security scan", () => {
+  it.each([
+    { mode: 0o600, error: "is not world-readable" },
+    { mode: 0o666, error: "has special or group/other-writable permission bits" },
+    { mode: 0o4755, error: "has special or group/other-writable permission bits" },
+  ])("rejects inaccessible or unsafe nested module mode $mode", ({ mode, error }) => {
+    expect(() =>
+      scanPluginNpmArtifactSecurity({
+        packageName: "@openclaw/example",
+        packageVersion: "1.0.0",
+        tarball: packageTarball(
+          "@openclaw/example",
+          { "dist/new-module/data.json": "{}" },
+          {},
+          {
+            "dist/new-module/data.json": mode,
+          },
+        ),
+      }),
+    ).toThrow(`Plugin npm artifact ${error} (0${mode.toString(8)}): dist/new-module/data.json`);
+  });
+
+  it("rejects an inaccessible generated parent even when its files are readable", () => {
+    expect(() =>
+      scanPluginNpmArtifactSecurity({
+        packageName: "@openclaw/example",
+        packageVersion: "1.0.0",
+        tarball: packageTarball(
+          "@openclaw/example",
+          { "dist/new-module/data.json": "{}" },
+          {},
+          {},
+          [{ path: "dist/new-module", mode: 0o700 }],
+        ),
+      }),
+    ).toThrow("Plugin npm artifact is not world-readable (0700): dist/new-module");
+  });
+
+  it.each([
+    { bin: "launcher" },
+    { bin: { example: "launcher" } },
+    { publishConfig: { executableFiles: ["launcher"] } },
+    { directories: { bin: "tools" } },
+  ])("requires executable permissions for manifest declarations %j", (manifest) => {
+    const launcher = "directories" in manifest ? "tools/launcher" : "launcher";
+    expect(() =>
+      scanPluginNpmArtifactSecurity({
+        packageName: "@openclaw/example",
+        packageVersion: "1.0.0",
+        tarball: packageTarball(
+          "@openclaw/example",
+          { [launcher]: "#!/usr/bin/env node\n" },
+          manifest,
+        ),
+      }),
+    ).toThrow(`Plugin npm artifact is not world-traversable/executable (0644): ${launcher}`);
+    expect(
+      scanPluginNpmArtifactSecurity({
+        packageName: "@openclaw/example",
+        packageVersion: "1.0.0",
+        tarball: packageTarball(
+          "@openclaw/example",
+          { [launcher]: "#!/usr/bin/env node\n" },
+          manifest,
+          {
+            [launcher]: 0o755,
+          },
+        ),
+      }).criticalFindingCount,
+    ).toBe(0);
+  });
+
+  it("rejects a declared executable absent from the exact archive", () => {
+    expect(() =>
+      scanPluginNpmArtifactSecurity({
+        packageName: "@openclaw/example",
+        packageVersion: "1.0.0",
+        tarball: packageTarball(
+          "@openclaw/example",
+          {},
+          { publishConfig: { executableFiles: ["missing-helper"] } },
+        ),
+      }),
+    ).toThrow("Plugin npm executable is absent from the tarball: missing-helper");
+  });
   it("accepts reviewed production behavior from the exact tarball", () => {
     const result = scanPluginNpmArtifactSecurity({
       packageName: "@openclaw/signal",
@@ -130,7 +219,9 @@ describe("plugin npm artifact security scan", () => {
         scanPluginNpmArtifactSecurity({
           packageName: "@openclaw/example",
           packageVersion: "1.0.0",
-          tarball: packageTarball("@openclaw/example", { [path]: SPAWN_SOURCE }, manifest),
+          tarball: packageTarball("@openclaw/example", { [path]: SPAWN_SOURCE }, manifest, {
+            [path]: 0o755,
+          }),
         }),
       ).toThrow("unreviewed critical findings in exact npm artifact");
     }

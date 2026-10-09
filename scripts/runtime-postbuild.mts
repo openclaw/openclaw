@@ -12,6 +12,10 @@ import {
   RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
   type RuntimeDependencyOwnership,
 } from "../src/infra/runtime-dependency-ownership.ts";
+import {
+  ensureGeneratedArtifactDirectory,
+  normalizeGeneratedArtifactTree,
+} from "../src/shared/artifact-permissions.ts";
 import { verifyBuiltPluginControlPlaneModules } from "./check-built-plugin-control-plane-modules.mts";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
 import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.ts";
@@ -308,7 +312,11 @@ export function copyExportHtmlTemplates(params: RuntimeFsParams = {}) {
   const outputDir = path.join(rootDir, EXPORT_HTML_OUTPUT_DIR);
   assertRealOutputRoot(path.join(rootDir, "dist"), { fs: fsImpl });
   fsImpl.rmSync(outputDir, { recursive: true, force: true });
-  fsImpl.mkdirSync(outputDir, { recursive: true });
+  if (fsImpl === fs) {
+    ensureGeneratedArtifactDirectory(outputDir, rootDir);
+  } else {
+    fsImpl.mkdirSync(outputDir, { recursive: true });
+  }
   for (const entry of fsImpl.readdirSync(sourceDir, { withFileTypes: true })) {
     if (!entry.isFile() || entry.name.endsWith(".test.ts")) {
       continue;
@@ -319,6 +327,9 @@ export function copyExportHtmlTemplates(params: RuntimeFsParams = {}) {
   fsImpl.mkdirSync(vendorDir, { recursive: true });
   for (const [fileName, contents] of Object.entries(generateExportHtmlVendorAssets({ rootDir }))) {
     fsImpl.writeFileSync(path.join(vendorDir, fileName), contents);
+  }
+  if (fsImpl === fs) {
+    normalizeGeneratedArtifactTree(outputDir, { preserveExecutable: false });
   }
 }
 
@@ -620,6 +631,16 @@ export function runRuntimePostBuild(params: RuntimePostBuildParams = {}) {
   // Source runners launch directly after postbuild, without the full UI build's
   // final metadata step. Publish identity only after the runtime is complete.
   runPhase("build provenance", () => writeBuildInfo({ rootDir, env: params.env }));
+  if (fsImpl === fs) {
+    runPhase("generated artifact permissions", () => {
+      for (const output of ["dist", "dist-runtime"]) {
+        const outputRoot = path.join(rootDir, output);
+        if (fs.existsSync(outputRoot)) {
+          normalizeGeneratedArtifactTree(outputRoot, { allowLinksWithin: rootDir });
+        }
+      }
+    });
+  }
   logSummary();
 }
 

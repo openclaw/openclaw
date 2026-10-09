@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -13,9 +14,13 @@ import {
   validateDockerReleaseManifest,
   verifyDockerReleaseLayout,
   verifyDockerReleaseProducer,
+  verifyPreparedDockerReleaseManifest,
 } from "../../scripts/docker-release-artifacts.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
+import {
+  candidatePublicationFixture,
+  dockerArtifactPermissionProof,
+} from "./candidate-publication.test-support.js";
 
 const sourceSha = "a".repeat(40);
 const toolingSha = "b".repeat(40);
@@ -123,6 +128,7 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
     imageTagSuffix: "-r20260901",
     builtAt: "2026-09-01T00:00:00.000Z",
     includeBrowser,
+    artifactPlan: { sourceSha, state: "required" },
     producer: {
       runId,
       runAttempt,
@@ -211,7 +217,16 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
         architecture,
         expectedDigest: image.indexDigest,
       });
-      images.push({ variant, ...verified, smoke: "success", attestations: "success" });
+      images.push({
+        variant,
+        ...verified,
+        artifactPermissions: dockerArtifactPermissionProof(
+          verified.configDigest,
+          variant === "browser",
+        ),
+        smoke: "success",
+        attestations: "success",
+      });
     }
     writeJson(path.join(root, "metadata", `${architecture}.json`), {
       ...context,
@@ -246,6 +261,126 @@ async function createPublicationRetry(conclusion = "failure") {
       readApi: fixture.readApi,
     },
   };
+}
+
+function preparedReleaseIdentity(
+  manifest: Awaited<ReturnType<typeof createPreparedRelease>>["manifest"],
+) {
+  return {
+    repository,
+    sourceSha,
+    tag: manifest.tag,
+    imageTagSuffix: manifest.imageTagSuffix,
+    artifactName: manifest.artifactName,
+    runId,
+    runAttempt,
+  };
+}
+
+const historicalDockerContracts = [
+  {
+    revision: "a162944f",
+    owner: "f512cbff44fc16568c8740bdbb6315824f448215",
+    workflow: "06269c7599f281b1d416601a9bf752a58d8e4613",
+  },
+  {
+    revision: "7a61192d",
+    owner: "f512cbff44fc16568c8740bdbb6315824f448215",
+    workflow: "dc56a33fcd8ebb037eb91b79b01110682682cc11",
+  },
+  {
+    revision: "6e5bac0d",
+    owner: "f512cbff44fc16568c8740bdbb6315824f448215",
+    workflow: "785a8c3fc03ab95f5969dea3a6d2df8f6190249d",
+  },
+  {
+    revision: "739a3355",
+    owner: "f512cbff44fc16568c8740bdbb6315824f448215",
+    workflow: "ea86c308fda8c954840009b2fc145fb6eb154cc3",
+  },
+  {
+    revision: "69aeafae",
+    owner: "7fb1de96c277e1cf93441edc3f0fc17f4b9f010c",
+    workflow: "ea86c308fda8c954840009b2fc145fb6eb154cc3",
+  },
+  {
+    revision: "06f897f5",
+    owner: "82e4665d1bdc7f8bb966d3a5d0ed5aecc08e5c46",
+    workflow: "ea86c308fda8c954840009b2fc145fb6eb154cc3",
+  },
+  {
+    revision: "164e18ea",
+    owner: "82e4665d1bdc7f8bb966d3a5d0ed5aecc08e5c46",
+    workflow: "009354c99b99d4953d6846cde5f58d7381adbfbc",
+  },
+  {
+    revision: "9ed5a04a",
+    owner: "82e4665d1bdc7f8bb966d3a5d0ed5aecc08e5c46",
+    workflow: "aa2bb94f2d87c70a797ac279e6ea1181d7674204",
+  },
+  {
+    revision: "73788ab0",
+    owner: "82e4665d1bdc7f8bb966d3a5d0ed5aecc08e5c46",
+    workflow: "7119fa50de1c65539d970aa293ae51a7c02f9c9c",
+  },
+  {
+    revision: "7dbfab8c",
+    owner: "82e4665d1bdc7f8bb966d3a5d0ed5aecc08e5c46",
+    workflow: "a78011d4f50492b6075d86fbd9c405ec2eed7d55",
+  },
+  {
+    revision: "eac43f0c",
+    owner: "82e4665d1bdc7f8bb966d3a5d0ed5aecc08e5c46",
+    workflow: "e5d6d39895c3c168a951941bfe3a9fae3a5e6004",
+  },
+  {
+    revision: "ebdab59f",
+    owner: "82e4665d1bdc7f8bb966d3a5d0ed5aecc08e5c46",
+    workflow: "fc1d82263241687ae9f4719d6174e244cbdcd618",
+  },
+  {
+    revision: "2abecd70",
+    owner: "82e4665d1bdc7f8bb966d3a5d0ed5aecc08e5c46",
+    workflow: "e260a50ccf567135c3a3be6593866c8e2eddc7c8",
+  },
+  {
+    revision: "38740f23",
+    owner: "7772cdde1721e8930eac47d058d5c2cc1b9ce1b7",
+    workflow: "e260a50ccf567135c3a3be6593866c8e2eddc7c8",
+  },
+];
+
+function historicalDockerContractTree(contract = historicalDockerContracts.at(-1)!) {
+  // Exact immutable blobs of the reviewed pre-permission producer, not flags in
+  // the saved receipt. The negative cases replace either of these source blobs.
+  return {
+    truncated: false,
+    tree: [
+      {
+        path: "scripts/docker-release-artifacts.mjs",
+        type: "blob",
+        mode: "100755",
+        sha: contract.owner,
+      },
+      {
+        path: ".github/workflows/docker-release-prepare.yml",
+        type: "blob",
+        mode: "100644",
+        sha: contract.workflow,
+      },
+    ],
+  };
+}
+
+function removePermissionReceipt(
+  manifest: Awaited<ReturnType<typeof createPreparedRelease>>["manifest"],
+) {
+  delete manifest.artifactPlan;
+  for (const entry of manifest.architectures) {
+    for (const image of entry.images) {
+      delete image.artifactPermissions;
+    }
+  }
 }
 
 function createRegistry({
@@ -340,6 +475,11 @@ async function createCandidateDockerPublication(recovered = false) {
         builtAt: fixture.docker.builtAt,
       }),
     );
+    entry.images[0]!.artifactPermissions = dockerArtifactPermissionProof(
+      entry.images[0]!.configDigest,
+      false,
+      fixture.q,
+    );
   }
   const bytes = JSON.stringify(fixture.docker, null, 2) + "\n";
   Object.assign(fixture.manifest.publicationArtifacts.docker, {
@@ -375,6 +515,288 @@ function registryWrites(calls: string[][]) {
 }
 
 describe("prepared Docker publication", () => {
+  it.each(["authenticated historical", "current stripped", "changed frozen bytes"])(
+    "uses authenticated receipt recovery in the newer verify CLI: %s",
+    async (kind) => {
+      const fixture = await createPreparedRelease(false);
+      removePermissionReceipt(fixture.manifest);
+      const manifestFile = path.join(fixture.root, "manifest.json");
+      const frozen = JSON.stringify(fixture.manifest, null, 2) + "\n";
+      writeFileSync(manifestFile, frozen);
+      const digest = createHash("sha256").update(frozen).digest("hex");
+      const tree = historicalDockerContractTree();
+      if (kind === "current stripped") {
+        tree.tree[0]!.sha = "c".repeat(40);
+      }
+      if (kind === "changed frozen bytes") {
+        writeFileSync(manifestFile, frozen + "\n");
+      }
+      const responses: Record<string, unknown> = {
+        [`repos/${repository}/actions/runs/${runId}`]: fixture.run,
+        [`repos/${repository}/actions/jobs/7`]: fixture.job,
+        [`repos/${repository}/compare/${toolingSha}...main`]: { status: "ahead" },
+        [`repos/${repository}/compare/${toolingSha}...${"c".repeat(40)}`]: { status: "ahead" },
+        [`repos/${repository}/git/trees/${toolingSha}?recursive=1`]: tree,
+      };
+      for (const artifact of fixture.artifacts) {
+        responses[
+          `repos/${repository}/actions/runs/${runId}/artifacts?name=${artifact.name}&per_page=100`
+        ] = { artifacts: [artifact] };
+      }
+      const responseFile = path.join(fixture.root, "api-responses.json");
+      writeJson(responseFile, responses);
+      const bin = path.join(fixture.root, "bin");
+      mkdirSync(bin);
+      writeFileSync(
+        path.join(bin, "gh"),
+        `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] !== 'api' || args[2] !== '--method' || args[3] !== 'GET') throw new Error('Unexpected GitHub command');
+const responses = JSON.parse(fs.readFileSync(process.env.DOCKER_RECOVERY_TEST_RESPONSES, 'utf8'));
+if (!Object.hasOwn(responses, args[1])) throw new Error('Unexpected API endpoint: ' + args[1]);
+process.stdout.write(JSON.stringify(responses[args[1]]));
+`,
+        { mode: 0o755 },
+      );
+      const outputFile = path.join(fixture.root, "github-output");
+      writeFileSync(outputFile, "");
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/docker-release-artifacts.mjs",
+          "verify",
+          "--manifest",
+          manifestFile,
+          "--manifest-sha256",
+          digest,
+          "--artifact-name",
+          fixture.manifest.artifactName,
+          "--run-id",
+          runId,
+          "--run-attempt",
+          runAttempt,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH}`,
+            DOCKER_RECOVERY_TEST_RESPONSES: responseFile,
+            GITHUB_REPOSITORY: repository,
+            GITHUB_WORKFLOW_SHA: "c".repeat(40),
+            GITHUB_OUTPUT: outputFile,
+            RELEASE_SHA: sourceSha,
+            RELEASE_TAG: fixture.manifest.tag,
+            IMAGE_TAG_SUFFIX: fixture.manifest.imageTagSuffix,
+            INCLUDE_BROWSER: "false",
+          },
+        },
+      );
+      if (kind === "authenticated historical") {
+        expect(result.status, result.stderr).toBe(0);
+        expect(readFileSync(outputFile, "utf8")).toBe("artifact_ids=10,11\n");
+      } else {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(
+          kind === "current stripped"
+            ? "authenticated historical producer contract"
+            : "digest mismatch",
+        );
+        expect(readFileSync(outputFile, "utf8")).toBe("");
+      }
+      expect(readFileSync(manifestFile, "utf8")).toBe(
+        kind === "changed frozen bytes" ? frozen + "\n" : frozen,
+      );
+    },
+  );
+
+  it.each(
+    historicalDockerContracts.flatMap((contract) =>
+      [false, true].map((includeBrowser) => ({ contract, includeBrowser })),
+    ),
+  )(
+    "recovers frozen historical $contract.revision receipts on newer tooling with browser=$includeBrowser",
+    async ({ contract, includeBrowser }) => {
+      const fixture = await createPreparedRelease(includeBrowser);
+      removePermissionReceipt(fixture.manifest);
+      fixture.run.status = "completed";
+      fixture.run.conclusion = "success";
+      Object.assign(fixture.attemptRun, fixture.run);
+      fixture.run.run_attempt += 1;
+      const receiptPath = path.join(fixture.root, "saved-manifest.json");
+      const frozenBytes = JSON.stringify(fixture.manifest, null, 2) + "\n";
+      writeFileSync(receiptPath, frozenBytes);
+      const frozenDigest = createHash("sha256").update(frozenBytes).digest("hex");
+      const originalPayloads = fixture.manifest.architectures.map(
+        (entry: { artifact: unknown; images: unknown }) => ({
+          artifact: structuredClone(entry.artifact),
+          images: structuredClone(entry.images),
+        }),
+      );
+      const readApi = vi.fn((endpoint: string) =>
+        endpoint === `repos/${repository}/git/trees/${toolingSha}?recursive=1`
+          ? historicalDockerContractTree(contract)
+          : fixture.readApi(endpoint),
+      );
+      const expected = preparedReleaseIdentity(fixture.manifest);
+      // Ordinary sealing must never mint a new smoke-only receipt.
+      expect(() => validateDockerReleaseManifest(fixture.manifest, expected)).toThrow(
+        "source artifact-plan qualification",
+      );
+      const verified = await verifyPreparedDockerReleaseManifest(
+        JSON.parse(readFileSync(receiptPath, "utf8")),
+        expected,
+        { publisherSha: "c".repeat(40), readApi },
+      );
+      const registry = createRegistry({ root: fixture.root, manifest: verified.manifest });
+      await publishDockerRelease({
+        ...verified,
+        payloadDirectory: path.join(fixture.root, "payloads"),
+        images: ["ghcr.io/openclaw/openclaw"],
+        execFileSyncImpl: registry.execute,
+        verifyTag: vi.fn(),
+      });
+      expect(JSON.stringify(verified.manifest, null, 2) + "\n").toBe(frozenBytes);
+      expect(readFileSync(receiptPath, "utf8")).toBe(frozenBytes);
+      expect(createHash("sha256").update(readFileSync(receiptPath)).digest("hex")).toBe(
+        frozenDigest,
+      );
+      expect(verified.manifest.producer.runAttempt).toBe(runAttempt);
+      expect(
+        verified.manifest.architectures.map((entry: { artifact: unknown; images: unknown }) => ({
+          artifact: entry.artifact,
+          images: entry.images,
+        })),
+      ).toEqual(originalPayloads);
+      expect(readApi).toHaveBeenCalledWith(
+        `repos/${repository}/actions/runs/${runId}/attempts/${runAttempt}`,
+      );
+      expect(readApi).toHaveBeenCalledWith(
+        `repos/${repository}/git/trees/${toolingSha}?recursive=1`,
+      );
+      for (const entry of verified.manifest.architectures) {
+        for (const image of entry.images) {
+          const suffix = image.variant === "browser" ? "-browser" : "";
+          expect(
+            registry.tags.get(
+              `ghcr.io/openclaw/openclaw:${verified.manifest.version}${verified.manifest.imageTagSuffix}${suffix}-${entry.architecture}`,
+            ),
+          ).toBe(image.indexDigest);
+        }
+      }
+    },
+  );
+
+  it.each([
+    "current owner with both permission fields stripped",
+    "changed preparation workflow",
+    "mixed historical contracts",
+    "truncated source tree",
+    "duplicate source blob",
+    "symlink owner",
+    "missing owner",
+    "unauthenticated producer",
+    "untrusted tooling ancestry",
+    "failed seal",
+    "changed artifact digest",
+    "missing historical smoke",
+    "permission-plan only",
+    "permission-proof only",
+  ])("rejects historical downgrade with %s", async (failure) => {
+    const fixture = await createPreparedRelease(false);
+    const original = structuredClone(fixture.manifest);
+    removePermissionReceipt(fixture.manifest);
+    const tree = historicalDockerContractTree();
+    if (failure === "current owner with both permission fields stripped") {
+      tree.tree[0]!.sha = "c".repeat(40);
+    }
+    if (failure === "changed preparation workflow") {
+      tree.tree[1]!.sha = "c".repeat(40);
+    }
+    if (failure === "mixed historical contracts") {
+      tree.tree[0]!.sha = historicalDockerContracts[0]!.owner;
+    }
+    if (failure === "truncated source tree") {
+      tree.truncated = true;
+    }
+    if (failure === "duplicate source blob") {
+      tree.tree.push({ ...tree.tree[0]! });
+    }
+    if (failure === "symlink owner") {
+      tree.tree[0]!.mode = "120000";
+    }
+    if (failure === "missing owner") {
+      tree.tree.shift();
+    }
+    if (failure === "unauthenticated producer") {
+      fixture.run.head_repository.full_name = "example/forged";
+    }
+    if (failure === "failed seal") {
+      fixture.job.conclusion = "failure";
+    }
+    if (failure === "changed artifact digest") {
+      fixture.artifacts[1]!.digest = `sha256:${"f".repeat(64)}`;
+    }
+    if (failure === "missing historical smoke") {
+      delete fixture.manifest.architectures[1].images[0].smoke;
+    }
+    if (failure === "permission-plan only") {
+      fixture.manifest.artifactPlan = original.artifactPlan;
+    }
+    if (failure === "permission-proof only") {
+      fixture.manifest.architectures[0].images[0].artifactPermissions =
+        original.architectures[0].images[0].artifactPermissions;
+    }
+    const frozen = JSON.stringify(fixture.manifest);
+    const readApi = vi.fn((endpoint: string) =>
+      endpoint.includes("/git/trees/")
+        ? tree
+        : failure === "untrusted tooling ancestry" && endpoint.includes("/compare/")
+          ? { status: "behind" }
+          : fixture.readApi(endpoint),
+    );
+    await expect(
+      verifyPreparedDockerReleaseManifest(
+        fixture.manifest,
+        preparedReleaseIdentity(fixture.manifest),
+        { publisherSha: "c".repeat(40), readApi },
+      ),
+    ).rejects.toThrow();
+    expect(JSON.stringify(fixture.manifest)).toBe(frozen);
+    if (
+      [
+        "unauthenticated producer",
+        "untrusted tooling ancestry",
+        "failed seal",
+        "changed artifact digest",
+      ].includes(failure)
+    ) {
+      expect(readApi.mock.calls.some(([endpoint]) => endpoint.includes("/git/trees/"))).toBe(false);
+    }
+  });
+
+  it("keeps modern proof strict on authenticated recovery without a historical lookup", async () => {
+    const fixture = await createPreparedRelease(false);
+    const readApi = vi.fn(fixture.readApi);
+    const expected = preparedReleaseIdentity(fixture.manifest);
+    const verified = await verifyPreparedDockerReleaseManifest(fixture.manifest, expected, {
+      publisherSha: toolingSha,
+      readApi,
+    });
+    expect(verified.manifest).toBe(fixture.manifest);
+    expect(readApi.mock.calls.some(([endpoint]) => endpoint.includes("/git/trees/"))).toBe(false);
+    fixture.manifest.architectures[1].images[0].artifactPermissions.cells.pop();
+    readApi.mockClear();
+    await expect(
+      verifyPreparedDockerReleaseManifest(fixture.manifest, expected, {
+        publisherSha: toolingSha,
+        readApi,
+      }),
+    ).rejects.toThrow("arbitrary-UID artifact/runtime proof");
+    expect(readApi).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "publishes authenticated candidate bytes with original-attempt recovery=%s",
     async (recovered) => {
@@ -786,6 +1208,100 @@ describe("prepared Docker publication", () => {
         "does not match the release",
       );
     }
+  });
+
+  it("refuses historical smoke-only and incomplete arbitrary-UID receipts", async () => {
+    const { manifest } = await createPreparedRelease(false);
+    const expected = {
+      repository,
+      sourceSha,
+      tag: manifest.tag,
+      imageTagSuffix: manifest.imageTagSuffix,
+      artifactName: manifest.artifactName,
+      runId,
+      runAttempt,
+    };
+    for (const kind of [
+      "historical",
+      "stale-image",
+      "missing-identity",
+      "no-read-proof",
+      "supplementary-root",
+      "missing-core",
+      "missing-plugin-assets",
+      "legacy-bypass",
+      "stale-source",
+      "mismatched-checked-source",
+    ]) {
+      const changed = structuredClone(manifest);
+      const image = changed.architectures[1].images[0];
+      const proof = image.artifactPermissions;
+      if (kind === "historical") {
+        delete image.artifactPermissions;
+      }
+      if (kind === "stale-image") {
+        proof.configDigest = `sha256:${"f".repeat(64)}`;
+      }
+      if (kind === "missing-identity") {
+        proof.cells.pop();
+      }
+      if (kind === "no-read-proof") {
+        proof.cells[2].artifact.readFiles = false;
+      }
+      if (kind === "supplementary-root") {
+        proof.cells[2].runtime.groups.push(0);
+      }
+      if (kind === "missing-core") {
+        proof.cells[2].runtime.compressedAssets = 0;
+      }
+      if (kind === "missing-plugin-assets") {
+        proof.cells[2].runtime.pluginAssets = 0;
+      }
+      if (kind === "legacy-bypass") {
+        proof.cells[2].artifact.planState = "legacy-source";
+      }
+      if (kind === "stale-source") {
+        changed.artifactPlan.sourceSha = "c".repeat(40);
+      }
+      if (kind === "mismatched-checked-source") {
+        proof.cells[2].artifact.sourceSha = "c".repeat(40);
+      }
+      expect(() => validateDockerReleaseManifest(changed, expected), kind).toThrow(
+        kind === "stale-source"
+          ? "source artifact-plan qualification"
+          : "arbitrary-UID artifact/runtime proof",
+      );
+    }
+  });
+
+  it("qualifies historical source explicitly without accepting legacy proof for new source", async () => {
+    const { manifest } = await createPreparedRelease(false);
+    const expected = {
+      repository,
+      sourceSha,
+      tag: manifest.tag,
+      imageTagSuffix: manifest.imageTagSuffix,
+      artifactName: manifest.artifactName,
+      runId,
+      runAttempt,
+    };
+    manifest.artifactPlan.state = "legacy-source";
+    expect(() => validateDockerReleaseManifest(manifest, expected)).toThrow(
+      "arbitrary-UID artifact/runtime proof",
+    );
+    for (const entry of manifest.architectures) {
+      for (const image of entry.images) {
+        for (const cell of image.artifactPermissions.cells) {
+          cell.artifact.planState = "legacy-source";
+          cell.runtime.compressedAssets = 0;
+        }
+      }
+    }
+    expect(validateDockerReleaseManifest(manifest, expected)).toBe(manifest);
+    manifest.artifactPlan.state = "required";
+    expect(() => validateDockerReleaseManifest(manifest, expected)).toThrow(
+      "arbitrary-UID artifact/runtime proof",
+    );
   });
 
   it("rejects a correction for another package base or an unsupported release train", () => {

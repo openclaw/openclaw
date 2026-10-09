@@ -10,6 +10,10 @@ import {
   PORTABLE_PLUGIN_ICON_PATH,
 } from "../../src/plugins/portable-icon-paths.ts";
 import {
+  ensureGeneratedArtifactDirectory,
+  normalizeGeneratedArtifactTree,
+} from "../../src/shared/artifact-permissions.ts";
+import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
   pluginRuntimeExtension,
@@ -655,6 +659,7 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
   ]);
   const { build } = await import("tsdown");
   assertRealOutputRoot(plan.outDir);
+  ensureGeneratedArtifactDirectory(plan.outDir, plan.packageDir);
   fs.rmSync(plan.outDir, { recursive: true, force: true });
   await build({
     clean: false,
@@ -696,9 +701,11 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     );
   }
   rewriteCommonJsRuntimeSpecifiers(plan);
+  const assets = await preparePackageRuntimeAssets(plan);
+  normalizeGeneratedArtifactTree(plan.outDir);
   return {
     ...plan,
-    ...(await preparePackageRuntimeAssets(plan)),
+    ...assets,
   };
 }
 

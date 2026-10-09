@@ -5,6 +5,10 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  ensureGeneratedArtifactDirectory,
+  normalizeGeneratedArtifactTree,
+} from "../src/shared/artifact-permissions.ts";
 import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
@@ -369,22 +373,10 @@ function renameWithRetry(from: string, to: string): void {
   }
 }
 
-function normalizeUiBuildPermissions(directory: string): void {
-  fs.chmodSync(directory, 0o755);
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      normalizeUiBuildPermissions(entryPath);
-    } else if (entry.isFile()) {
-      fs.chmodSync(entryPath, 0o644);
-    }
-  }
-}
-
 function buildAndPublishUi(toolCall: UiSpawnCall, env: NodeJS.ProcessEnv): UiSpawnResult {
   const dist = path.join(repoRoot, "dist");
   const output = path.join(dist, "control-ui");
-  fs.mkdirSync(dist, { recursive: true });
+  ensureGeneratedArtifactDirectory(dist, repoRoot);
   if (!fs.existsSync(output)) {
     // An interrupted swap can leave the previous complete build in a retired sibling.
     const retired = fs
@@ -425,7 +417,7 @@ function buildAndPublishUi(toolCall: UiSpawnCall, env: NodeJS.ProcessEnv): UiSpa
         return result;
       }
     }
-    normalizeUiBuildPermissions(staging);
+    normalizeGeneratedArtifactTree(staging, { preserveExecutable: false });
     const hadOutput = fs.existsSync(output);
     if (hadOutput) {
       renameWithRetry(output, retired);

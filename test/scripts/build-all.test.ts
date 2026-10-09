@@ -1,4 +1,4 @@
-import { spawnSync, type SpawnOptions } from "node:child_process";
+import { execFileSync, spawnSync, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +15,10 @@ import {
   runBuildAllSteps,
 } from "../../scripts/build-all.mts";
 import {
+  assertBuiltArtifactPermissions,
+  normalizeBuildArtifactPermissions,
+} from "../../scripts/check-artifact-permissions.mts";
+import {
   resolveBuildStepCacheState,
   writeBuildStepCacheStamp,
   resolveBuildStepCacheStampState,
@@ -25,7 +29,12 @@ import {
 import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { createManagedCommandInvocation } from "../../scripts/lib/managed-child-process.mts";
+import {
+  copyStaticExtensionAssets,
+  copyStaticExtensionAssetsToRuntimeOverlay,
+} from "../../scripts/lib/static-extension-assets.mts";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
+import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mts";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -300,10 +309,45 @@ describe("resolveBuildAllSteps", () => {
     expect(runner.logger.error).toHaveBeenCalledWith(message);
   });
 
-  it.each(["gatewayWatch", "cliStartup"])(
-    "records %s runtime phase completeness",
-    async (profile) => {
+  it.each([
+    { profile: "gatewayWatch", restore: false },
+    { profile: "cliStartup", restore: false },
+    { profile: "gatewayWatch", restore: true },
+    { profile: "cliStartup", restore: true },
+  ])(
+    "records $profile runtime phase and selected UI plugin completeness (restore=$restore)",
+    async ({ profile, restore }) => {
       const cwd = tempDirs.make("openclaw-phase-stamp-");
+      fs.mkdirSync(path.join(cwd, "extensions"));
+      writeFixture(cwd, "package.json", '{"name":"openclaw","type":"module"}');
+      writeFixture(
+        cwd,
+        "tsdown.config.ts",
+        'export default {entry:{entry:"src/entry.ts"},outDir:"dist",outExtensions:()=>({js:".js"})};',
+      );
+      writeFixture(cwd, "dist/entry.js", "export {};\n");
+      const manifest = JSON.stringify({
+        id: "demo",
+        controlUi: { entry: "dist/control-ui/index.js" },
+      });
+      writeFixture(cwd, "extensions/demo/index.ts", "export {};\n");
+      writeFixture(cwd, "extensions/demo/openclaw.plugin.json", manifest);
+      writeFixture(
+        cwd,
+        "extensions/demo/package.json",
+        JSON.stringify({
+          name: "@openclaw/demo",
+          openclaw: {
+            extensions: ["./index.ts"],
+            build: { staticAssets: [{ source: "assets/help.txt", output: "assets/help.txt" }] },
+          },
+        }),
+      );
+      for (const prefix of ["dist/extensions", "dist-runtime/extensions"]) {
+        writeFixture(cwd, `${prefix}/demo/index.js`, "export {};\n");
+        writeFixture(cwd, `${prefix}/demo/openclaw.plugin.json`, manifest);
+        writeFixture(cwd, `${prefix}/demo/package.json`, '{"name":"@openclaw/demo"}');
+      }
       const steps = resolveBuildAllSteps(profile, {})
         .filter((step) => ["runtime-postbuild", "runtime-postbuild-stamp"].includes(step.label))
         .map((step) =>
@@ -311,10 +355,34 @@ describe("resolveBuildAllSteps", () => {
             ? Object.assign({}, step, { args: ["-e", "process.exit(0)"] })
             : step,
         );
+      const cachedStep = {
+        label: "restored-artifacts",
+        args: ["-e", "process.exit(0)"],
+        cache: {
+          inputs: ["package.json"],
+          outputs: ["dist", "dist-runtime"],
+          restore: "always" as const,
+        },
+      };
+      if (restore) {
+        // A previous/full plan restored by a cache is not the current profile's authority.
+        writeFixture(cwd, "dist/runtime-artifact-plan.json", '{"staticAssets":true}');
+        const cacheParams = { rootDir: cwd };
+        writeBuildStepCacheStamp(
+          cachedStep,
+          resolveBuildStepCacheState(cachedStep, cacheParams),
+          cacheParams,
+        );
+        fs.rmSync(path.join(cwd, "dist"), { recursive: true });
+        fs.rmSync(path.join(cwd, "dist-runtime"), { recursive: true });
+        steps.unshift(cachedStep);
+      }
       const result = await runBuildAllSteps(profile, {
         cwd,
         env: {},
         steps,
+        resolveCacheState: (step) => resolveBuildStepCacheState(step, { rootDir: cwd, env: {} }),
+        restoreCache: (state) => restoreBuildStepCacheOutputs(state, { rootDir: cwd }),
         logger: { error() {}, warn() {} },
         memoryLimit: buildMemoryLimit(16),
       });
@@ -323,8 +391,140 @@ describe("resolveBuildAllSteps", () => {
         JSON.parse(fs.readFileSync(path.join(cwd, "dist/.runtime-postbuildstamp"), "utf8"))
           .staticAssets,
       ).toBe(false);
+      const plan = JSON.parse(
+        fs.readFileSync(path.join(cwd, "dist/runtime-artifact-plan.json"), "utf8"),
+      );
+      expect(plan.staticAssets).toBe(false);
+      expect(plan.plugins).toMatchObject([
+        { id: "demo", controlUi: { entry: "dist/control-ui/index.js" } },
+      ]);
+      expect(plan.requiredFiles).not.toContain("dist/extensions/demo/dist/control-ui/index.js");
+      expect(plan.requiredFiles).not.toContain("dist/extensions/demo/assets/help.txt");
+      expect(result.timings.at(-1)?.label).toBe("artifact-permissions");
+      if (restore) {
+        expect(result.timings[0]).toMatchObject({ label: "restored-artifacts", status: "cached" });
+      }
     },
   );
+
+  it("copies selected Docker plugin UI assets before runtime overlay publication and acceptance", async () => {
+    const cwd = tempDirs.make("openclaw-docker-plugin-ui-order-");
+    const uiRoot = `dist/control-ui/${"a".repeat(64)}`;
+    const controlUi = { entry: `${uiRoot}/index.js`, styles: [`${uiRoot}/index.css`] };
+    writeFixture(cwd, "package.json", '{"name":"openclaw","type":"module"}');
+    writeFixture(cwd, "pnpm-workspace.yaml", "packages:\n  - extensions/*\n");
+    writeFixture(
+      cwd,
+      "tsdown.config.ts",
+      'export default {entry:{entry:"src/entry.ts"},outDir:"dist",outExtensions:()=>({js:".js"})};',
+    );
+    writeFixture(cwd, "dist/entry.js", "export {};\n");
+    for (const id of ["demo", "sibling"]) {
+      const manifest = JSON.stringify({ id, ...(id === "demo" ? { controlUi } : {}) });
+      const pkg = JSON.stringify({
+        name: `@openclaw/${id}`,
+        type: "module",
+        openclaw: {
+          extensions: ["./index.ts"],
+          build: { staticAssets: [{ source: "assets/help.txt", output: "assets/help.txt" }] },
+        },
+      });
+      writeFixture(cwd, `extensions/${id}/index.ts`, "export {};\n");
+      writeFixture(cwd, `extensions/${id}/package.json`, pkg);
+      writeFixture(cwd, `extensions/${id}/openclaw.plugin.json`, manifest);
+      writeFixture(cwd, `extensions/${id}/assets/help.txt`, `${id} help\n`);
+      writeFixture(cwd, `dist/extensions/${id}/index.js`, "export {};\n");
+      writeFixture(cwd, `dist/extensions/${id}/package.json`, pkg);
+      writeFixture(cwd, `dist/extensions/${id}/openclaw.plugin.json`, manifest);
+    }
+    writeFixture(cwd, `extensions/demo/${controlUi.entry}`, "export const browserAsset = true;\n");
+    writeFixture(cwd, `extensions/demo/${controlUi.styles[0]}`, ".demo { color: red; }\n");
+    // Run the real --copy entrypoint in an owned checkout while borrowing only
+    // its source/dependency imports, never the serving checkout's output roots.
+    fs.mkdirSync(path.join(cwd, "scripts"));
+    fs.copyFileSync(
+      path.resolve("scripts/build-plugin-control-ui.mts"),
+      path.join(cwd, "scripts/build-plugin-control-ui.mts"),
+    );
+    for (const [source, destination] of [
+      ["src", "src"],
+      ["node_modules", "node_modules"],
+      ["scripts/lib", "scripts/lib"],
+    ]) {
+      fs.symlinkSync(path.resolve(source!), path.join(cwd, destination!), "junction");
+    }
+    const env = {
+      ...process.env,
+      GIT_COMMIT: "b".repeat(40),
+      OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: undefined,
+      OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: undefined,
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined,
+    };
+    const copyUi = () =>
+      execFileSync(
+        testNodeExecPath,
+        [
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          "scripts/build-plugin-control-ui.mts",
+          "extensions/demo",
+          "--copy",
+        ],
+        { cwd, env, stdio: "pipe" },
+      );
+    const postbuildOverlay = () => {
+      stageBundledPluginRuntime({ repoRoot: cwd });
+      copyStaticExtensionAssets({ rootDir: cwd, env });
+      copyStaticExtensionAssetsToRuntimeOverlay({ rootDir: cwd, env });
+    };
+    const params = { rootDir: cwd, env, readFiles: true };
+
+    // The real native Docker failure: postbuild cannot stage UI files that the
+    // package's copy hook has not installed yet. Root assets alone are insufficient.
+    postbuildOverlay();
+    copyUi();
+    await normalizeBuildArtifactPermissions(params);
+    expect(() => assertBuiltArtifactPermissions(params)).toThrow(
+      `dist-runtime/extensions/demo/${controlUi.styles[0]}`,
+    );
+    fs.rmSync(path.join(cwd, "dist/extensions/demo/dist"), { recursive: true });
+
+    const dockerScript: string = JSON.parse(fs.readFileSync("package.json", "utf8")).scripts[
+      "build:docker"
+    ];
+    const phases = dockerScript
+      .split(" && ")
+      .filter(
+        (command) =>
+          command === "pnpm plugins:assets:copy" ||
+          command === "node scripts/runtime-postbuild.mjs",
+      );
+    expect(phases).toHaveLength(2);
+    for (const phase of phases) {
+      if (phase === "pnpm plugins:assets:copy") {
+        copyUi();
+      } else {
+        postbuildOverlay();
+      }
+    }
+    await normalizeBuildArtifactPermissions(params);
+    expect(assertBuiltArtifactPermissions(params)).toMatchObject({ plugins: 2, readFiles: true });
+    expect(fs.readFileSync(path.join(cwd, "dist/extensions/demo", controlUi.entry), "utf8")).toBe(
+      "export const browserAsset = true;\n",
+    );
+    expect(
+      fs.statSync(path.join(cwd, "dist-runtime/extensions/demo", controlUi.entry)).isFile(),
+    ).toBe(true);
+    for (const prefix of ["dist/extensions", "dist-runtime/extensions"]) {
+      expect(fs.readFileSync(path.join(cwd, prefix, "demo", controlUi.styles[0]!), "utf8")).toBe(
+        ".demo { color: red; }\n",
+      );
+      expect(fs.readFileSync(path.join(cwd, prefix, "sibling/assets/help.txt"), "utf8")).toBe(
+        "sibling help\n",
+      );
+      expect(fs.statSync(path.join(cwd, prefix, "sibling/index.js")).isFile()).toBe(true);
+    }
+  });
 
   it("invalidates old runtime stamps before a failed declaration-cache restoration", async () => {
     const cwd = tempDirs.make("openclaw-restore-stamps-");

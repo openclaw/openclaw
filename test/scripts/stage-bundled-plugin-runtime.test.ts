@@ -176,6 +176,10 @@ try {
   it("prepares both roots without mutation and publishes imports valid at their final paths", async () => {
     await withTempDir(async (repoRoot) => {
       const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
+      // Copied metadata can arrive with private source modes. Publication must
+      // canonicalize its own tree without changing the source generation.
+      const readmeSource = path.join(repoRoot, "dist/extensions/demo/README.md");
+      fs.chmodSync(readmeSource, 0o600);
       const prepared = prepareBundledPluginRuntime({ repoRoot });
       expect(prepared.changed).toBe(true);
       expect(fs.existsSync(runtimeRoot)).toBe(false);
@@ -200,6 +204,18 @@ try {
         )?.readme,
       ).toBe("# Candidate plugin\n");
       expect(sdk.generation).toBe("candidate");
+      if (process.platform !== "win32") {
+        for (const output of [
+          runtimeRoot,
+          path.join(runtimeRoot, "extensions/demo/README.md"),
+          aliasRoot,
+        ]) {
+          const stat = fs.statSync(output);
+          expect(stat.mode & 0o777).toBe(stat.isDirectory() ? 0o755 : 0o644);
+        }
+        expect(fs.statSync(readmeSource).mode & 0o777).toBe(0o600);
+        expect(fs.readFileSync(readmeSource, "utf8")).toBe("# Candidate plugin\n");
+      }
       expect(
         fs.readFileSync(path.join(runtimeRoot, "extensions/demo/assets/info.txt"), "utf8"),
       ).toBe("candidate asset\n");
@@ -300,28 +316,48 @@ try {
     },
   );
 
-  it("leaves both live roots intact when preparation fails", async () => {
-    await withTempDir(async (repoRoot) => {
-      const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
-      stageBundledPluginRuntime({ repoRoot });
-      const runtimeBefore = fs.statSync(runtimeRoot).ino;
-      const aliasBefore = fs.statSync(aliasRoot).ino;
-      const originalWrite = fs.writeFileSync.bind(fs);
-      vi.spyOn(fs, "writeFileSync").mockImplementation((target, ...args) => {
-        if (String(target).includes(".openclaw-runtime-")) {
-          throw new Error("staging write failed");
+  it.each(["staging write", "linked alias parent"] as const)(
+    "leaves both live roots intact when preparation fails (%s)",
+    async (failure) => {
+      await withTempDir(async (repoRoot) => {
+        const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
+        stageBundledPluginRuntime({ repoRoot });
+        const runtimeBefore = fs.statSync(runtimeRoot).ino;
+        const aliasBefore = fs.statSync(aliasRoot).ino;
+        const privateRoot = path.join(repoRoot, "private-alias-parent");
+        if (failure === "linked alias parent") {
+          fs.renameSync(path.dirname(aliasRoot), privateRoot);
+          fs.chmodSync(privateRoot, 0o700);
+          fs.symlinkSync(privateRoot, path.dirname(aliasRoot), "dir");
+        } else {
+          const originalWrite = fs.writeFileSync.bind(fs);
+          vi.spyOn(fs, "writeFileSync").mockImplementation((target, ...args) => {
+            if (String(target).includes(".openclaw-runtime-")) {
+              throw new Error("staging write failed");
+            }
+            return originalWrite(target, ...args);
+          });
         }
-        return originalWrite(target, ...args);
+        expect(() => prepareBundledPluginRuntime({ repoRoot })).toThrow(
+          failure === "linked alias parent"
+            ? "Runtime staging parent is a symbolic link"
+            : "staging write failed",
+        );
+        if (failure === "linked alias parent") {
+          expect(fs.readdirSync(privateRoot)).toEqual(["openclaw"]);
+          if (process.platform !== "win32") {
+            expect(fs.statSync(privateRoot).mode & 0o777).toBe(0o700);
+          }
+        }
+        expect(fs.statSync(runtimeRoot).ino).toBe(runtimeBefore);
+        expect(fs.statSync(aliasRoot).ino).toBe(aliasBefore);
+        expect(fs.readdirSync(repoRoot).some((name) => name.startsWith(".openclaw-runtime-"))).toBe(
+          false,
+        );
+        expect(fs.readdirSync(path.dirname(aliasRoot))).toEqual(["openclaw"]);
       });
-      expect(() => prepareBundledPluginRuntime({ repoRoot })).toThrow("staging write failed");
-      expect(fs.statSync(runtimeRoot).ino).toBe(runtimeBefore);
-      expect(fs.statSync(aliasRoot).ino).toBe(aliasBefore);
-      expect(fs.readdirSync(repoRoot).some((name) => name.startsWith(".openclaw-runtime-"))).toBe(
-        false,
-      );
-      expect(fs.readdirSync(path.dirname(aliasRoot))).toEqual(["openclaw"]);
-    });
-  });
+    },
+  );
 
   it.each([false, true])(
     "restores originals or retains failed restoration (restore fails=%s)",

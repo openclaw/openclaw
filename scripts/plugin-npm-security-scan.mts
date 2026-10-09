@@ -4,6 +4,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  artifactPermissionError,
+  declaredArtifactExecutableFiles,
+} from "../src/shared/artifact-permissions.ts";
 import { isScannable, scanSource, type SkillScanFinding } from "../src/skills/security/scanner.js";
 import { inspectPackageTarballBytes } from "./plugin-publication-artifact.mjs";
 import { isPluginTestFixturePath } from "./verify-plugin-npm-published-runtime.mts";
@@ -187,14 +191,8 @@ function declaredExecutablePaths(
     }
     declared.add(target);
   };
-  if (typeof manifest.bin === "string") {
-    add(manifest.bin);
-  } else if (manifest.bin && typeof manifest.bin === "object" && !Array.isArray(manifest.bin)) {
-    for (const value of Object.values(manifest.bin)) {
-      add(value);
-    }
-  } else if (manifest.bin !== undefined) {
-    throw new Error("Plugin npm bin declaration is invalid.");
+  for (const executable of declaredArtifactExecutableFiles(manifest)) {
+    add(executable);
   }
   if (manifest.directories && typeof manifest.directories === "object") {
     const binDirectory = (manifest.directories as Record<string, unknown>).bin;
@@ -262,6 +260,17 @@ export function scanPluginNpmArtifactSecurity(params: {
     );
   }
   const executables = declaredExecutablePaths(initial.packageManifest, packedFiles);
+  for (const entry of initial.permissionEntries) {
+    const packedPath = entry.path.replace(/^package\//u, "");
+    const error = artifactPermissionError(
+      entry.mode,
+      entry.type === "directory",
+      executables.has(packedPath),
+    );
+    if (error) {
+      throw new Error(`Plugin npm artifact ${error} (0${entry.mode.toString(8)}): ${packedPath}`);
+    }
+  }
   const critical: CriticalFinding[] = [];
   let scannedFiles = 0;
   let scannedBytes = 0;

@@ -202,17 +202,11 @@ COPY --from=runtime-build-output /app/ ./
 # plugin-local dependencies under dist/extensions/<id> after package lifecycle
 # cleanup so the packaged roots keep them. Keep SDK-native binaries only for
 # selected plugins that explicitly require them.
+# pnpm's generated workspace state is part of the public installation payload,
+# not operator configuration; normalize only that metadata before runtime COPY.
 RUN node scripts/postinstall-bundled-plugins.mjs && \
     OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
-    if [ -L /app/node_modules/@openclaw/ai ]; then \
-      ai_runtime_target="$(readlink -f /app/node_modules/@openclaw/ai)" && \
-      ai_runtime_tmp="$(mktemp -d)" && \
-      cp -a "$ai_runtime_target" "$ai_runtime_tmp/ai" && \
-      rm /app/node_modules/@openclaw/ai && \
-      mv "$ai_runtime_tmp/ai" /app/node_modules/@openclaw/ai && \
-      rmdir "$ai_runtime_tmp"; \
-    fi && \
     rm -rf \
       /app/node_modules/openclaw \
       /app/node_modules/.bin/openclaw \
@@ -221,6 +215,7 @@ RUN node scripts/postinstall-bundled-plugins.mjs && \
       find /app/node_modules/@anthropic-ai -maxdepth 1 -type d \
         -name 'claude-agent-sdk-linux-*' -exec rm -rf {} +; \
     fi && \
+    node --input-type=module -e 'import { normalizeGeneratedArtifactTree } from "./src/shared/artifact-permissions.ts"; normalizeGeneratedArtifactTree("node_modules/.pnpm-workspace-state-v1.json", { preserveExecutable: false });' && \
     node --input-type=module -e 'await import("grammy")' && \
     node scripts/check-package-dist-imports.mjs /app && \
     node scripts/docker/copy-bootstrap-scripts.mjs /app/.runtime-bootstrap
@@ -280,6 +275,9 @@ RUN chown node:node /app
 
 COPY --from=runtime-assets --chown=node:node /app/dist ./dist
 COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
+# Production workspace links retain their importer-relative targets. Some contracts
+# export source files, so compiled dist alone is not the complete runtime payload.
+COPY --from=runtime-assets --chown=node:node /app/packages ./packages
 COPY --from=runtime-assets --chown=node:node /app/package.json .
 COPY --from=runtime-assets --chown=node:node /app/pnpm-lock.yaml .
 COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
@@ -444,6 +442,15 @@ USER node
 
 # Verify the shipped toolchain needs no privileged writes or first-run downloads.
 RUN COREPACK_ENABLE_NETWORK=0 PNPM_CONFIG_OFFLINE=true pnpm --version
+
+# Verify the final immutable application closure after every runtime copy/writer.
+# Mounted tooling is not shipped. An unrelated UID/GID proves actual reads;
+# mode inspection as root alone cannot establish arbitrary-UID usability.
+USER 1000950000:1000950001
+RUN --mount=from=build,source=/app/scripts/check-artifact-permissions.mts,target=/permission-proof/scripts/check-artifact-permissions.mts \
+    --mount=from=build,source=/app/src/shared/artifact-permissions.ts,target=/permission-proof/src/shared/artifact-permissions.ts \
+    node /permission-proof/scripts/check-artifact-permissions.mts --root /app --image --read-files
+USER node
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.

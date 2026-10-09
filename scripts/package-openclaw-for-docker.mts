@@ -9,6 +9,10 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveTimerTimeoutMs } from "../packages/normalization-core/src/number-coercion.ts";
 import {
+  declaredArtifactExecutableFiles,
+  generatedArtifactMode,
+} from "../src/shared/artifact-permissions.ts";
+import {
   booleanFlag,
   parseFlagArgs,
   stringFlag,
@@ -779,18 +783,29 @@ async function normalizeOpenClawTarballModes(tarballPath: string) {
   const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-package-modes-"));
   try {
     await runPackageTar("extract", tarballPath, stageDir);
+    const packageRoot = path.join(stageDir, "package");
+    const packageManifest: unknown = JSON.parse(
+      await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+    );
+    if (!isRecord(packageManifest)) {
+      throw new Error("packed OpenClaw tarball has no valid package manifest");
+    }
+    const requiredExecutables = new Set(declaredArtifactExecutableFiles(packageManifest));
     let stagedFileCount = 0;
     const normalizeStagedModes = async (dir: string): Promise<void> => {
       for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
         const entryPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
-          await fs.chmod(entryPath, 0o755);
+          await fs.chmod(entryPath, generatedArtifactMode(0, true));
           await normalizeStagedModes(entryPath);
         } else if (entry.isFile()) {
           // Umask masking on extraction only clears group/other bits, so the
           // owner exec bit still says whether the packed entry was executable.
-          const executable = ((await fs.stat(entryPath)).mode & 0o100) !== 0;
-          await fs.chmod(entryPath, executable ? 0o755 : 0o644);
+          const mode = (await fs.stat(entryPath)).mode;
+          const requiredExecutable = requiredExecutables.has(
+            path.relative(packageRoot, entryPath).replaceAll(path.sep, "/"),
+          );
+          await fs.chmod(entryPath, generatedArtifactMode(mode, false, requiredExecutable));
           stagedFileCount += 1;
         }
       }

@@ -61,6 +61,7 @@ jobs:
       include_browser: ${{ steps.identity.outputs.include_browser }}
       built_at: ${{ steps.identity.outputs.built_at }}
       artifact_name: ${{ steps.identity.outputs.artifact_name }}
+      runtime_artifact_plan: ${{ steps.identity.outputs.runtime_artifact_plan }}
     steps:
       - name: Checkout immutable source metadata
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -79,7 +80,9 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: workflow-source
           fetch-depth: 1
-          sparse-checkout: scripts
+          sparse-checkout: |
+            scripts
+            src/shared
           persist-credentials: false
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -108,6 +111,13 @@ jobs:
             if (baseSha !== env.RELEASE_SHA) throw new Error('Docker correction source must match its base release tag.');
           }
           const includeBrowser = /^ARG OPENCLAW_INSTALL_BROWSER/m.test(readFileSync('source/Dockerfile', 'utf8'));
+          // Qualify from pinned source, never from missing output in the image.
+          // Old release/tag backfills lack the new build-owned membership plan.
+          const policyPath = 'scripts/check-artifact-permissions.mts';
+          const sourcePolicy = execFileSync('git', ['-C', 'source', 'ls-tree', '--name-only', env.RELEASE_SHA, '--', policyPath], { encoding: 'utf8' }).trim();
+          if (sourcePolicy !== '' && sourcePolicy !== policyPath) throw new Error('Unexpected source artifact-policy identity.');
+          const runtimeArtifactPlan = sourcePolicy === policyPath ? 'required' : 'legacy-source';
+          appendFileSync(env.GITHUB_OUTPUT, `runtime_artifact_plan=${runtimeArtifactPlan}\n`);
           appendFileSync(env.GITHUB_OUTPUT, `version=${policy.version}\ninclude_browser=${includeBrowser}\nbuilt_at=${new Date().toISOString()}\nartifact_name=${dockerReleaseArtifactName(env.RELEASE_SHA, env.GITHUB_RUN_ATTEMPT)}\n`);
           NODE
 
@@ -133,6 +143,7 @@ jobs:
       IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
       BUILT_AT: ${{ needs.resolve.outputs.built_at }}
       INCLUDE_BROWSER: ${{ needs.resolve.outputs.include_browser }}
+      RUNTIME_ARTIFACT_PLAN: ${{ needs.resolve.outputs.runtime_artifact_plan }}
     steps:
       - name: Checkout immutable build source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -147,7 +158,9 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: workflow-source
           fetch-depth: 1
-          sparse-checkout: scripts
+          sparse-checkout: |
+            scripts
+            src/shared
           persist-credentials: false
       - name: Install reviewed OCI transport
         run: |
@@ -259,7 +272,7 @@ jobs:
           fi
           printf '%s\n' "$history_log" | node workflow-source/scripts/relay-build-limit-warnings.mts
 
-      - name: Verify OCI bytes, attestations, and image smoke
+      - name: Verify OCI bytes, attestations, and arbitrary-UID runtime acceptance
         env:
           JOB_CONTEXT: ${{ toJSON(job) }}
           ARCHITECTURE: ${{ matrix.architecture }}
@@ -301,7 +314,9 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: workflow-source
           fetch-depth: 1
-          sparse-checkout: scripts
+          sparse-checkout: |
+            scripts
+            src/shared
           persist-credentials: false
       - name: Download architecture proof
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -326,6 +341,7 @@ jobs:
           IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
           BUILT_AT: ${{ needs.resolve.outputs.built_at }}
           INCLUDE_BROWSER: ${{ needs.resolve.outputs.include_browser }}
+          RUNTIME_ARTIFACT_PLAN: ${{ needs.resolve.outputs.runtime_artifact_plan }}
         run: |
           set -euo pipefail
           node workflow-source/scripts/docker-release-artifacts.mjs seal \

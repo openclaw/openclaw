@@ -20,6 +20,7 @@ import {
   createPluginPublicationArtifact,
   downloadActionsArtifactArchive,
   inspectActionsArtifactZipWithPolicy,
+  inspectPackageTarballBytes,
   verifyPluginPublicationArtifact,
 } from "../../scripts/plugin-publication-artifact.mjs";
 
@@ -95,6 +96,7 @@ type TarEntry = {
   content?: Buffer | string;
   format?: "ustar" | "v7";
   linkPath?: string;
+  mode?: number;
   path: string;
   prefix?: string;
   type?: "0" | "2" | "3" | "5" | "K" | "L" | "g" | "x";
@@ -107,7 +109,7 @@ function tarEntry(entry: TarEntry): Buffer {
     : Buffer.from(entry.content ?? "", "utf8");
   const header = Buffer.alloc(512);
   writeTarString(header, 0, 100, entry.path);
-  writeTarOctal(header, 100, 8, type === "5" ? 0o755 : 0o644);
+  writeTarOctal(header, 100, 8, entry.mode ?? (type === "5" ? 0o755 : 0o644));
   writeTarOctal(header, 108, 8, 0);
   writeTarOctal(header, 116, 8, 0);
   writeTarOctal(header, 124, 12, content.length);
@@ -549,6 +551,33 @@ it.each(["npm-readback", "clawhub-readback"])(
 );
 
 describe("plugin publication artifact", () => {
+  it("retains complete archive modes separately from the sealed content inventory", () => {
+    const entries: TarEntry[] = [
+      {
+        path: "package/package.json",
+        content: JSON.stringify({ name: PACKAGE_NAME, version: PACKAGE_VERSION }),
+      },
+      { path: "package/openclaw.plugin.json", content: JSON.stringify({ id: "example" }) },
+      { path: "package/dist/", type: "5", mode: 0o700 },
+      { path: "package/dist/helper.mjs", content: "export {};\n", mode: 0o4755 },
+    ];
+    const inspection = inspectPackageTarballBytes(createTarball(entries));
+    const canonical = inspectPackageTarballBytes(
+      createTarball(
+        entries.map((entry) =>
+          Object.assign({}, entry, { mode: entry.type === "5" ? 0o755 : 0o644 }),
+        ),
+      ),
+    );
+    expect(inspection.inventory).toEqual(canonical.inventory);
+    expect(inspection.tarballSha256).not.toBe(canonical.tarballSha256);
+    expect(inspection.permissionEntries).toEqual(
+      expect.arrayContaining([
+        { path: "package/dist", type: "directory", mode: 0o700 },
+        { path: "package/dist/helper.mjs", type: "file", mode: 0o4755 },
+      ]),
+    );
+  });
   it("canonically binds and verifies the Meta beta3 token-bootstrap tuple without running lifecycle scripts", () => {
     const fixture = createFixture();
     const verified = verifyFixture(fixture);

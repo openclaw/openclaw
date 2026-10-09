@@ -1683,7 +1683,7 @@
     "bench:usage-refresh-memory": "node --import ./scripts/tsx.mjs scripts/bench-usage-refresh-memory.ts",
     "build": "node --import ./scripts/tsx.mjs scripts/build-all.mts",
     "build:ci-artifacts": "node --import ./scripts/tsx.mjs scripts/build-all.mts ciArtifacts",
-    "build:docker": "pnpm plugins:assets:build && node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node --import ./scripts/tsx.mjs scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/build-stamp.mts && node --import ./scripts/tsx.mjs scripts/runtime-postbuild-stamp.mts && pnpm plugins:assets:copy && node --import ./scripts/tsx.mjs scripts/write-build-info.ts && node --import ./scripts/tsx.mjs scripts/write-cli-startup-metadata.ts",
+    "build:docker": "pnpm plugins:assets:build && node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node --import ./scripts/tsx.mjs scripts/check-cli-bootstrap-imports.mts && pnpm plugins:assets:copy && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/build-stamp.mts && node --import ./scripts/tsx.mjs scripts/runtime-postbuild-stamp.mts && node --import ./scripts/tsx.mjs scripts/write-build-info.ts && node --import ./scripts/tsx.mjs scripts/write-cli-startup-metadata.ts && node --import ./scripts/tsx.mjs scripts/check-artifact-permissions.mts --normalize --write-plan",
     "build:package": "node --import ./scripts/tsx.mjs scripts/build-all.mts package",
     "build:plugin-sdk:dts": "node --import ./scripts/tsx.mjs scripts/write-plugin-sdk-entry-dts.ts",
     "build:plugin-sdk:strict-smoke": "node --import ./scripts/tsx.mjs scripts/build-all.mts pluginSdkStrictSmoke",

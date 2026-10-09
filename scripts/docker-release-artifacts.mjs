@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { promoteDockerChannel } from "./docker-channel-promote.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -37,6 +38,39 @@ const SHA = /^[a-f0-9]{40}$/u;
 const DIGEST = /^sha256:[a-f0-9]{64}$/u;
 const POSITIVE_INTEGER = /^[1-9][0-9]*$/u;
 const INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json";
+// Reviewed schema-v1 smoke-only producer/workflow Git blobs. A matching pair
+// must belong to the authenticated immutable Tooling SHA; absent fields alone
+// never select a weaker policy. Unknown historical contracts fail closed.
+const HISTORICAL_DOCKER_CONTRACTS = new Map([
+  // a162944f: original prepared publication owner.
+  [
+    "f512cbff44fc16568c8740bdbb6315824f448215",
+    [
+      "06269c7599f281b1d416601a9bf752a58d8e4613", // a162944f
+      "dc56a33fcd8ebb037eb91b79b01110682682cc11", // 7a61192d
+      "785a8c3fc03ab95f5969dea3a6d2df8f6190249d", // 6e5bac0d
+      "ea86c308fda8c954840009b2fc145fb6eb154cc3", // 739a3355
+    ],
+  ],
+  // 69aeafae: original-attempt publication retry recovery.
+  ["7fb1de96c277e1cf93441edc3f0fc17f4b9f010c", ["ea86c308fda8c954840009b2fc145fb6eb154cc3"]],
+  // 06f897f5: detached preparation producer qualification.
+  [
+    "82e4665d1bdc7f8bb966d3a5d0ed5aecc08e5c46",
+    [
+      "ea86c308fda8c954840009b2fc145fb6eb154cc3", // 06f897f5
+      "009354c99b99d4953d6846cde5f58d7381adbfbc", // 164e18ea
+      "aa2bb94f2d87c70a797ac279e6ea1181d7674204", // 9ed5a04a
+      "7119fa50de1c65539d970aa293ae51a7c02f9c9c", // 73788ab0
+      "a78011d4f50492b6075d86fbd9c405ec2eed7d55", // 7dbfab8c
+      "e5d6d39895c3c168a951941bfe3a9fae3a5e6004", // eac43f0c
+      "fc1d82263241687ae9f4719d6174e244cbdcd618", // ebdab59f
+      "e260a50ccf567135c3a3be6593866c8e2eddc7c8", // 2abecd70
+    ],
+  ],
+  // 38740f23, retained unchanged at dbab3d44: frozen candidate admission.
+  ["7772cdde1721e8930eac47d058d5c2cc1b9ce1b7", ["e260a50ccf567135c3a3be6593866c8e2eddc7c8"]],
+]);
 
 /**
  * Release commands use explicit argv/options and return UTF-8 stdout.
@@ -259,7 +293,7 @@ if printf '%s\\n' "$smoke_output" | grep -q "Missing workspace template:"; then 
 if [ "$smoke_status" -ne 0 ]; then echo "Agent exited $smoke_status after workspace bootstrap (provider credentials are intentionally absent)."; fi
 `;
 
-function smokeImage(directory, architecture, variant, configDigest) {
+function smokeImage(directory, architecture, variant, configDigest, artifactPlan) {
   const image = `openclaw-release-smoke:${architecture}-${variant}`;
   // Only the smoke copy enters Docker's single-image store. The OCI artifact
   // retains the original index, SBOM, and provenance for digest-preserving promotion.
@@ -288,6 +322,74 @@ function smokeImage(directory, architecture, variant, configDigest) {
     timeout: 120_000,
     stdio: "inherit",
   });
+  const toolingRoot = fileURLToPath(new URL("../", import.meta.url));
+  const identities = [
+    { name: "default", uid: 1000, gid: 1000 },
+    { name: "arbitrary-uid-gid-zero", user: "1000950000:0", uid: 1000950000, gid: 0 },
+    { name: "unrelated-uid-gid", user: "1000950000:1000950001", uid: 1000950000, gid: 1000950001 },
+  ];
+  const cells = identities.map(({ name, user, uid, gid }) => {
+    const isolation = [
+      "run",
+      "--rm",
+      "--network",
+      "none",
+      "--read-only",
+      "--cap-drop",
+      "ALL",
+      "--security-opt",
+      "no-new-privileges",
+      "--tmpfs",
+      "/tmp:rw,nosuid,nodev,mode=1777",
+      "--tmpfs",
+      "/permission-state:rw,nosuid,nodev,mode=1777",
+      "--mount",
+      `type=bind,source=${path.join(toolingRoot, "scripts")},target=/permission-proof/scripts,readonly`,
+      "--mount",
+      `type=bind,source=${path.join(toolingRoot, "src/shared/artifact-permissions.ts")},target=/permission-proof/src/shared/artifact-permissions.ts,readonly`,
+      ...(user ? ["--user", user] : []),
+      "--env",
+      `OPENCLAW_PERMISSION_PROOF_BROWSER=${variant === "browser" ? "1" : "0"}`,
+      "--env",
+      `OPENCLAW_PERMISSION_PROOF_LEGACY=${artifactPlan.state === "legacy-source" ? "1" : "0"}`,
+      "--entrypoint",
+      "node",
+      image,
+    ];
+    const artifact = JSON.parse(
+      run(
+        "docker",
+        [
+          ...isolation,
+          "/permission-proof/scripts/check-artifact-permissions.mts",
+          "--root",
+          "/app",
+          "--image",
+          "--read-files",
+          "--source-sha",
+          artifactPlan.sourceSha,
+          ...(artifactPlan.state === "legacy-source" ? ["--legacy-source"] : []),
+        ],
+        { timeout: 300_000 },
+      ),
+    );
+    const runtime = JSON.parse(
+      run(
+        "docker",
+        [...isolation, "/permission-proof/scripts/e2e/lib/artifact-permissions/runtime-proof.mjs"],
+        { timeout: 300_000 },
+      ),
+    );
+    requireValue(
+      runtime.uid === uid &&
+        runtime.gid === gid &&
+        Array.isArray(runtime.groups) &&
+        runtime.groups.every((group) => group === gid),
+      `Unexpected runtime identity/supplementary groups: ${name}`,
+    );
+    return { name, uid, gid, artifact, runtime };
+  });
+  return { schemaVersion: 1, configDigest, cells };
 }
 
 function releaseContext(env) {
@@ -314,6 +416,10 @@ function releaseContext(env) {
       job.workflow_ref?.startsWith(`${env.GITHUB_REPOSITORY}/${WORKFLOW_PATH}@`),
     "Docker preparation must execute its pinned canonical workflow.",
   );
+  requireValue(
+    ["required", "legacy-source"].includes(env.RUNTIME_ARTIFACT_PLAN),
+    "Missing immutable-source artifact-plan qualification.",
+  );
   return {
     schemaVersion: 1,
     repository: env.GITHUB_REPOSITORY,
@@ -324,6 +430,10 @@ function releaseContext(env) {
     imageTagSuffix: env.IMAGE_TAG_SUFFIX ?? "",
     builtAt: env.BUILT_AT,
     includeBrowser: env.INCLUDE_BROWSER === "true",
+    artifactPlan: {
+      sourceSha: env.RELEASE_SHA,
+      state: env.RUNTIME_ARTIFACT_PLAN,
+    },
     producer: {
       runId: env.GITHUB_RUN_ID,
       runAttempt: env.GITHUB_RUN_ATTEMPT,
@@ -348,8 +458,20 @@ async function prepareArchitecture(values, env) {
       architecture,
       expectedDigest: variant === "default" ? env.DEFAULT_DIGEST : env.BROWSER_DIGEST,
     });
-    smokeImage(directory, architecture, variant, image.configDigest);
-    images.push({ variant, ...image, smoke: "success", attestations: "success" });
+    const artifactPermissions = smokeImage(
+      directory,
+      architecture,
+      variant,
+      image.configDigest,
+      context.artifactPlan,
+    );
+    images.push({
+      variant,
+      ...image,
+      artifactPermissions,
+      smoke: "success",
+      attestations: "success",
+    });
   }
   writeJson(values.output, { ...context, architecture, images });
 }
@@ -442,6 +564,10 @@ export function sealDockerRelease({ metadataDirectory, context, checkRunId, read
 }
 
 export function validateDockerReleaseManifest(manifest, expected) {
+  return validateDockerReleaseManifestContract(manifest, expected, true);
+}
+
+function validateDockerReleaseManifestContract(manifest, expected, requirePermissionProof) {
   const policy = validateDockerReleaseIdentity({
     tag: expected.tag,
     sourceSha: expected.sourceSha,
@@ -480,6 +606,12 @@ export function validateDockerReleaseManifest(manifest, expected) {
     "Prepared Docker browser support differs from the finalized source.",
   );
   requireValue(
+    !requirePermissionProof ||
+      (manifest.artifactPlan?.sourceSha === manifest.sourceSha &&
+        ["required", "legacy-source"].includes(manifest.artifactPlan.state)),
+    "Prepared Docker source artifact-plan qualification is missing or stale.",
+  );
+  requireValue(
     Array.isArray(manifest.architectures) && manifest.architectures.length === ARCHITECTURES.length,
     "Prepared Docker release must include both native architectures.",
   );
@@ -499,6 +631,52 @@ export function validateDockerReleaseManifest(manifest, expected) {
     );
     for (const [imageIndex, variant] of variants.entries()) {
       const image = entry.images[imageIndex];
+      const proof = image.artifactPermissions;
+      const identities = [
+        ["default", 1000, 1000],
+        ["arbitrary-uid-gid-zero", 1000950000, 0],
+        ["unrelated-uid-gid", 1000950000, 1000950001],
+      ];
+      requireValue(
+        !requirePermissionProof ||
+          (proof?.schemaVersion === 1 &&
+            proof.configDigest === image.configDigest &&
+            Array.isArray(proof.cells) &&
+            proof.cells.length === identities.length &&
+            identities.every(([name, uid, gid], identityIndex) => {
+              const cell = proof.cells[identityIndex];
+              return (
+                cell.name === name &&
+                cell.uid === uid &&
+                cell.gid === gid &&
+                cell.artifact?.schemaVersion === 1 &&
+                cell.artifact.readFiles === true &&
+                cell.artifact.planState ===
+                  (manifest.artifactPlan.state === "required" ? "verified" : "legacy-source") &&
+                (manifest.artifactPlan.state === "legacy-source" ||
+                  cell.artifact.sourceSha === manifest.artifactPlan.sourceSha) &&
+                Number.isSafeInteger(cell.artifact.files) &&
+                cell.artifact.files > 0 &&
+                cell.runtime?.schemaVersion === 1 &&
+                cell.runtime.uid === uid &&
+                cell.runtime.gid === gid &&
+                Array.isArray(cell.runtime.groups) &&
+                cell.runtime.groups.every((group) => group === gid) &&
+                cell.runtime.anonymousCatalogDenied === true &&
+                cell.runtime.offlineToolchain === true &&
+                cell.runtime.browser === (variant === "browser") &&
+                cell.runtime.coreAssets > 0 &&
+                Number.isSafeInteger(cell.runtime.compressedAssets) &&
+                cell.runtime.compressedAssets >=
+                  (manifest.artifactPlan.state === "required" ? 1 : 0) &&
+                Number.isSafeInteger(cell.runtime.pluginUiCount) &&
+                cell.runtime.pluginUiCount >= 0 &&
+                Number.isSafeInteger(cell.runtime.pluginAssets) &&
+                cell.runtime.pluginAssets >= cell.runtime.pluginUiCount
+              );
+            })),
+        "Prepared Docker arbitrary-UID artifact/runtime proof is incomplete or stale.",
+      );
       requireValue(
         image.variant === variant &&
           image.smoke === "success" &&
@@ -679,6 +857,51 @@ export async function verifyDockerReleaseProducer(
   return { manifest, revalidateAuthority };
 }
 
+/** Authenticate saved receipts before selecting their immutable producer contract.
+ * New sealing stays on validateDockerReleaseManifest's strict permission contract.
+ * @param {ReturnType<typeof validateDockerReleaseManifest>} manifest
+ * @param {Parameters<typeof validateDockerReleaseManifest>[1]} expected
+ * @param {Parameters<typeof verifyDockerReleaseProducer>[1]} options
+ */
+export async function verifyPreparedDockerReleaseManifest(manifest, expected, options) {
+  // Structural validation protects the subsequent authenticated producer reads;
+  // this is not yet permission-proof or historical-contract acceptance.
+  validateDockerReleaseManifestContract(manifest, expected, false);
+  const historical =
+    !Object.hasOwn(manifest, "artifactPlan") &&
+    manifest.architectures.every((entry) =>
+      entry.images.every((image) => !Object.hasOwn(image, "artifactPermissions")),
+    );
+  if (!historical) {
+    validateDockerReleaseManifest(manifest, expected);
+  }
+  const verified = await verifyDockerReleaseProducer(manifest, options);
+  if (historical) {
+    const tree = (options.readApi ?? ghJson)(
+      `repos/${manifest.repository}/git/trees/${manifest.toolingSha}?recursive=1`,
+    );
+    requireValue(
+      tree.truncated === false && Array.isArray(tree.tree),
+      "Historical Docker producer contract tree is incomplete.",
+    );
+    const blobs = ["scripts/docker-release-artifacts.mjs", WORKFLOW_PATH].map((file) => {
+      const entries = tree.tree.filter((entry) => entry.path === file);
+      requireValue(
+        entries.length === 1 &&
+          entries[0].type === "blob" &&
+          ["100644", "100755"].includes(entries[0].mode),
+        "Saved Docker receipt lacks permission proof from an authenticated historical producer contract.",
+      );
+      return entries[0].sha;
+    });
+    requireValue(
+      HISTORICAL_DOCKER_CONTRACTS.get(blobs[0])?.includes(blobs[1]),
+      "Saved Docker receipt lacks permission proof from an authenticated historical producer contract.",
+    );
+  }
+  return verified;
+}
+
 async function loadPreparedManifest(values, env) {
   const bytes = readFileSync(values.manifest);
   requireValue(
@@ -686,25 +909,28 @@ async function loadPreparedManifest(values, env) {
       sha256(bytes) === values["manifest-sha256"],
     "Prepared Docker manifest digest mismatch.",
   );
-  const manifest = validateDockerReleaseManifest(JSON.parse(bytes), {
-    repository: env.GITHUB_REPOSITORY,
-    sourceSha: env.RELEASE_SHA,
-    tag: env.RELEASE_TAG,
-    imageTagSuffix: env.IMAGE_TAG_SUFFIX ?? "",
-    includeBrowser: env.INCLUDE_BROWSER === "true",
-    artifactName: values["artifact-name"],
-    runId: values["run-id"],
-    runAttempt: values["run-attempt"],
-  });
-  return verifyDockerReleaseProducer(manifest, {
-    publisherSha: env.GITHUB_WORKFLOW_SHA,
-    publisherRunId: env.GITHUB_RUN_ID,
-    publisherRunAttempt: env.GITHUB_RUN_ATTEMPT,
-    publisherFullRef: env.GITHUB_REF,
-    fullReleaseManifest: values["full-release-manifest"]
-      ? readJson(values["full-release-manifest"])
-      : undefined,
-  });
+  return verifyPreparedDockerReleaseManifest(
+    JSON.parse(bytes),
+    {
+      repository: env.GITHUB_REPOSITORY,
+      sourceSha: env.RELEASE_SHA,
+      tag: env.RELEASE_TAG,
+      imageTagSuffix: env.IMAGE_TAG_SUFFIX ?? "",
+      includeBrowser: env.INCLUDE_BROWSER === "true",
+      artifactName: values["artifact-name"],
+      runId: values["run-id"],
+      runAttempt: values["run-attempt"],
+    },
+    {
+      publisherSha: env.GITHUB_WORKFLOW_SHA,
+      publisherRunId: env.GITHUB_RUN_ID,
+      publisherRunAttempt: env.GITHUB_RUN_ATTEMPT,
+      publisherFullRef: env.GITHUB_REF,
+      fullReleaseManifest: values["full-release-manifest"]
+        ? readJson(values["full-release-manifest"])
+        : undefined,
+    },
+  );
 }
 
 function verifyFinalTag(manifest, readApi = ghJson) {

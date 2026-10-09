@@ -200,6 +200,59 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it.each([
+    { mode: 0o666, type: "File", error: "has special or group/other-writable permission bits" },
+    { mode: 0o4755, type: "File", error: "has special or group/other-writable permission bits" },
+    { mode: 0o744, type: "Directory", error: "is not world-traversable/executable" },
+  ] as const)("rejects unsafe archive mode $mode on $type", ({ mode, type, error }) => {
+    checkCraftedTarball(
+      [
+        {
+          path: "package/package.json",
+          type: "File",
+          body: '{"name":"openclaw","version":"2026.9.4"}\n',
+        },
+        { path: "package/dist/unsafe", type, mode },
+      ],
+      `tar entry ${error} (0${mode.toString(8)}): package/dist/unsafe`,
+    );
+  });
+
+  it.each([
+    { bin: "launcher.mjs" },
+    { bin: { openclaw: "launcher.mjs" } },
+    { publishConfig: { executableFiles: ["launcher.mjs"] } },
+  ])("rejects lost executable bits declared by %j", (declarations) => {
+    checkCraftedTarball(
+      [
+        {
+          path: "package/package.json",
+          type: "File",
+          body: JSON.stringify({ name: "openclaw", version: "2026.9.4", ...declarations }),
+        },
+        { path: "package/launcher.mjs", type: "File", mode: 0o644, body: "#!/usr/bin/env node\n" },
+      ],
+      "declared tar executable is not world-traversable/executable (0644): launcher.mjs",
+    );
+  });
+
+  it("rejects a declared executable missing from the archive", () => {
+    checkCraftedTarball(
+      [
+        {
+          path: "package/package.json",
+          type: "File",
+          body: JSON.stringify({
+            name: "openclaw",
+            version: "2026.9.4",
+            publishConfig: { executableFiles: ["missing-helper.mjs"] },
+          }),
+        },
+      ],
+      "package.json declares missing tar executable missing-helper.mjs",
+    );
+  });
+
   it("accepts a real pnpm-produced package", () => {
     withTarball(
       ["dist/index.js"],

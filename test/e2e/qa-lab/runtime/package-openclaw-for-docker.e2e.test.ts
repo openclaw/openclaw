@@ -856,6 +856,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "scripts/lib/windows-taskkill.mjs",
       "src/infra/npm-command.ts",
+      "src/shared/artifact-permissions.ts",
       "src/shared/non-packaged-plugin-dirs.ts",
     ];
     try {
@@ -1150,11 +1151,15 @@ describe("package-openclaw-for-docker", () => {
       fs.writeFileSync(path.join(sourceDir, "openclaw.mjs"), "#!/usr/bin/env node\n", {
         mode: 0o700,
       });
+      fs.writeFileSync(path.join(sourceDir, "helper.mjs"), "#!/usr/bin/env node\n", {
+        mode: 0o600,
+      });
       fs.writeFileSync(
         path.join(sourceDir, "package.json"),
         `${JSON.stringify({
           bin: { openclaw: "openclaw.mjs" },
-          files: ["dist", "openclaw.mjs"],
+          publishConfig: { executableFiles: ["helper.mjs"] },
+          files: ["dist", "openclaw.mjs", "helper.mjs"],
           name: "openclaw",
           version: "2026.8.26",
         })}\n`,
@@ -1205,7 +1210,10 @@ describe("package-openclaw-for-docker", () => {
       expect(extendedAttributeHeaders).toEqual([]);
       expect(entryModes.get("package/dist/index.js")).toBe(0o644);
       expect(entryModes.get("package/openclaw.mjs")).toBe(0o755);
+      expect(entryModes.get("package/helper.mjs")).toBe(0o755);
       expect(entryModes.get("package/package.json")).toBe(0o644);
+      expect(fs.statSync(path.join(distDir, "index.js")).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(path.join(sourceDir, "helper.mjs")).mode & 0o777).toBe(0o600);
       const receipt = JSON.parse(fs.readFileSync(path.join(outputDir, "pack.json"), "utf8"));
       expect(receipt).toEqual([
         expect.objectContaining({

@@ -26,6 +26,7 @@ import {
   withAugmentedPluginNpmManifestForPackage,
 } from "../scripts/lib/plugin-npm-package-manifest.mts";
 import { resolveNpmRunner } from "../scripts/npm-runner.mts";
+import { inspectPackageTarballBytes } from "../scripts/plugin-publication-artifact.mjs";
 import { hasChannelPackageState } from "../src/channels/plugins/package-state-probes.js";
 import type { PluginManifest } from "../src/plugins/manifest-types.js";
 import {
@@ -501,6 +502,88 @@ function writePatchedRuntimeFixture(bundling = "default") {
 }
 
 describe("plugin npm package manifest staging", () => {
+  it.skipIf(process.platform === "win32")(
+    "packs canonical permissions without widening source or excluded private files",
+    () => {
+      const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-permissions-");
+      const packageDir = writePublishablePluginPackage(repoDir);
+      writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+      writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+      writeFileText(join(packageDir, "helper"), "#!/usr/bin/env node\n");
+      writeFileText(join(packageDir, "private-note"), "not distributed\n");
+      writeFileText(join(packageDir, ".npmrc"), "# private package fixture\n");
+      const sourcePackageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+      writeJsonFile(join(packageDir, "package.json"), {
+        ...sourcePackageJson,
+        bin: { example: "helper" },
+        files: ["dist", "helper", "openclaw.plugin.json", "README.md"],
+      });
+      const sourceFiles = [
+        "package.json",
+        "openclaw.plugin.json",
+        "README.md",
+        "dist/index.js",
+        "dist/setup-entry.js",
+        "helper",
+        "private-note",
+        ".npmrc",
+      ];
+      for (const file of sourceFiles) {
+        chmodSync(join(packageDir, file), 0o600);
+      }
+      chmodSync(packageDir, 0o700);
+      chmodSync(join(packageDir, "dist"), 0o700);
+      const originalBytes = sourceFiles.map((file) => readFileSync(join(packageDir, file)));
+      const outputDir = join(repoDir, "packed");
+      mkdirSync(outputDir);
+      let stagedPackage = "";
+      withAugmentedPluginNpmManifestForPackage(
+        { repoRoot: repoDir, packageDir, normalizeStagingPermissions: true },
+        ({ packageDir: staged }) => {
+          stagedPackage = staged;
+          expect(staged).not.toBe(packageDir);
+          expect(lstatSync(join(staged, "private-note")).mode & 0o777).toBe(0o600);
+          expect(lstatSync(join(staged, ".npmrc")).mode & 0o777).toBe(0o600);
+          expect(lstatSync(join(staged, "dist")).mode & 0o777).toBe(0o755);
+          const runner = resolveNpmRunner({
+            npmArgs: ["pack", "--json", "--ignore-scripts", "--pack-destination", outputDir],
+          });
+          const result = spawnSync(runner.command, runner.args, {
+            cwd: staged,
+            encoding: "utf8",
+            env: runner.env ?? process.env,
+            shell: runner.shell,
+            windowsVerbatimArguments: runner.windowsVerbatimArguments,
+          });
+          expect(result.status, result.stderr).toBe(0);
+          const { filename } = parseNpmPackResult(result.stdout);
+          const inspection = inspectPackageTarballBytes(readFileSync(join(outputDir, filename)));
+          expect(inspection.permissionEntries).toContainEqual({
+            path: "package/helper",
+            type: "file",
+            mode: 0o755,
+          });
+          expect(inspection.permissionEntries).toContainEqual({
+            path: "package/dist/index.js",
+            type: "file",
+            mode: 0o644,
+          });
+          expect(
+            inspection.inventory.some(
+              (entry) => entry.path === "package/private-note" || entry.path === "package/.npmrc",
+            ),
+          ).toBe(false);
+        },
+      );
+      expect(existsSync(stagedPackage)).toBe(false);
+      for (const [index, file] of sourceFiles.entries()) {
+        expect(readFileSync(join(packageDir, file))).toEqual(originalBytes[index]);
+        expect(lstatSync(join(packageDir, file)).mode & 0o777).toBe(0o600);
+      }
+      expect(lstatSync(packageDir).mode & 0o777).toBe(0o700);
+      expect(lstatSync(join(packageDir, "dist")).mode & 0o777).toBe(0o700);
+    },
+  );
   it("keeps msteams runtime dependencies registry-installed", () => {
     const packageJson = JSON.parse(
       readFileSync(join(process.cwd(), "extensions", "msteams", "package.json"), "utf8"),

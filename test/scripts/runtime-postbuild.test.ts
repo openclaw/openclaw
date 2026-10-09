@@ -645,6 +645,55 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it.each(["private output", "leaf link", "hardlink", "parent link"] as const)(
+    "publishes readable static assets without changing private data (%s)",
+    async (fixture) => {
+      const rootDir = createTempDir("openclaw-static-asset-permissions-");
+      const source = path.join(rootDir, "source.txt");
+      const privateDir = path.join(rootDir, "private");
+      const privateFile = path.join(privateDir, "asset.txt");
+      const outputDir = path.join(rootDir, "dist/assets");
+      const output = path.join(outputDir, "asset.txt");
+      await fs.writeFile(source, "published bytes\n", { mode: 0o600 });
+      await fs.mkdir(privateDir, { mode: 0o700 });
+      await fs.writeFile(privateFile, "private bytes\n", { mode: 0o600 });
+      await fs.mkdir(path.join(rootDir, "dist"), { mode: 0o700 });
+      if (fixture === "parent link") {
+        await fs.symlink(privateDir, outputDir, "dir");
+      } else {
+        await fs.mkdir(outputDir, { mode: 0o700 });
+        if (fixture === "leaf link") {
+          await fs.symlink(privateFile, output);
+        } else if (fixture === "hardlink") {
+          await fs.link(privateFile, output);
+        }
+      }
+      const copy = () =>
+        copyStaticExtensionAssets({
+          rootDir,
+          assets: [{ src: "source.txt", dest: "dist/assets/asset.txt" }],
+        });
+      if (fixture === "parent link") {
+        expect(copy).toThrow(/real directory|symbolic link/u);
+      } else {
+        copy();
+        expect((await fs.lstat(output)).isFile()).toBe(true);
+        expect(await fs.readFile(output, "utf8")).toBe("published bytes\n");
+        if (process.platform !== "win32") {
+          expect((await fs.stat(path.join(rootDir, "dist"))).mode & 0o777).toBe(0o755);
+          expect((await fs.stat(outputDir)).mode & 0o777).toBe(0o755);
+          expect((await fs.stat(output)).mode & 0o777).toBe(0o644);
+        }
+      }
+      expect(await fs.readFile(privateFile, "utf8")).toBe("private bytes\n");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(source)).mode & 0o777).toBe(0o600);
+        expect((await fs.stat(privateDir)).mode & 0o777).toBe(0o700);
+        expect((await fs.stat(privateFile)).mode & 0o777).toBe(0o600);
+      }
+    },
+  );
+
   it("warns when a declared static asset is missing", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const warn = vi.fn();

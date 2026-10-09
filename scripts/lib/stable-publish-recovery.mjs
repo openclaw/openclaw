@@ -4,10 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import {
-  validateDockerReleaseManifest,
-  verifyDockerReleaseProducer,
-} from "../docker-release-artifacts.mjs";
+import { verifyPreparedDockerReleaseManifest } from "../docker-release-artifacts.mjs";
 import { verifyReleaseToolingIdentity } from "../release-tooling-identity.mjs";
 import {
   inspectRaw,
@@ -668,19 +665,22 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
     "manifest.json",
     prepared.preparedManifestSha256,
   );
-  validateDockerReleaseManifest(dockerArtifact.value, {
-    repository: REPOSITORY,
-    tag: evidence.releaseTag,
-    sourceSha,
-    runId: prepared.preparedRunId,
-    runAttempt: prepared.preparedRunAttempt,
-    artifactName: prepared.preparedArtifactName,
-  });
-  await verifyDockerReleaseProducer(dockerArtifact.value, {
-    publisherSha: docker.head_sha,
-    publisherFullRef: dockerDispatch.value.toolingFullRef,
-    fullReleaseManifest: manifest,
-  });
+  await verifyPreparedDockerReleaseManifest(
+    dockerArtifact.value,
+    {
+      repository: REPOSITORY,
+      tag: evidence.releaseTag,
+      sourceSha,
+      runId: prepared.preparedRunId,
+      runAttempt: prepared.preparedRunAttempt,
+      artifactName: prepared.preparedArtifactName,
+    },
+    {
+      publisherSha: docker.head_sha,
+      publisherFullRef: dockerDispatch.value.toolingFullRef,
+      fullReleaseManifest: manifest,
+    },
+  );
   const directory = mkdtempSync(join(tmpdir(), "openclaw-stable-recovery-"));
   try {
     const npmPackages = await verifyNpm(

@@ -11,6 +11,11 @@ import JSON5 from "json5";
 import { parse as parseYaml } from "yaml";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/categories.ts";
 import {
+  declaredArtifactExecutableFiles,
+  ensureGeneratedArtifactDirectory,
+  generatedArtifactMode,
+} from "../../src/shared/artifact-permissions.ts";
+import {
   generateNpmPackageLock,
   packageJsonForNpmLock,
   packageRuntimeDependencyField,
@@ -20,6 +25,7 @@ import {
 } from "../generate-npm-package-lock.mts";
 import { resolveNpmRunner } from "../npm-runner.mts";
 import { mapPluginCatalogEntries } from "./bundled-plugin-build-entries.mjs";
+import { collectNpmPackInventory } from "./npm-pack-inventory.mts";
 import {
   listPluginNpmRuntimeBuildOutputs,
   resolvePluginNpmRuntimeBuildPlan,
@@ -37,6 +43,7 @@ type PluginPackageParams = Parameters<typeof resolvePluginNpmRuntimeBuildPlan>[0
   bundleDependencies?: unknown;
   patchedDependencies?: WorkspacePatchedDependency[];
   clawhubMetadataDir?: string;
+  normalizeStagingPermissions?: boolean;
 };
 type GeneratedChannelConfig = {
   description?: string;
@@ -1097,6 +1104,79 @@ type ManifestOverlayContext = ReturnType<typeof resolveAugmentedPluginNpmManifes
   repoRoot: string;
 };
 
+/** Canonicalize only npm's public closure in a disposable package, never source/private files. */
+function normalizeStagedPluginPackagePermissions(packageDir: string): void {
+  const { files } = collectNpmPackInventory(packageDir, { timeoutMs: 180_000 });
+  const packageJson = readJsonFile(path.join(packageDir, "package.json"));
+  const requiredExecutables = new Set(declaredArtifactExecutableFiles(packageJson));
+  if (isRecord(packageJson.directories) && packageJson.directories.bin !== undefined) {
+    const [binDirectory] = declaredArtifactExecutableFiles({ bin: packageJson.directories.bin });
+    const declared = files.filter((file) => file.startsWith(`${binDirectory}/`));
+    if (declared.length === 0) {
+      throw new Error(
+        `Plugin npm executable directory is absent from the package: ${binDirectory}`,
+      );
+    }
+    for (const file of declared) {
+      requiredExecutables.add(file);
+    }
+  }
+  const packedFiles = new Set(files);
+  for (const executable of requiredExecutables) {
+    if (!packedFiles.has(executable)) {
+      throw new Error(`Plugin npm executable is absent from the package: ${executable}`);
+    }
+  }
+  const entries = files.map((file) => {
+    const absolutePath = path.join(packageDir, file);
+    const stat = fs.statSync(absolutePath);
+    if (!stat.isFile()) {
+      throw new Error(`Plugin npm packed entry must be a regular file: ${file}`);
+    }
+    // npm file: dependencies can be directory links. Snapshot only npm's selected
+    // public files, then materialize them without chmod/write through the link.
+    let alias: string | undefined;
+    let current = packageDir;
+    for (const part of file.split("/")) {
+      current = path.join(current, part);
+      if (fs.lstatSync(current).isSymbolicLink()) {
+        alias = current;
+        break;
+      }
+    }
+    return {
+      absolutePath,
+      file,
+      stat,
+      alias,
+      bytes: alias || stat.nlink > 1 ? fs.readFileSync(absolutePath) : undefined,
+    };
+  });
+  const aliases = [...new Set(entries.flatMap(({ alias }) => (alias ? [alias] : [])))];
+  for (const alias of aliases) {
+    fs.unlinkSync(alias);
+  }
+  for (const { absolutePath, bytes, stat, alias } of entries) {
+    if (!bytes) {
+      continue;
+    }
+    if (!alias) {
+      fs.unlinkSync(absolutePath);
+    }
+    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+    fs.writeFileSync(absolutePath, bytes, { mode: stat.mode & 0o777 });
+  }
+  // Preflight every selected file/ancestor before changing any output mode.
+  fs.chmodSync(packageDir, generatedArtifactMode(0, true));
+  for (const { absolutePath, file, stat } of entries) {
+    ensureGeneratedArtifactDirectory(path.dirname(absolutePath), packageDir);
+    fs.chmodSync(
+      absolutePath,
+      generatedArtifactMode(stat.mode, false, requiredExecutables.has(file)),
+    );
+  }
+}
+
 export function withAugmentedPluginNpmManifestForPackage<T>(
   params: PluginPackageParams,
   callback: (context: ManifestOverlayContext) => T,
@@ -1122,6 +1202,7 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
   );
   if (
     !params.clawhubMetadataDir &&
+    !params.normalizeStagingPermissions &&
     (!packageJson || !bundleDependencies || !hasPackageRuntimeDependencies(packageJson))
   ) {
     return withPluginNpmManifestOverlay(resolvedParams, bundleDependencies, callback);
@@ -1130,17 +1211,25 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
   // pnpm owns the source install. npm bundling needs a separate tree so its
   // production-only install and cleanup cannot replace source versions or links.
   // ClawHub metadata overlays likewise never write into the frozen candidate.
-  const stagingRoot = fs.mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-pack-"));
+  const stagingRoot = fs.realpathSync(
+    fs.mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-pack-")),
+  );
   const stagedPackageDir = path.join(stagingRoot, path.basename(packageDir));
   try {
     fs.cpSync(packageDir, stagedPackageDir, {
       recursive: true,
+      verbatimSymlinks: true,
       filter: (source) => path.basename(source) !== "node_modules",
     });
     return withPluginNpmManifestOverlay(
       { ...resolvedParams, repoRoot, packageDir: stagedPackageDir },
       bundleDependencies,
-      callback,
+      (context) => {
+        if (params.normalizeStagingPermissions) {
+          normalizeStagedPluginPackagePermissions(context.packageDir);
+        }
+        return callback(context);
+      },
     );
   } finally {
     fs.rmSync(stagingRoot, { recursive: true, force: true });
@@ -1276,6 +1365,8 @@ function main(argv: string[] = process.argv.slice(2)) {
       bundleDependencies: process.env.OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES,
       clawhubMetadataDir: parsedArgs.clawhubMetadataDir,
       profile: parsedArgs.profile,
+      normalizeStagingPermissions:
+        command === "npm" && (args[0] === "pack" || args[0] === "publish"),
     },
     ({ packageDir: cwd }) => {
       const commandArgs = [...args];

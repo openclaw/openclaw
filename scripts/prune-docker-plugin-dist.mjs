@@ -42,15 +42,31 @@ function nodeModulePath(repoRoot, packageName) {
   return path.join(repoRoot, "node_modules", ...packageName.split("/"));
 }
 
+function runtimeDependencySeed(importerDir, packageName, packageJson) {
+  return {
+    importerDir,
+    packageName,
+    required:
+      !Object.hasOwn(packageJson?.optionalDependencies ?? {}, packageName) &&
+      (Object.hasOwn(packageJson?.dependencies ?? {}, packageName) ||
+        packageJson?.peerDependenciesMeta?.[packageName]?.optional !== true),
+  };
+}
+
 // Follow Node's importer-relative lookup: hoisted installs can contain several versions,
 // and root-only traversal can misclassify a kept dependency as exclusive to an omitted plugin.
-function resolveNodeModulePackageDir(importerDir, packageName) {
+function resolveNodeModulePackageDir(importerDir, packageName, unresolvedLinks) {
   let currentDir = fs.realpathSync(importerDir);
 
   while (true) {
     const packageDir = path.join(currentDir, "node_modules", ...packageName.split("/"));
     if (fs.existsSync(path.join(packageDir, "package.json"))) {
       return fs.realpathSync(packageDir);
+    }
+    if (unresolvedLinks && fs.lstatSync(packageDir, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      unresolvedLinks.push(
+        path.join(fs.realpathSync(path.dirname(packageDir)), path.basename(packageDir)),
+      );
     }
     const parentDir = path.dirname(currentDir);
     if (parentDir === currentDir) {
@@ -73,15 +89,48 @@ function removeEmptyScopeDir(repoRoot, packageName) {
   }
 }
 
+// Only unresolved required dependency links need this traversal. Track each
+// alias before excluded-workspace cleanup, and cap inspection at 40 hops rather
+// than letting a cycle or pathological chain spin.
+function requiredDependencyLinkChain(link) {
+  const aliases = new Set();
+  let current = link;
+  while (fs.lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    const alias = path.join(fs.realpathSync(path.dirname(current)), path.basename(current));
+    if (aliases.has(alias)) {
+      throw new Error(`Docker required dependency has a symlink cycle: ${link}`);
+    }
+    if (aliases.size >= 40) {
+      throw new Error(`Docker required dependency exceeds 40 symlink hops: ${link}`);
+    }
+    aliases.add(alias);
+    current = path.resolve(path.dirname(alias), fs.readlinkSync(alias));
+  }
+  return aliases;
+}
+
 function collectPackageRuntimeClosure(repoRoot, seeds, options = {}) {
   const packageDirs = new Set();
   const rootPackageNames = new Set();
+  const unresolvedRequiredLinks = new Set();
   const stack = [...seeds];
 
   while (stack.length > 0) {
     const entry = stack.pop();
-    const packageDir = resolveNodeModulePackageDir(entry.importerDir, entry.packageName);
+    const unresolvedLinks = [];
+    const packageDir = resolveNodeModulePackageDir(
+      entry.importerDir,
+      entry.packageName,
+      unresolvedLinks,
+    );
     if (!packageDir) {
+      if (entry.required !== false) {
+        for (const link of unresolvedLinks) {
+          for (const alias of requiredDependencyLinkChain(link)) {
+            unresolvedRequiredLinks.add(alias);
+          }
+        }
+      }
       continue;
     }
 
@@ -99,11 +148,11 @@ function collectPackageRuntimeClosure(repoRoot, seeds, options = {}) {
 
     const packageJson = readPackageJson(path.join(packageDir, "package.json"));
     for (const dependencyName of collectRuntimeDependencyNames(packageJson, options)) {
-      stack.push({ importerDir: packageDir, packageName: dependencyName });
+      stack.push(runtimeDependencySeed(packageDir, dependencyName, packageJson));
     }
   }
 
-  return { packageDirs, rootPackageNames };
+  return { packageDirs, rootPackageNames, unresolvedRequiredLinks };
 }
 
 function collectWorkspacePackageRuntimeSeeds(repoRoot, workspaceDir, excludedPluginIds) {
@@ -123,10 +172,72 @@ function collectWorkspacePackageRuntimeSeeds(repoRoot, workspaceDir, excludedPlu
       seeds.push({ importerDir, packageName: packageJson.name });
     }
     for (const packageName of collectRuntimeDependencyNames(packageJson)) {
-      seeds.push({ importerDir, packageName });
+      seeds.push(runtimeDependencySeed(importerDir, packageName, packageJson));
     }
   }
   return seeds;
+}
+
+function isWithin(root, target) {
+  const relative = path.relative(root, target);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+  );
+}
+
+// pnpm's aggregate and importer-local aliases outlive their workspace targets.
+// Snapshot only aliases into deliberately excluded importers before pruning those
+// targets; unrelated dangling links remain errors for immutable-image acceptance.
+function collectExcludedWorkspaceDependencyLinks(repoRoot, bundledPluginDir, excludedRoots) {
+  const realRepoRoot = fs.realpathSync(repoRoot);
+  const moduleRoots = [path.join(repoRoot, "node_modules")];
+  for (const workspaceDir of ["packages", bundledPluginDir]) {
+    const workspaceRoot = path.join(repoRoot, workspaceDir);
+    assertRealOutputRoot(workspaceRoot);
+    if (!fs.existsSync(workspaceRoot)) {
+      continue;
+    }
+    for (const entry of fs.readdirSync(workspaceRoot, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        moduleRoots.push(path.join(workspaceRoot, entry.name, "node_modules"));
+      }
+    }
+  }
+  const links = [];
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(file);
+      } else if (entry.isSymbolicLink()) {
+        let target = path.resolve(fs.realpathSync(path.dirname(file)), fs.readlinkSync(file));
+        try {
+          target = fs.realpathSync(file);
+        } catch (error) {
+          if (error?.code !== "ENOENT") {
+            throw error;
+          }
+        }
+        if (excludedRoots.some((root) => isWithin(root, target))) {
+          links.push(file);
+        }
+      }
+    }
+  };
+  const existingRoots = moduleRoots.filter((root) => {
+    assertRealOutputRoot(root);
+    return fs.lstatSync(root, { throwIfNoEntry: false })?.isDirectory();
+  });
+  for (const moduleRoot of existingRoots) {
+    if (!isWithin(realRepoRoot, fs.realpathSync(moduleRoot))) {
+      throw new Error(`Docker dependency root escapes repository: ${moduleRoot}`);
+    }
+  }
+  for (const moduleRoot of existingRoots) {
+    visit(moduleRoot);
+  }
+  return links.toSorted((left, right) => left.localeCompare(right));
 }
 
 function pruneNodeModulesForOmittedPlugins(repoRoot, bundledPluginDir, omittedPluginIds) {
@@ -141,20 +252,47 @@ function pruneNodeModulesForOmittedPlugins(repoRoot, bundledPluginDir, omittedPl
       omittedPackageNames.add(packageJson.name);
     }
     for (const packageName of collectRuntimeDependencyNames(packageJson)) {
-      omittedSeeds.push({ importerDir, packageName });
+      omittedSeeds.push(runtimeDependencySeed(importerDir, packageName, packageJson));
     }
   }
 
-  const keptSeeds = [...collectRuntimeDependencyNames(rootPackageJson)].map((packageName) => ({
-    importerDir: repoRoot,
-    packageName,
-  }));
+  const keptSeeds = [...collectRuntimeDependencyNames(rootPackageJson)].map((packageName) =>
+    runtimeDependencySeed(repoRoot, packageName, rootPackageJson),
+  );
   keptSeeds.push(...collectWorkspacePackageRuntimeSeeds(repoRoot, "packages", new Set()));
   keptSeeds.push(
     ...collectWorkspacePackageRuntimeSeeds(repoRoot, bundledPluginDir, omittedPluginIds),
   );
 
   const keptClosure = collectPackageRuntimeClosure(repoRoot, keptSeeds);
+  // The browser UI workspace is build-only; its generated dist/control-ui is
+  // shipped, but its importer root is not. Omitted plugins have the same closure
+  // boundary. Never prune a workspace that retained runtime code actually needs.
+  const realRepoRoot = fs.realpathSync(repoRoot);
+  const excludedRoots = [
+    path.join(realRepoRoot, "ui"),
+    ...[...omittedPluginIds].map((id) => path.join(realRepoRoot, bundledPluginDir, id)),
+  ];
+  for (const packageDir of keptClosure.packageDirs) {
+    if (excludedRoots.some((root) => isWithin(root, packageDir))) {
+      throw new Error(
+        `Docker runtime dependency resolves to excluded workspace: ${path.relative(realRepoRoot, packageDir).replaceAll("\\", "/")}`,
+      );
+    }
+  }
+  const excludedLinks = collectExcludedWorkspaceDependencyLinks(
+    repoRoot,
+    bundledPluginDir,
+    excludedRoots,
+  );
+  for (const link of excludedLinks) {
+    const canonicalLink = path.join(fs.realpathSync(path.dirname(link)), path.basename(link));
+    if (keptClosure.unresolvedRequiredLinks.has(canonicalLink)) {
+      throw new Error(
+        `Docker required dependency is missing from excluded workspace: ${path.relative(realRepoRoot, canonicalLink).replaceAll("\\", "/")}`,
+      );
+    }
+  }
   // Hoisted workspace dev dependencies can satisfy optional peers of omitted
   // plugins. Treat those installed peer-only branches as removal candidates;
   // the kept runtime closure below remains authoritative.
@@ -177,6 +315,13 @@ function pruneNodeModulesForOmittedPlugins(repoRoot, bundledPluginDir, omittedPl
     removePathIfExists(packageDir);
     removeEmptyScopeDir(repoRoot, packageName);
     removed.push(path.relative(repoRoot, packageDir).replaceAll("\\", "/"));
+  }
+
+  for (const link of excludedLinks) {
+    if (fs.lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      fs.unlinkSync(link);
+      removed.push(path.relative(repoRoot, link).replaceAll("\\", "/"));
+    }
   }
 
   return removed;

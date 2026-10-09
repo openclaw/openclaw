@@ -10658,7 +10658,7 @@ describe("package artifact reuse", () => {
     );
     expect(repoE2eHarnessCheckout.with).toMatchObject({
       "sparse-checkout":
-        "/.github/actions/setup-playwright-chromium/\n/package.json\n/scripts/\n/src/shared/non-packaged-plugin-dirs.ts\n",
+        "/.github/actions/setup-playwright-chromium/\n/package.json\n/scripts/\n/src/shared/artifact-permissions.ts\n/src/shared/non-packaged-plugin-dirs.ts\n",
       "sparse-checkout-cone-mode": false,
     });
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");

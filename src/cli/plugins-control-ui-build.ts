@@ -12,6 +12,11 @@ import {
 import type { PluginManifestControlUi } from "../plugins/manifest-types.js";
 import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
+import {
+  assertArtifactTreeReadable,
+  ensureGeneratedArtifactDirectory,
+  normalizeGeneratedArtifactTree,
+} from "../shared/artifact-permissions.js";
 import { buildPluginBundle } from "./plugins-build-bundle.js";
 
 export async function writePluginBuildManifest(
@@ -108,22 +113,28 @@ export async function buildPluginControlUi(params: {
         throw new Error("Control UI build is missing or stale. Run openclaw plugins build.");
       }
     }
+    if (
+      JSON.stringify((await fs.readdir(outputDir)).toSorted()) !==
+      JSON.stringify(files.map((file) => file.name).toSorted())
+    ) {
+      throw new Error(
+        "An immutable Control UI build has unexpected entries. Remove it and rebuild.",
+      );
+    }
+    assertArtifactTreeReadable(outputDir, { ownerRoot: rootDir });
     return declaration;
   }
 
   // Publish an immutable directory before its manifest pointer. A failed build
   // cannot change the previous activation or expose a mixed JS/CSS generation.
   const generations = path.dirname(outputDir);
-  await fs.mkdir(generations, { recursive: true });
-  // The builder owns this parent too; a restrictive umask would otherwise leave
-  // it owner-only and block traversal before the generation is ever reached.
-  await fs.chmod(generations, 0o755);
+  ensureGeneratedArtifactDirectory(generations, rootDir);
   const staging = await fs.mkdtemp(path.join(generations, ".build-"));
   try {
     for (const file of files) {
       await fs.writeFile(path.join(staging, file.name), file.contents);
     }
-    await normalizeGenerationPermissions(staging, files);
+    normalizeGeneratedArtifactTree(staging, { preserveExecutable: false });
     try {
       await fs.rename(staging, outputDir);
     } catch (error) {
@@ -143,20 +154,20 @@ export async function buildPluginControlUi(params: {
           );
         }
       }
+      const expectedNames = files.map((file) => file.name).toSorted();
+      if (
+        JSON.stringify((await fs.readdir(outputDir)).toSorted()) !== JSON.stringify(expectedNames)
+      ) {
+        throw new Error(
+          "An immutable Control UI build has unexpected entries. Remove it and rebuild.",
+          { cause: error },
+        );
+      }
       // A generation published by an earlier build may still carry owner-only modes.
-      await normalizeGenerationPermissions(outputDir, files);
+      normalizeGeneratedArtifactTree(outputDir, { preserveExecutable: false });
     }
   } finally {
     await fs.rm(staging, { recursive: true, force: true });
   }
   return declaration;
-}
-
-// mkdtemp is owner-only and file creation follows umask. Normalize generated
-// asset modes before publication or after validating a reused generation.
-async function normalizeGenerationPermissions(directory: string, files: Array<{ name: string }>) {
-  await fs.chmod(directory, 0o755);
-  for (const file of files) {
-    await fs.chmod(path.join(directory, file.name), 0o644);
-  }
 }

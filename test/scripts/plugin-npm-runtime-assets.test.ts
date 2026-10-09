@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import * as managedCommands from "../../scripts/lib/managed-child-process.mts";
+import { preparePackageRuntimeAssets } from "../../scripts/lib/plugin-npm-runtime-assets.mts";
 import { buildPluginNpmRuntime } from "../../scripts/lib/plugin-npm-runtime-build.mts";
 import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -17,6 +18,7 @@ function createAssetFixture(
     generated?: boolean;
     dependency?: string;
     localDependency?: boolean;
+    restrictivePermissions?: boolean;
   } = {},
 ) {
   const repoRoot = createTempDir("openclaw-selected-plugin-assets-");
@@ -77,6 +79,10 @@ function createAssetFixture(
   } else if (!options.missing) {
     fs.writeFileSync(path.join(packageDir, "assets", "message.txt"), "selected asset");
   }
+  if (options.restrictivePermissions) {
+    fs.chmodSync(packageDir, 0o700);
+    fs.chmodSync(path.join(packageDir, source), 0o600);
+  }
   if (options.tracked) {
     execFileSync("git", ["add", "extensions/demo/package.json"], { cwd: repoRoot });
   }
@@ -84,6 +90,38 @@ function createAssetFixture(
 }
 
 describe("selected plugin runtime assets", () => {
+  it.skipIf(process.platform === "win32").each(["hardlink", "symlink"])(
+    "replaces a destination %s before copying without modifying private state",
+    async (linkKind) => {
+      const fixture = createAssetFixture({ restrictivePermissions: true });
+      const privateFile = path.join(fixture.repoRoot, "private.txt");
+      fs.writeFileSync(privateFile, "private state", { mode: 0o600 });
+      fs.chmodSync(privateFile, 0o600);
+      const destination = path.join(fixture.packageDir, "dist/assets/message.txt");
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      if (linkKind === "hardlink") {
+        fs.linkSync(privateFile, destination);
+      } else {
+        fs.symlinkSync(privateFile, destination);
+      }
+
+      await preparePackageRuntimeAssets({
+        packageDir: fixture.packageDir,
+        pluginDir: "demo",
+        packageJson: JSON.parse(
+          fs.readFileSync(path.join(fixture.packageDir, "package.json"), "utf8"),
+        ),
+      });
+
+      expect(fs.readFileSync(privateFile, "utf8")).toBe("private state");
+      expect(fs.statSync(privateFile).mode & 0o777).toBe(0o600);
+      expect(fs.readFileSync(destination, "utf8")).toBe("selected asset");
+      expect(fs.lstatSync(destination).isFile()).toBe(true);
+      expect(fs.statSync(destination).nlink).toBe(1);
+      expect(fs.statSync(destination).mode & 0o777).toBe(0o644);
+    },
+  );
+
   it("awaits bounded asset execution before publishing package assets", async () => {
     const fixture = createAssetFixture({ generated: true });
     fs.writeFileSync(path.join(fixture.packageDir, fixture.source), "previous source asset");
@@ -136,6 +174,7 @@ describe("selected plugin runtime assets", () => {
 
   it.each([
     { name: "untracked package", options: {} },
+    { name: "private source modes", options: { restrictivePermissions: true } },
     { name: "tracked package with a malformed unrelated manifest", options: { tracked: true } },
     { name: "asset generated after compilation", options: { generated: true } },
     { name: "hoisted dependency", options: { dependency: "engine" } },
@@ -155,6 +194,21 @@ describe("selected plugin runtime assets", () => {
 
     const result = await buildPluginNpmRuntime({ ...fixture, logLevel: "silent" });
     expect(result?.copiedStaticAssets).toEqual(["dist/assets/message.txt"]);
+    if (options.restrictivePermissions && process.platform !== "win32") {
+      const dist = path.join(fixture.packageDir, "dist");
+      for (const output of [
+        dist,
+        ...fs.readdirSync(dist, { recursive: true }).map((entry) => path.join(dist, String(entry))),
+      ]) {
+        const stat = fs.statSync(output);
+        expect(stat.mode & 0o777).toBe(stat.isDirectory() ? 0o755 : 0o644);
+      }
+      expect(fs.statSync(fixture.packageDir).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(path.join(fixture.packageDir, fixture.source)).mode & 0o777).toBe(0o600);
+      expect(fs.readFileSync(path.join(fixture.packageDir, fixture.source), "utf8")).toBe(
+        "selected asset",
+      );
+    }
     const entry = pathToFileURL(path.join(fixture.packageDir, "dist", "index.js")).href;
     expect(
       execFileSync(

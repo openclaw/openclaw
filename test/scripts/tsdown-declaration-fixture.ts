@@ -209,6 +209,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "src/process/exec-result.ts",
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
     "src/infra/update-managed-service-handoff-native-loader.ts",
+    "src/shared/artifact-permissions.ts",
     "src/shared/deferred.ts",
     "src/shared/freebsd-process-identity.ts",
     "src/shared/freebsd-process-identity-native.ts",
@@ -378,16 +379,30 @@ export function runWriter(
 }
 
 export function runUnifiedBuild(command: CommandFixture, root: string) {
+  // This fixture runs only the compiler/cache fragment, not runtime metadata or
+  // overlay publication. Its injected runner still executes the real compilers
+  // under the same artifact ownership and process-tree lifetime contract.
   return runFixtureModule(
     command,
     root,
     `
 import { resolveBuildAllSteps, runBuildAllSteps } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/build-all.mts")).href)};
-import { withDistArtifactOwnership } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/dist-artifact-ownership.mts")).href)};
+import { distArtifactEntryArgs, withDistArtifactOwnership } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/dist-artifact-ownership.mts")).href)};
+import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/managed-child-process.mts")).href)};
 await withDistArtifactOwnership(process.cwd(), async () => {
   const steps = resolveBuildAllSteps("full").filter(step =>
     ["tsdown-unified", "write-unified-entry-dts"].includes(step.label));
-  const result = await runBuildAllSteps("full", { steps });
+  const result = await runBuildAllSteps("full", {
+    steps,
+    runStep: async (invocation) => ({
+      status: await runManagedCommand({
+        bin: invocation.command,
+        args: distArtifactEntryArgs(invocation.args[2], invocation.args.slice(3)),
+        ...invocation.options,
+        requireProcessTreeExit: process.platform !== "win32",
+      }),
+    }),
+  });
   process.exitCode = result.exitCode;
 });
 `,
