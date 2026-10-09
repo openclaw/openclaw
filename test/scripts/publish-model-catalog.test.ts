@@ -14,11 +14,13 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assembleModelCatalogBundle,
+  assembleModelCatalogBundleV2,
   enrichModelCatalogPricing,
   hydrateModelCatalogFromModelsDev,
   MODEL_CATALOG_MIN_MODELS,
   parsePublishModelCatalogArgs,
   readModelCatalogManifests,
+  resolveProviderFeaturedModels,
   retireUnservedModels,
   serializeModelCatalogBundle,
   summarizeModelCatalogBundle,
@@ -796,6 +798,130 @@ describe("publish model catalog", () => {
     expect(JSON.stringify(bundle)).toBe(before);
     expect(warnings.join("")).toContain("publishing nvidia without inventory retirement");
     expect(warnings.join("")).toContain("publishing novita without inventory retirement");
+  });
+
+  const FEATURED_MODELS_URL =
+    "https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json";
+  const GLOBAL_RECOMMENDED = [
+    "kimi-k3",
+    "deepseek-v4.1-flash",
+    "glm-5.3",
+    "glm-5.2",
+    "glm-5.3-flash",
+    "nemotron-3-ultra-550b-a55b",
+  ];
+
+  async function featuredRecommendations(respond: () => Response) {
+    const bundle = await assembleFixtureBundle([
+      {
+        pluginId: "fixture",
+        manifestPath: "fixture.json",
+        manifest: {
+          providers: ["anthropic", "openai", "nvidia"],
+          modelCatalog: {
+            providers: {
+              anthropic: fixtureProvider("claude", 100),
+              openai: fixtureProvider("gpt", 100),
+              nvidia: {
+                models: [
+                  { id: "nvidia/nemotron-3-ultra-550b-a55b" },
+                  { id: "nvidia/nemotron-3-super-120b-a12b" },
+                  { id: "z-ai/glm-5.3" },
+                  { id: "z-ai/glm-5.2" },
+                  { id: "z-ai/glm-5.3-flash" },
+                  { id: "deepseek-ai/deepseek-v4.1-flash" },
+                  {
+                    id: "deepseek-ai/deepseek-v4-flash",
+                    status: "deprecated",
+                    statusReason: "old",
+                  },
+                  { id: "moonshotai/kimi-k3" },
+                ],
+              },
+            },
+          },
+        },
+      },
+    ]);
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      expect(requestUrl(input)).toBe(FEATURED_MODELS_URL);
+      return respond();
+    });
+    const featured = await resolveProviderFeaturedModels({ bundle, fetchImpl });
+    const bundleV2 = await assembleModelCatalogBundleV2(
+      bundle,
+      new WeakMap(),
+      undefined,
+      GLOBAL_RECOMMENDED,
+      featured,
+    );
+    return { featured, recommended: bundleV2.providers.nvidia?.recommendedModels };
+  }
+
+  function featuredFeed(ids: string[]) {
+    return Response.json({ "featured-models": ids.map((model) => ({ model, context: 1 })) });
+  }
+
+  it("leads a provider's recommendations with its featured models, then the global list", async () => {
+    const { featured, recommended } = await featuredRecommendations(() =>
+      featuredFeed([
+        "nvidia/nemotron-3-ultra-550b-a55b",
+        "nemotron-3-super-120b-a12b",
+        "z-ai/glm-5-3",
+        // An older family member is a provider pick, so the family rule keeps it.
+        "z-ai/glm-5.2",
+        "deepseek-ai/deepseek-v4.1-flash",
+        "deepseek-ai/deepseek-v4-flash",
+        "nvidia/unserved-model",
+      ]),
+    );
+
+    const picks = [
+      "nvidia/nemotron-3-ultra-550b-a55b",
+      "nvidia/nemotron-3-super-120b-a12b",
+      "z-ai/glm-5.3",
+      "z-ai/glm-5.2",
+      "deepseek-ai/deepseek-v4.1-flash",
+    ];
+    expect(featured).toEqual({
+      nvidia: {
+        ids: picks,
+        skipped: ["deepseek-ai/deepseek-v4-flash", "nvidia/unserved-model"],
+      },
+    });
+    expect(recommended).toEqual([...picks, "moonshotai/kimi-k3", "z-ai/glm-5.3-flash"]);
+  });
+
+  it.each([
+    ["unavailable", () => new Response("Gone.", { status: 404 }), true],
+    [
+      "malformed",
+      () => Response.json({ "featured-models": [{ model: "z-ai/glm-5.2" }, {}] }),
+      true,
+    ],
+    ["unmatched", () => featuredFeed(["nvidia/unserved-model"]), true],
+    ["empty", () => featuredFeed([]), false],
+  ])("falls back to the global list when the featured feed is %s", async (_s, respond, warns) => {
+    const warnings: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((value) => {
+      warnings.push(String(value));
+      return true;
+    });
+
+    const { recommended } = await featuredRecommendations(respond).finally(() =>
+      stderr.mockRestore(),
+    );
+
+    expect(recommended).toEqual([
+      "moonshotai/kimi-k3",
+      "deepseek-ai/deepseek-v4.1-flash",
+      "z-ai/glm-5.3",
+      "z-ai/glm-5.3-flash",
+      "nvidia/nemotron-3-ultra-550b-a55b",
+    ]);
+    expect(warnings.join("")).toEqual(
+      warns ? expect.stringContaining("publishing nvidia with global recommendations only") : "",
+    );
   });
 
   it.each(["absent", "unowned", "without provider catalog"])(
