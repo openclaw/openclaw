@@ -626,7 +626,6 @@ extensions/ollama/index.ts	6
 extensions/ollama/provider-discovery.ts	1
 extensions/ollama/src/config-compat.ts	1
 extensions/ollama/src/discovery-shared.ts	1
-extensions/ollama/src/embedding-provider.runtime.ts	1
 extensions/ollama/src/provider-base-url.ts	1
 extensions/ollama/src/provider-models.ts	1
 extensions/ollama/src/setup-pull.ts	1
