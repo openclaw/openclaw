@@ -292,23 +292,30 @@ export function serializeConversation(messages: Message[]): string {
 }
 
 const ENTRY_SEPARATOR = "\n\n";
+// A sampled tool result names its call; long arguments keep their start.
+const MAX_CALL_LABEL_ARGUMENT_CHARS = 120;
+const MAX_CALL_LABEL_CHARS = 300;
 
-// A trimmed tool batch keeps every call's name and the start of each argument.
-const MAX_COMPACT_TOOL_ARGUMENT_CHARS = 300;
+function formatCallLabel(name: string, args: Record<string, unknown>): string {
+  const label = `${name}(${Object.entries(args)
+    .map(([key, value]) => {
+      const text = stringifyCompactionValue(value);
+      return `${key}=${text.length > MAX_CALL_LABEL_ARGUMENT_CHARS ? `${truncateUtf16Safe(text, MAX_CALL_LABEL_ARGUMENT_CHARS)}...` : text}`;
+    })
+    .join(", ")})`;
+  return label.length > MAX_CALL_LABEL_CHARS
+    ? `${truncateUtf16Safe(label, MAX_CALL_LABEL_CHARS)}...)`
+    : label;
+}
 
 function serializeConversationEntries(messages: Message[]): {
   entries: string[];
-  /**
-   * Entries that cannot start a sampled run: tool results, which name neither
-   * the tool nor its call, and an omission note emitted just before one.
-   */
-  continuationEntries: Set<number>;
-  /** Tool-call entries with long arguments, rendered with each argument capped. */
-  compactEntries: Map<number, string>;
+  /** Tool-result entries rendered with the call that produced them, for sampled input. */
+  labeledResults: Map<number, string>;
 } {
   const parts: string[] = [];
-  const continuationEntries = new Set<number>();
-  const compactEntries = new Map<number, string>();
+  const labeledResults = new Map<number, string>();
+  const callLabels = new Map<string, string>();
   let omissionMessages = 0;
 
   for (const msg of messages) {
@@ -322,9 +329,6 @@ function serializeConversationEntries(messages: Message[]): {
       // Fixed ASCII bounds additions to 8 * (82 markers + 17 wrapper) + 55 overflow = 847 bytes.
       // Keep the aggregate outside truncation too; later omissions must never disappear silently.
       if (omissionText && omissionMessages++ === MAX_OMISSION_MESSAGES) {
-        if (msg.role === "toolResult") {
-          continuationEntries.add(parts.length);
-        }
         parts.push(OMISSION_OVERFLOW);
       }
       const content = [
@@ -333,38 +337,29 @@ function serializeConversationEntries(messages: Message[]): {
       ]
         .filter(Boolean)
         .join("\n");
-      if (content) {
-        const speaker =
-          msg.role === "toolResult" ? "Tool result" : `User${formatPersistedSenderSuffix(msg)}`;
-        if (msg.role === "toolResult") {
-          continuationEntries.add(parts.length);
-        }
-        parts.push(`[${speaker}]: ${content}`);
+      if (!content) {
+        continue;
+      }
+      if (msg.role === "toolResult") {
+        const label = callLabels.get(msg.toolCallId) ?? `${msg.toolName}(...)`;
+        labeledResults.set(parts.length, `[Tool result of ${label}]: ${content}`);
+        parts.push(`[Tool result]: ${content}`);
+      } else {
+        parts.push(`[User${formatPersistedSenderSuffix(msg)}]: ${content}`);
       }
     } else if (msg.role === "assistant") {
       const textParts: string[] = [];
       const toolCalls: string[] = [];
-      const compactToolCalls: string[] = [];
-      let hasLongArgument = false;
 
       for (const block of msg.content) {
         if (block.type === "text") {
           textParts.push(block.text);
         } else if (block.type === "toolCall") {
-          const args = Object.entries(block.arguments).map(([k, v]) => {
-            const value = stringifyCompactionValue(v);
-            if (value.length <= MAX_COMPACT_TOOL_ARGUMENT_CHARS) {
-              return { full: `${k}=${value}`, compact: `${k}=${value}` };
-            }
-            hasLongArgument = true;
-            const kept = truncateUtf16Safe(value, MAX_COMPACT_TOOL_ARGUMENT_CHARS);
-            return {
-              full: `${k}=${value}`,
-              compact: `${k}=${kept}[... ${value.length - kept.length} characters omitted]`,
-            };
-          });
-          toolCalls.push(`${block.name}(${args.map((arg) => arg.full).join(", ")})`);
-          compactToolCalls.push(`${block.name}(${args.map((arg) => arg.compact).join(", ")})`);
+          const argsStr = Object.entries(block.arguments)
+            .map(([k, v]) => `${k}=${stringifyCompactionValue(v)}`)
+            .join(", ");
+          toolCalls.push(`${block.name}(${argsStr})`);
+          callLabels.set(block.id, formatCallLabel(block.name, block.arguments));
         }
       }
 
@@ -372,18 +367,12 @@ function serializeConversationEntries(messages: Message[]): {
         parts.push(`[Assistant]: ${textParts.join("\n")}`);
       }
       if (toolCalls.length > 0) {
-        if (hasLongArgument) {
-          compactEntries.set(
-            parts.length,
-            `[Assistant tool calls]: ${compactToolCalls.join("; ")}`,
-          );
-        }
         parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
       }
     }
   }
 
-  return { entries: parts, continuationEntries, compactEntries };
+  return { entries: parts, labeledResults };
 }
 
 /**
@@ -455,57 +444,52 @@ export interface BoundedConversation {
  * verbatim (half the budget), the oldest entries (a tenth), and eight evenly
  * spaced runs of the span between them. Sampled entries are trimmed to 6,000
  * characters, and every gap is marked with its entry count, so the summarizer
- * knows what it did not see. No run starts with a tool result, because its
- * entry names neither the tool nor the call that produced it. The transcript
- * itself is not changed.
+ * knows what it did not see. Each tool result names its call, because sampling
+ * can separate the two. The transcript itself is not changed.
  */
 export function serializeConversationWithinBudget(
   messages: Message[],
   maxChars: number,
 ): BoundedConversation {
-  const { entries, continuationEntries, compactEntries } = serializeConversationEntries(messages);
-  const weights = entries.map((entry) => estimateStringChars(entry));
+  const serialized = serializeConversationEntries(messages);
   const separatorChars = ENTRY_SEPARATOR.length;
   const totalChars =
-    weights.reduce((sum, weight) => sum + weight, 0) +
-    separatorChars * Math.max(0, entries.length - 1);
+    serialized.entries.reduce((sum, entry) => sum + estimateStringChars(entry), 0) +
+    separatorChars * Math.max(0, serialized.entries.length - 1);
   if (totalChars <= maxChars) {
-    return { text: entries.join(ENTRY_SEPARATOR), omittedEntries: 0, trimmedEntries: 0 };
+    return {
+      text: serialized.entries.join(ENTRY_SEPARATOR),
+      omittedEntries: 0,
+      trimmedEntries: 0,
+    };
   }
+  const entries = serialized.entries.map(
+    (entry, index) => serialized.labeledResults.get(index) ?? entry,
+  );
+  const weights = entries.map((entry) => estimateStringChars(entry));
 
   const budget = Math.max(0, maxChars - OMISSION_MARKER_RESERVE_CHARS);
-  const selected = new Map<number, { text: string; chars: number }>();
+  const selected = new Map<number, string>();
   let trimmedEntries = 0;
   let usedChars = 0;
 
-  // Returns the entry text that fits `limit`. A tool batch first drops to its
-  // compact form, which keeps every call's name; other text loses its middle.
-  const fit = (index: number, limit: number): { text: string; chars: number } | undefined => {
+  // Keeps the entry when it fits `limit`, eliding its middle when needed.
+  const take = (index: number, limit: number, maxEntryChars = limit): boolean => {
     const entry = entries[index] ?? "";
     const weight = weights[index] ?? 0;
-    if (weight + separatorChars <= limit) {
-      return { text: entry, chars: weight + separatorChars };
+    const entryLimit = Math.min(limit, maxEntryChars + separatorChars);
+    if (weight + separatorChars <= entryLimit) {
+      selected.set(index, entry);
+      usedChars += weight + separatorChars;
+      return true;
     }
-    const compact = compactEntries.get(index);
-    const compactChars = compact === undefined ? 0 : estimateStringChars(compact);
-    if (compact !== undefined && compactChars + separatorChars <= limit) {
-      return { text: compact, chars: compactChars + separatorChars };
-    }
-    const trimmed = elideMiddleWithinWeight(compact ?? entry, limit - separatorChars);
-    return trimmed === undefined
-      ? undefined
-      : { text: trimmed, chars: estimateStringChars(trimmed) + separatorChars };
-  };
-  const take = (index: number, limit: number, maxEntryChars = limit): boolean => {
-    const kept = fit(index, Math.min(limit, maxEntryChars + separatorChars));
-    if (!kept || kept.chars > limit) {
+    const trimmed = elideMiddleWithinWeight(entry, entryLimit - separatorChars);
+    if (trimmed === undefined) {
       return false;
     }
-    if (kept.text !== entries[index]) {
-      trimmedEntries += 1;
-    }
-    selected.set(index, kept);
-    usedChars += kept.chars;
+    selected.set(index, trimmed);
+    usedChars += estimateStringChars(trimmed) + separatorChars;
+    trimmedEntries += 1;
     return true;
   };
 
@@ -513,55 +497,15 @@ export function serializeConversationWithinBudget(
   // entry may be trimmed, when it alone exceeds the tail share.
   let tailStart = entries.length;
   const tailLimit = Math.floor(budget * SUMMARY_INPUT_TAIL_SHARE);
-  const newest = entries.length - 1;
-  let newestGroupStart = newest;
-  while (newestGroupStart > 0 && continuationEntries.has(newestGroupStart)) {
-    newestGroupStart -= 1;
-  }
-  let newestGroupChars = 0;
-  for (let index = newestGroupStart; index <= newest; index += 1) {
-    newestGroupChars += (weights[index] ?? 0) + separatorChars;
-  }
-  if (newestGroupStart < newest && newestGroupChars > tailLimit) {
-    // The newest tool batch does not fit: keep an excerpt of the newest result
-    // and its call, reserving the call's room first.
-    const call = compactEntries.get(newestGroupStart) ?? entries[newestGroupStart] ?? "";
-    const callReserve = Math.min(
-      estimateStringChars(call) + separatorChars,
-      MAX_SAMPLED_ENTRY_CHARS + separatorChars,
-      Math.floor(tailLimit / 2),
-    );
-    // At least half the tail share remains, enough for an excerpt of any entry.
-    take(newest, tailLimit - callReserve);
-    take(newestGroupStart, tailLimit - usedChars, MAX_SAMPLED_ENTRY_CHARS);
-    // Earlier results of the same batch fill what is left, newest first.
-    for (let index = newest - 1; index > newestGroupStart; index -= 1) {
-      if ((weights[index] ?? 0) + separatorChars > tailLimit - usedChars) {
-        break;
-      }
-      take(index, tailLimit - usedChars);
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const remaining = tailLimit - usedChars;
+    const verbatim = (weights[index] ?? 0) + separatorChars <= remaining;
+    if ((!verbatim && tailStart !== entries.length) || !take(index, remaining)) {
+      break;
     }
-    tailStart = newestGroupStart;
-  } else {
-    for (let index = newest; index >= 0; index -= 1) {
-      const remaining = tailLimit - usedChars;
-      const verbatim = (weights[index] ?? 0) + separatorChars <= remaining;
-      if (!verbatim && tailStart !== entries.length) {
-        break;
-      }
-      if (!take(index, remaining)) {
-        break;
-      }
-      tailStart = index;
-    }
-    // A newest run that starts inside an earlier tool batch drops its leading
-    // results; the middle sampling may still show them with their call.
-    while (continuationEntries.has(tailStart)) {
-      usedChars -= selected.get(tailStart)?.chars ?? 0;
-      selected.delete(tailStart);
-      tailStart += 1;
-    }
+    tailStart = index;
   }
+
   // The oldest entries usually state the goal and the constraints of the session.
   let headEnd = 0;
   const headLimit = usedChars + Math.floor(budget * SUMMARY_INPUT_HEAD_SHARE);
@@ -579,15 +523,6 @@ export function serializeConversationWithinBudget(
         nextFree,
         headEnd + Math.floor((slice * middleCount) / SUMMARY_INPUT_MIDDLE_SLICES),
       );
-      // Start at the tool call that produced a result, or past results whose call is out of reach.
-      while (index > nextFree && continuationEntries.has(index)) {
-        index -= 1;
-      }
-      if (!selected.has(index - 1)) {
-        while (index < tailStart && continuationEntries.has(index)) {
-          index += 1;
-        }
-      }
       const sliceEnd = usedChars + sliceLimit;
       while (index < tailStart && take(index, sliceEnd - usedChars, MAX_SAMPLED_ENTRY_CHARS)) {
         index += 1;
@@ -601,7 +536,7 @@ export function serializeConversationWithinBudget(
   let gap = 0;
   // The extra iteration flushes a trailing gap.
   for (let index = 0; index <= entries.length; index += 1) {
-    const text = selected.get(index)?.text;
+    const text = selected.get(index);
     if (text === undefined && index < entries.length) {
       gap += 1;
       continue;

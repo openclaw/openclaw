@@ -187,9 +187,12 @@ describe("summary request input budget", () => {
     expect(estimateStringChars(conversation)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
     // The newest turn carries the live task and arrives verbatim.
     expect(conversation).toContain(`[User]: ask-1249 ${"context ".repeat(100)}`);
-    expect(conversation.endsWith(serializeConversation(convertToLlm(messages.slice(-1))))).toBe(
-      true,
-    );
+    const newestResult = serializeConversation(convertToLlm(messages.slice(-1)));
+    expect(
+      conversation.endsWith(
+        `[Tool result of exec(cmd="run 1249")]${newestResult.slice("[Tool result]".length)}`,
+      ),
+    ).toBe(true);
     // The oldest turn usually states the goal of the session.
     expect(conversation).toContain("[User]: ask-0 ");
     // Every gap names its size, and the sizes add up to what was left out.
@@ -200,18 +203,15 @@ describe("summary request input budget", () => {
       .filter((part) => /^\[(User|Assistant|Assistant tool calls|Tool result)/u.test(part));
     const omitted = gaps.reduce((sum, gap) => sum + Number(gap[1]), 0);
     expect(kept.length + omitted).toBe(1_250 * 4);
-    // A tool result names neither its tool nor its call, so every kept result
-    // follows its own call with no gap in between.
-    const results = [...conversation.matchAll(/\[Tool result\]: result-(\d+) /gu)];
+    // Sampling can separate a result from its call, so each kept result names
+    // the call that produced it.
+    expect(conversation).not.toContain("[Tool result]:");
+    const results = [
+      ...conversation.matchAll(/\[Tool result of exec\(cmd="run (\d+)"\)\]: result-(\d+) /gu),
+    ];
     expect(results.length).toBeGreaterThan(3);
-    for (const result of results) {
-      const call = conversation.lastIndexOf(
-        `[Assistant tool calls]: exec(cmd="run ${result[1]}")`,
-        result.index,
-      );
-      expect(call).toBeGreaterThanOrEqual(0);
-      expect(conversation.slice(call, result.index)).not.toContain("omitted from this summary");
-    }
+    expect(results.filter((result) => result[1] !== result[2])).toEqual([]);
+    expect(results).toHaveLength([...conversation.matchAll(/ result-\d+ /gu)].length);
     // The summarizer is told about the gaps, and the previous summary stays outside the budget.
     expect(prompt).toContain("Do not guess what they said.");
     expect(prompt).toContain("<previous-summary>\nPREVIOUS-SUMMARY-FACT\n</previous-summary>");
@@ -302,7 +302,7 @@ describe("summary request input budget", () => {
     expect(bounded.text.length).toBeLessThan(MAX_SUMMARY_INPUT_CHARS / 2);
   });
 
-  it("never shows a sampled tool result without its call, even after the image-omission note", () => {
+  it("names the call of every sampled tool result, even after the image-omission note", () => {
     const messages: AgentMessage[] = [];
     for (let index = 0; index < 100; index += 1) {
       messages.push(toolCallMessage([{ id: `c-${index}`, name: "exec", cmd: `command-${index}` }]));
@@ -323,16 +323,19 @@ describe("summary request input budget", () => {
 
     for (let budget = 4_000; budget <= 60_000; budget += 1_000) {
       const { text } = serializeConversationWithinBudget(convertToLlm(messages), budget);
-      for (const result of text.matchAll(/RESULT-(\d+) /gu)) {
-        const call = text.lastIndexOf(`exec(cmd="command-${result[1]}")`, result.index);
-        expect(call, `budget ${budget}, result ${result[1]}`).toBeGreaterThanOrEqual(0);
-        expect(text.slice(call, result.index)).not.toContain("omitted from this summary input");
-      }
+      const named = [
+        ...text.matchAll(/exec\(cmd="command-(\d+)"\)\]: (?:\[.*\]\n)?RESULT-(\d+) /gu),
+      ];
+      expect(
+        named.filter((result) => result[1] !== result[2]),
+        `budget ${budget}`,
+      ).toEqual([]);
+      expect(named, `budget ${budget}`).toHaveLength([...text.matchAll(/RESULT-\d+ /gu)].length);
     }
   });
 
   it.each([6_000, 9_000, 20_000])(
-    "keeps the newest result and its call when one argument fills a %i-character budget",
+    "keeps the newest result and names its call when one argument fills a %i-character budget",
     (budget) => {
       const messages: AgentMessage[] = [
         { role: "user", content: "Write the report.", timestamp: 1 },
@@ -342,18 +345,16 @@ describe("summary request input budget", () => {
 
       const { text } = serializeConversationWithinBudget(convertToLlm(messages), budget);
 
-      expect(text.endsWith("[Tool result]: WRITE-FAILED: disk full")).toBe(true);
-      expect(text).toContain("[Assistant tool calls]: write(cmd=");
+      expect(text).toMatch(/\[Tool result of write\(cmd="x+\.\.\.\)\]: WRITE-FAILED: disk full$/u);
       expect(estimateStringChars(text)).toBeLessThanOrEqual(budget);
     },
   );
 
-  it("names every call of a trimmed tool batch whose results are kept", () => {
+  it("names the call of each result from a trimmed multi-call batch", () => {
+    const names = Array.from({ length: 24 }, (_, index) => `tool${index}`);
     const messages: AgentMessage[] = [
-      toolCallMessage(
-        ["alpha", "beta", "gamma"].map((name) => ({ id: name, name, cmd: "y".repeat(10_000) })),
-      ),
-      ...["alpha", "beta", "gamma"].map((name) => toolResultMessage(name, name, `R-${name}`)),
+      toolCallMessage(names.map((name) => ({ id: name, name, cmd: "y".repeat(10_000) }))),
+      ...names.map((name) => toolResultMessage(name, name, `R-${name}`)),
       { role: "user", content: `NEWEST ${"z".repeat(200_000)}`, timestamp: 9 },
     ];
 
@@ -362,10 +363,28 @@ describe("summary request input budget", () => {
       MAX_SUMMARY_INPUT_CHARS,
     );
 
-    for (const name of ["alpha", "beta", "gamma"]) {
-      expect(text).toContain(`R-${name}`);
-      expect(text.indexOf(`${name}(cmd=`)).toBeGreaterThanOrEqual(0);
+    for (const name of names) {
+      expect(text).toMatch(
+        new RegExp(`\\[Tool result of ${name}\\(cmd="y+\\.\\.\\.\\)\\]: R-${name}\\b`, "u"),
+      );
     }
     expect(estimateStringChars(text)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
+  });
+
+  it("names the call of a result that follows an intervening user message", () => {
+    const messages: AgentMessage[] = [
+      ...createLongSession(60),
+      toolCallMessage([{ id: "report", name: "write_report", cmd: "r".repeat(40_000) }]),
+      { role: "user", content: "Any update?", timestamp: 2 },
+      toolResultMessage("report", "write_report", "WRITE_FAILED: quota"),
+    ];
+
+    const { text } = serializeConversationWithinBudget(
+      convertToLlm(messages),
+      MAX_SUMMARY_INPUT_CHARS,
+    );
+
+    expect(text).toContain("omitted from this summary input");
+    expect(text).toMatch(/\[Tool result of write_report\(cmd="r+\.\.\.\)\]: WRITE_FAILED: quota$/u);
   });
 });
