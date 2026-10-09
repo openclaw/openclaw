@@ -33,11 +33,8 @@ import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
-import {
-  createDsmlRecoverer,
-  type DeepSeekDsmlRecoveredPart,
-  type RecoveredDeepSeekDsmlToolCall,
-} from "./openai-completions-dsml.js";
+import { createDsmlRecoverer } from "./openai-completions-dsml.js";
+import { createGemmaToolCallRecoverer } from "./openai-completions-gemma.js";
 import { getCompat } from "./openai-transport-params.js";
 import {
   isOpenAICompletionsThinkingEnabled,
@@ -49,6 +46,7 @@ import {
   type OpenAICompletionsTextSource,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
+import type { RecoveredTextToolCall, TextToolCallRecoveryPart } from "./text-tool-call-recovery.js";
 import { iterateModelStream, throwIfModelStreamAborted } from "./transport-stream-shared.js";
 
 type OpenAICompatibleChoice = ChatCompletionChunk["choices"][number] & {
@@ -111,6 +109,8 @@ export async function processCompletionsStream(
   const shouldFilterDeepSeekDsmlText = !directMode && compat.thinkingFormat === "deepseek";
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
   const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
+  const gemmaToolCallRecoverer =
+    !directMode && /gemma-?4/i.test(model.id) ? createGemmaToolCallRecoverer() : null;
   const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
   if (options?.strictReasoningTags) {
     reasoningTagTextPartitioner.markStrict();
@@ -287,7 +287,7 @@ export async function processCompletionsStream(
       }
     }
   };
-  const appendRecoveredToolCall = (toolCall: RecoveredDeepSeekDsmlToolCall) => {
+  const appendRecoveredToolCall = (toolCall: RecoveredTextToolCall) => {
     const switchingToolCall = currentBlock?.type === "toolCall";
     if (switchingToolCall) {
       currentBlock = null;
@@ -299,7 +299,7 @@ export async function processCompletionsStream(
     );
     const block: ToolCallBlock = {
       type: "toolCall",
-      // DSML has no provider call id. A response-local counter would alias a
+      // Recovered text has no provider call id. A response-local counter would alias a
       // later assistant response and could collapse distinct mutating calls.
       id: `call_${randomUUID().replaceAll("-", "").slice(0, 24)}`,
       name: toolCall.name,
@@ -322,7 +322,7 @@ export async function processCompletionsStream(
       partial: output,
     });
   };
-  const appendRecoveredParts = (recoveredParts: readonly DeepSeekDsmlRecoveredPart[]) => {
+  const appendRecoveredParts = (recoveredParts: readonly TextToolCallRecoveryPart[]) => {
     for (const recoveredPart of recoveredParts) {
       if (recoveredPart.kind === "toolCall") {
         appendRecoveredToolCall(recoveredPart);
@@ -358,6 +358,18 @@ export async function processCompletionsStream(
   const flushReasoningTagTextPartitioner = () => {
     for (const delta of reasoningTagTextPartitioner.flush()) {
       appendPartitionedVisibleDelta(delta);
+    }
+  };
+  // Recover raw arguments before reasoning-tag filtering can alter their bytes.
+  const flushGemmaToolCallRecoverer = (allowRecovery = true) => {
+    for (const part of gemmaToolCallRecoverer?.flush(allowRecovery) ?? []) {
+      if (part.kind === "toolCall") {
+        appendRecoveredToolCall(part);
+      } else {
+        for (const delta of reasoningTagTextPartitioner.pushVisible(part.text)) {
+          appendPartitionedVisibleDelta(delta);
+        }
+      }
     }
   };
   const sealTextBeforeReasoning = () => {
@@ -479,11 +491,14 @@ export async function processCompletionsStream(
       }
       for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
         if (contentDelta.kind === "text") {
-          const routedDeltas = hasReasoningThinking
-            ? reasoningTagTextPartitioner.push(contentDelta.text)
-            : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
-          for (const routedDelta of routedDeltas) {
-            appendPartitionedVisibleDelta(routedDelta);
+          const parts = gemmaToolCallRecoverer?.push(contentDelta.text) ?? [contentDelta];
+          for (const part of parts) {
+            const routedDeltas = hasReasoningThinking
+              ? reasoningTagTextPartitioner.push(part.text)
+              : reasoningTagTextPartitioner.pushVisible(part.text);
+            for (const routedDelta of routedDeltas) {
+              appendPartitionedVisibleDelta(routedDelta);
+            }
           }
         } else {
           const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
@@ -502,6 +517,8 @@ export async function processCompletionsStream(
       }
       const toolCallDeltas = normalizedDelta.toolCalls;
       if (toolCallDeltas.length > 0) {
+        // Native calls own mixed streams; emit pending raw text in its original position.
+        flushGemmaToolCallRecoverer(false);
         sawNativeToolCallDelta = true;
         flushReasoningTagTextPartitioner();
         rememberPendingCommentaryTags(
@@ -604,6 +621,7 @@ export async function processCompletionsStream(
   if (!finishReason && (directMode || options?.sawStreamDONE?.() === false)) {
     throw new Error("Stream ended without finish_reason");
   }
+  flushGemmaToolCallRecoverer();
   flushReasoningTagTextPartitioner();
   appendRecoveredParts(deepSeekToolCallRecoverer?.flush() ?? []);
   for (const part of deepSeekTextFilter?.flush() ?? []) {
