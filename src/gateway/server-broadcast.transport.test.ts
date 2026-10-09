@@ -57,6 +57,7 @@ const liveText = (group: AbortSignal) => ({
 
 describe("broadcast transport retirement", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -64,40 +65,38 @@ describe("broadcast transport retirement", () => {
     const read = controlledPeer("read");
     const write = controlledPeer("write");
     const admin = controlledPeer("admin");
-    const otherAdmin = controlledPeer("other-admin");
     write.client.connect.scopes = ["operator.write"];
     admin.client.connect.scopes = ["operator.admin"];
-    otherAdmin.client.connect.scopes = ["operator.admin"];
     const { broadcastPluginEvent } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([
-        read.client,
-        write.client,
-        admin.client,
-        otherAdmin.client,
-      ]),
+      clients: new GatewayClientRegistry([read.client, write.client, admin.client]),
     });
     const payload = { text: "synthetic 🦞 update" };
 
     broadcastPluginEvent("plugin.fixture.changed", payload, "operator.write");
 
     expect(read.frames).toEqual([]);
-    for (const peer of [write, admin, otherAdmin]) {
+    for (const peer of [write, admin]) {
       expect(peer.frames).toEqual([
         { type: "event", event: "plugin.fixture.changed", payload, seq: 1 },
       ]);
+      expect(peer.socket.send.mock.calls[0]?.[1]).toEqual({ binary: false });
     }
-    const first = admin.socket.send.mock.calls[0]![0];
+    const first = write.socket.send.mock.calls[0]![0];
     expect(Buffer.isBuffer(first)).toBe(true);
-    expect(otherAdmin.socket.send.mock.calls[0]![0]).toBe(first);
-    expect(admin.socket.send.mock.calls[0]?.[1]).toEqual({ binary: false });
-    expect(otherAdmin.socket.send.mock.calls[0]?.[1]).toEqual({ binary: false });
+    expect(admin.socket.send.mock.calls[0]![0]).toBe(first);
 
+    const encode = vi.spyOn(Buffer, "from");
     broadcastPluginEvent("plugin.fixture.changed", payload, "operator.read");
+    const payloadEncodings = encode.mock.calls.filter(
+      ([value]) => typeof value === "string" && value.includes(payload.text),
+    );
+    encode.mockRestore();
+    expect(payloadEncodings.length).toBeLessThanOrEqual(1);
     expect(read.frames.at(-1)?.seq).toBe(1);
     expect(write.frames.at(-1)?.seq).toBe(2);
     expect(admin.frames.at(-1)?.seq).toBe(2);
-    expect(admin.socket.send.mock.calls[1]![0]).not.toBe(first);
-    expect(otherAdmin.socket.send.mock.calls[1]![0]).toBe(admin.socket.send.mock.calls[1]![0]);
+    expect(write.socket.send.mock.calls[1]![0]).not.toBe(first);
+    expect(admin.socket.send.mock.calls[1]![0]).toBe(write.socket.send.mock.calls[1]![0]);
   });
 
   it("shares encoded presence only after current recipient projection", () => {
@@ -122,7 +121,8 @@ describe("broadcast transport retirement", () => {
     broadcast("presence", { presence: visible });
 
     const frames = peers.map((peer) => peer.socket.send.mock.lastCall![0]);
-    expect(Buffer.isBuffer(frames[1])).toBe(true);
+    expect(Buffer.isBuffer(frames[0])).toBe(true);
+    expect(frames[1]).toBe(frames[0]);
     expect(frames[2]).toBe(frames[1]);
     expect(project).toHaveBeenCalledTimes(6);
     for (const [index, frame] of frames.entries()) {
