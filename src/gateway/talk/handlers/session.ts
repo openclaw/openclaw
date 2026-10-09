@@ -24,6 +24,7 @@ import { ADMIN_SCOPE, hasGatewayAdminScope } from "../../operator-scopes.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandlers, RespondFn } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../server-plugin-in-process-dispatch.js";
 import { resolveOperatorSessionCreation } from "../../session-creation-provenance.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { withPreparedSessionResolve } from "../../sessions-resolve.js";
@@ -90,6 +91,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       const mode = params.mode ?? (params.transport === "managed-room" ? "stt-tts" : "realtime");
       const transport = params.transport ?? (mode === "stt-tts" ? "managed-room" : "gateway-relay");
       const brain = params.brain ?? (mode === "transcription" ? "none" : "agent-consult");
+      let releaseUnadoptedAuthority: (() => void) | undefined;
 
       if (transport === "webrtc" || transport === "provider-websocket") {
         respondInvalidRequest(
@@ -306,11 +308,17 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               resolution.provider.voices ??
               []),
           ];
+          const executionContext = await captureOperatorToolGatewayContinuationContext();
+          releaseUnadoptedAuthority = executionContext?.release;
+          assertEnsuredTargetCurrent();
           const session = createTalkRealtimeRelaySession({
             context,
             connId,
             cfg: runtimeConfig,
-            consultAuthority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+            consultAuthority: {
+              ...resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+              executionContext,
+            },
             provider: resolution.provider,
             providerConfig,
             controlSource,
@@ -334,6 +342,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             language: params.language,
             forceAgentConsultOnFinalTranscript,
           });
+          releaseUnadoptedAuthority = undefined;
           rememberUnifiedTalkSession(session.relaySessionId, {
             kind: "realtime-relay",
             connId,
@@ -400,6 +409,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         );
       } catch (err) {
         respond(false, undefined, talkSessionError(err));
+      } finally {
+        releaseUnadoptedAuthority?.();
       }
     },
   ),

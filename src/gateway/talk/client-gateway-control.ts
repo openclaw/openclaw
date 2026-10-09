@@ -4,6 +4,10 @@ import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/clie
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { formatErrorMessage as formatError, readErrorName } from "../../infra/errors.js";
 import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "../../talk/agent-consult-tool.js";
@@ -28,6 +32,7 @@ import type { TalkEvent } from "../../talk/talk-events.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveChatSendCallerContext } from "../server-methods/gateway-client-identity.js";
 import type { GatewayRequestContext } from "../server-methods/shared-types.js";
+import type { captureOperatorToolGatewayContinuationContext } from "../server-plugin-in-process-dispatch.js";
 import type {
   LifecycleBoundTalkAgentConsult,
   ReusableTalkAgentConsult,
@@ -53,6 +58,7 @@ export type TalkAgentConsultAuthority = {
   senderIsOwner: boolean;
   toolsAllow?: string[];
   replyCaller?: ReturnType<typeof resolveChatSendCallerContext>;
+  executionContext?: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
 };
 
 export function resolveTalkAgentConsultAuthority(
@@ -75,6 +81,34 @@ export function resolveTalkAgentConsultAuthority(
     ...(replyCaller ? { replyCaller } : {}),
     toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only"),
   };
+}
+
+export async function runWithTalkConsultAuthority<T>(
+  executionContext: TalkAgentConsultAuthority["executionContext"],
+  signal: AbortSignal | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!executionContext) {
+    return await run();
+  }
+  return await executionContext.run(async () => {
+    // The audio session admits this input, but accepted work can outlive it.
+    const release = executionContext.operatorAuthority?.retain?.();
+    try {
+      const scope = getPluginRuntimeGatewayRequestScope();
+      return await withPluginRuntimeGatewayRequestScope(
+        {
+          isWebchatConnect: () => false,
+          ...scope,
+          // The finished setup request must not own this consult's cancellation.
+          signal,
+        },
+        run,
+      );
+    } finally {
+      release?.();
+    }
+  });
 }
 
 export function createTalkClientGatewayControlOwner(params: {
@@ -100,6 +134,7 @@ export function createTalkClientGatewayControlOwner(params: {
   flushTranscript: () => Promise<void>;
   closeLogicalSession: () => Promise<void>;
   withCloseSettlement?: (run: () => Promise<void>) => Promise<void>;
+  releaseConsultAuthority?: () => void;
   controlAgentRun?: typeof controlRealtimeVoiceAgentRun;
   getToolAuthorityOverlay?: (source?: "reply" | "attempt") => ReplyToolAuthorityOverlay;
 }): GatewayControlOwner {
@@ -604,6 +639,7 @@ export function createTalkClientGatewayControlOwner(params: {
       // preserveRuns keeps accepted work alive, not a retired transport's presentation authority.
       params.runAgentConsult.revokeRequesterFinal?.();
       lifetime.abort(new Error("Realtime voice session closed"));
+      params.releaseConsultAuthority?.();
       confirmationReadiness.close();
       return closing;
     },

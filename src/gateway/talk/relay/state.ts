@@ -246,6 +246,7 @@ export class TalkRealtimeRelayOutputOwnership {
 }
 
 export type RelaySession = {
+  releaseConsultAuthority?: () => void;
   getToolAuthorityOverlay?: (
     authority?: TalkAgentConsultAuthority,
     source?: "reply" | "attempt",

@@ -35,6 +35,12 @@ browser transport preserves control of its accepted work. The legacy
 `talk.client.steer` RPC remains session-scoped: it selects owned work by
 `sessionKey`, not by a voice call ID.
 
+Gateway-owned voice calls retain the authenticated operator's original authority
+after their setup request completes. Each accepted consultation holds that source
+independently of the audio transport, so disconnecting or replacing a call does not
+expire accepted work. Device, profile, role, and Gateway revocation still apply;
+closing the voice call prevents it from admitting further consultations.
+
 Native steering uses the current caller's tool policy and session permissions. The
 host captures the actual backend attempt's authority after policy preparation and
 checks that exact owner again before delivering a control. Changed caller authority, tool
