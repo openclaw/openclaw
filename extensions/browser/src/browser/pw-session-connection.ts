@@ -554,12 +554,11 @@ export async function getAllPages(browser: Browser): Promise<Page[]> {
   return browser.contexts().flatMap((context) => context.pages());
 }
 
-async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] }): Promise<{
-  accessible: Array<{ page: Page; targetId: string | null }>;
-  blockedCount: number;
-}> {
+async function getAccessiblePages(opts: {
+  cdpUrl: string;
+  pages: Page[];
+}): Promise<Array<{ page: Page; targetId: string | null }>> {
   const accessible: Array<{ page: Page; targetId: string | null }> = [];
-  let blockedCount = 0;
   const candidates = await Promise.all(
     opts.pages.map(async (page) => {
       if (isBlockedPageRef(opts.cdpUrl, page)) {
@@ -577,13 +576,12 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
       isBlockedPageRef(opts.cdpUrl, page) ||
       (targetId ? isBlockedTarget(opts.cdpUrl, targetId) : hasBlockedTargetsForCdpUrl(opts.cdpUrl))
     ) {
-      blockedCount += 1;
       continue;
     }
     bindRoleRefsTarget(page, opts.cdpUrl, targetId);
     accessible.push({ page, targetId });
   }
-  return { accessible, blockedCount };
+  return accessible;
 }
 
 async function getPageForTargetIdOnce(opts: {
@@ -601,15 +599,12 @@ async function getPageForTargetIdOnce(opts: {
     throw new Error("No pages available in the connected browser.");
   }
 
-  const { accessible, blockedCount } = await partitionAccessiblePages({
+  const accessible = await getAccessiblePages({
     cdpUrl: opts.cdpUrl,
     pages,
   });
   if (!accessible.length) {
-    if (blockedCount > 0) {
-      throw new BlockedBrowserTargetError();
-    }
-    throw new Error("No pages available in the connected browser.");
+    throw new BlockedBrowserTargetError();
   }
   const found = opts.targetId
     ? accessible.find((entry) => entry.targetId === opts.targetId)

@@ -32,7 +32,7 @@ extensions/baseten/models.ts	1
 extensions/beam/src/mirror.ts	2
 extensions/browser/src/browser-node-fallback.ts	1
 extensions/browser/src/browser-node-proxy.ts	2
-extensions/browser/src/browser-proxy-upload.ts	2
+extensions/browser/src/browser-proxy-upload.ts	1
 extensions/browser/src/browser-tool-binding.ts	3
 extensions/browser/src/browser-tool-session-tabs.ts	1
 extensions/browser/src/browser-tool.actions.ts	9
@@ -550,7 +550,6 @@ extensions/memory-core/src/short-term-promotion-apply.ts	1
 extensions/memory-core/src/short-term-promotion-memory-write.ts	2
 extensions/memory-core/src/short-term-promotion-record.ts	1
 extensions/memory-core/src/short-term-promotion-rehydrate.ts	1
-extensions/memory-core/src/short-term-promotion-utils.ts	4
 extensions/memory-core/src/standing-intents-tool.ts	1
 extensions/memory-core/src/tools.ts	2
 extensions/memory-lancedb/doctor-contract-api.ts	1

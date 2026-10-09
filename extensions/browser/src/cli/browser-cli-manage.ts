@@ -20,6 +20,7 @@ import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerOption,
+  printBrowserList,
   printBrowserJsonResult as printJsonResult,
   resolveBrowserProfileQuery as resolveProfileQuery,
   runBrowserCliCommand as runBrowserCommand,
@@ -100,22 +101,14 @@ function parseTabIndex(value: string): number {
 }
 
 function logBrowserTabs(tabs: BrowserTab[]) {
-  if (tabs.length === 0) {
-    defaultRuntime.log("No tabs (browser closed or no targets).");
-    return;
-  }
-  defaultRuntime.log(
-    tabs
-      .map((t, i) => {
-        const labelHandle = t.label ? `label:${t.label}` : undefined;
-        const suggested = t.suggestedTargetId ? `use: ${t.suggestedTargetId}` : undefined;
-        const handles = [suggested, t.tabId ? `tab: ${t.tabId}` : undefined, labelHandle]
-          .filter(Boolean)
-          .join(" ");
-        return `${i + 1}. ${t.title || "(untitled)"}${handles ? ` [${handles}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
-      })
-      .join("\n"),
-  );
+  printBrowserList(tabs, "No tabs (browser closed or no targets).", (t, i) => {
+    const labelHandle = t.label ? `label:${t.label}` : undefined;
+    const suggested = t.suggestedTargetId ? `use: ${t.suggestedTargetId}` : undefined;
+    const handles = [suggested, t.tabId ? `tab: ${t.tabId}` : undefined, labelHandle]
+      .filter(Boolean)
+      .join(" ");
+    return `${i + 1}. ${t.title || "(untitled)"}${handles ? ` [${handles}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
+  });
 }
 
 function formatDoctorLine(check: BrowserDoctorCheck): string {
@@ -369,29 +362,24 @@ export function registerBrowserManageCommands(
       });
     });
 
-  browser
-    .command("start")
-    .description("Start the browser (no-op if already running)")
-    .option("--headless", "Launch a local managed browser headless for this start")
-    .action(async (opts: { headless?: boolean }, cmd) => {
+  for (const [action, description] of [
+    ["start", "Start the browser (no-op if already running)"],
+    ["stop", "Stop the browser (best-effort)"],
+  ] as const) {
+    const command = browser.command(action).description(description);
+    if (action === "start") {
+      command.option("--headless", "Launch a local managed browser headless for this start");
+    }
+    command.action(async (opts: { headless?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserCommand(async () => {
         await runBrowserToggle(cmd, parent, {
-          path: "/start",
-          query: opts.headless ? { headless: true } : undefined,
+          path: `/${action}`,
+          query: action === "start" && opts.headless ? { headless: true } : undefined,
         });
       });
     });
-
-  browser
-    .command("stop")
-    .description("Stop the browser (best-effort)")
-    .action(async (_opts, cmd) => {
-      const parent = parentOpts(cmd);
-      await runBrowserCommand(async () => {
-        await runBrowserToggle(cmd, parent, { path: "/stop" });
-      });
-    });
+  }
 
   browser
     .command("reset-profile")
@@ -556,26 +544,16 @@ export function registerBrowserManageCommands(
         path: "/profiles",
         timeoutMs: resolveBrowserManagementTimeout(cmd),
         json: (result) => ({ profiles: result.profiles ?? [] }),
-        print: (result) => {
-          const profiles = result.profiles ?? [];
-          if (profiles.length === 0) {
-            defaultRuntime.log("No profiles configured.");
-            return;
-          }
-          defaultRuntime.log(
-            profiles
-              .map((p) => {
-                const status = p.running ? "running" : "stopped";
-                const tabs = p.running ? ` (${p.tabCount} tabs)` : "";
-                const def = p.isDefault ? " [default]" : "";
-                const loc = formatBrowserConnectionSummary(p);
-                const remote = p.isRemote ? " [remote]" : "";
-                const driver = p.driver !== "openclaw" ? ` [${p.driver}]` : "";
-                return `${p.name}: ${status}${tabs}${def}${remote}${driver}\n  ${loc}, color: ${p.color}`;
-              })
-              .join("\n"),
-          );
-        },
+        print: (result) =>
+          printBrowserList(result.profiles ?? [], "No profiles configured.", (p) => {
+            const status = p.running ? "running" : "stopped";
+            const tabs = p.running ? ` (${p.tabCount} tabs)` : "";
+            const def = p.isDefault ? " [default]" : "";
+            const loc = formatBrowserConnectionSummary(p);
+            const remote = p.isRemote ? " [remote]" : "";
+            const driver = p.driver !== "openclaw" ? ` [${p.driver}]` : "";
+            return `${p.name}: ${status}${tabs}${def}${remote}${driver}\n  ${loc}, color: ${p.color}`;
+          }),
       });
     });
 
@@ -592,23 +570,16 @@ export function registerBrowserManageCommands(
         query: opts.browser ? { browser: opts.browser } : undefined,
         timeoutMs: resolveBrowserManagementTimeout(cmd),
         json: (result) => ({ systemProfiles: result.systemProfiles ?? [] }),
-        print: (result) => {
-          const systemProfiles = result.systemProfiles ?? [];
-          if (systemProfiles.length === 0) {
-            defaultRuntime.log("No system browser profiles found.");
-            return;
-          }
-          defaultRuntime.log("browser\tid\tname\thasCookies");
-          defaultRuntime.log(
-            systemProfiles
-              .map((profile) =>
-                [profile.browser, profile.id, profile.name, profile.hasCookies ? "yes" : "no"]
-                  .map(sanitizeTableCell)
-                  .join("\t"),
-              )
-              .join("\n"),
-          );
-        },
+        print: (result) =>
+          printBrowserList(
+            result.systemProfiles ?? [],
+            "No system browser profiles found.",
+            (profile) =>
+              [profile.browser, profile.id, profile.name, profile.hasCookies ? "yes" : "no"]
+                .map(sanitizeTableCell)
+                .join("\t"),
+            "browser\tid\tname\thasCookies",
+          ),
       });
     });
 
