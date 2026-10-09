@@ -134,20 +134,28 @@ export async function processCompletionsStream(
   // Preview schedules are per active tool call; WeakMap keys die with the block.
   const toolArgumentPreviewSchedules = new WeakMap<ToolCallBlock, ToolArgumentPreviewSchedule>();
   const provisionalCommentaryTags = directMode ? options.provisionalCommentaryTags : new Map();
-  const contentBlockIndices = new WeakMap<TextBlock | ThinkingBlock, number>();
-  const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
+  const blockIndices = new WeakMap<TextBlock | ThinkingBlock | ToolCallBlock, number>();
   let explicitVisibleTextBlocks: Set<TextBlock> | undefined;
   const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
   let finishReason: string | undefined;
   let sawNativeToolCallDelta = false;
   const blockIndex = () =>
     directMode && currentBlock && currentBlock.type !== "toolCall"
-      ? (contentBlockIndices.get(currentBlock) ?? output.content.length - 1)
+      ? (blockIndices.get(currentBlock) ?? output.content.length - 1)
       : output.content.length - 1;
   let chunkPushedEvent = false;
   const pushStreamEvent = (event: AssistantMessageEvent) => {
     chunkPushedEvent = true;
     stream.push(event);
+  };
+  const appendToolCallBlock = (block: ToolCallBlock) => {
+    output.content.push(block);
+    blockIndices.set(block, output.content.length - 1);
+    pushStreamEvent({
+      type: "toolcall_start",
+      contentIndex: blockIndices.get(block) ?? -1,
+      partial: output,
+    });
   };
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
     const nextBytes = Buffer.byteLength(next.text, "utf8");
@@ -200,7 +208,7 @@ export async function processCompletionsStream(
         directContent.block = currentBlock;
       }
       output.content.push(currentBlock);
-      contentBlockIndices.set(currentBlock, output.content.length - 1);
+      blockIndices.set(currentBlock, output.content.length - 1);
       pushStreamEvent({ type: `${delta.kind}_start`, contentIndex: blockIndex(), partial: output });
     }
     if (currentBlock.type === "thinking") {
@@ -281,16 +289,10 @@ export async function processCompletionsStream(
       partialArgs: toolCall.partialArgs,
     };
     currentBlock = block;
-    output.content.push(block);
-    toolCallBlockIndices.set(block, output.content.length - 1);
-    pushStreamEvent({
-      type: "toolcall_start",
-      contentIndex: toolCallBlockIndices.get(block) ?? -1,
-      partial: output,
-    });
+    appendToolCallBlock(block);
     pushStreamEvent({
       type: "toolcall_delta",
-      contentIndex: toolCallBlockIndices.get(block) ?? -1,
+      contentIndex: blockIndices.get(block) ?? -1,
       delta: toolCall.partialArgs,
       partial: output,
     });
@@ -510,13 +512,7 @@ export async function processCompletionsStream(
             };
             encryptedReasoning.rememberToolCall(block.id, block);
             toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
-            output.content.push(block);
-            toolCallBlockIndices.set(block, output.content.length - 1);
-            pushStreamEvent({
-              type: "toolcall_start",
-              contentIndex: toolCallBlockIndices.get(block) ?? -1,
-              partial: output,
-            });
+            appendToolCallBlock(block);
           }
           if (streamIndex !== undefined && !toolCallBlocksByIndex.has(streamIndex)) {
             toolCallBlocksByIndex.set(streamIndex, block);
@@ -560,7 +556,7 @@ export async function processCompletionsStream(
           if (toolArgumentsDelta || directMode) {
             pushStreamEvent({
               type: "toolcall_delta",
-              contentIndex: toolCallBlockIndices.get(block) ?? -1,
+              contentIndex: blockIndices.get(block) ?? -1,
               delta: toolArgumentsDelta ?? "",
               partial: output,
             });

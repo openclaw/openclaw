@@ -35,7 +35,12 @@ import {
 } from "./view-card-content.ts";
 import { openCardDetails, workboardCardDetailDrawerId } from "./view-card-details.ts";
 import { openCreateModal, workboardCardModalId } from "./view-card-modal.ts";
-import { canMutate, formatStatusLabel, type WorkboardProps } from "./view-helpers.ts";
+import {
+  canMutate,
+  formatStatusLabel,
+  workboardMutationContext,
+  type WorkboardProps,
+} from "./view-helpers.ts";
 import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
 import { workboardScrollFadeRef } from "./view-scroll-fade.ts";
 import { getSessionStatus } from "./view-session-status.ts";
@@ -76,6 +81,10 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
   const editAction = !widget && writable && !archived ? renderEditCardAction(props, card) : nothing;
   const archiveAction =
     !widget && writable ? renderArchiveCardAction(props, card, busy, archived) : nothing;
+  const showDetails = () => {
+    openCardDetails(state, card);
+    props.onRequestUpdate?.();
+  };
   const detailAction = widget
     ? nothing
     : html`
@@ -86,10 +95,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
           aria-haspopup="dialog"
           aria-expanded=${state.detailCardId === card.id ? "true" : "false"}
           aria-controls=${workboardCardDetailDrawerId}
-          @click=${() => {
-            openCardDetails(state, card);
-            props.onRequestUpdate?.();
-          }}
+          @click=${showDetails}
         >
           ${icons.eye}<span>${t("workboard.viewDetails")}</span>
         </button>
@@ -276,8 +282,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
             toggleSelection();
             return;
           }
-          openCardDetails(state, card);
-          props.onRequestUpdate?.();
+          showDetails();
         }
       }}
       @keydown=${(event: KeyboardEvent) => {
@@ -287,8 +292,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
         if (selectionMode || (event.shiftKey && selectable)) {
           toggleSelection();
         } else {
-          openCardDetails(state, card);
-          props.onRequestUpdate?.();
+          showDetails();
         }
         event.preventDefault();
       }}
@@ -508,13 +512,11 @@ export function renderColumn(
           return;
         }
         void moveWorkboardCard({
-          host: props.host,
-          client: props.client,
+          ...workboardMutationContext(props),
           cardId: card.id,
           status,
           beforeCardId,
           boardFilter: options.boardFilter ?? state.boardFilter,
-          requestUpdate: props.onRequestUpdate,
         });
       }}
     >

@@ -100,7 +100,6 @@ export function createDiscordDraftPreviewController(params: {
           fallbackLimit: DISCORD_TEXT_CHUNK_LIMIT,
         })
       : undefined;
-  const shouldSplitPreviewMessages = discordStreamMode === "block";
   const draftChunker = draftChunking ? new EmbeddedBlockChunker(draftChunking) : undefined;
   let lastPartialText = "";
   let draftText = "";
@@ -224,7 +223,7 @@ export function createDiscordDraftPreviewController(params: {
         draftStream?.forceNewMessage("discard");
       }
     } else {
-      if (shouldSplitPreviewMessages && hasStreamedAssistantText) {
+      if (discordStreamMode === "block" && hasStreamedAssistantText) {
         params.log("discord: calling forceNewMessage() for draft stream");
         draftStream?.forceNewMessage();
       }

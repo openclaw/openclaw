@@ -8,7 +8,11 @@ import {
   type PolicyScopeSelectorKind,
 } from "./doctor/metadata.js";
 import { policyRuleValueIsValid } from "./doctor/ordered-shape.js";
-import { normalizePolicySelectorValues, scopedPolicyOverlays } from "./doctor/policy-scope.js";
+import {
+  normalizePolicySelectorValues,
+  scopedPolicyFields,
+  scopedPolicyOverlays,
+} from "./doctor/policy-scope.js";
 import { policyContainerShapeFindings } from "./doctor/policy-shape.js";
 import { isPolicyValueAtLeastAsStrict } from "./doctor/strictness.js";
 import { ocPathSegment } from "./doctor/utils.js";
@@ -359,20 +363,11 @@ function collectScopedPolicyRuleClaims(document: PolicyDocument): readonly Polic
       if (selectorValues.length === 0) {
         continue;
       }
-      const rules = POLICY_RULE_METADATA.filter(
-        (metadata) => metadata.scopeSelectors?.includes(selector) === true,
-      );
-      for (const metadata of rules) {
-        const value = getPolicyPath(overlay, metadata.policyPath);
-        if (value === undefined) {
-          continue;
-        }
-        const propertyPath = metadata.policyPath.join(".");
-        const targetPath = [
-          "scopes",
-          ocPathSegment(scopeName),
-          ...metadata.policyPath.map(ocPathSegment),
-        ].join("/");
+      for (const { metadata, value, propertyPath, targetPath } of scopedPolicyFields(
+        scopeName,
+        overlay,
+        selector,
+      )) {
         for (const selectorValue of selectorValues) {
           claims.push({
             key: `${selector}:${selectorValue}:${propertyPath}`,
