@@ -66,14 +66,20 @@ import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "../../agents/wo
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
   readConfigFileSnapshotForWrite,
+  transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "../../config/config.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../../config/runtime-write-application.js";
 import { purgeAgentSessionStoreEntries } from "../../config/sessions.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../../infra/exec-approvals.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import {
   readAgentDeletionJournalAsync,
@@ -114,6 +120,31 @@ function respondAgentNotFound(respond: RespondFn, agentId: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
 }
 
+function createAgentConfigApplication(respond: RespondFn) {
+  const application = createRuntimeConfigWriteApplication(
+    captureGatewayRootWorkAdmissionContinuationScope()?.run,
+  );
+  return {
+    attach: <T extends object>(options: T) =>
+      attachRuntimeConfigWriteApplication(options, application),
+    confirm: async () => {
+      const outcome = application.claimed ? await application.result : "unclaimed";
+      if (outcome === "applied") {
+        return true;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`,
+        ),
+      );
+      return false;
+    },
+  };
+}
+
 type AgentDeleteRemovedPath = NonNullable<AgentsDeleteResult["removed"]>[number];
 type AgentDeleteFailedPath = NonNullable<AgentsDeleteResult["failed"]>[number];
 
@@ -135,6 +166,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const application = createAgentConfigApplication(respond);
     try {
       const result = await createAgent({
         name: params.name,
@@ -142,6 +174,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
         model: params.model,
         emoji: params.emoji,
         avatar: params.avatar,
+        transformConfig: (mutation) =>
+          transformConfigFileWithRetry({
+            ...mutation,
+            writeOptions: application.attach(mutation.writeOptions ?? {}),
+          }),
         assertIdentityInputAllowed: captureGatewayClientUploadCommitGuard({
           method: "agents.create",
           requestParams: params,
@@ -156,6 +193,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
       await reviveAgentDatabasesAfterConfigCommit([result.agentId], (message) =>
         context.logGateway.warn(message),
       );
+      if (!(await application.confirm())) {
+        return;
+      }
       respond(
         true,
         {
@@ -233,6 +273,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const nextConfig = configured ? applyAgentConfig(cfg, agentConfigUpdate) : cfg;
+    const application = createAgentConfigApplication(respond);
 
     try {
       let ensuredWorkspace: Awaited<ReturnType<typeof ensureAgentWorkspace>> | undefined;
@@ -297,7 +338,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
         assertWorkspaceAccessCurrent();
       }
 
-      await updateAgentConfigEntry({ ...agentConfigUpdate, assertCurrent: assertUploadAllowed });
+      await updateAgentConfigEntry(
+        { ...agentConfigUpdate, assertCurrent: assertUploadAllowed },
+        application.attach({}),
+      );
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         respond(false, undefined, error.error);
@@ -314,7 +358,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
       throw error;
     }
 
-    respond(true, { ok: true, agentId }, undefined);
+    if (await application.confirm()) {
+      respond(true, { ok: true, agentId }, undefined);
+    }
   },
   "agents.delete": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateAgentsDeleteParams, "agents.delete", respond)) {
@@ -368,6 +414,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const requestedDeleteFiles = params.deleteFiles ?? true;
+    const application = createAgentConfigApplication(respond);
     try {
       const result = await withAgentDeletion(agentId, async (begin) =>
         withConfigMutationExclusive(async (lockedConfig) => {
@@ -486,41 +533,41 @@ export const agentsHandlers: GatewayRequestHandlers = {
                 agentId,
                 async () => {
                   await deletion.assertCurrentAsync();
-                  if (!rosterCommitted) {
+                  try {
+                    committed = await deleteAgentConfigEntry({
+                      agentId,
+                      allowMissing: !configured,
+                      allowConfigSizeDrop: true,
+                      assertCurrent: deletion.assertCurrentFinal,
+                      assertCurrentAsync: deletion.assertCurrentAsync,
+                      writeOptions: application.attach({}),
+                    });
+                  } catch (error) {
                     try {
-                      committed = await deleteAgentConfigEntry({
-                        agentId,
-                        allowConfigSizeDrop: true,
-                        assertCurrent: deletion.assertCurrentFinal,
-                        assertCurrentAsync: deletion.assertCurrentAsync,
-                      });
-                    } catch (error) {
-                      try {
-                        const persisted = await readConfigFileSnapshotForWrite();
-                        if (!isConfiguredAgent(persisted.snapshot.sourceConfig, agentId)) {
-                          rosterCommitted = true;
-                          throw new AgentDeletionCommitUncertainError(error);
-                        }
-                      } catch (readError) {
-                        if (readError instanceof AgentDeletionCommitUncertainError) {
-                          throw readError;
-                        }
+                      const persisted = await readConfigFileSnapshotForWrite();
+                      if (!isConfiguredAgent(persisted.snapshot.sourceConfig, agentId)) {
+                        rosterCommitted = true;
                         throw new AgentDeletionCommitUncertainError(error);
                       }
-                      throw error;
-                    }
-                    if (!committed.result) {
-                      rosterCommitted = !isConfiguredAgent(committed.nextConfig, agentId);
-                      const missingResultError = new Error(
-                        "agent delete config mutation did not return its target",
-                      );
-                      if (rosterCommitted) {
-                        throw new AgentDeletionCommitUncertainError(missingResultError);
+                    } catch (readError) {
+                      if (readError instanceof AgentDeletionCommitUncertainError) {
+                        throw readError;
                       }
-                      throw missingResultError;
+                      throw new AgentDeletionCommitUncertainError(error);
                     }
-                    rosterCommitted = true;
+                    throw error;
                   }
+                  if (configured && !committed.result) {
+                    rosterCommitted = !isConfiguredAgent(committed.nextConfig, agentId);
+                    const missingResultError = new Error(
+                      "agent delete config mutation did not return its target",
+                    );
+                    if (rosterCommitted) {
+                      throw new AgentDeletionCommitUncertainError(missingResultError);
+                    }
+                    throw missingResultError;
+                  }
+                  rosterCommitted = true;
                 },
                 deletion,
               ),
@@ -794,6 +841,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
           };
         }),
       );
+      // Reload may need the mutation/deletion leases; wait only after they settle.
+      if (!(await application.confirm())) {
+        return;
+      }
       respond(true, result, undefined);
     } catch (error) {
       if (
