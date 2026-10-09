@@ -162,6 +162,7 @@ export async function ensureAgentComponentInteractionAllowed(params: {
   const memberAllowed = await ensureGuildComponentMemberAllowed({
     ...params,
     ...guildContext,
+    groupPolicy: guildContext.groupPolicy,
   });
   if (!memberAllowed) {
     return null;
@@ -203,6 +204,7 @@ export async function resolveAuthorizedComponentInteraction(params: {
     ...params,
     ...interactionCtx,
     ...guildContext,
+    groupPolicy: guildContext.groupPolicy,
   });
   if (!memberAllowed) {
     return null;
