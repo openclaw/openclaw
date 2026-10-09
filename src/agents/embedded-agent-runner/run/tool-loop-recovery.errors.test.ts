@@ -217,4 +217,59 @@ describe("default repeated tool error termination", () => {
     expect(agent.state.messages.at(-1)).toMatchObject({ role: "toolResult" });
     expect(agent.state.errorMessage).toBeUndefined();
   });
+
+  it.each([
+    { queue: "followUp", delivery: "active" },
+    { queue: "followUp", delivery: "continue" },
+    { queue: "steer", delivery: "active" },
+    { queue: "steer", delivery: "continue" },
+  ] as const)(
+    "starts a fresh error streak for $queue through $delivery",
+    async ({ queue, delivery }) => {
+      const tool = makeTool("probe");
+      tool.execute = async () => {
+        throw new Error("same failure");
+      };
+      const freshInput = user("second request", 2);
+      const agent = new Agent({
+        initialState: { model, tools: [tool] },
+        streamFn: createTurnSequenceStream([
+          [makeCall("probe", "first")],
+          [makeCall("probe", "second")],
+          ...(queue === "steer" && delivery === "active"
+            ? []
+            : [[{ type: "text" as const, text: "first answer" }]]),
+          [makeCall("probe", "third")],
+          [{ type: "text", text: "second answer" }],
+        ]),
+      });
+      setInternalBeforeToolBatch(agent, createToolLoopBatchAdmission({}));
+      if (delivery === "active") {
+        agent.subscribe((event) => {
+          if (
+            event.type === "message_end" &&
+            event.message.role === "toolResult" &&
+            event.message.toolCallId === "second"
+          ) {
+            agent[queue](freshInput);
+          }
+        });
+      }
+      await agent.prompt("first request");
+      if (delivery === "continue") {
+        agent[queue](freshInput);
+        await agent.continue();
+      }
+      expect(agent.state.messages).toContain(freshInput);
+      expect(agent.state.messages.filter((message) => message.role === "toolResult")).toHaveLength(
+        3,
+      );
+      expect(agent.state.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "second answer" }],
+      });
+      expect(agent.state.errorMessage).toBeUndefined();
+    },
+  );
 });

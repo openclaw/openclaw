@@ -489,7 +489,7 @@ export class Agent {
         "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
       );
     }
-    this.toolLoopRecoveryState = { criticalToolLoopSeen: false };
+    this.toolLoopRecoveryState.criticalToolLoopSeen = false;
     const messages = this.normalizePromptInput(input, images);
     await this.runPromptMessages(messages);
   }
@@ -724,6 +724,9 @@ export class Agent {
           this.mutableState.streamingMessage = undefined;
         }
         this.mutableState.messages.push(event.message);
+        if (event.message.role === "user") {
+          delete this.toolLoopRecoveryState.repeatedToolError;
+        }
         this.steeringQueue.commit(event.message);
         this.followUpQueue.commit(event.message);
         break;

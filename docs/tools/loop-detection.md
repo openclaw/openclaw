@@ -140,7 +140,9 @@ preserve the preceding failure evidence rather than resetting the streak.
 
 Already-running parallel calls settle before the terminal failure is recorded;
 unstarted calls in the batch are blocked. The error count follows the model's
-call order, not completion timing. A new user turn starts with a fresh count.
+call order, not completion timing. Committed user messages start a fresh count,
+including follow-ups and steering. Continuation retries without new user input
+keep the current count.
 
 ## Post-compaction guard
 
