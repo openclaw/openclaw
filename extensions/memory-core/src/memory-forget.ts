@@ -2,7 +2,6 @@ import path from "node:path";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   resolveAgentWorkspaceDir,
-  resolveStateDir,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -18,7 +17,6 @@ import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-ho
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import {
   borrowOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { readMemoryPreimages } from "./dreaming-consolidation-artifacts.js";
@@ -33,6 +31,7 @@ import {
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import { captureMemoryAgentDatabaseOptions } from "./memory-agent-database.js";
 import {
   selectedMemoryLineageIdentity,
   type MemoryForgetLineageResult,
@@ -86,12 +85,7 @@ export async function forgetMemoryEntries(params: MemoryForgetParams): Promise<M
   }
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const run = async (): Promise<MemoryForgetReport> => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir(process.env) };
-    const databaseOptions = {
-      agentId: params.agentId,
-      env,
-      path: resolveOpenClawAgentSqlitePath({ agentId: params.agentId, env }),
-    };
+    const databaseOptions = captureMemoryAgentDatabaseOptions(params.agentId);
     const context: MemoryForgetContext = {
       targets: await resolveMemorySessionTargetsAsync({
         agentId: params.agentId,
@@ -350,7 +344,6 @@ async function forgetWorkspaceMemory(
   );
   const indexPlan = await planMemoryIndex(
     {
-      agentId: params.agentId,
       changedPaths,
       removedPaths: new Set(
         corpusRewrites

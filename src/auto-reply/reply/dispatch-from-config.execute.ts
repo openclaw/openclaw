@@ -33,10 +33,8 @@ import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
   const {
-    cfg,
     commentaryPayloadsEnabled,
     ctx,
-    deliveryChannel,
     deferFinalTtsText,
     dispatcher,
     failDispatchReplyOperation,
@@ -55,12 +53,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     params,
     reasoningPayloadsEnabled,
     replyConfig,
-    replyRoute,
     resolveToolDeliveryPayload,
     runWithDispatchLifecycleAdmission,
     sendPayloadAsync,
-    sessionAgentId,
-    sessionTtsAuto,
     shouldForwardProgressCallback,
     shouldRouteToOriginating,
     trackDispatchLifecycleWork,
@@ -343,15 +338,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   if (!visibleToolPayload) {
                     return;
                   }
-                  const ttsPayload = await maybeApplyTtsWithFinalizationLease({
-                    payload: visibleToolPayload,
-                    cfg,
-                    channel: deliveryChannel,
-                    kind: "tool",
-                    ttsAuto: sessionTtsAuto,
-                    agentId: sessionAgentId,
-                    accountId: replyRoute.accountId,
-                  });
+                  const ttsPayload = await maybeApplyTtsWithFinalizationLease(
+                    visibleToolPayload,
+                    "tool",
+                  );
                   const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
                   const deliveryPayload = bypassToolSummarySuppression
                     ? normalizedPayload

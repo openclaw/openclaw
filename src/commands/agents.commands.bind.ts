@@ -64,34 +64,6 @@ async function resolveParsedBindings(params: {
   return parsed.bindings;
 }
 
-function emitJsonPayload(
-  runtime: RuntimeEnv,
-  json: boolean | undefined,
-  payload: { conflicts: string[] },
-): boolean {
-  if (!json) {
-    return false;
-  }
-  writeRuntimeJson(runtime, payload);
-  if (payload.conflicts.length > 0) {
-    runtime.exit(1);
-  }
-  return true;
-}
-
-async function resolveConfigAndTargetAgentId(params: {
-  runtime: RuntimeEnv;
-  agentInput: string | undefined;
-}) {
-  const writeSnapshot = await requireValidConfigForWrite(params.runtime);
-  if (!writeSnapshot) {
-    return null;
-  }
-  const cfg = writeSnapshot.snapshot.sourceConfig;
-  const agentId = resolveTargetAgentId({ cfg, agentInput: params.agentInput });
-  return { cfg, agentId, writeSnapshot };
-}
-
 export async function agentsBindingsCommand(
   opts: AgentsBindingsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -141,11 +113,12 @@ export async function agentsUpdateBindingsCommand(
   opts: AgentsBindingsUpdateOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const resolved = await resolveConfigAndTargetAgentId({ runtime, agentInput: opts.agent });
-  if (!resolved) {
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return;
   }
-  const { cfg, agentId, writeSnapshot } = resolved;
+  const cfg = writeSnapshot.snapshot.sourceConfig;
+  const agentId = resolveTargetAgentId({ cfg, agentInput: opts.agent });
   if (operation === "unbind" && opts.all && (opts.bind?.length ?? 0) > 0) {
     throwExpectedCliError("Use either --all or --bind, not both.");
   }
@@ -206,7 +179,11 @@ export async function agentsUpdateBindingsCommand(
         }),
     conflicts: result.conflicts.map(describeBindingConflict),
   };
-  if (emitJsonPayload(runtime, opts.json, payload)) {
+  if (opts.json) {
+    writeRuntimeJson(runtime, payload);
+    if (payload.conflicts.length > 0) {
+      runtime.exit(1);
+    }
     return;
   }
   if (removeAll && "removed" in payload) {

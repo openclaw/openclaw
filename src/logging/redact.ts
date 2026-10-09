@@ -32,7 +32,7 @@ import {
 import {
   getSecretCaptureStart,
   selectSecretCapture,
-  iterateRedactMatches,
+  visitRedactMatches,
   parseRedactPatternSource,
   readRedactMatch,
   redactPemBlock,
@@ -752,9 +752,9 @@ export function computeSensitiveRedactionBitmap(
   markAssignmentValues(text, "url", bitmap);
   markFormBodyRedactions(text, bitmap);
   for (const pattern of resolved.patterns) {
-    for (const match of iterateRedactMatches(text, pattern)) {
-      markPatternMatchRedaction(bitmap, text, pattern, match);
-    }
+    visitRedactMatches(text, pattern, (match) =>
+      markPatternMatchRedaction(bitmap, text, pattern, match),
+    );
   }
   return bitmap;
 }

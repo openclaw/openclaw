@@ -1,5 +1,9 @@
 import { html, nothing } from "lit";
-import type { TabIconPreference } from "../../../../packages/gateway-protocol/src/schema/tab-icon.ts";
+import {
+  agentTabIconShape,
+  type AgentTabIconShape,
+  type TabIconPreference,
+} from "../../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { controlUiFaviconBaseSvg } from "../../app/control-ui-environment-presentation.runtime.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import {
@@ -39,20 +43,22 @@ export function renderTabIconSection(props: TabIconViewProps) {
   const defaultSource = controlUiFaviconBaseSvg() ?? inferControlUiPublicAssetPath("favicon.svg");
   const lobsters = props.tabIconLobsters ?? [];
   const lobsterMode = props.tabIcon?.startsWith("lobster:") ?? false;
+  const selectedShape = agentTabIconShape(props.tabIcon);
   const selected = lobsters.find((palette) => props.tabIcon === `lobster:${palette.id}`);
   const preview = lobsterMode ? selected : lobsters[0];
-  const optionLabel = (label: string, source: string | null) => {
+  const avatarPreview = (source: string | null, shape: AgentTabIconShape = "square") => {
     const view = { imageUrl: source, pending: false };
-    return html`<span class="settings-tab-icon__option">
-      <span
-        class=${identityAvatarClass("identity-avatar--agent settings-tab-icon__preview", view)}
-        aria-hidden="true"
-      >
-        ${renderIdentityAvatarImage({ view, fallbackSelector: ".settings-tab-icon__preview", className: "identity-avatar__image" })}
-        <span class="identity-avatar__fallback"><img src=${defaultSource} alt="" /></span> </span
-      >${label}
+    return html`<span
+      class=${identityAvatarClass("identity-avatar--agent settings-tab-icon__preview", view)}
+      data-avatar-shape=${shape}
+      aria-hidden="true"
+    >
+      ${renderIdentityAvatarImage({ view, fallbackSelector: ".settings-tab-icon__preview", className: "identity-avatar__image" })}
+      <span class="identity-avatar__fallback"><img src=${defaultSource} alt="" /></span>
     </span>`;
   };
+  const optionLabel = (label: string, source: string | null, shape: AgentTabIconShape = "square") =>
+    html`<span class="settings-tab-icon__option">${avatarPreview(source, shape)}${label}</span>`;
   return html`
     <section
       id=${APPEARANCE_SETTINGS_TARGET_IDS.tabIcon}
@@ -68,7 +74,7 @@ export function renderTabIconSection(props: TabIconViewProps) {
               ? t("configView.appearance.tabIcon.empty")
               : undefined,
           control: renderSettingsSegmented({
-            value: lobsterMode ? "lobster" : (props.tabIcon ?? "default"),
+            value: lobsterMode ? "lobster" : selectedShape ? "agent" : "default",
             options: [
               {
                 value: "default",
@@ -79,6 +85,7 @@ export function renderTabIconSection(props: TabIconViewProps) {
                 label: optionLabel(
                   t("configView.appearance.tabIcon.agent"),
                   props.tabIconAgentAvatar ?? null,
+                  selectedShape ?? "square",
                 ),
               },
               {
@@ -104,6 +111,38 @@ export function renderTabIconSection(props: TabIconViewProps) {
             },
           }),
         })}
+        ${
+          selectedShape
+            ? renderSettingsRow({
+                title: t("configView.appearance.tabIcon.shape"),
+                stackedOnNarrow: true,
+                control: html`<div
+                  class="settings-tab-icon__shapes"
+                  role="group"
+                  aria-label=${t("configView.appearance.tabIcon.shapeLabel")}
+                >
+                  ${(
+                    [
+                      ["square", "agent"],
+                      ["rounded", "agent:rounded"],
+                      ["circle", "agent:circle"],
+                    ] as const
+                  ).map(
+                    ([choice, preference]) => html`<button
+                      type="button"
+                      class="settings-tab-icon__pick"
+                      aria-pressed=${String(selectedShape === choice)}
+                      aria-label=${t(`configView.appearance.tabIcon.${choice}`)}
+                      title=${t(`configView.appearance.tabIcon.${choice}`)}
+                      @click=${() => props.setTabIconMode(preference)}
+                    >
+                      ${avatarPreview(props.tabIconAgentAvatar ?? null, choice)}
+                    </button>`,
+                  )}
+                </div>`,
+              })
+            : nothing
+        }
         ${
           lobsterMode
             ? renderSettingsRow({

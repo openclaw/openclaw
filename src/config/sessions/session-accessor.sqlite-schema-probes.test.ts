@@ -37,6 +37,7 @@ import {
   type SessionProbeOperations,
 } from "./session-accessor.sqlite-schema-probes.test-support.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -382,10 +383,10 @@ describe.each([
 it("retains unrelated canonical-key errors for an empty selection", () => {
   const { database, read } = fixture(listSessionEntriesReadOnly);
   read();
-  // Raw DML after validation must not disappear behind an unrelated selection.
+  // Explicitly pending repair rows must not disappear behind an unrelated selection.
   database.db
     .prepare(
-      "INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at) VALUES(?, ?, ?, ?)",
+      "INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES(?, ?, ?, ?, 1)",
     )
     .run(
       "AGENT:MAIN:UNRELATED",
@@ -393,6 +394,7 @@ it("retains unrelated canonical-key errors for an empty selection", () => {
       JSON.stringify({ sessionId: "unrelated", updatedAt: 1 }),
       1,
     );
+  markCanonicalSessionValidationPending(database, ["AGENT:MAIN:UNRELATED"]);
   expect(() => read([])).toThrow("non-canonical persisted row");
 });
 
@@ -414,6 +416,7 @@ it("validates unrelated warm delivery aliases before selecting listing keys", ()
   database.db
     .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
     .run(JSON.stringify(entry), legacyKey);
+  markCanonicalSessionValidationPending(database, [legacyKey]);
   expect(() => read(["agent:main:a"])).toThrow(
     `non-canonical persisted row resolves to session key ${canonicalKey}`,
   );

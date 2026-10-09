@@ -200,11 +200,13 @@ async function prepareTrackedTabCleanup(
   params: CloseParams & { sessionKeys?: Array<string | undefined> },
 ) {
   let dashboardClosed = 0;
-  let durable = await readCurrentBrowserState(
-    params.authority?.runtime,
-    () => readDurableTabs(params.onWarn, params.authority),
-    params.isCurrent,
-  );
+  const readDurable = () =>
+    readCurrentBrowserState(
+      params.authority?.runtime,
+      () => readDurableTabs(params.onWarn, params.authority),
+      params.isCurrent,
+    );
+  let durable = await readDurable();
   if (!durable) {
     return { dashboardClosed, durable };
   }
@@ -223,11 +225,7 @@ async function prepareTrackedTabCleanup(
       return { dashboardClosed, durable: undefined };
     }
     dashboardClosed = await reconcileBrowserDashboards(params);
-    durable = await readCurrentBrowserState(
-      params.authority?.runtime,
-      () => readDurableTabs(params.onWarn, params.authority),
-      params.isCurrent,
-    );
+    durable = await readDurable();
   }
   return { dashboardClosed, durable: isCleanupCurrent(params) ? durable : undefined };
 }
@@ -302,27 +300,23 @@ export async function sweepTrackedBrowserTabs(
     if (!durable || !isCleanupCurrent(params)) {
       return dashboardClosed;
     }
-    if (params.ordinaryCleanup === false) {
-      return (
-        dashboardClosed +
-        (await closeTrackedTabs(
-          durable.filter((tab) => !tab.dashboard && tab.cleanupKind === "lifecycle"),
-          { ...params, now, cleanupKind: "lifecycle" },
-        ))
-      );
-    }
-    return (
-      dashboardClosed +
-      (await closeTrackedTabs(
-        selectStaleTrackedTabs({
+    const lifecycleOnly = params.ordinaryCleanup === false;
+    const tabs = lifecycleOnly
+      ? durable.filter((tab) => !tab.dashboard && tab.cleanupKind === "lifecycle")
+      : selectStaleTrackedTabs({
           tabs: [...durable, ...volatile],
           now,
           idleMs: params.idleMs,
           maxTabsPerSession: params.maxTabsPerSession,
           sessionFilter: params.sessionFilter,
-        }),
-        { ...params, now, cleanupKind: "sweep" },
-      ))
+        });
+    return (
+      dashboardClosed +
+      (await closeTrackedTabs(tabs, {
+        ...params,
+        now,
+        cleanupKind: lifecycleOnly ? "lifecycle" : "sweep",
+      }))
     );
   });
 }

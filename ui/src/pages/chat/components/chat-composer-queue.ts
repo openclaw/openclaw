@@ -50,6 +50,8 @@ const QUEUE_DRAG_SCROLL_EDGE = 24;
 const QUEUE_DRAG_SCROLL_MAX_SPEED = 12;
 const mountedQueueEditInputs = new WeakSet<HTMLTextAreaElement>();
 const queueMentionInputs = new WeakMap<HTMLTextAreaElement, HumanMentionInput>();
+// The leading glyph identifies the object, not its transient delivery state.
+// Row tone, badges, and actions carry failure, review, reconnect, and steer.
 const queueWaitingIcon = strokeIcon(svg` <path d="M16 5H3" />
   <path d="M16 12H3" />
   <path d="M9 19H3" />
@@ -315,9 +317,6 @@ function renderChatQueueItem(
     (item.attachments?.length
       ? t("chat.queue.imageCount", { count: String(item.attachments.length) })
       : "");
-  // The leading glyph identifies the object, not its transient delivery state.
-  // Row tone, badges, and actions carry failure, review, reconnect, and steer.
-  const leadingIcon = queueWaitingIcon;
   const itemClass = `chat-queue__item${hasAuthorAvatar ? "" : " chat-queue__item--no-avatar"}${previewUrl ? " chat-queue__item--with-images" : ""}${steered ? " chat-queue__item--steered" : ""}${
     failed ? " chat-queue__item--failed" : ""
   }${reconnecting ? " chat-queue__item--reconnect" : ""}${
@@ -433,7 +432,7 @@ function renderChatQueueItem(
               }}
             >
               <span class="chat-queue__grip-state chat-queue__grip-state--idle" aria-hidden="true"
-                >${leadingIcon}</span
+                >${queueWaitingIcon}</span
               >
               ${
                 canMove
@@ -446,7 +445,7 @@ function renderChatQueueItem(
               }
             </button>`
           : html`<span class="chat-queue__leading chat-queue__icon" aria-hidden="true"
-              >${leadingIcon}</span
+              >${queueWaitingIcon}</span
             >`
       }
       ${authorAvatar}

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../../infra/errno.js";
@@ -10,6 +11,7 @@ import {
 } from "../../process/exec-result.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { estimateWorktreeGitBytes } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
@@ -23,6 +25,7 @@ type ResolvedWorktreeBase = {
   recordRef: string;
   fetchSucceeded?: boolean;
   warning?: string;
+  preparationKey?: string;
 };
 
 type RemoteDefaultAttempt = {
@@ -192,7 +195,15 @@ export async function withWorktreeBasePreparation<T>(
         const started: RemoteDefaultAttempt = {
           ownerInvalidated: false,
           pending: fetchRemoteDefault(repository.repoRoot, options)
-            .then((base) => {
+            .then(async (base) => {
+              // The creation cohort shares hydration before any checkout, including local main.
+              const preparationKey = randomUUID();
+              await estimateWorktreeGitBytes(repository.repoRoot, base.commit, {
+                signal,
+                assertCurrent: options.beforeRun,
+                preparationKey,
+              });
+              base.preparationKey = preparationKey;
               options.beforeRun();
               return base;
             })

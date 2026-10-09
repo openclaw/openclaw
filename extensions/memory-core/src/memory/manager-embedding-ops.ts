@@ -519,19 +519,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     provider: string;
     run: () => Promise<number[][] | null>;
   }): Promise<MemoryBatchRetryResult> {
-    try {
-      return { kind: "success", value: await params.run() };
-    } catch (error) {
-      if (!/timed out|timeout/i.test(formatErrorMessage(error))) {
-        return { kind: "failure", error, attempts: 1 };
+    let attempts: 1 | 2 = 1;
+    while (true) {
+      try {
+        return { kind: "success", value: await params.run() };
+      } catch (error) {
+        if (attempts === 2 || !/timed out|timeout/i.test(formatErrorMessage(error))) {
+          return { kind: "failure", error, attempts };
+        }
       }
-    }
-
-    log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
-    try {
-      return { kind: "success", value: await params.run() };
-    } catch (error) {
-      return { kind: "failure", error, attempts: 2 };
+      log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
+      attempts = 2;
     }
   }
 

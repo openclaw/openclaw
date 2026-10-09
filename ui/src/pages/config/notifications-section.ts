@@ -310,6 +310,25 @@ function nativeNotificationsStatus(permission: NativeNotificationsPermission | "
   }
 }
 
+function renderNotificationActions(actions: TemplateResult | typeof nothing) {
+  return actions === nothing
+    ? nothing
+    : html`<div class="settings-row">
+        <div class="settings-row__control">${actions}</div>
+      </div>`;
+}
+
+function renderBlockedNotifications(description: string) {
+  return renderSettingsRow({
+    title: t("configView.notifications.blocked"),
+    description,
+    control: renderSettingsStatus({
+      kind: "danger",
+      label: t("configView.notifications.denied"),
+    }),
+  });
+}
+
 function renderNotificationSection(
   title: string,
   status: TemplateResult,
@@ -374,25 +393,10 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
               title: t("configView.notifications.permission"),
               control: renderSettingsValue(status.label),
             })}
-            ${
-              actionButton !== nothing
-                ? html`
-                    <div class="settings-row">
-                      <div class="settings-row__control">${actionButton}</div>
-                    </div>
-                  `
-                : nothing
-            }
+            ${renderNotificationActions(actionButton)}
             ${
               native.permission === "denied"
-                ? renderSettingsRow({
-                    title: t("configView.notifications.blocked"),
-                    description: t("configView.notifications.nativeBlockedHint"),
-                    control: renderSettingsStatus({
-                      kind: "danger",
-                      label: t("configView.notifications.denied"),
-                    }),
-                  })
+                ? renderBlockedNotifications(t("configView.notifications.nativeBlockedHint"))
                 : nothing
             }
             ${
@@ -538,25 +542,10 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
               label: subscriptionLabel,
             }),
           })}
-          ${
-            actionButtons !== nothing
-              ? html`
-                  <div class="settings-row">
-                    <div class="settings-row__control">${actionButtons}</div>
-                  </div>
-                `
-              : nothing
-          }
+          ${renderNotificationActions(actionButtons)}
           ${
             push.permission === "denied"
-              ? renderSettingsRow({
-                  title: t("configView.notifications.blocked"),
-                  description: t("configView.notifications.blockedHint"),
-                  control: renderSettingsStatus({
-                    kind: "danger",
-                    label: t("configView.notifications.denied"),
-                  }),
-                })
+              ? renderBlockedNotifications(t("configView.notifications.blockedHint"))
               : nothing
           }
           ${

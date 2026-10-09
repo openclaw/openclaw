@@ -10,6 +10,7 @@ import {
   SessionEntryNavigation,
 } from "../../config/sessions/session-entry-navigation.js";
 import type { SessionEntryCohortRequest } from "../../config/sessions/session-entry-read.types.js";
+import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptTargetBinding,
@@ -153,15 +154,14 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   ): Promise<boolean> {
     this.assertTranscriptViewAvailable();
     const capturedTarget = captureSessionTranscriptTargetBinding(target);
-    const retarget =
-      !preserveCwd && !sameSessionTranscriptTargetBinding(capturedTarget, this.persistenceTarget);
-    const hydration = prepareSessionManagerHydration(
-      capturedTarget,
-      complete ? undefined : this.boundedContextLimits,
+    const hydration = prepareSessionManagerHydration(capturedTarget, {
+      limits: complete ? undefined : this.boundedContextLimits,
       signal,
-      this,
-      retarget,
-    );
+      manager: this,
+      retarget:
+        !preserveCwd && !sameSessionTranscriptTargetBinding(capturedTarget, this.persistenceTarget),
+      lane: preserveCwd ? targetDiscoveryLane : undefined,
+    });
     if (cohort && !hydration.readCohort) {
       return false;
     }

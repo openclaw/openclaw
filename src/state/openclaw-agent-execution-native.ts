@@ -42,6 +42,7 @@ import {
   invalidateOpenClawAgentDatabaseValidation,
   retireReplacedAgentValidation,
 } from "./openclaw-agent-db-validation-cache.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import {
   cleanupRetiredAgentDatabaseLease,
   readAgentDatabaseClosedReceipt,
@@ -54,7 +55,6 @@ import type {
   AgentDatabaseExecutionScope,
   AgentDatabaseNativeGeneration,
   AgentDatabaseNativeStore as Store,
-  AgentDatabaseRequestExecutionSource,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
@@ -432,6 +432,8 @@ export function createAgentDatabaseNativeGeneration(
               nativeStopped = stopped;
               readCloseReceipt = readReceipt;
             },
+            // A failed pooled worker also retires proof lent by its other agent actors.
+            onNativeLost: () => invalidateOpenClawAgentDatabaseValidation(pathname),
           },
         );
         // Keep the native owner reachable if registration publication fails after open.

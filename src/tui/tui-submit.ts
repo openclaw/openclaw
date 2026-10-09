@@ -158,10 +158,7 @@ export function createSubmitBurstCoalescer(params: {
   let disposed = false;
 
   const clearFlushTimer = () => {
-    if (!flushTimer) {
-      return;
-    }
-    clearTimeout(flushTimer);
+    clearTimeout(flushTimer ?? undefined);
     flushTimer = null;
   };
 
@@ -182,13 +179,6 @@ export function createSubmitBurstCoalescer(params: {
     pendingAt = 0;
     clearFlushTimer();
     submit(value, snapshot);
-  };
-
-  const scheduleFlush = () => {
-    clearFlushTimer();
-    flushTimer = setTimeout(() => {
-      flushPending();
-    }, windowMs);
   };
 
   const submitBurst = (value: string) => {
@@ -217,7 +207,8 @@ export function createSubmitBurstCoalescer(params: {
       pending = { value, ...(snapshot ? { snapshot } : {}) };
     }
     pendingAt = ts;
-    scheduleFlush();
+    clearFlushTimer();
+    flushTimer = setTimeout(flushPending, windowMs);
   };
 
   const dispose = () => {

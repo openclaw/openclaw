@@ -51,7 +51,6 @@ export function renderConfig(props: ConfigProps) {
   const viewState = props.viewState;
   const showModeToggle = props.showModeToggle ?? false;
   const showRootTab = props.showRootTab ?? true;
-  const validity = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
   const includeVirtualSections = props.includeVirtualSections ?? true;
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
   const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
@@ -285,7 +284,7 @@ export function renderConfig(props: ConfigProps) {
       })
     : nothing;
   const showToolbar = showModeToggle || showSectionTabs;
-  const showValidityWarning = validity === "invalid" && !viewState.validityDismissed;
+  const showValidityWarning = props.valid === false && !viewState.validityDismissed;
   const showLead =
     showToolbar || settingsLayout === "accordion" || showValidityWarning || Boolean(channelGroup);
 

@@ -39,6 +39,7 @@ import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 
 export const CHAT_HISTORY_REQUEST_LIMIT = 80;
 const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
+const CHAT_HISTORY_TOOL_RESULT_MAX_CHARS = 2_000;
 const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
 
 // Keep startup small, then amortize older-history reads and prepend work across
@@ -184,6 +185,7 @@ export function requestSharedHistory(
   if (!shared || existingOwner) {
     const params = {
       sessionKey,
+      toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
       ...(cursor !== undefined ? { cursor } : {}),
       ...budget,
@@ -346,6 +348,7 @@ async function requestOlderChatHistoryPage(
   const result = attachHistoryActivity(
     await client.request<ChatHistoryResult>("chat.history", {
       sessionKey,
+      toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
       limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
       offset,

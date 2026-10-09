@@ -11,6 +11,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -30,6 +31,7 @@ import {
 import * as anchorKernel from "./session-transcript-anchor-read.kernel.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
+import { historyLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 const events = [
@@ -112,6 +114,49 @@ it("keeps replay tails metadata-only unless message payloads are selected", asyn
       anchor: { entryId: "tagged" },
       message: { role: "assistant", content: "selected answer" },
     });
+  });
+});
+
+it("settles callback-owned tail reads while independent history waits on the writer", async () => {
+  await withOpenClawTestState({ label: "writer-owned-transcript-tail" }, async (state) => {
+    const scope = transcriptScope(state);
+    await replaceTranscriptEvents(scope, events);
+    openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+    const independentRead = createDeferred();
+    const blockedHistory = createDeferred<never>();
+    void blockedHistory.promise.catch(() => {});
+    const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(() => {
+      independentRead.resolve();
+      return blockedHistory.promise;
+    });
+    let accepted = false;
+    const reading = readSessionTranscriptAnchorsAsync(
+      scope,
+      { entryIds: ["question"], afterSeq: 1, includeMessagesForRunId: "answer-run" },
+      undefined,
+      (facts) => {
+        expect(facts.anchors).toEqual(
+          expect.arrayContaining([expect.objectContaining({ entryId: "question" })]),
+        );
+        expect(facts.tail?.entries).toContainEqual(
+          expect.objectContaining({ entryId: "answer", runId: "answer-run" }),
+        );
+        accepted = true;
+      },
+    );
+    try {
+      await Promise.race([
+        reading,
+        independentRead.promise.then(() => {
+          throw new Error("Tail acceptance waited on independent history custody");
+        }),
+      ]);
+      expect(accepted).toBe(true);
+    } finally {
+      blockedHistory.reject(new Error("Synthetic history custody released"));
+      await reading.catch(() => {});
+      spy.mockRestore();
+    }
   });
 });
 
@@ -272,15 +317,41 @@ it.each([
         reason: "rebuilding",
       });
       const hydrate = prepareSessionTranscriptHydration(scope, { maxBytes: 4096, maxEvents: 10 });
-      await expect(
-        hydrate.readCohort!({ sessionKey: scope.sessionKey, entryIds: ["question"] }, () => {
-          throw new Error("Stale hydration must not publish anchors");
-        }),
-      ).rejects.toMatchObject({
-        name: "SessionTranscriptProjectionUnavailableError",
-        sessionId: scope.sessionId,
-        reason: "rebuilding",
+      const retirementEntered = createDeferred();
+      const releaseRetirement = createDeferred();
+      let following: Promise<void> | undefined;
+      const retirement = vi.spyOn(historyLane.pool, "rotate").mockImplementation(() => {
+        following ??= runOpenClawAgentWriteAdmission(
+          { agentId: scope.agentId, env: scope.env, path: scope.storePath },
+          () => {},
+        );
+        retirementEntered.resolve();
+        return Promise.race([following, releaseRetirement.promise]);
       });
+      const reading = hydrate.readCohort!(
+        { sessionKey: scope.sessionKey, entryIds: ["question"] },
+        () => {
+          throw new Error("Stale hydration must not publish anchors");
+        },
+      );
+      try {
+        await expect(
+          Promise.race([
+            reading,
+            retirementEntered.promise.then(() => {
+              throw new Error("Hydration cleanup waits on the writer queued behind its cohort");
+            }),
+          ]),
+        ).rejects.toMatchObject({
+          name: "SessionTranscriptProjectionUnavailableError",
+          sessionId: scope.sessionId,
+          reason: "rebuilding",
+        });
+      } finally {
+        releaseRetirement.resolve();
+        await Promise.allSettled([reading, following]);
+        retirement.mockRestore();
+      }
       expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();

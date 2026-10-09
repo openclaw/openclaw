@@ -4,7 +4,6 @@ import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
-import type { AgentConfig } from "../config/types.agents.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
@@ -16,9 +15,6 @@ import {
   loadExecApprovalsReadOnly,
   resolveExecApprovalsDisplayPath,
   type ExecApprovalsFile,
-  type ExecAsk,
-  type ExecMode,
-  type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { findSecretStoreRedactedValueFindings } from "../secrets/audit-store.js";
 import { classifyConfigSecretTarget } from "../secrets/config-secret-target.js";
@@ -28,48 +24,40 @@ import type { SecurityAuditFinding } from "../security/audit.types.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
 
 function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  const findings: SecurityAuditFinding[] = [];
-
-  const maybeWarn = (params: {
-    label: string;
-    heartbeat: AgentConfig["heartbeat"] | undefined;
-    pathHint: string;
-  }) => {
-    const heartbeat = params.heartbeat;
-    if (!heartbeat || heartbeat.target === undefined || heartbeat.target === "none") {
-      return;
-    }
-    if (heartbeat.directPolicy !== undefined) {
-      return;
-    }
-    findings.push({
-      checkId: "doctor.heartbeat_direct_policy_unset",
-      severity: "warn",
-      title: params.label,
-      detail: `heartbeat delivery is configured while ${params.pathHint} is unset.`,
-      remediation:
-        'Heartbeat now allows direct/DM targets by default. Set it explicitly to "allow" or "block" to pin upgrade behavior.',
-    });
-  };
-
-  maybeWarn({
-    label: "Heartbeat defaults",
-    heartbeat: cfg.agents?.defaults?.heartbeat,
-    pathHint: "agents.defaults.heartbeat.directPolicy",
-  });
-
-  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
-    maybeWarn({
+  return [
+    {
+      label: "Heartbeat defaults",
+      heartbeat: cfg.agents?.defaults?.heartbeat,
+      pathHint: "agents.defaults.heartbeat.directPolicy",
+    },
+    ...listAgentEntriesWithSource(cfg).map(({ entry: agent, source }) => ({
       label: `Heartbeat agent "${agent.id}"`,
       heartbeat: agent.heartbeat,
       pathHint:
         source.kind === "entries"
           ? `agents.entries.${source.key}.heartbeat.directPolicy`
           : `heartbeat.directPolicy for agent "${agent.id}"`,
-    });
-  }
-
-  return findings;
+    })),
+  ].flatMap<SecurityAuditFinding>(({ label, heartbeat, pathHint }) => {
+    if (
+      !heartbeat ||
+      heartbeat.target === undefined ||
+      heartbeat.target === "none" ||
+      heartbeat.directPolicy !== undefined
+    ) {
+      return [];
+    }
+    return [
+      {
+        checkId: "doctor.heartbeat_direct_policy_unset",
+        severity: "warn",
+        title: label,
+        detail: `heartbeat delivery is configured while ${pathHint} is unset.`,
+        remediation:
+          'Heartbeat now allows direct/DM targets by default. Set it explicitly to "allow" or "block" to pin upgrade behavior.',
+      },
+    ];
+  });
 }
 
 function collectExecPolicyConflictWarnings(
@@ -78,29 +66,33 @@ function collectExecPolicyConflictWarnings(
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
 
-  const maybeWarn = (params: {
-    scopeLabel: string;
-    scopeExecConfig: { mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk } | undefined;
-    globalExecConfig?: { mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk } | undefined;
-    agentId?: string;
-  }) => {
-    const scopeExecConfig = params.scopeExecConfig;
-    const globalExecConfig = params.globalExecConfig;
+  const scopes = [
+    {
+      scopeLabel: "tools.exec",
+      scopeExecConfig: cfg.tools?.exec,
+      globalExecConfig: undefined,
+      agentId: undefined,
+    },
+    ...Object.entries(cfg.agents?.entries ?? {}).map(([agentId, agent]) => ({
+      scopeLabel: `agents.entries.${agentId}.tools.exec`,
+      scopeExecConfig: agent.tools?.exec,
+      globalExecConfig: cfg.tools?.exec,
+      agentId,
+    })),
+  ];
+  for (const { scopeLabel, scopeExecConfig, globalExecConfig, agentId } of scopes) {
     if (
       ![scopeExecConfig, globalExecConfig].some((exec) => exec?.mode || exec?.security || exec?.ask)
     ) {
-      return;
+      continue;
     }
     const snapshot = resolveExecPolicyScopeSnapshot({
       approvals,
       scopeExecConfig,
       globalExecConfig,
-      configPath:
-        params.scopeLabel === "tools.exec"
-          ? "tools.exec"
-          : `agents.entries.${params.agentId}.tools.exec`,
-      scopeLabel: params.scopeLabel,
-      agentId: params.agentId,
+      configPath: scopeLabel,
+      scopeLabel,
+      agentId,
     });
     const configParts: string[] = [];
     const hostParts: string[] = [];
@@ -126,13 +118,13 @@ function collectExecPolicyConflictWarnings(
       hostParts.push(`${policy.hostSource}="${policy.host}"`);
     }
     if (hostParts.length === 0) {
-      return;
+      continue;
     }
 
     findings.push({
       checkId: "doctor.exec_policy_conflict",
       severity: "warn",
-      title: `${params.scopeLabel} is broader than the host exec policy.`,
+      title: `${scopeLabel} is broader than the host exec policy.`,
       detail: "",
       remediation: [
         `Config: ${configParts.join(", ")}`,
@@ -141,21 +133,6 @@ function collectExecPolicyConflictWarnings(
         "Headless runs like isolated cron cannot answer approval prompts; align both files, or keep the Control UI or a macOS/iOS/Android app connected so gateway automation runs can raise approval cards.",
         `Inspect with: ${formatCliCommand("openclaw approvals get --gateway")}`,
       ].join("\n"),
-    });
-  };
-
-  maybeWarn({
-    scopeLabel: "tools.exec",
-    scopeExecConfig: cfg.tools?.exec,
-  });
-
-  const agents = cfg.agents?.entries ?? {};
-  for (const [agentId, agent] of Object.entries(agents)) {
-    maybeWarn({
-      scopeLabel: `agents.entries.${agentId}.tools.exec`,
-      scopeExecConfig: agent.tools?.exec,
-      globalExecConfig: cfg.tools?.exec,
-      agentId,
     });
   }
 
@@ -198,12 +175,9 @@ function collectExecFilesystemPolicyWarnings(cfg: OpenClawConfig): SecurityAudit
 }
 
 function collectPlaintextConfigSecretWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  const plaintextPaths: string[] = [];
-  for (const target of discoverConfigSecretTargets(cfg)) {
-    if (classifyConfigSecretTarget(cfg, target).plaintext) {
-      plaintextPaths.push(target.path);
-    }
-  }
+  const plaintextPaths = discoverConfigSecretTargets(cfg)
+    .filter((target) => classifyConfigSecretTarget(cfg, target).plaintext)
+    .map((target) => target.path);
 
   if (plaintextPaths.length === 0) {
     return [];
@@ -304,13 +278,11 @@ export async function collectSecurityWarnings(
     env,
     tailscaleMode,
   });
-  const authToken = normalizeOptionalString(resolvedAuth.token) ?? "";
-  const authPassword = normalizeOptionalString(resolvedAuth.password) ?? "";
   const hasToken =
-    authToken.length > 0 ||
+    Boolean(normalizeOptionalString(resolvedAuth.token)) ||
     hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);
   const hasPassword =
-    authPassword.length > 0 ||
+    Boolean(normalizeOptionalString(resolvedAuth.password)) ||
     hasConfiguredSecretInput(cfg.gateway?.auth?.password, cfg.secrets?.defaults);
   const hasSharedSecret =
     (resolvedAuth.mode === "token" && hasToken) ||

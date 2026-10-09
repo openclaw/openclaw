@@ -6,18 +6,25 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
-import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
+import type {
+  OpenClawAgentDatabase,
+  OpenClawAgentDatabaseOptions,
+} from "./openclaw-agent-db-contract.js";
+import {
+  isOpenClawAgentDatabasePathCurrent,
+  readOpenClawAgentDatabaseIdentity,
+} from "./openclaw-agent-db-identity.js";
 import { hasAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-lease.js";
 import { agentDatabaseLifecycle } from "./openclaw-agent-db-lifecycle.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
+import type { AgentDatabaseGenerationClaim } from "./openclaw-agent-execution-admission-contract.js";
 import type {
-  AgentDatabaseFileExecutionOwner,
   OpenClawAgentDatabaseExecution,
-  AgentDatabaseGenerationClaim,
   AgentDatabaseNativeGeneration,
+  AgentDatabaseFileExecutionOwner,
   AgentDatabaseExecutionFileIdentity,
 } from "./openclaw-agent-execution-contract.js";
 import type { IncognitoAgentExecutionOwner } from "./openclaw-agent-execution-incognito.js";
@@ -101,6 +108,40 @@ export function supportsOpenClawAgentDatabaseExecution(
     !isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options) &&
     supportsAgentDatabaseExecutionScope(options)
   );
+}
+
+/** Bind native handoff to the admitted connection and recheck it after cleanup waits. */
+export function captureNativeAgentDatabaseExecutionIdentity(
+  database: OpenClawAgentDatabase,
+  agentId: string,
+  canonicalPath: string,
+  assertBorrowed: () => void,
+) {
+  assertBorrowed();
+  const native = readOpenClawAgentDatabaseIdentity(database);
+  const assertCurrent = () => {
+    assertBorrowed();
+    if (
+      database.agentId !== agentId ||
+      agentDatabaseLifecycle.databases.get(database.path) !== database ||
+      readOpenClawAgentDatabaseIdentity(database) !== native ||
+      native.canonicalPath !== canonicalPath ||
+      !isOpenClawAgentDatabasePathCurrent(database)
+    ) {
+      throw new Error("Agent execution cannot adopt a different native database owner");
+    }
+  };
+  assertCurrent();
+  if (typeof native.identity !== "string") {
+    throw new Error("Agent execution requires an admitted native file");
+  }
+  const fileIdentity: AgentDatabaseExecutionFileIdentity = {
+    kind: "file",
+    physicalIdentity: native.identity,
+    birthtime: native.birthtime,
+    nativeLocation: native.canonicalPath,
+  };
+  return { fileIdentity, assertCurrent };
 }
 
 export function assertAgentDatabaseExecutionCreationIdentity(

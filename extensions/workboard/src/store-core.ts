@@ -7,7 +7,7 @@ import type {
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PersistedWorkboardCard } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import { WorkboardBoardStore } from "./store-boards.js";
@@ -559,13 +559,8 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       ) {
         // Ignore stale lifecycle status writes, but still accept any non-status updates in the patch.
         effectivePatch = { ...patch, status: undefined };
-        if (
-          patch.metadata &&
-          typeof patch.metadata === "object" &&
-          !Array.isArray(patch.metadata)
-        ) {
-          const metadataPatch = patch.metadata as Record<string, unknown>;
-          const { lifecycleStatusSourceUpdatedAt: _ignored, ...rest } = metadataPatch;
+        if (isRecord(patch.metadata)) {
+          const { lifecycleStatusSourceUpdatedAt: _ignored, ...rest } = patch.metadata;
           effectivePatch.metadata = Object.keys(rest).length > 0 ? rest : undefined;
         }
         const hasSemanticPatch = Object.entries(effectivePatch).some(
@@ -646,10 +641,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
             ? existing.notes
             : normalizeNotes(effectivePatch.notes),
         status,
-        priority:
-          effectivePatch.priority === undefined
-            ? existing.priority
-            : normalizePriority(effectivePatch.priority, existing.priority),
+        priority: normalizePriority(effectivePatch.priority, existing.priority),
         labels:
           effectivePatch.labels === undefined
             ? existing.labels

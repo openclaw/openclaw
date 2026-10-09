@@ -12,6 +12,7 @@ import { captureSessionEntryNativeMutationWitness } from "../config/sessions/ses
 import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { releaseSessionSourceAuthorities } from "../config/sessions/session-source-authority.js";
+import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
@@ -253,14 +254,17 @@ export class SqliteBoardStore implements BoardStore {
       async (identity, assertDatabaseCurrent) => {
         let expectedSession: BoardSessionIdentity | undefined;
         if (!incognito) {
-          const source = await withSessionHistoryWorkerDatabase(databaseOptions, (reader) =>
-            reader.readExactEntries({
-              env,
-              sessionKeys: [resolved.sessionKey],
-              projection: "exact",
-              snapshotFields: [],
-              expectedIdentity: identity,
-            }),
+          const source = await withSessionHistoryWorkerDatabase(
+            databaseOptions,
+            (reader) =>
+              reader.readExactEntries({
+                env,
+                sessionKeys: [resolved.sessionKey],
+                projection: "exact",
+                snapshotFields: [],
+                expectedIdentity: identity,
+              }),
+            targetDiscoveryLane,
           );
           assertDatabaseCurrent();
           assertOpenCurrent();
@@ -303,13 +307,12 @@ export class SqliteBoardStore implements BoardStore {
                 "board database closed or changed; retry",
               );
             }
-            // First-use schema work must precede the worker's strict native-open validation.
-            ensureBoardSchema(database);
             if (
               nativeSource ||
               typeof readOpenClawAgentDatabaseIdentity(database).identity === "symbol"
             ) {
               // Released opaque/cross-store guards keep synchronous authority and mutation together.
+              ensureBoardSchema(database);
               return runOpenClawAgentWriteTransaction(
                 (current) => {
                   assertPreparedCurrent();
@@ -506,7 +509,7 @@ export class SqliteBoardStore implements BoardStore {
       const result = await runOpenClawAgentWorkerWrite(captured, async () => accept(undefined));
       return await result.value;
     }
-    // A read holds FIFO order without a native writer permit; cold admission may reenter.
+    // FIFO-held reads and their failure cleanup use the writer-safe discovery lane.
     const result = await withSessionHistoryWorkerDatabase(
       { ...captured, path: identity.canonicalPath, requestedPaths: [captured.path] },
       (reader) =>
@@ -523,6 +526,7 @@ export class SqliteBoardStore implements BoardStore {
           },
           true,
         ),
+      targetDiscoveryLane,
     ).catch((error: unknown) => {
       throw restoreBoardError(error);
     });

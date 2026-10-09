@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   sessionRowChangeSource,
+  sessionChangeScopeAffectsStoredRows,
+  sessionChanges,
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
@@ -109,7 +111,7 @@ export function recordCommittedSessionEntryPublication(
 }
 
 export function recordCommittedSessionMetadataPublication(
-  database: SessionEntryCacheDatabase,
+  database: SessionEntryCacheDatabase | string,
   sessionKey: string,
   change?: SessionRowFacts,
   entry?: SessionEntry,
@@ -122,7 +124,8 @@ export function recordCommittedSessionMetadataPublication(
         : undefined);
     publishRetainedSessionEntryPredicate(read, postimage, postimage !== undefined);
   }
-  const identity = findOpenClawAgentDatabaseIdentity(database)?.identity;
+  const identity =
+    typeof database === "string" ? database : findOpenClawAgentDatabaseIdentity(database)?.identity;
   if (typeof identity === "string") {
     for (const pending of pendingSessionEntryPublications.get(`file:${identity}\0${sessionKey}`) ??
       []) {
@@ -610,5 +613,111 @@ export function readPreparedSessionEntryChange(change: object, sessionKey: strin
       : (prepared.sharing?.get(sessionKey) ??
         (entry ? projectSessionSharingEntry(entry) : undefined)),
     projection: record.readCurrent ? current?.projection : prepared.projection?.get(sessionKey),
+  };
+}
+
+/** One pending delta per key; a later native field assignment keeps its own postimage. */
+export function retainSessionEntryDeltaSupersession(params: {
+  agentId: string;
+  databaseIdentity: string;
+  storePath: string;
+}) {
+  const superseded = new Map<string, Set<string>>();
+  const postimages = new Map<string, Map<string, SessionRowFacts>>();
+  let stop: (() => void) | undefined;
+  const field = (change: SessionRowChange): string | undefined => {
+    if ("all" in change || change.factsInvalidated === true) {
+      return "*";
+    }
+    if (change.factsInvalidated === "category") {
+      return "category";
+    }
+    const facts = change.facts;
+    if (!facts || facts.kind === "unchanged") {
+      return undefined;
+    }
+    if (facts.kind === "entry" || facts.kind === "replacement" || facts.kind === "removed") {
+      return "*";
+    }
+    return facts.kind === "member" ? `member:${facts.identityId}` : facts.kind;
+  };
+  return {
+    begin(sessionKeys: readonly string[], observe?: (change: SessionRowChange) => void): void {
+      const targets = new Set(sessionKeys);
+      superseded.clear();
+      postimages.clear();
+      stop = sessionChanges.subscribeFacts((change) => {
+        if (!sessionChangeScopeAffectsStoredRows(change)) {
+          return;
+        }
+        const source = readPreparedSessionEntryPublicationSource(change);
+        if (source.identity !== undefined && source.identity !== params.databaseIdentity) {
+          return;
+        }
+        if (source.identity === undefined) {
+          const scope = "all" in change ? change.scope : change;
+          if (
+            typeof scope === "object" &&
+            ((scope.storePath && scope.storePath !== params.storePath) ||
+              (scope.agentId && scope.agentId !== params.agentId))
+          ) {
+            return;
+          }
+        }
+        observe?.(change);
+        const changed = field(change);
+        if (!changed) {
+          return;
+        }
+        for (const sessionKey of "all" in change ? targets : [change.sessionKey]) {
+          if (!targets.has(sessionKey)) {
+            continue;
+          }
+          const fields = superseded.get(sessionKey) ?? new Set<string>();
+          fields.add(changed);
+          superseded.set(sessionKey, fields);
+          const values = postimages.get(sessionKey) ?? new Map<string, SessionRowFacts>();
+          if ("sessionKey" in change && !change.factsInvalidated && change.facts) {
+            values.set(changed, change.facts);
+          } else {
+            values.delete(changed);
+          }
+          postimages.set(sessionKey, values);
+        }
+      });
+    },
+    hasSupersedingField(change: SessionRowChange): boolean {
+      return (
+        "sessionKey" in change &&
+        superseded.get(change.sessionKey)?.has(field(change) ?? "*") === true
+      );
+    },
+    currentKeys(changes: readonly SessionRowChange[]): ReadonlySet<string> {
+      return new Set(
+        changes.flatMap((change) => {
+          if (!("sessionKey" in change)) {
+            return [];
+          }
+          const fields = superseded.get(change.sessionKey);
+          return fields?.has("*") || fields?.has(field(change) ?? "*") ? [] : [change.sessionKey];
+        }),
+      );
+    },
+    /** Rebase a whole-row receipt through subsequent exact native field assignments. */
+    rebaseEntry(sessionKey: string, entry: SessionEntry): SessionEntry | undefined {
+      let current: SessionEntry | undefined = entry;
+      for (const changed of superseded.get(sessionKey) ?? []) {
+        const fact = postimages.get(sessionKey)?.get(changed);
+        if (changed === "*" || !fact || !current) {
+          return undefined;
+        }
+        current = projectSessionEntryPredicateChange({ entry: current }, fact);
+      }
+      return current;
+    },
+    release(): void {
+      stop?.();
+      stop = undefined;
+    },
   };
 }

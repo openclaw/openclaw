@@ -39,10 +39,6 @@ import {
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
 import { resolveReplyDirectiveCommand } from "./directive-handling.parse.js";
-import {
-  reserveSkillCommandNames,
-  resolveConfiguredDirectiveAliases,
-} from "./get-reply-directive-aliases.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
@@ -167,11 +163,10 @@ export async function resolveReplyDirectives(params: {
   }
 
   const rawAliases = hasConfiguredModelAliases
-    ? resolveConfiguredDirectiveAliases({
-        cfg,
-        commandTextHasSlash,
-        reservedCommands,
-      })
+    ? Object.values(cfg.agents?.defaults?.models ?? {})
+        .map((entry) => normalizeOptionalString(entry.alias))
+        .filter((alias): alias is string => Boolean(alias))
+        .filter((alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)))
     : [];
   const skillCommandContext = {
     workspaceDir,
@@ -193,7 +188,9 @@ export async function resolveReplyDirectives(params: {
           skillFilter,
         })
       : [];
-  reserveSkillCommandNames({ reservedCommands, skillCommands });
+  for (const skill of skillCommands) {
+    reservedCommands.add(normalizeLowercaseStringOrEmpty(skill.name));
+  }
 
   const allSkillCommands =
     hasSkillReferences && skillFilter !== undefined

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -43,7 +43,7 @@ import {
   recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
 import { removeAgentIntegrityMetadataForTest } from "./openclaw-agent-db.test-support.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import * as verificationImplementation from "./openclaw-database-verify.impl.js";
@@ -170,15 +170,23 @@ it.each(["confirmed close", "native exit"] as const)(
     try {
       await expect(generation.run(source, async () => "opened")).resolves.toBe("opened");
       expect(leases()).toHaveLength(2);
+      const validation = getOpenClawAgentDatabaseValidation(database);
+      assert(validation, "native generation must publish validation before retirement");
       process.off("worker", observeWorker);
       if (outcome === "native exit") {
         expect(workers.length).toBeGreaterThan(0);
         await Promise.all(workers.map((worker) => worker.terminate()));
         expect(leases()).toHaveLength(2);
+        expect(cleanup).not.toHaveBeenCalled();
+        expect(Atomics.load(new Int32Array(validation.valid), 0)).toBe(0);
+        expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
       }
       await generation.close();
       expect(leases()).toEqual(hostLeases);
       expect(cleanup).toHaveBeenCalledTimes(outcome === "confirmed close" ? 0 : 1);
+      if (outcome === "confirmed close") {
+        expect(Atomics.load(new Int32Array(validation.valid), 0)).toBe(1);
+      }
     } finally {
       process.off("worker", observeWorker);
       try {

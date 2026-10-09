@@ -11,6 +11,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { startWorkerPlacementDispatch } from "./placement-dispatch-store.js";
 import { createPlacementLifecycleWorkerOps } from "./placement-lifecycle-store.js";
 import { createPlacementMoveOps } from "./placement-move-intent.js";
+import { readWorkerPlacementMoveAuthorityInDatabase } from "./placement-read-projection.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import { readPublishedPlacementProjection } from "./placement-read-publication.js";
 import { createPlacementReadStore } from "./placement-read-store.js";
@@ -137,6 +138,14 @@ export function createWorkerSessionPlacementStore(
 
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {
       return withWorkspaceResultConflict(find(read(), required(sessionId, "session id")));
+    },
+
+    readCurrentMoveAuthority(sessionId: string) {
+      const authority = readWorkerPlacementMoveAuthorityInDatabase(
+        read(),
+        required(sessionId, "session id"),
+      );
+      return { ...authority, placement: withWorkspaceResultConflict(authority.placement) };
     },
 
     prepareTurnClaimAuthority(claim: WorkerSessionTurnClaim): Promise<PlacementTurnClaimAuthority> {

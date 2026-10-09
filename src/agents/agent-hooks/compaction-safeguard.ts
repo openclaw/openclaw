@@ -1051,6 +1051,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
+      // Reserve headroom for the prompt, previous summary, and reasoning budget
+      // that generateSummary adds to each adaptively sized conversation chunk.
+      const resolveMaxChunkTokens = async (messages: AgentMessage[]) => {
+        const ratio = await computeAdaptiveChunkRatioWithWorker({
+          messages,
+          contextWindow: contextWindowTokens,
+          signal,
+        });
+        return Math.max(1, Math.floor(contextWindowTokens * ratio) - SUMMARIZATION_OVERHEAD_TOKENS);
+      };
       let messagesToSummarize = baseMessagesToSummarize;
       const headers = buildCompactionSummaryHeaders({
         model,
@@ -1107,15 +1117,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             // Summarize dropped messages so context isn't lost
             if (pruned.droppedMessagesList.length > 0) {
               try {
-                const droppedChunkRatio = await computeAdaptiveChunkRatioWithWorker({
-                  messages: pruned.droppedMessagesList,
-                  contextWindow: contextWindowTokens,
-                  signal,
-                });
-                const droppedMaxChunkTokens = Math.max(
-                  1,
-                  Math.floor(contextWindowTokens * droppedChunkRatio) -
-                    SUMMARIZATION_OVERHEAD_TOKENS,
+                const droppedMaxChunkTokens = await resolveMaxChunkTokens(
+                  pruned.droppedMessagesList,
                 );
                 droppedSummary = await summarizeViaLLM({
                   ...llmSummaryParams,
@@ -1172,18 +1175,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           ? oracleMessages
           : [];
 
-      // Use adaptive chunk ratio based on message sizes, reserving headroom for
-      // the summarization prompt, system prompt, previous summary, and reasoning budget
-      // that generateSummary adds on top of the serialized conversation chunk.
-      const adaptiveRatio = await computeAdaptiveChunkRatioWithWorker({
-        messages: reconciliationMessages,
-        contextWindow: contextWindowTokens,
-        signal,
-      });
-      const maxChunkTokens = Math.max(
-        1,
-        Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
-      );
+      const maxChunkTokens = await resolveMaxChunkTokens(reconciliationMessages);
       let correctiveInstructions = "";
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
 

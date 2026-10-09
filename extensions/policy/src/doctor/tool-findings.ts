@@ -10,7 +10,7 @@ import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 import { KNOWN_RISK_LEVELS, KNOWN_SENSITIVITY_LEVELS } from "./policy-constants.js";
 import {
-  policyEvidenceFinding as toolPostureFinding,
+  policyEvidenceFinding,
   policyEvidenceRuleFindings,
   type PolicyEvidenceRule,
 } from "./policy-evidence-finding.js";
@@ -169,7 +169,7 @@ function toolAlsoAllowExpectedFindings(
         continue;
       }
       findings.push(
-        toolPostureFinding(entry, {
+        policyEvidenceFinding(entry, {
           checkId: CHECK_IDS.policyToolsAlsoAllowMissing,
           message: `${toolPostureLabel(entry)} is missing expected tools.alsoAllow entry '${expectedTool}'.`,
           requirement: `oc://${policyDocName}/${requirementBase}/alsoAllow/expected`,
@@ -182,7 +182,7 @@ function toolAlsoAllowExpectedFindings(
         continue;
       }
       findings.push(
-        toolPostureFinding(entry, {
+        policyEvidenceFinding(entry, {
           checkId: CHECK_IDS.policyToolsAlsoAllowUnexpected,
           message: `${toolPostureLabel(entry)} has unexpected tools.alsoAllow entry '${actualTool}'.`,
           requirement: `oc://${policyDocName}/${requirementBase}/alsoAllow/expected`,
@@ -212,7 +212,7 @@ function toolRequiredDenyFindings(
         continue;
       }
       findings.push(
-        toolPostureFinding(entry, {
+        policyEvidenceFinding(entry, {
           checkId: CHECK_IDS.policyToolsRequiredDenyMissing,
           message: `${toolPostureLabel(entry)} does not deny required tool '${tool}'.`,
           requirement: `oc://${policyDocName}/${requirementBase}/denyTools`,
@@ -236,18 +236,11 @@ function toolMetadataFinding(
   message: string,
   fixHint: string,
 ): HealthFinding {
-  return {
-    checkId,
-    severity: "error",
-    message,
-    source: "policy",
-    path: "AGENTS.md",
-    line: tool.line,
-    ocPath: tool.source,
-    target: tool.source,
-    requirement: `oc://${policyDocName}/tools/requireMetadata`,
-    fixHint,
-  };
+  return policyEvidenceFinding(
+    tool,
+    { checkId, message, requirement: `oc://${policyDocName}/tools/requireMetadata`, fixHint },
+    { path: "AGENTS.md", line: tool.line },
+  );
 }
 
 type ToolMetadataIssue = readonly [

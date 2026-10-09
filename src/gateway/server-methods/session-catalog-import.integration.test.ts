@@ -689,25 +689,24 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
         { id: "later-2", type: "agentMessage", text: "Revoked later reply" },
       );
       let revoked = false;
-      const withWriteLock = transcriptRuntime.withSessionTranscriptWriteLock;
-      vi.spyOn(transcriptRuntime, "withSessionTranscriptWriteLock").mockImplementation(
-        (params, run) =>
-          withWriteLock(params, (transcript) =>
-            run({
-              ...transcript,
-              appendMessage: async (options) => {
-                const result = await transcript.appendMessage(options);
-                if (
-                  result?.appended &&
-                  JSON.stringify(options.message).includes("First later reply")
-                ) {
-                  fixture.config.gateway!.roles!.definitions!.reader!.sessions.others = "none";
-                  revoked = true;
-                }
-                return result;
-              },
-            }),
-          ),
+      const withWrite = transcriptRuntime.withSessionTranscriptWrite;
+      vi.spyOn(transcriptRuntime, "withSessionTranscriptWrite").mockImplementation((params, run) =>
+        withWrite(params, (transcript) =>
+          run({
+            ...transcript,
+            appendMessage: async (options) => {
+              const result = await transcript.appendMessage(options);
+              if (
+                result?.appended &&
+                JSON.stringify(options.message).includes("First later reply")
+              ) {
+                fixture.config.gateway!.roles!.definitions!.reader!.sessions.others = "none";
+                revoked = true;
+              }
+              return result;
+            },
+          }),
+        ),
       );
       const response = await fixture.call();
       expect(revoked).toBe(true);
