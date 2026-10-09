@@ -53,27 +53,27 @@ export function toPortableMatchPath(match: string, separator: string = path.sep)
   return match.replaceAll(separator, "/");
 }
 
-// Leading literal directory prefix of a glob-routed pattern: the path segments
-// before the first glob-magic segment. The security pre-gate realpaths it to
-// decide whether a pattern rooted at a literal directory symlink escapes the
-// workspace before fs.glob reads there, and the fs.glob-absent fallback roots its
-// walk there. A magic-first pattern (`{a,b}/…`) collapses to "." (the workspace
-// root), matching fs.glob which would root that walk at the workspace.
-//
-// The grammar must match how fs.glob resolves the pattern, or the pre-gate
-// realpaths the wrong directory. A glob-routed pattern treats `[ab]` as a
-// character class, so the prefix stops before a bracket segment too:
-// `pkg[ab]/*/AGENTS.md` collapses to the workspace root, exactly where fs.glob
-// roots its walk over `pkga`/`pkgb`. Realpathing the literal `pkg[ab]` directory
-// instead would falsely reject the whole pattern if a stray `pkg[ab]` symlink
-// escaped the workspace. An extglob open (`@(`, `+(`, `!(`, plus `?(` and `*(`)
-// is magic for the same reason. Fully-literal patterns never come here: the
-// pre-gate checks their exact path.
+// Leading literal directory prefix of a glob-routed pattern: the security
+// pre-gate realpaths it to decide whether a pattern rooted at a literal directory
+// symlink escapes the workspace before fs.glob reads there, and the
+// fs.glob-absent fallback roots its walk there. It must be where fs.glob roots
+// its walk, so it comes from the matcher's parsed segments rather than raw text:
+// the leading literal segments shared by every brace alternative, never the
+// final segment. A bracket class (`pkg[ab]/*`), extglob, or alternation
+// (`{a,b}/…`, including one spanning a `/`) collapses the prefix there; an
+// escaped class (`[[]ab]`) or an unmatched `]` stays literal, so
+// `/srv/workspace]/*/AGENTS.md` keeps the workspace as its root. Fully-literal
+// patterns never come here: the pre-gate checks their exact path.
 function literalPatternPrefix(pattern: string): string {
-  const segments = normalizeWorkspacePatternPath(pattern).split("/");
+  const { set } = new Minimatch(
+    normalizeWorkspacePatternPath(pattern),
+    EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS,
+  );
+  const [first = []] = set;
   const literal: string[] = [];
-  for (const segment of segments) {
-    if (/[?*{}[\]]|[!*+?@]\(/u.test(segment)) {
+  for (let index = 0; index < first.length - 1; index++) {
+    const segment = first[index];
+    if (typeof segment !== "string" || set.some((parts) => parts[index] !== segment)) {
       break;
     }
     literal.push(segment);

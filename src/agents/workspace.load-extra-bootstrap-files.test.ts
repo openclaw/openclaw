@@ -346,6 +346,21 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     },
   );
 
+  it("keeps a literal closing bracket in an absolute pattern's walk root", async () => {
+    // An unmatched `]` is literal to the glob matcher, so the containment pre-gate
+    // must check the workspace itself, not stop at its parent directory.
+    const workspaceDir = await fs.realpath(await createWorkspaceDir("bracket]"));
+    await fs.mkdir(path.join(workspaceDir, "pkg"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "pkg", "AGENTS.md"), "pkg agents", "utf-8");
+
+    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+      path.join(workspaceDir, "*", "AGENTS.md"),
+    ]);
+
+    expect(diagnostics).toStrictEqual([]);
+    expect(files.map((file) => file.content)).toStrictEqual(["pkg agents"]);
+  });
+
   it("resolves a missing workspace cwd to no matches without a diagnostic (ENOENT)", async () => {
     // F1 boundary: a missing cwd makes fs.glob throw ENOENT, which legitimately
     // means "no matches" rather than an error to surface — no files, no diagnostic.
