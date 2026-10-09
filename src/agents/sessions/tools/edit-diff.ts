@@ -32,14 +32,6 @@ function foldFuzzyCharacters(text: string): string {
     .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " ");
 }
 
-/**
- * Normalize text for fuzzy matching. Applies progressive transformations:
- * - Strip trailing whitespace from each line
- * - Normalize smart quotes to ASCII equivalents
- * - Normalize Unicode dashes/hyphens to ASCII hyphen
- * - Normalize special Unicode spaces to regular space
- *
- */
 function normalizeForFuzzyMatch(text: string): string {
   return foldFuzzyCharacters(
     text

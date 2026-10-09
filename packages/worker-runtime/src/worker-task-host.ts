@@ -20,6 +20,8 @@ export type WorkerTaskObservation = { started(): void; completed(): void };
 
 /** Host facts and resource owners are supplied once, before a pool admits work. */
 export type WorkerTaskHost = {
+  /** Prepared host policy takes precedence over legacy caller sizing. */
+  maxWorkers?: number;
   /** Internal served workers acknowledge initialization; arbitrary SDK Workers do not. */
   requiresReady?: true;
   createWorker(

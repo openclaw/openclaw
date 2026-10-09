@@ -232,13 +232,9 @@ export async function deliverSubagentAnnouncement(
             enqueueContext,
           );
       if (queued.status === "failed") {
-        return {
-          delivered: false,
-          path: "queued",
-          reason: "completion_handoff_unavailable",
-          error: "generated media session handoff was already dead-lettered",
-          disposition: "permanent_failure",
-        };
+        throw new SessionDeliveryDeadLetteredError(
+          "generated media session handoff was already dead-lettered",
+        );
       }
       if (queued.status === "completed") {
         return { delivered: true, path: "queued", disposition: "delivered" };

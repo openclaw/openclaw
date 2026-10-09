@@ -4,25 +4,27 @@ import { describe, expect, it } from "vitest";
 import {
   appendTranscriptMessage,
   appendTranscriptMessages,
+  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { serializeGatewayFrame } from "../serialized-json.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
+import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 
 function createHistoryRequest(
-  method: "chat.history" | "chat.startup",
+  method: "chat.history" | "chat.startup" | "chat.message.get",
   sessionKey: string,
   context: Awaited<ReturnType<typeof createHistoryReadContext>>,
 ) {
   return async (params: Record<string, unknown>) => {
     let result: unknown;
     await expectDefined(
-      chatHistoryHandlers[method],
+      (method === "chat.message.get" ? chatMessageGetHandlers : chatHistoryHandlers)[method],
       "history handler",
     )({
-      params: { sessionKey, limit: 80, ...params },
+      params: { sessionKey, ...(method === "chat.message.get" ? {} : { limit: 80 }), ...params },
       context,
       req: { type: "req", id: "budgeted-history", method },
       client: null,
@@ -100,9 +102,13 @@ describe("chat history request byte budgets", () => {
           kind: "reset",
         });
         const single = await request({ maxBytes: 64 * 1024, maxChars: 100_000 });
-        expect(single.messages).toHaveLength(1);
-        expect(JSON.stringify(single.messages)).toContain(longText);
-        expect(single.hasMore).toBe(true);
+        expect(single.messages).toContainEqual(
+          expect.objectContaining({
+            __openclaw: expect.objectContaining({ truncated: true, reason: "oversized" }),
+          }),
+        );
+        expect(Buffer.byteLength(JSON.stringify(single.messages))).toBeLessThanOrEqual(64 * 1024);
+        expect(single.hasMore).toBe(false);
       });
     },
   );
@@ -172,7 +178,7 @@ describe("chat history request byte budgets", () => {
     });
   });
 
-  it("keeps all readable siblings of one source row across default back-scroll pages", async () => {
+  it("replaces an indivisible source row with a fetchable reference across anchored and back-scroll pages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const scope = {
         agentId: "main",
@@ -184,38 +190,60 @@ describe("chat history request byte budgets", () => {
         message: { role: "user", content: "Before the sibling group" },
       });
       const texts = Array.from(
-        { length: 5 },
+        { length: 10 },
         (_, index) => `sibling-${index}: ${"x".repeat(60_000)}`,
       );
       await appendTranscriptMessage(scope, {
         eventId: "sibling-group",
         message: {
           role: "assistant",
-          content: texts.map((text, index) => ({
-            type: "text",
-            text,
-            textSignature: JSON.stringify({ v: 1, id: `sibling-${index}`, phase: "commentary" }),
-          })),
+          content: [
+            ...texts.map((text, index) => ({
+              type: "text",
+              text,
+              textSignature: JSON.stringify({ v: 1, id: `sibling-${index}`, phase: "commentary" }),
+            })),
+            {
+              type: "text",
+              text: "Short final answer",
+              textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
+            },
+          ],
         },
       });
       await appendTranscriptMessage(scope, {
         message: { role: "user", content: "After the sibling group" },
       });
-      const request = createHistoryRequest(
-        "chat.history",
-        scope.sessionKey,
-        await createHistoryReadContext(),
-      );
+      const context = await createHistoryReadContext();
+      const request = createHistoryRequest("chat.history", scope.sessionKey, context);
+      const getMessage = createHistoryRequest("chat.message.get", scope.sessionKey, context);
+      const original = await loadTranscriptEvents(scope);
 
       const anchored = await request({ messageId: "sibling-group", maxChars: 100_000 });
-      const anchoredMessages = JSON.stringify(anchored.messages);
-      for (const text of texts) {
-        expect(anchoredMessages).toContain(text);
-      }
-      expect(Buffer.byteLength(anchoredMessages)).toBeGreaterThan(512 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(anchored))).toBeLessThan(1_000_000);
+      expect(anchored.messages).toContainEqual(
+        expect.objectContaining({
+          __openclaw: expect.objectContaining({
+            id: "sibling-group",
+            truncated: true,
+            reason: "oversized",
+          }),
+        }),
+      );
       expect(anchored.nextOffset).toBeUndefined();
 
-      const expected = ["Before the sibling group", ...texts, "After the sibling group"];
+      const recovered = await getMessage({ messageId: "sibling-group", maxChars: 8_000_000 });
+      expect(recovered.ok).toBe(true);
+      for (const text of texts) {
+        expect(JSON.stringify(recovered.message)).toContain(text);
+      }
+      const truncated = await getMessage({ messageId: "sibling-group", maxChars: 1000 });
+      expect(truncated).toMatchObject({
+        ok: true,
+        message: { __openclaw: { truncated: true, reason: "display-cap" } },
+      });
+      expect(JSON.stringify(truncated.message)).toContain("Short final answer");
+      const expected = ["Before the sibling group", "sibling-group", "After the sibling group"];
       const seen = new Set<string>();
       let offset: number | undefined;
       for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
@@ -224,11 +252,7 @@ describe("chat history request byte budgets", () => {
           ...(offset === undefined ? {} : { offset }),
         });
         const serialized = JSON.stringify(page.messages);
-        const siblings = texts.filter((text) => serialized.includes(text));
-        expect([0, texts.length]).toContain(siblings.length);
-        if (siblings.length) {
-          expect(Buffer.byteLength(serialized)).toBeGreaterThan(512 * 1024);
-        }
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(1_000_000);
         for (const text of expected) {
           if (serialized.includes(text)) {
             seen.add(text);
@@ -236,6 +260,7 @@ describe("chat history request byte budgets", () => {
         }
         if (page.hasMore !== true) {
           expect(seen.size).toBe(expected.length);
+          expect(await loadTranscriptEvents(scope)).toEqual(original);
           return;
         }
         const nextOffset = expectDefined(
@@ -246,6 +271,44 @@ describe("chat history request byte budgets", () => {
         offset = nextOffset;
       }
       throw new Error("History did not finish within its three source rows");
+    });
+  });
+
+  it("keeps a 5 MB tool result out of history while its reference returns every byte", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:large-tool",
+        sessionId: "large-tool",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const text = "tool-output:" + "x".repeat(5_000_000);
+      await appendTranscriptMessage(scope, {
+        eventId: "large-result",
+        message: {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "large-call",
+          content: [{ type: "text", text }],
+        },
+      });
+      const original = await loadTranscriptEvents(scope);
+      const context = await createHistoryReadContext();
+      const history = createHistoryRequest("chat.history", scope.sessionKey, context);
+      for (const selector of [{}, { messageId: "large-result" }]) {
+        const page = await history({ ...selector, maxChars: 500_000 });
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(1_000_000);
+        expect(page.messages).toMatchObject([
+          { toolCallId: "large-call", __openclaw: { id: "large-result", truncated: true } },
+        ]);
+      }
+      const recovered = await createHistoryRequest(
+        "chat.message.get",
+        scope.sessionKey,
+        context,
+      )({ messageId: "large-result", maxChars: 8_000_000 });
+      expect(recovered).toMatchObject({ ok: true, message: { content: [{ type: "text", text }] } });
+      expect(await loadTranscriptEvents(scope)).toEqual(original);
     });
   });
 

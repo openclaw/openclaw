@@ -10,27 +10,23 @@ import {
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
-import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import { rowToRef, selectMcpRefs } from "./mcp-records.js";
-import type {
-  ClawPackageRefStatus,
-  PersistedClawPackageRef,
-} from "./package-extension-provenance.js";
 import { updateClawPackageRefStatusInDatabase } from "./package-status.kernel.js";
 import {
   readClawInstallRecordFromDatabase,
   readClawOrphanWorkspaceInDatabase,
 } from "./provenance-read.kernel.js";
+import type { ClawProvenanceWriteOperations } from "./provenance-write.worker-contract.js";
+import { mutateClawRemovalJournalInWorker } from "./removal-journal.worker.js";
 
 export const clawProvenanceOperations = {
+  "clawProvenance.removalJournal": (
+    input: ClawProvenanceWriteOperations["clawProvenance.removalJournal"]["input"],
+    { open, stateOptions },
+  ) => mutateClawRemovalJournalInWorker(open(), input, stateOptions()),
   "clawProvenance.packageStatus": (
-    input: {
-      ref: PersistedClawPackageRef;
-      status: ClawPackageRefStatus;
-      nowMs?: number;
-      lease: OpenClawStateLeaseIdentity;
-    },
+    input: ClawProvenanceWriteOperations["clawProvenance.packageStatus"]["input"],
     { open, stateOptions },
   ) =>
     runOpenClawStateWriteTransaction(
@@ -90,7 +86,7 @@ export const clawProvenanceOperations = {
       { database: open(), ...stateOptions() },
     ),
   "clawProvenance.reconcileMcp": (
-    input: { agentId: string; digests: Record<string, string>; nowMs?: number },
+    input: ClawProvenanceWriteOperations["clawProvenance.reconcileMcp"]["input"],
     { open, stateOptions },
   ) =>
     runOpenClawStateWriteTransaction(

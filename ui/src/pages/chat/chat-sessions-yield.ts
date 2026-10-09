@@ -45,6 +45,12 @@ export type PendingSessionsYield = {
   runId?: string;
 };
 
+type WorkingStatusItem = Extract<ChatItem, { kind: "reading-indicator" }>;
+
+function isWorkingStatus(item: ChatItem): item is WorkingStatusItem {
+  return item.kind === "reading-indicator" && !item.waitingOn;
+}
+
 function scanSessionsYieldItems(
   items: ChatItem[],
   showToolCalls: boolean,
@@ -53,6 +59,12 @@ function scanSessionsYieldItems(
   let pending: PendingSessionsYield | null = null;
   let laterActivity = false;
   const laterRuns = new Set<string>();
+  // The working status and, while the scan is still inside its turn, the runs
+  // and handoffs between it and the message that asked.
+  let working: { slot: ChatItem[]; item: WorkingStatusItem; askedAt?: number } | undefined;
+  let insideWorkingTurn = false;
+  const turnRuns = new Set<string>();
+  const handoffRunIds: string[] = [];
   for (let index = items.length - 1; index >= 0; index--) {
     const item = items[index]!;
     const message = item.kind === "message" ? asRecord(item.message) : null;
@@ -63,20 +75,35 @@ function scanSessionsYieldItems(
     const boundary: ChatItem[] = [];
     if (lastYield) {
       const timestamp = message ? rawMessageTimestamp(message) : null;
-      // Later output, or output from another run, means the parent already resumed.
+      // Later output, or output from another run, means the parent already
+      // resumed. So does a working status whose run the pane cannot name yet:
+      // after a confirmed handoff, only what continues it can be working.
       const resumed =
         laterActivity ||
-        [...laterRuns].some((runId) => lastYield.runId !== undefined && runId !== lastYield.runId);
+        [...laterRuns].some(
+          (runId) => lastYield.runId !== undefined && runId !== lastYield.runId,
+        ) ||
+        (insideWorkingTurn && working !== undefined && !working.item.runId);
+      // Nothing is drawn here. The boundary keeps the handed-off turn's rows in
+      // place, also between the wait ending and the resume, and keeps a resumed
+      // run's rows from pooling or rolling up with the run that handed off.
+      boundary.push({
+        kind: "notice",
+        key: `yield:${item.key}:${lastYield.id}`,
+        handoffBoundary: true,
+        text: "",
+        timestamp: timestamp ?? 0,
+      });
       if (resumed) {
-        // Nothing is drawn here, but the resumed run's rows must not pool, roll
-        // up or frame together with the run that handed off.
-        boundary.push({
-          kind: "notice",
-          key: `yield:${item.key}:${lastYield.id}`,
-          handoffBoundary: true,
-          text: "",
-          timestamp: timestamp ?? 0,
-        });
+        const handoffRunId = lastYield.runId ?? transcriptRunId(message);
+        if (
+          insideWorkingTurn &&
+          handoffRunId &&
+          handoffRunId !== working?.item.runId &&
+          !handoffRunIds.includes(handoffRunId)
+        ) {
+          handoffRunIds.unshift(handoffRunId);
+        }
       } else {
         pending = {
           timestamp: timestamp !== null && timestamp > 0 ? timestamp : null,
@@ -129,7 +156,18 @@ function scanSessionsYieldItems(
           ]
         : [];
     }
-    projected.push([...remaining, ...boundary]);
+    const slot = [...remaining, ...boundary];
+    projected.push(slot);
+    if (isWorkingStatus(item)) {
+      working = { slot, item };
+      insideWorkingTurn = true;
+    } else if (insideWorkingTurn && chatItemStartsUserTurn(item)) {
+      const askedAt = message ? rawMessageTimestamp(message) : null;
+      if (working && askedAt !== null && askedAt > 0) {
+        working.askedAt = askedAt;
+      }
+      insideWorkingTurn = false;
+    }
     const runId = message
       ? transcriptRunId(message)
       : item.kind === "stream" || item.kind === "reading-indicator"
@@ -137,6 +175,9 @@ function scanSessionsYieldItems(
         : undefined;
     if (runId) {
       laterRuns.add(runId);
+      if (insideWorkingTurn) {
+        turnRuns.add(runId);
+      }
     }
     laterActivity ||=
       chatItemStartsUserTurn(item) ||
@@ -145,15 +186,44 @@ function scanSessionsYieldItems(
         normalizeRoleForGrouping(resolveMessageRole(message)) === "assistant" &&
         hasRenderableNormalizedMessage(message));
   }
+  // A run that resumes a handoff continues the same answer: its status counts
+  // from the request and names the runs before it. That needs the loaded turn
+  // to be exactly that chain, from the message that asked. A turn that also
+  // holds another run, or starts outside the window, keeps the run's own status
+  // so its time and tokens never describe different sets of runs.
+  const status = working;
+  if (
+    status?.askedAt !== undefined &&
+    handoffRunIds.length > 0 &&
+    [...turnRuns].every((runId) => runId === status.item.runId || handoffRunIds.includes(runId))
+  ) {
+    status.slot[status.slot.indexOf(status.item)] = {
+      ...status.item,
+      startedAt: Math.min(status.item.startedAt, status.askedAt),
+      request: { askedAt: status.askedAt, runIds: handoffRunIds },
+    };
+  }
   return { items: projected.toReversed().flat(), pending };
 }
 
 /**
  * Keeps handoff calls out of tool details and separates a resumed run from the
  * run that handed off. The working indicator shows the wait itself.
+ *
+ * `complete` is this projection of the same transcript before search hid any
+ * rows. A resumed run's request and handoffs are facts of the whole transcript,
+ * so its working status is taken from there, not from the matching rows.
  */
-export function projectSessionsYieldItems(items: ChatItem[], showToolCalls = true): ChatItem[] {
-  return scanSessionsYieldItems(items, showToolCalls).items;
+export function projectSessionsYieldItems(
+  items: ChatItem[],
+  showToolCalls = true,
+  complete?: readonly ChatItem[],
+): ChatItem[] {
+  const projected = scanSessionsYieldItems(items, showToolCalls).items;
+  const status = complete?.find(isWorkingStatus);
+  return status
+    ? projected.map((item) => (isWorkingStatus(item) && item.key === status.key ? status : item))
+    : projected;
 }
 
 const pendingYieldByHistory = new WeakMap<readonly unknown[], PendingSessionsYield | null>();

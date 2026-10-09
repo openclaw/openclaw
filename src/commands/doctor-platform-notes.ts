@@ -41,11 +41,14 @@ function collectMacLaunchAgentOverrideWarning(): string | null {
   ].join("\n");
 }
 
-export async function noteMacLaunchAgentOverrides() {
-  const warning = collectMacLaunchAgentOverrideWarning();
+function noteMacGatewayWarning(warning: string | null) {
   if (warning) {
     note(warning, "Gateway (macOS)");
   }
+}
+
+export async function noteMacLaunchAgentOverrides() {
+  noteMacGatewayWarning(collectMacLaunchAgentOverrideWarning());
 }
 
 /** Diagnose persistent disablement without taking activation authority from update or Doctor. */
@@ -96,10 +99,7 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string
 }
 
 export async function noteMacStaleOpenClawUpdateLaunchdJobs() {
-  const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning();
-  if (warning) {
-    note(warning, "Gateway (macOS)");
-  }
+  noteMacGatewayWarning(await collectMacStaleOpenClawUpdateLaunchdJobsWarning());
 }
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
@@ -157,10 +157,7 @@ async function collectMacLaunchctlGatewayEnvOverrideWarning(
 }
 
 export async function noteMacLaunchctlGatewayEnvOverrides(cfg: OpenClawConfig) {
-  const warning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg);
-  if (warning) {
-    note(warning, "Gateway (macOS)");
-  }
+  noteMacGatewayWarning(await collectMacLaunchctlGatewayEnvOverrideWarning(cfg));
 }
 
 async function resolveGatewayServiceEnvForPlatformNotes(): Promise<NodeJS.ProcessEnv> {
@@ -209,16 +206,6 @@ export async function collectGatewayPlatformWarnings(
   ].filter((warning): warning is string => Boolean(warning));
 }
 
-function isTmpCompileCachePath(cachePath: string): boolean {
-  const normalized = cachePath.trim().replace(/\/+$/, "");
-  return (
-    normalized === "/tmp" ||
-    normalized.startsWith("/tmp/") ||
-    normalized === "/private/tmp" ||
-    normalized.startsWith("/private/tmp/")
-  );
-}
-
 export function noteStartupOptimizationHints(env: NodeJS.ProcessEnv = process.env) {
   const platform = process.platform;
   if (platform === "win32") {
@@ -243,7 +230,7 @@ export function noteStartupOptimizationHints(env: NodeJS.ProcessEnv = process.en
     lines.push(
       "- NODE_COMPILE_CACHE is not set; repeated CLI runs can be slower on small hosts (Raspberry Pi/VM).",
     );
-  } else if (isTmpCompileCachePath(compileCache)) {
+  } else if (/^\/(?:private\/)?tmp(?:\/|$)/.test(compileCache)) {
     lines.push(
       "- NODE_COMPILE_CACHE points to /tmp; use /var/tmp so cache survives reboots and warms startup reliably.",
     );

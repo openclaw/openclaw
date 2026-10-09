@@ -1,4 +1,4 @@
-/** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
+import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { SessionRestartRecoveryTombstoneError } from "../../config/sessions/lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
@@ -23,7 +23,6 @@ import { sendReplyRestartRecoveryNotice } from "./reply-turn-recovery-notice.js"
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
-/** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
@@ -93,16 +92,21 @@ async function dispatchReplyFromConfigInner(
   messageAuditTerminal: ReturnType<typeof createInboundMessageAuditTerminal>,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
+  await using runtimeResources = new AsyncDisposableStack();
+  let runtimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
   const gathered = await gatherDispatchRequest(
     params,
     messageAuditTerminal,
     allowActiveQueueResolution,
+    (lease) => {
+      runtimeLease = runtimeResources.use(scopePreparedModelRuntimeLease(lease));
+    },
   );
   if (gathered.status === "complete") {
     return gathered.result;
   }
 
-  return await withPluginRuntimeRegistryScope(gathered.state.pluginRegistry, async () => {
+  const execute = async () => {
     const delivery = await prepareDispatchDelivery(gathered.state);
 
     const context = await prepareDispatchOperationContext(delivery.state);
@@ -198,5 +202,8 @@ async function dispatchReplyFromConfigInner(
       }
       throw err;
     }
-  });
+  };
+  const runWithRegistry = () =>
+    withPluginRuntimeRegistryScope(gathered.state.pluginRegistry, execute);
+  return runtimeLease ? await runtimeLease.run(runWithRegistry) : await runWithRegistry();
 }

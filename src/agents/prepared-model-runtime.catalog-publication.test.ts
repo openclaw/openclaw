@@ -237,8 +237,9 @@ describe("catalog publication session rows", () => {
       const completed = await owner.loadFullModelCatalog!({ changedOnly: true });
       expect(completed.entries).toMatchObject([model]);
       expect(owner.readFullModelCatalog?.()).toBe(completed);
-      expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
-      expect(changes).not.toContain(true);
+      // Without provider inventory, a changed-only pass acquires the full catalog.
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledExactlyOnceWith(undefined);
+      changes.length = 0;
       for (let observation = 0; observation < 2; observation += 1) {
         const unchanged = await owner.loadNativeModelCatalog!({
           provider: model.provider,
@@ -267,7 +268,7 @@ describe("catalog publication session rows", () => {
         contextWindow: 32_000,
       });
       expect(selected.routeVariants).toContainEqual(expect.objectContaining(nativeModel));
-      expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
       expect(changes).toContain(true);
     } finally {
       unsubscribe();

@@ -11,8 +11,8 @@ import {
   patchSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionAdmissionTransition } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import {
-  readSessionEntryInWorker,
   readSessionEntryReadOnlyInWorker,
   readSessionEntrySummariesInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
@@ -31,10 +31,10 @@ import { logVerbose } from "../../globals.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { captureSessionPlacementCompactionSuccessorAssertion } from "../session-placement-admission.js";
+import { resolveLegacyCompactionSessionKey } from "./legacy-compaction-session-key.js";
 import { log } from "./logger.js";
 
 /** Resolve a context engine's successor without letting it cross the active store binding. */
@@ -109,28 +109,13 @@ export async function resolveContextEngineCompactionSuccessor(params: {
           storePath: marker.storePath,
         })
       : [];
-    const retainedMarkerEntry = markerEntries.find(
-      ({ sessionKey }) => sessionKey === current.sessionKey,
-    )?.entry;
-    const markerMatches = markerEntries.filter(
-      ({ entry }) => entry.sessionId === marker?.sessionId,
-    );
-    const preferredMarkerSessionKey = marker
-      ? resolvePreferredSessionKeyForSessionIdMatches(
-          markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
-          marker.sessionId,
-        )
-      : undefined;
-    const markerMappedToRetainedKey = markerMatches.some(
-      ({ sessionKey }) => sessionKey === current.sessionKey,
-    );
     const markerSessionKey = marker
-      ? retainedMarkerEntry?.sessionId === marker.sessionId ||
-        (retainedMarkerEntry?.sessionId === current.sessionId &&
-          (markerMatches.length === 0 || markerMappedToRetainedKey))
-        ? current.sessionKey
-        : (preferredMarkerSessionKey ??
-          (markerMatches.length === 0 && !retainedMarkerEntry ? current.sessionKey : undefined))
+      ? resolveLegacyCompactionSessionKey(
+          markerEntries,
+          marker.sessionId,
+          current,
+          current.sessionKey,
+        )
       : undefined;
     const legacyTarget = marker
       ? markerSessionKey
@@ -174,6 +159,7 @@ export type AcceptedCompactionSuccessor = Awaited<
 > & {
   entry: InternalSessionEntry;
   previousSessionId?: string;
+  readonly admissionTransition?: SessionAdmissionTransition;
 };
 
 type CompactionWriterClaim = Readonly<{
@@ -222,7 +208,7 @@ export async function acceptCompactionSuccessor(params: {
   });
   params.assertActive();
   const previousEntry = requireCompactionWriterEntry(
-    await readSessionEntryInWorker(
+    await readSessionEntryReadOnlyInWorker(
       { ...currentTarget, readConsistency: "latest" },
       params.assertActive,
     ),
@@ -254,7 +240,21 @@ export async function acceptCompactionSuccessor(params: {
         onCommitted: (entry) => {
           // Capture the actual commit before identity observers can abort the caller.
           // This sink records facts only; no authority checks or lifecycle hooks.
-          committed = { ...successor, entry, previousSessionId: currentTarget.sessionId };
+          committed = {
+            ...successor,
+            entry,
+            previousSessionId: currentTarget.sessionId,
+            admissionTransition: Object.freeze({
+              previous: Object.freeze({
+                sessionId: expected.sessionId,
+                lifecycleRevision: expected.lifecycleRevision,
+              }),
+              current: Object.freeze({
+                sessionId: entry.sessionId,
+                lifecycleRevision: entry.lifecycleRevision,
+              }),
+            }),
+          };
           params.onCommitted?.(committed);
         },
       },

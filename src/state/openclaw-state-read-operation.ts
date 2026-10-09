@@ -51,6 +51,8 @@ type Selection = {
   context: ReturnType<typeof captureOpenClawStateReadWorkerContext>;
   preserveArtifacts: boolean;
   preferIndependentWarmRead?: true;
+  onChunk?: OpenClawStateReadOptions["onChunk"];
+  onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"];
   controller: AbortController;
   signal: AbortSignal;
   receipt: OpenClawStateReadReceipt;
@@ -449,7 +451,7 @@ export function startOpenClawStateReadOperation(
 
   try {
     source = captureOpenClawStateReadSource();
-    transport = source.createTransport(command);
+    transport = source.createTransport(command, selection.onChunk, selection.onChunkAsync);
     unregister = registerOpenClawStateDatabaseAsyncResource({
       async close(identity) {
         if (

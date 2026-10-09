@@ -325,19 +325,23 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
 }
 
-async function hasUserScopedSystemdGatewayService(env: NodeJS.ProcessEnv): Promise<boolean> {
+async function shouldInspectSystemdLinger(
+  ctx: Pick<HealthCheckContext, "cfg" | "env">,
+): Promise<boolean> {
+  if (
+    process.platform !== "linux" ||
+    resolveDoctorMode(ctx.cfg) !== "local" ||
+    !(await shouldManageGatewayService(ctx.env ?? process.env))
+  ) {
+    return false;
+  }
+  const env = ctx.env ?? process.env;
   const { findInstalledSystemdGatewayScope } = await import("../daemon/systemd.js");
   return (await findInstalledSystemdGatewayScope(env))?.scope === "user";
 }
 
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (
-    ctx.options.nonInteractive === true ||
-    process.platform !== "linux" ||
-    resolveDoctorMode(ctx.cfg) !== "local" ||
-    !(await shouldManageGatewayService(ctx.env ?? process.env)) ||
-    !(await hasUserScopedSystemdGatewayService(ctx.env ?? process.env))
-  ) {
+  if (ctx.options.nonInteractive === true || !(await shouldInspectSystemdLinger(ctx))) {
     return;
   }
   const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
@@ -363,12 +367,7 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
 async function detectSystemdLingerFindings(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
-  if (
-    process.platform !== "linux" ||
-    resolveDoctorMode(ctx.cfg) !== "local" ||
-    !(await shouldManageGatewayService(ctx.env ?? process.env)) ||
-    !(await hasUserScopedSystemdGatewayService(ctx.env ?? process.env))
-  ) {
+  if (!(await shouldInspectSystemdLinger(ctx))) {
     return [];
   }
   const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
@@ -416,17 +415,13 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
   const { note } = await import("../../packages/terminal-core/src/note.js");
-  if (ctx.gatewayMaintenanceActive) {
-    note("Gateway health will be checked after Doctor repair.", "Gateway");
-    ctx.gatewayHealthSkipped = true;
-    ctx.gatewayMemoryProbe = { checked: false, ready: false, skipped: true };
-    return;
-  }
-  if ((await hasActiveGatewayExecCredential(ctx)) && ctx.options.allowExec !== true) {
-    note(
-      "Gateway health probes skipped because gateway credentials use an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
-      "Gateway",
-    );
+  const skipReason = ctx.gatewayMaintenanceActive
+    ? "Gateway health will be checked after Doctor repair."
+    : (await hasActiveGatewayExecCredential(ctx)) && ctx.options.allowExec !== true
+      ? "Gateway health checks skipped because gateway credentials use an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs."
+      : undefined;
+  if (skipReason) {
+    note(skipReason, "Gateway");
     ctx.gatewayHealthSkipped = true;
     ctx.gatewayMemoryProbe = { checked: false, ready: false, skipped: true };
     return;

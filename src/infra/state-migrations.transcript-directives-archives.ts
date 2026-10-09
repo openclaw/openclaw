@@ -5,7 +5,10 @@ import {
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
+import {
+  assertAgentDatabaseMaintenanceAuthority,
+  renewAgentDatabaseMaintenanceAuthorityIfPresent,
+} from "../state/openclaw-agent-db-lease.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { SESSION_TRANSCRIPT_ARCHIVES_TABLE } from "../state/openclaw-agent-session-transcript-archive-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
@@ -22,6 +25,7 @@ import {
 } from "./migration-warning-summary.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "./state-migrations.media-persistence-targets.js";
@@ -149,7 +153,7 @@ function hasArchiveTable(database: DatabaseSync): boolean {
 
 function listArchiveBatch(
   database: DatabaseSync,
-  cursor: ArchiveCursor,
+  cursor: ArchiveCursor | undefined,
   transformContent: ArchiveContentTransform = transformArchiveContent,
   options?: {
     archiveDirectory: string;
@@ -172,7 +176,8 @@ function listArchiveBatch(
     .orderBy("session_id", "asc")
     .orderBy("generation", "asc")
     .limit(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
-  if (cursor.sessionId) {
+  if (cursor) {
+    // Empty key parts still seek the composite key; only the first page has no cursor.
     // Seek the composite key; OR branches rescan the visited prefix on every page.
     query = query.where((eb) =>
       eb(
@@ -219,7 +224,9 @@ function listArchiveBatch(
         fingerprint: verified ? fingerprint : undefined,
       };
     } catch (error) {
-      options?.signal?.throwIfAborted();
+      if (options?.signal?.aborted && error === options.signal.reason) {
+        throw error;
+      }
       const detail = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed migrating transcript archive ${archivePath} (${owner}): ${detail}`, {
         cause: error,
@@ -228,18 +235,21 @@ function listArchiveBatch(
   });
 }
 
-export function transcriptDirectiveArchivesNeedMigration(
+export async function transcriptDirectiveArchivesNeedMigration(
   database: DatabaseSync,
   start: ArchiveCursor,
-): boolean {
+): Promise<boolean> {
+  const signal = resolveSqliteInspectionSignal();
+  signal?.throwIfAborted();
   if (!hasArchiveTable(database)) {
     return false;
   }
   if (readTranscriptArchiveRecoveryJournal(database)) {
     return true;
   }
-  let cursor = start;
+  let cursor: ArchiveCursor | undefined = start.sessionId || start.generation ? start : undefined;
   while (true) {
+    signal?.throwIfAborted();
     const batch = listArchiveBatch(database, cursor);
     const last = batch.at(-1);
     if (!last) {
@@ -249,6 +259,9 @@ export function transcriptDirectiveArchivesNeedMigration(
       return true;
     }
     cursor = { generation: last.generation, sessionId: last.sessionId };
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   }
 }
 
@@ -364,8 +377,11 @@ export async function migrateCanonicalTranscriptArchives(
     transformContent: ArchiveContentTransform;
   },
 ): Promise<ArchiveMigrationResult> {
+  const signal = resolveSqliteInspectionSignal(params.signal);
+  signal?.throwIfAborted();
   let rewrittenArchives = 0;
-  let cursor = params.start;
+  let cursor: ArchiveCursor | undefined =
+    params.start.sessionId || params.start.generation ? params.start : undefined;
   const archivesPresent = hasArchiveTable(params.database);
   const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(params.database);
   const verificationKey = params.verification?.key;
@@ -392,16 +408,16 @@ export async function migrateCanonicalTranscriptArchives(
         database: params.database,
         onArchive: params.onArchive,
         pathname: params.pathname,
-        signal: params.signal,
+        signal,
       });
   const write = <T>(operationLabel: string, operation: () => T): T =>
     runSqliteImmediateTransactionSync(
       params.database,
       () => {
-        params.signal?.throwIfAborted();
+        signal?.throwIfAborted();
         assertAgentDatabaseMaintenanceAuthority();
         const result = operation();
-        params.signal?.throwIfAborted();
+        signal?.throwIfAborted();
         assertAgentDatabaseMaintenanceAuthority();
         return result;
       },
@@ -415,11 +431,14 @@ export async function migrateCanonicalTranscriptArchives(
   let missingCopies = 0;
   const missingCopyExamples: string[] = [];
   while (true) {
-    params.signal?.throwIfAborted();
+    signal?.throwIfAborted();
+    if (!params.verifyOnly) {
+      renewAgentDatabaseMaintenanceAuthorityIfPresent();
+    }
     const batch = archivesPresent
       ? listArchiveBatch(params.database, cursor, params.transformContent, {
           archiveDirectory,
-          signal: params.signal,
+          signal,
           verified,
         })
       : [];
@@ -472,134 +491,157 @@ export async function migrateCanonicalTranscriptArchives(
         ],
       };
     }
-    for (const planned of batch) {
-      params.onArchive?.(transcriptArchivePathFor(archiveDirectory, planned.archiveName));
-    }
-    params.signal?.throwIfAborted();
-    // Persist the original publication timestamps with the rewritten blobs.
-    // Until file repair and cursor commit finish, changed rows remain pending.
-    const needsRewrite = batch.some((planned) => planned.changed);
-    const rowsPresent =
-      params.verifyOnly || !needsRewrite
-        ? batch.map(
-            (planned) => !planned.changed && assertArchiveSourceUnchanged(params.database, planned),
-          )
-        : write("historical-transcript-archive-directives", () => {
-            const pending = new Map(
-              (readTranscriptArchiveRecoveryJournal(params.database)?.rows ?? []).map((row) => [
-                transcriptArchiveRecoveryRowKey(row),
-                row,
-              ]),
-            );
-            const result = batch.map((planned) => rewriteArchiveRow(params.database, planned));
-            let receiptsChanged = false;
-            for (const [index, planned] of batch.entries()) {
-              if (!result[index] || !planned.changed) {
-                continue;
-              }
-              const key = transcriptArchiveRecoveryRowKey(planned);
-              const prior = pending.get(key);
-              const publishedAt =
-                planned.publishedAt ??
-                (prior?.nextSha256 === planned.archiveSha256 ? prior.publishedAt : null);
-              if (publishedAt === null) {
-                continue;
-              }
-              pending.set(key, {
-                generation: planned.generation,
-                nextSha256: planned.nextSha256,
-                publishedAt,
-                sessionId: planned.sessionId,
-              });
-              receiptsChanged = true;
-            }
-            if (receiptsChanged) {
-              writeTranscriptArchiveRecoveryJournal(params.database, params.agentId, [
-                ...pending.values(),
-              ]);
-            }
-            return result;
-          });
-    // Published files never point at rolled-back blobs: rewritten rows are
-    // committed as pending before an atomic replacement can touch a file.
-    const filesCurrent = batch.map((planned, index) => {
-      const archivePath = transcriptArchivePathFor(archiveDirectory, planned.archiveName);
-      let fileCurrent: boolean;
-      try {
-        fileCurrent = rowsPresent[index]
-          ? repairPublishedTranscriptArchive({
-              archiveDirectory,
-              planned,
-              signal: params.signal,
-              verifyOnly: params.verifyOnly,
+    let current = batch[0]!;
+    try {
+      for (const planned of batch) {
+        current = planned;
+        params.onArchive?.(transcriptArchivePathFor(archiveDirectory, planned.archiveName));
+      }
+      signal?.throwIfAborted();
+      // Persist the original publication timestamps with the rewritten blobs.
+      // Until file repair and cursor commit finish, changed rows remain pending.
+      const needsRewrite = batch.some((planned) => planned.changed);
+      const rowsPresent =
+        params.verifyOnly || !needsRewrite
+          ? batch.map((planned) => {
+              current = planned;
+              return !planned.changed && assertArchiveSourceUnchanged(params.database, planned);
             })
-          : false;
-      } catch (error) {
-        params.signal?.throwIfAborted();
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(`Failed publishing transcript archive ${archivePath}: ${detail}`, {
-          cause: error,
-        });
-      }
-      if (rowsPresent[index] && !planned.changed) {
-        assertArchiveSourceUnchanged(params.database, planned);
-      }
-      if (rowsPresent[index] && !fileCurrent) {
-        missingCopies += 1;
-        if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
-          missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
-        }
-      }
-      if (rowsPresent[index] && planned.fingerprint) {
-        observed.add(planned.fingerprint);
-        params.verification?.collect?.add(planned.fingerprint);
-      }
-      return fileCurrent;
-    });
-    // Cursor progress and verified timestamp restoration are atomic with
-    // removal of only the settled receipts. Missing files keep their receipts.
-    if (!params.verifyOnly && (needsRewrite || checkpoint)) {
-      write("historical-transcript-archive-cursor", () => {
-        const journal = readTranscriptArchiveRecoveryJournal(params.database);
-        const pending = new Map(
-          (journal?.rows ?? []).map((row) => [transcriptArchiveRecoveryRowKey(row), row]),
-        );
-        for (const [index, planned] of batch.entries()) {
-          const key = transcriptArchiveRecoveryRowKey(planned);
-          const recorded = pending.get(key);
-          const fileCurrent = filesCurrent[index] === true;
-          finalizeArchiveCursor({
-            database: params.database,
-            fileCurrent,
-            planned,
-            recoveredPublishedAt:
-              recorded?.nextSha256 === planned.nextSha256 ? recorded.publishedAt : undefined,
-            writeCursor: checkpoint,
+          : write("historical-transcript-archive-directives", () => {
+              const pending = new Map(
+                (readTranscriptArchiveRecoveryJournal(params.database)?.rows ?? []).map((row) => [
+                  transcriptArchiveRecoveryRowKey(row),
+                  row,
+                ]),
+              );
+              const result = batch.map((planned) => {
+                current = planned;
+                return rewriteArchiveRow(params.database, planned);
+              });
+              let receiptsChanged = false;
+              for (const [index, planned] of batch.entries()) {
+                if (!result[index] || !planned.changed) {
+                  continue;
+                }
+                const key = transcriptArchiveRecoveryRowKey(planned);
+                const prior = pending.get(key);
+                const publishedAt =
+                  planned.publishedAt ??
+                  (prior?.nextSha256 === planned.archiveSha256 ? prior.publishedAt : null);
+                if (publishedAt === null) {
+                  continue;
+                }
+                pending.set(key, {
+                  generation: planned.generation,
+                  nextSha256: planned.nextSha256,
+                  publishedAt,
+                  sessionId: planned.sessionId,
+                });
+                receiptsChanged = true;
+              }
+              if (receiptsChanged) {
+                writeTranscriptArchiveRecoveryJournal(params.database, params.agentId, [
+                  ...pending.values(),
+                ]);
+              }
+              return result;
+            });
+      // Published files never point at rolled-back blobs: rewritten rows are
+      // committed as pending before an atomic replacement can touch a file.
+      const filesCurrent = batch.map((planned, index) => {
+        current = planned;
+        const archivePath = transcriptArchivePathFor(archiveDirectory, planned.archiveName);
+        let fileCurrent: boolean;
+        try {
+          fileCurrent = rowsPresent[index]
+            ? repairPublishedTranscriptArchive({
+                archiveDirectory,
+                planned,
+                signal,
+                verifyOnly: params.verifyOnly,
+              })
+            : false;
+        } catch (error) {
+          if (signal?.aborted && error === signal.reason) {
+            throw error;
+          }
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(`Failed publishing transcript archive ${archivePath}: ${detail}`, {
+            cause: error,
           });
-          if (!rowsPresent[index] || (fileCurrent && recorded?.nextSha256 === planned.nextSha256)) {
-            pending.delete(key);
+        }
+        if (rowsPresent[index] && !planned.changed) {
+          assertArchiveSourceUnchanged(params.database, planned);
+        }
+        if (rowsPresent[index] && !fileCurrent) {
+          missingCopies += 1;
+          if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
+            missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
           }
         }
-        if (pending.size > 0) {
-          writeTranscriptArchiveRecoveryJournal(params.database, params.agentId, [
-            ...pending.values(),
-          ]);
-        } else if (journal) {
-          clearTranscriptArchiveRecoveryJournal(params.database);
+        if (rowsPresent[index] && planned.fingerprint) {
+          observed.add(planned.fingerprint);
+          params.verification?.collect?.add(planned.fingerprint);
         }
+        return fileCurrent;
       });
+      // Cursor progress and verified timestamp restoration are atomic with
+      // removal of only the settled receipts. Missing files keep their receipts.
+      if (!params.verifyOnly && (needsRewrite || checkpoint)) {
+        write("historical-transcript-archive-cursor", () => {
+          const journal = readTranscriptArchiveRecoveryJournal(params.database);
+          const pending = new Map(
+            (journal?.rows ?? []).map((row) => [transcriptArchiveRecoveryRowKey(row), row]),
+          );
+          for (const [index, planned] of batch.entries()) {
+            current = planned;
+            const key = transcriptArchiveRecoveryRowKey(planned);
+            const recorded = pending.get(key);
+            const fileCurrent = filesCurrent[index] === true;
+            finalizeArchiveCursor({
+              database: params.database,
+              fileCurrent,
+              planned,
+              recoveredPublishedAt:
+                recorded?.nextSha256 === planned.nextSha256 ? recorded.publishedAt : undefined,
+              writeCursor: checkpoint,
+            });
+            if (
+              !rowsPresent[index] ||
+              (fileCurrent && recorded?.nextSha256 === planned.nextSha256)
+            ) {
+              pending.delete(key);
+            }
+          }
+          if (pending.size > 0) {
+            writeTranscriptArchiveRecoveryJournal(params.database, params.agentId, [
+              ...pending.values(),
+            ]);
+          } else if (journal) {
+            clearTranscriptArchiveRecoveryJournal(params.database);
+          }
+        });
+      }
+      rewrittenArchives += batch.filter(
+        (planned, index) => planned.changed && rowsPresent[index],
+      ).length;
+      const last = batch.at(-1)!;
+      cursor = { generation: last.generation, sessionId: last.sessionId };
+    } catch (error) {
+      if (signal?.aborted && error === signal.reason) {
+        throw error;
+      }
+      throw new Error(
+        `Transcript archive migration failed for ${params.pathname} at ${current.sessionId}:${current.generation}: ${String(error)}`,
+        { cause: error },
+      );
     }
-    rewrittenArchives += batch.filter(
-      (planned, index) => planned.changed && rowsPresent[index],
-    ).length;
-    const last = batch.at(-1)!;
-    cursor = { generation: last.generation, sessionId: last.sessionId };
     // Archive planning and file publication are synchronous. Give the lease
     // heartbeat a scheduling point before the next bounded batch begins.
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    params.signal?.throwIfAborted();
+    signal?.throwIfAborted();
   }
 }
 

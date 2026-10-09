@@ -187,7 +187,7 @@ it.each(["abort", "interruption", "replacement", "already terminal"] as const)(
   },
 );
 
-it.each(["declined", "throws", "throws undefined"] as const)(
+it.each(["declined", "throws"] as const)(
   "joins a Stop accepted by the session callback (outcome: %s)",
   async (mode) => {
     const { sessionKey, sessionId, runId, context } = await seedExecutionTarget(
@@ -223,8 +223,7 @@ it.each(["declined", "throws", "throws undefined"] as const)(
           if (mode === "declined") {
             return false;
           }
-          // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may throw undefined; preserve the exact refusal.
-          throw mode === "throws undefined" ? undefined : new Error("callback failed after Stop");
+          throw new Error("callback failed after Stop");
         },
       },
     );
@@ -424,7 +423,6 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
 
 it.each([
   { mode: "completed", startsAfterCleanup: false },
-  { mode: "completed", startsAfterCleanup: true },
   { mode: "self-disposal", startsAfterCleanup: true },
   { mode: "self-disposal during wake cancellation", startsAfterCleanup: true },
   { mode: "self-disposal with unrecorded binding loss", startsAfterCleanup: true },

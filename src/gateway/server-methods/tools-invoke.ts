@@ -11,23 +11,6 @@ import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.j
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-function resolveRpcErrorCode(params: {
-  type: "invalid_request" | "not_found" | "tool_call_blocked" | "tool_error";
-  requiresApproval?: boolean;
-}): string {
-  if (params.requiresApproval) {
-    return "requires_approval";
-  }
-  return (
-    {
-      invalid_request: "validation_error",
-      not_found: "not_found",
-      tool_call_blocked: "forbidden",
-      tool_error: "internal_error",
-    }[params.type] ?? "internal_error"
-  );
-}
-
 export const toolsInvokeHandlers: GatewayRequestHandlers = {
   "tools.invoke": async (options) => {
     const { params, respond, context, client, signal } = options;
@@ -78,7 +61,14 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       toolName: outcome.toolName || requestedToolName,
       ...(outcome.error.requiresApproval ? { requiresApproval: true } : {}),
       error: {
-        code: resolveRpcErrorCode(outcome.error),
+        code: outcome.error.requiresApproval
+          ? "requires_approval"
+          : {
+              invalid_request: "validation_error",
+              not_found: "not_found",
+              tool_call_blocked: "forbidden",
+              tool_error: "internal_error",
+            }[outcome.error.type],
         message: outcome.error.message,
       },
     };

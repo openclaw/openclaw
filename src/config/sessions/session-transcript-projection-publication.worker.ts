@@ -7,6 +7,7 @@ import {
 import type {
   SqliteWorkerBackend,
   SqliteWorkerCommand,
+  SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -46,6 +47,11 @@ export type TranscriptProjectionPublicationOperations = TranscriptProjectionRebu
   preflight: { input: undefined; output: ReturnType<typeof maintainSessionTranscriptIndexStatus> };
   sweep: { input: undefined; output: ReturnType<typeof maintainSessionTranscriptIndexStatus> };
 };
+
+export type ProjectionPublisher = Pick<
+  SqliteWorkerStore<TranscriptProjectionRebuildOperations>,
+  "execute"
+>;
 
 /** The canonical agent executor lends its connection for each bounded publication. */
 export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorkerDatabaseContext) {

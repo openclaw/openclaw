@@ -8,10 +8,12 @@ import {
 } from "../../boards/sqlite-board-store.kernel.js";
 import { readSessionTitleFieldsFromTranscript } from "../../gateway/session-transcript-title-reader.js";
 import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
+import type { MessageToolRunOutcomeWorkerOperations } from "../../infra/message-tool-run-outcome-store.worker.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
+import { takeSqliteWorkerOperationAdmissionAttachment } from "../../infra/sqlite-worker-operation-admission.js";
 import { readSessionProgressCard } from "../../session-cards/progress-card-store.js";
 import type { ProgressCardWorkerOperations } from "../../session-cards/progress-card-store.worker.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
@@ -25,6 +27,7 @@ import {
 } from "../../state/openclaw-state-worker-error.js";
 import { createWorkerOperationRegistry } from "../../state/worker-operation-registry.js";
 import { readSessionTerminalFallbackModel } from "../../status/session-fallback-model.js";
+import { readTrajectoryRuntimeRetentionLease } from "../../trajectory/runtime-retention.contract.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { readLegacyAcpMigrationContextInDatabase } from "./session-accessor.sqlite-acp-provenance.js";
 import {
@@ -37,12 +40,13 @@ import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js
 import type { IncognitoSideDataOperations } from "./session-incognito-side-data-contract.js";
 import { readSessionMembershipRowsInDatabase } from "./session-membership-facts.js";
 import { listSessionReactionsInDatabase } from "./session-reaction-store.read.js";
-import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
+import { readSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
 import { listSessionSuggestionsInDatabase } from "./session-suggestion-store.kernel.js";
 
 type DomainOperations = SessionSharingWorkerOperations &
   HeartbeatOutcomeWorkerOperations &
+  MessageToolRunOutcomeWorkerOperations &
   ProgressCardWorkerOperations &
   BoardWriteOperations;
 type Command = SqliteWorkerCommand<IncognitoSideDataOperations>;
@@ -54,6 +58,12 @@ export function createIncognitoSideDataWorker(
   admit: (stage: "transaction" | "commit", keys: readonly string[]) => void,
 ) {
   let keys: string[] = [];
+  let appendTrajectory:
+    | typeof import("../../trajectory/runtime-store.sqlite.js").appendSqliteTrajectoryRuntimeEventsWithWriter
+    | undefined;
+  let trajectoryRetention:
+    | typeof import("../../trajectory/runtime-retention.sqlite.js")
+    | undefined;
   const domain = createAgentDatabaseDomainOwner({
     databasePath: database.path,
     assertCurrent: () => database.db,
@@ -91,6 +101,13 @@ export function createIncognitoSideDataWorker(
   };
   return {
     async prepare(command: Command) {
+      if (command.type === "session.trajectory.append") {
+        appendTrajectory ??= (await import("../../trajectory/runtime-store.sqlite.js"))
+          .appendSqliteTrajectoryRuntimeEventsWithWriter;
+      }
+      if (command.type.startsWith("session.trajectory.retention.")) {
+        trajectoryRetention ??= await import("../../trajectory/runtime-retention.sqlite.js");
+      }
       const module =
         command.type.startsWith("session.sharing.") || command.type === "session.category.apply"
           ? runtimeProcessEntrypoints.sessionSharingStore
@@ -102,7 +119,9 @@ export function createIncognitoSideDataWorker(
               ? runtimeProcessEntrypoints.boardStore
               : command.type === "session.progressCard.put"
                 ? runtimeProcessEntrypoints.progressCardStore
-                : undefined;
+                : command.type === "session.messageToolOutcome.record"
+                  ? runtimeProcessEntrypoints.messageToolRunOutcomeStore
+                  : undefined;
       if (module) {
         binding = {
           id: randomUUID(),
@@ -137,6 +156,84 @@ export function createIncognitoSideDataWorker(
         }
         return withSqlitePostCommitPublications(database.db, () => {
           switch (command.type) {
+            case "session.trajectory.retention.prepare": {
+              if (!trajectoryRetention) {
+                throw new Error("Trajectory retention was not prepared");
+              }
+              const state = trajectoryRetention.trajectoryRuntimeRetentionState(database);
+              if (!trajectoryRetention.trajectoryRuntimeRetentionDue(state, command.input.now)) {
+                return result(undefined);
+              }
+              const sweepId = trajectoryRetention.beginTrajectoryRuntimeRetention(
+                database.db,
+                readTrajectoryRuntimeRetentionLease(takeSqliteWorkerOperationAdmissionAttachment()),
+              );
+              return result({
+                sweepId,
+                snapshot: trajectoryRetention.prepareTrajectoryRuntimeRetention(
+                  database.db,
+                  command.input,
+                  command.input.now,
+                ),
+              });
+            }
+            case "session.trajectory.retention.delete": {
+              if (!trajectoryRetention) {
+                throw new Error("Trajectory retention was not prepared");
+              }
+              const retention = trajectoryRetention;
+              const batch = retention.selectTrajectoryRuntimeRetentionBatch(
+                database.db,
+                command.input,
+              );
+              // Changing actor commands retain a commit receipt even for a refresh-only result.
+              const deleted = context.writeTransaction(
+                "trajectory.runtime.retention.delete",
+                "Trajectory retention",
+                (current) => {
+                  const value = retention.deleteTrajectoryRuntimeRetention(current, batch);
+                  admit("commit", keys);
+                  return value;
+                },
+              );
+              if (deleted.complete) {
+                retention.trajectoryRuntimeRetentionState(database).sweptAt = command.input.now;
+              }
+              return result(deleted);
+            }
+            case "session.trajectory.append": {
+              if (!appendTrajectory) {
+                throw new Error("Incognito trajectory append was not prepared");
+              }
+              appendTrajectory(command.input, (label, write) =>
+                context.writeTransaction(label, "Trajectory append", (current) => {
+                  const entry = readExactSessionEntryRow(current, command.input.sessionKey)?.entry;
+                  if (
+                    entry?.sessionId !== command.input.sessionId ||
+                    entry.lifecycleRevision !== command.input.lifecycleRevision
+                  ) {
+                    throw new Error("Incognito trajectory session changed before append");
+                  }
+                  const appended = write(current);
+                  admit("commit", keys);
+                  return appended;
+                }),
+              );
+              return result(undefined);
+            }
+            case "session.messageToolOutcome.record": {
+              if (command.input.agent_id !== database.agentId) {
+                throw new Error("Message-tool outcome belongs to another incognito actor");
+              }
+              // Canonical actor admission already installed this table; only record here.
+              const receipt = executeDomain({ type: "record", input: command.input }).value;
+              if (!receipt.ok) {
+                const error = new Error("Message-tool outcome transaction failed");
+                retainOpenClawStateWorkerErrorPayload(error, receipt.error);
+                throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+              }
+              return result(receipt.value);
+            }
             case "session.progressCard.put": {
               const receipt = executeDomain({ type: "put", input: command.input }).value;
               if (!receipt.ok) {
@@ -262,7 +359,7 @@ export function createIncognitoSideDataWorker(
             case "session.category.keys":
               return result(readSessionGroupCategoryKeys(database, command.input.name));
             case "session.members.read":
-              return result(listSessionMembersInDatabase(database, command.input.sessionKey));
+              return result(readSessionMembersInDatabase(database, command.input.sessionKey));
             case "session.suggestions.read":
               return result(
                 listSessionSuggestionsInDatabase(

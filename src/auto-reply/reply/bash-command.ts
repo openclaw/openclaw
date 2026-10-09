@@ -1,4 +1,3 @@
-/** Handles /bash and ! shell command chat shortcuts. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -69,12 +68,9 @@ function formatOutputBlock(text: string) {
 }
 
 function parseBashRequest(trimmed: string): BashRequest | null {
+  const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);
   let restSource;
-  if (trimmed.toLowerCase().startsWith("/bash")) {
-    const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);
-    if (!match) {
-      return null;
-    }
+  if (match) {
     restSource = match[1] ?? "";
   } else if (trimmed.startsWith("!")) {
     restSource = trimmed.slice(1);
@@ -113,34 +109,6 @@ function getScopedSession(sessionId: string) {
   return {};
 }
 
-function ensureActiveJobState() {
-  if (!activeJob) {
-    return null;
-  }
-  if (activeJob.state === "starting") {
-    return activeJob;
-  }
-  const { running } = getScopedSession(activeJob.sessionId);
-  if (running) {
-    return activeJob;
-  }
-  activeJob = null;
-  return null;
-}
-
-function buildUsageReply(): ReplyPayload {
-  return {
-    text: [
-      "⚙️ Usage:",
-      "- ! <command>",
-      "- !poll | ! poll",
-      "- !stop | ! stop",
-      "- /bash ... (alias; same subcommands as !)",
-    ].join("\n"),
-  };
-}
-
-/** Parses, authorizes, starts, polls, or stops chat-driven bash commands. */
 export async function handleBashChatCommand(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -194,10 +162,21 @@ export async function handleBashChatCommand(params: {
     return { text: "⚠️ Unrecognized bash request." };
   }
 
-  const liveJob = ensureActiveJobState();
+  if (activeJob?.state === "running" && !getScopedSession(activeJob.sessionId).running) {
+    activeJob = null;
+  }
+  const liveJob = activeJob;
 
   if (request.action === "help") {
-    return buildUsageReply();
+    return {
+      text: [
+        "⚙️ Usage:",
+        "- ! <command>",
+        "- !poll | ! poll",
+        "- !stop | ! stop",
+        "- /bash ... (alias; same subcommands as !)",
+      ].join("\n"),
+    };
   }
 
   if (request.action === "poll" || request.action === "stop") {

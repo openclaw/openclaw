@@ -1,5 +1,3 @@
-// Gateway HTTP server routes control UI, OpenAI-compatible APIs, plugin HTTP
-// surfaces, hooks, readiness, auth, and WebSocket upgrades.
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -31,13 +29,13 @@ import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./cont
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import { CONTROL_UI_IMAGE_HTTP_ROUTES } from "./control-ui-image-http-routes.js";
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
-import { createControlUiPublicSessionRoute } from "./control-ui-public-session.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
   classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
+import { createControlUiSessionRoutes } from "./control-ui-session-routes.js";
 import { isControlUiSharePath } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
@@ -70,6 +68,7 @@ import {
 } from "./provider-browser-auth.js";
 import type { ControlUiRootState } from "./server-control-ui-root.js";
 import {
+  getNativeHookRelayModule,
   getControlUiModule,
   getControlUiPluginAssetsModule,
   getCanvasServeModule,
@@ -121,7 +120,6 @@ type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Pr
 
 type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 
-/** Creates the gateway HTTP/HTTPS server and ordered request-stage router. */
 export function createGatewayHttpServer(opts: {
   /** Pre-bound listener supplied by the internal test transport. */
   testListener?: HttpServer;
@@ -178,7 +176,7 @@ export function createGatewayHttpServer(opts: {
   const controlUiRouteBasePath =
     controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
   const pluginAssetRoot = controlUiPluginAssetRoot(controlUiRouteBasePath);
-  const publicSessionRoute = createControlUiPublicSessionRoute();
+  const publicSessionRoute = createControlUiSessionRoutes(opts);
   const handleServerRequest = (
     req: IncomingMessage,
     res: ServerResponse,
@@ -203,6 +201,7 @@ export function createGatewayHttpServer(opts: {
     opts.testListener ??
     (opts.tlsOptions ? createHttpsServer(opts.tlsOptions) : createHttpServer());
   httpServer.on("request", handleServerRequest);
+  httpServer.once("close", () => publicSessionRoute.dispose());
   // Node otherwise sends interim/expectation responses before application admission.
   httpServer.on("checkContinue", (req, res) => handleServerRequest(req, res, "continue"));
   httpServer.on("checkExpectation", (req, res) => handleServerRequest(req, res, "reject"));
@@ -419,6 +418,9 @@ export function createGatewayHttpServer(opts: {
         clientIp: ingressAttribution.rateLimit.subject.key,
         rateLimiter: joinRateLimiter,
       };
+      addAdmittedStage(scopedRequestPath.startsWith("/__openclaw__/native-hook"), async () =>
+        (await getNativeHookRelayModule()).handleNativeHookRelayHttpRequest(transferRequest),
+      );
       addAdmittedStage(
         classifyWorkerBootstrapArtifactTransferPath(scopedRequestPath) !== "outside",
         () =>
@@ -555,16 +557,13 @@ export function createGatewayHttpServer(opts: {
         pathname: scopedRequestPath,
       });
       const focusDocument = isControlUiFocusPath(scopedRequestPath, controlUiBasePath);
-      const publicSessionPath = publicSessionRoute.matches(
-        scopedRequestPath,
-        controlUiRouteBasePath,
-      );
+      const publicSessionPath = publicSessionRoute.matches(scopedRequestPath, req.url);
       addRequestStage(!controlUiEnabled && publicSessionPath, () => publicSessionRoute.reject(res));
       addAdmittedStage(controlUiEnabled && publicSessionPath, () =>
         publicSessionRoute.serve({
+          ...routeAuth,
           req,
           res,
-          basePath: controlUiRouteBasePath,
           config: configSnapshot,
           ingress: ingressAttribution,
         }),

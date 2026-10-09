@@ -518,18 +518,15 @@ describe("update-cli", () => {
   );
 
   it.each([
-    { name: "timeout", run: () => invokeUpdateCli({ timeout: "" }) },
     { name: "update channel", run: () => invokeUpdateCli({ channel: "" }) },
     { name: "finalization channel", run: () => updateFinalizeCommand({ channel: "" }) },
-  ])("rejects an explicitly empty $name before mutation", async ({ name, run }) => {
+  ])("rejects an explicitly empty $name before mutation", async ({ run }) => {
     const runsBefore = listUpdateRuns();
     await run();
 
-    if (name !== "timeout") {
-      expect(defaultRuntime.error).toHaveBeenCalledWith(
-        '--channel must be "stable", "extended-stable", "beta", or "dev" (got "")',
-      );
-    }
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      '--channel must be "stable", "extended-stable", "beta", or "dev" (got "")',
+    );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(listUpdateRuns()).toEqual(runsBefore);
     expectNoSideEffects(

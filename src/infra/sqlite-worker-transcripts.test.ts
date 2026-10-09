@@ -18,7 +18,11 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { persistTranscriptSummary } from "../transcripts/capture-summary.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
-import { getTranscriptLibrary, listTranscriptLibrary } from "../transcripts/library.js";
+import {
+  exportTranscriptLibrary,
+  getTranscriptLibrary,
+  listTranscriptLibrary,
+} from "../transcripts/library.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptUtterance,
@@ -122,8 +126,7 @@ async function withoutParentTranscriptSql(operation: () => Promise<void>) {
       }
     }
     const probes = [
-      "SELECT sqlite_version() AS version",
-      "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
+      "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
     ];
     for (const entry of observed) {
       expect(entry.databasePath, "caller-thread file-backed SQLite activity").toBeNull();
@@ -538,6 +541,50 @@ it("returns complete stored reads and typed errors after existing-only status an
     await expect(result).rejects.toMatchObject({
       type: "transcript_result_too_large",
       maxBytes: TRANSCRIPTS_RESULT_MAX_BYTES,
+    });
+  });
+});
+
+it("exports cold and warm library rows and notes without caller-thread SQLite", async () => {
+  const { store } = fixture();
+  const session: TranscriptSessionDescriptor = {
+    sessionId: "export-worker",
+    title: "Export meeting",
+    startedAt: "2026-09-18T12:00:00.000Z",
+    source: { providerId: "manual-transcript" },
+  };
+  await store.writeSession(session);
+  const utterance = {
+    text: "Saved speech",
+    speaker: { label: "Sam" },
+    metadata: { private: true },
+  };
+  await store.appendUtteranceForSession(session, utterance);
+  await store.writeSummary(summarizeTranscripts({ session, utterances: [utterance] }), session);
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  const selector = transcriptSessionSelector(session);
+  await withoutParentSql(async () => {
+    for (const format of ["jsonl", "markdown", "jsonl"] as const) {
+      const exported = await exportTranscriptLibrary(store, { selector, format });
+      const text = Buffer.from(exported.data, "base64").toString("utf8");
+      expect(text).toContain("Saved speech");
+      expect(text).not.toContain("private");
+      if (format === "markdown") {
+        expect(text).toContain("Export meeting");
+        expect(text).toContain("Sam");
+      } else {
+        expect(JSON.parse(text)).toEqual({
+          sequence: 0,
+          text: "Saved speech",
+          speakerLabel: "Sam",
+        });
+      }
+    }
+    await expect(
+      exportTranscriptLibrary(store, { selector: "missing", format: "jsonl" }),
+    ).rejects.toMatchObject({
+      type: "transcript_session_not_found",
     });
   });
 });

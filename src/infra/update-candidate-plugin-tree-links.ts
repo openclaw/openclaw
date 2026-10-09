@@ -1,9 +1,9 @@
-import type { BigIntStats } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { sameFileMutationFingerprint } from "./file-descriptor.js";
+import { hashFileMutationSnapshotSync, sameFileMutationMetadata } from "./file-descriptor.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import {
   captureUpdateCandidatePluginCodeLink,
@@ -17,6 +17,13 @@ import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
 type MaterializablePlan = Omit<UpdateCandidatePluginTreePlan, "bytes" | "entries">;
+
+export function ignoreUnresolvedPluginLink(error: unknown): undefined {
+  if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
+    return undefined;
+  }
+  throw error;
+}
 
 export const isUpdateCandidateHostLauncher = (file: string) =>
   path.basename(path.dirname(file)) === ".bin" &&
@@ -37,17 +44,26 @@ export function assertUpdateCandidatePluginEntryStat(
   if (!sameKind || !sameIdentity || !sameMode) {
     throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
   }
-  const sameFile =
-    entry.kind !== "file" ||
-    sameFileMutationFingerprint(current, {
+  if (entry.kind === "file") {
+    const expected = {
       dev: BigInt(entry.dev),
       ino: BigInt(entry.ino),
       size: BigInt(entry.size),
       birthtimeNs: BigInt(entry.birthtimeNs),
       mtimeNs: BigInt(entry.mtimeNs),
       ctimeNs: BigInt(entry.ctimeNs),
-    });
-  if (!sameFile || (entry.kind === "symlink" && current.size !== BigInt(entry.size))) {
+      mode: BigInt(entry.mode | constants.S_IFREG),
+      uid: BigInt(entry.uid),
+      gid: BigInt(entry.gid),
+    };
+    if (
+      !sameFileMutationMetadata(expected, current) ||
+      (current.ctimeNs !== expected.ctimeNs &&
+        hashFileMutationSnapshotSync(entry.path, expected) !== entry.sha256)
+    ) {
+      throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
+    }
+  } else if (entry.kind === "symlink" && current.size !== BigInt(entry.size)) {
     throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
   }
 }
@@ -56,6 +72,7 @@ export function assertUpdateCandidatePluginEntryStat(
 export function resolveUpdateCandidatePluginTreeTargets(
   plan: MaterializablePlan,
   params: { targetStateDir: string; candidateRoot: string },
+  onProgress?: () => void,
 ) {
   const privateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   const candidateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.candidateRoot));
@@ -95,18 +112,17 @@ export function resolveUpdateCandidatePluginTreeTargets(
           if ((await fs.realpath(source)) !== real) {
             throw new Error(`Plugin module owner changed after snapshot inventory: ${source}`);
           }
+          onProgress?.();
         }),
         ...plan.edges.map((edge) => async () => {
           const target = path.resolve(path.dirname(edge.source), await fs.readlink(edge.source));
-          const real = await fs.realpath(edge.source).catch((error: unknown) => {
-            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-              return target;
-            }
-            throw error;
-          });
+          const real = await fs
+            .realpath(edge.source)
+            .catch((error: unknown) => ignoreUnresolvedPluginLink(error) ?? target);
           if (target !== edge.target || real !== edge.real) {
             throw new Error(`Plugin link changed after snapshot inventory: ${edge.source}`);
           }
+          onProgress?.();
         }),
       ],
     });
@@ -216,6 +232,7 @@ export async function verifyUpdateCandidatePluginTree(
     candidateRoot: string;
     hostLinks: Set<string>;
     onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
+    onProgress?: () => void;
   },
 ): Promise<void> {
   const readEntry = async (file: string) => {
@@ -238,6 +255,7 @@ export async function verifyUpdateCandidatePluginTree(
     } else if (stat.isSymbolicLink()) {
       assertUpdateCandidatePluginLinkTarget(file, path.resolve(path.dirname(file), link!), params);
     }
+    params.onProgress?.();
     // Inspect the entry before traversal, including standalone module aliases;
     // following a copied root link can otherwise accept an entirely live tree.
     if (link !== undefined) {

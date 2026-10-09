@@ -1,4 +1,3 @@
-/** Linux systemd unit paths and environment-file parsing. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -80,8 +79,6 @@ export function resolveInstalledSystemdServiceNameCandidates(env: GatewayService
 export function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
 }
-
-// Unit file parsing/rendering: see systemd-unit.ts
 
 const UNKNOWN_SYSTEMD_OVERRIDES = {
   launcher: "command",

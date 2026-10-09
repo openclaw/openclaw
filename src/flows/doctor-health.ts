@@ -58,6 +58,7 @@ export async function runDoctorHealthFlow(
     writeAuthority?.assertCurrent,
     writeAuthority?.commandAuthority,
   );
+  let requestedExit: (() => void) | undefined;
   const run = () =>
     withDeferredDebugProxyCapture(async (resumeCapture) => {
       let preparedPreflight = databasePreflight;
@@ -89,6 +90,9 @@ export async function runDoctorHealthFlow(
       return withPluginLoadDiagnostics((diagnostics) => {
         const runDoctor = (capture?: DoctorConfigCapture) =>
           runDoctorHealthFlowWithResult(
+            (selectedRuntime, code) => {
+              requestedExit = () => selectedRuntime.exit(code);
+            },
             runtime,
             options,
             preparedPreflight,
@@ -103,10 +107,16 @@ export async function runDoctorHealthFlow(
           : runDoctor();
       });
     });
-  return await (custody ? withCommandProcessScope(run, undefined, custody) : run());
+  const { withPluginGenerationSourceCustody } =
+    await import("../plugins/plugin-generation-source-lookup.js");
+  await withPluginGenerationSourceCustody(() =>
+    custody ? withCommandProcessScope(run, undefined, custody) : run(),
+  );
+  requestedExit?.();
 }
 
 async function runDoctorHealthFlowWithResult(
+  requestExit: (runtime: RuntimeEnv, code: number) => void,
   runtime: RuntimeEnv | undefined,
   options: DoctorOptions,
   databasePreflight: DoctorDatabasePreflight | undefined,
@@ -302,11 +312,8 @@ async function runDoctorHealthFlowWithResult(
           pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
           verifiedSnapshots,
         });
-        for (const change of backups.changes) {
-          effectiveRuntime.log(change);
-        }
-        for (const warning of backups.warnings) {
-          effectiveRuntime.log(warning);
+        for (const message of [...backups.changes, ...backups.warnings]) {
+          effectiveRuntime.log(message);
         }
       }
 
@@ -317,10 +324,7 @@ async function runDoctorHealthFlowWithResult(
         shouldRepair: prompter.shouldRepair,
         env: process.env,
       });
-      for (const message of deletionJournal.changes) {
-        effectiveRuntime.log(message);
-      }
-      for (const message of deletionJournal.warnings) {
+      for (const message of [...deletionJournal.changes, ...deletionJournal.warnings]) {
         effectiveRuntime.log(message);
       }
       if (deletionJournal.changes.length > 0) {
@@ -690,7 +694,7 @@ async function runDoctorHealthFlowWithResult(
     // The default runtime exits synchronously; finish native recovery and release
     // maintenance leases before handing it an exit code.
     if (exitCode !== undefined) {
-      effectiveRuntime.exit(exitCode);
+      requestExit(effectiveRuntime, exitCode);
     }
   }
 

@@ -1,10 +1,17 @@
-// OpenClaw assistant planning converts fuzzy user text into one safe command.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { extractAgentRunTerminalError, extractAgentRunText } from "../agents/agent-run-result.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "../agents/prepared-model-runtime.errors.js";
+import {
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
+  isAgentRunSupersededAbortReason,
+} from "../agents/run-termination.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -19,10 +26,10 @@ import {
 import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import type { SystemAgentGreetingFacts, SystemAgentGreetingPlan } from "./greeting.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
-  resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
@@ -111,7 +118,11 @@ async function runConfiguredSystemAgentText(params: {
   timeoutMs?: number;
   responseFormat?: Record<string, unknown>;
 }): Promise<{ text: string; modelLabel: string } | null> {
-  const route = await requireVerifiedPlannerRoute(params.verifiedInference, params.deps);
+  const route = await requireSystemAgentInferenceRoute(
+    params.verifiedInference,
+    params.deps,
+    "planner",
+  );
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
     typeof resolveSystemAgentExpectedAgentHarnessRuntimeArtifact
   >;
@@ -187,12 +198,29 @@ async function runConfiguredSystemAgentText(params: {
           });
     const terminalError = extractAgentRunTerminalError(result);
     if (terminalError) {
-      throw new SystemAgentInferenceUnavailableError("planner", [new Error(terminalError)]);
+      throw new SystemAgentInferenceUnavailableError(
+        "planner",
+        [new Error(terminalError)],
+        result.meta?.stopReason === "timeout" || result.meta?.timeoutPhase
+          ? "timeout"
+          : result.meta?.stopReason === AGENT_RUN_SUPERSEDED_STOP_REASON
+            ? "superseded"
+            : "retry",
+      );
     }
     text = extractAgentRunText(result);
   } catch (error) {
     if (error instanceof SystemAgentInferenceUnavailableError) {
       throw error;
+    }
+    if (
+      isAgentRunSupersededAbortReason(error) ||
+      error instanceof PreparedModelRuntimePublicationSupersededError
+    ) {
+      throw new SystemAgentInferenceUnavailableError("planner", [error], "superseded");
+    }
+    if (error instanceof PreparedModelRuntimeOwnerNotPublishedError) {
+      throw new SystemAgentInferenceUnavailableError("planner", [error], "runtime-unavailable");
     }
     text = undefined;
   } finally {
@@ -204,24 +232,6 @@ async function runConfiguredSystemAgentText(params: {
   }
   // Cleanup is the final suspension before callers can display model text, so
   // authority must still match after cleanup completes.
-  await requireVerifiedPlannerRoute(params.verifiedInference, params.deps);
+  await requireSystemAgentInferenceRoute(params.verifiedInference, params.deps, "planner");
   return { text, modelLabel: route.modelLabel };
-}
-
-async function requireVerifiedPlannerRoute(
-  binding: SystemAgentVerifiedInferenceBinding | undefined,
-  deps: SystemAgentVerifiedInferenceDeps | undefined,
-) {
-  if (!binding) {
-    throw new SystemAgentInferenceUnavailableError("planner");
-  }
-  try {
-    const route = await resolveSystemAgentVerifiedInferenceRoute(binding, deps);
-    if (route) {
-      return route;
-    }
-  } catch (error) {
-    throw new SystemAgentInferenceUnavailableError("planner", [error]);
-  }
-  throw new SystemAgentInferenceUnavailableError("planner");
 }

@@ -490,7 +490,7 @@ export function restoreChatComposerState(
     (!options.preserveCurrent ||
       (!state.chatMessage && !state.chatGoalDraftMode && !state.chatReplyTarget))
   ) {
-    state.chatMessage = normalizeChatComposerDraft(snapshot.draft);
+    state.chatMessage = snapshot.draft;
     state.chatMentions = snapshot.mentions;
     state.chatGoalDraftMode = snapshot.goalMode ?? null;
     state.chatReplyTarget = snapshot.replyTarget ?? null;

@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSessionPatch
 import ai.openclaw.app.chat.SESSION_LIST_FETCH_LIMIT
 import ai.openclaw.app.chat.selectChatAgentSessionKey
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -1114,10 +1115,12 @@ class NodeRuntimeAgentSelectionTest {
         val archive =
           async {
             chat.patchSession(
-              key = chosenKey,
-              ownerAgentId = "scout",
-              expectedSessionId = archiveSessionId,
-              archived = true,
+              ChatSessionPatch(
+                key = chosenKey,
+                ownerAgentId = "scout",
+                expectedSessionId = archiveSessionId,
+                archived = true,
+              ),
             )
           }
         withTimeout(2_000) { archiveRequested.await() }

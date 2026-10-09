@@ -46,6 +46,45 @@ function createHostedComputerTool(options: Parameters<typeof createVisionCompute
 }
 
 describe("computer Gateway and node targets", () => {
+  it("advertises a cold Gateway without probing and binds input to the probed generation", async () => {
+    const computer = await vi.importActual<typeof import("./computer-tool-gateway.js")>(
+      "./computer-tool-gateway.js",
+    );
+    gatewayComputerStatusMock.mockImplementation(computer.loadGatewayComputerStatus);
+    const declared = v2Descriptor(["screenshot", "list_windows"]);
+    const ready = {
+      ...declared,
+      provider: { ...declared.provider, generation: "live-generation" },
+    };
+    const invokeMock = callGatewayToolMock.getMockImplementation()!;
+    callGatewayToolMock.mockImplementation(async (method, options, request, ...rest) => {
+      if (method === "computer.status") {
+        return {
+          configured: true,
+          available: request.probe,
+          computerUse: request.probe ? ready : declared,
+        };
+      }
+      return invokeMock(method, options, request, ...rest);
+    });
+    listNodesMock.mockResolvedValue([]);
+    const availability = await loadPairedComputerUseAvailabilityForSurface({
+      computerAllowed: true,
+    });
+    const tool = createHostedComputerTool({ pairedNodeComputerUse: availability?.prepared });
+    expect(readActionEnum(tool)).toContain("list_windows");
+    expect(callGatewayToolMock.mock.calls.map(([method, , request]) => [method, request])).toEqual([
+      ["computer.status", { probe: false }],
+    ]);
+    await tool.execute("observe", { action: "screenshot" });
+    expect(callGatewayToolMock.mock.calls[1]?.slice(0, 3)).toEqual([
+      "computer.status",
+      {},
+      { probe: true },
+    ]);
+    expect(callGatewayToolMock.mock.calls[2]?.[2].generation).toBe("live-generation");
+  });
+
   it.each([{ gatewayUrl: "wss://released-gateway.example" }, { gatewayToken: "fixture-token" }])(
     "preserves v2026.9.4 implicit remote-node selection with %j",
     async (gatewayOptions) => {

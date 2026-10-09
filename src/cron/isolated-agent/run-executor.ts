@@ -25,7 +25,6 @@ import {
   prepareModelRunCapabilities,
 } from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
-import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
 import {
   resolveScheduledToolCallerContext,
   resolveScheduledToolPolicyContext,
@@ -44,7 +43,6 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { assertCronExecutionRootRuntime } from "../execution-root-runtime.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
@@ -273,7 +271,7 @@ function createCronPromptExecutor(
         sessionKey: params.runSessionKey,
       },
       harness: {
-        workspaceDir: params.executionRoot ?? params.workspaceDir,
+        workspaceDir: params.workspaceDir,
         sessionKey: params.runSessionKey,
         preparation: { kind: "direct" },
         resolveRuntimeOverride: (provider) =>
@@ -372,12 +370,6 @@ function createCronPromptExecutor(
           catalog: thinkingCatalog,
           agentRuntime: candidateRuntime,
         });
-        const rootedExecution = params.executionRoot ? { root: params.executionRoot } : undefined;
-        assertCronExecutionRootRuntime(
-          params.executionRoot,
-          candidateRuntime,
-          cliExecution && Boolean(rootedExecution),
-        );
         assertCronRuntimeAuthorityCandidate({
           authority: params.job.runtimeAuthority,
           candidateRuntime,
@@ -415,8 +407,8 @@ function createCronPromptExecutor(
         const buildCommonRunParams = () =>
           ({
             preparedRunAdmission: cronAdmission.preparedRunAdmission,
-            ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
-            cwd: params.executionRoot ?? params.cwd,
+            workspaceDir: params.workspaceDir,
+            cwd: params.cwd,
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
             sessionTarget,
@@ -516,7 +508,6 @@ function createCronPromptExecutor(
                   sessionFile,
                   storePath: params.cronSession.storePath,
                   persistAssistantTranscript: true,
-                  rootedExecution,
                   modelProvider: providerOverride,
                   requesterModel: { provider: providerOverride, model: modelOverride },
                   modelHasVision: modelSupportsInput(
@@ -698,6 +689,7 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     normalizeVerboseLevel(params.agentVerboseDefault) ??
     "off";
   registerAgentRunContext(params.runId, {
+    sessionEventDelivery: params.sourceDelivery.normalFinal === "private" ? false : undefined,
     sessionId: params.cronSession.sessionEntry.sessionId,
     agentId: params.agentId,
     verboseLevel: resolvedVerboseLevel,
@@ -779,7 +771,6 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
         })
       ).preferFinalAssistantVisibleText,
     });
-    const interimText = interimOutputText?.trim() ?? "";
     const shouldRetryInterimAck =
       !runResult.meta?.error &&
       !interimHasFatalErrorPayload &&
@@ -787,7 +778,7 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
       !hasNewGeneratedMediaTaskForSessionKey(params.runSessionKey, promptMediaTaskIds) &&
       !interimPayloadHasStructuredContent &&
       !interimPayloads.some((payload) => payload?.isError === true) &&
-      isLikelyInterimCronMessage(interimText);
+      isLikelyInterimCronMessage(interimOutputText ?? "");
 
     let hasFreshDescendants = false;
     let hasActiveDescendants = false;

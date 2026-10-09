@@ -25,34 +25,19 @@ import {
   normalizeAzureSpeechBaseUrl,
 } from "./tts.js";
 
-function readAzureSpeechEnvApiKey(): string | undefined {
-  return (
-    trimToUndefined(process.env.AZURE_SPEECH_KEY) ??
-    trimToUndefined(process.env.AZURE_SPEECH_API_KEY) ??
-    trimToUndefined(process.env.SPEECH_KEY)
-  );
-}
-
 function readAzureSpeechEnvRegion(): string | undefined {
   return (
     trimToUndefined(process.env.AZURE_SPEECH_REGION) ?? trimToUndefined(process.env.SPEECH_REGION)
   );
 }
 
-function resolveAzureSpeechConfigRecord(
-  rawConfig: Record<string, unknown>,
-): Record<string, unknown> | undefined {
+function normalizeAzureSpeechProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  return (
+  const raw =
     asOptionalRecord(providers?.["azure-speech"]) ??
     asOptionalRecord(providers?.azure) ??
     asOptionalRecord(rawConfig["azure-speech"]) ??
-    asOptionalRecord(rawConfig.azure)
-  );
-}
-
-function normalizeAzureSpeechProviderConfig(rawConfig: Record<string, unknown>) {
-  const raw = resolveAzureSpeechConfigRecord(rawConfig);
+    asOptionalRecord(rawConfig.azure);
   const region = trimToUndefined(raw?.region) ?? readAzureSpeechEnvRegion();
   const endpoint =
     trimToUndefined(raw?.endpoint) ?? trimToUndefined(process.env.AZURE_SPEECH_ENDPOINT);
@@ -132,7 +117,12 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
 }
 
 function resolveApiKey(...candidates: Array<string | undefined>): string | undefined {
-  return resolveSpeechProviderApiKey(...candidates, readAzureSpeechEnvApiKey());
+  return resolveSpeechProviderApiKey(
+    ...candidates,
+    trimToUndefined(process.env.AZURE_SPEECH_KEY) ??
+      trimToUndefined(process.env.AZURE_SPEECH_API_KEY) ??
+      trimToUndefined(process.env.SPEECH_KEY),
+  );
 }
 
 async function resolveAzureSpeechTtsRequest(

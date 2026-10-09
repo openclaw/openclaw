@@ -43,7 +43,7 @@ export function resolveZaloToken(
   const baseConfig = config;
   const accountConfig = resolveAccountEntry(
     baseConfig?.accounts as Record<string, ZaloConfig> | undefined,
-    normalizeAccountId(resolvedAccountId),
+    resolvedAccountId,
   );
   const accountHasBotToken = Boolean(accountConfig && Object.hasOwn(accountConfig, "botToken"));
 

@@ -1,8 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   registerSessionPendingInputOwner,
@@ -11,19 +10,23 @@ import {
 } from "../config/sessions/session-accessor.sqlite-pending-inputs.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { createIncognitoSessionHistoryReader } from "../gateway/session-history-snapshot.js";
-import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import {
+  openIncognitoTestActor,
+  useIncognitoActorProbe,
+  useIncognitoNoHostSql,
+} from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
+const probe = useIncognitoActorProbe();
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
 let env: NodeJS.ProcessEnv;
-let sql: ReturnType<typeof observeHostDataSql>;
 
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-pending-history-") };
@@ -43,29 +46,15 @@ beforeAll(async () => {
       ),
     );
   try {
-    const opened = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "main",
-      env,
-      authority,
-    });
-    assert(opened);
-    actor = opened;
+    actor = await openIncognitoTestActor(env, authority);
   } finally {
     fixture.mockRestore();
   }
 });
 
-beforeEach(() => {
-  sql = observeHostDataSql();
-});
+useIncognitoNoHostSql();
 afterEach(() => {
-  try {
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-    vi.restoreAllMocks();
-  }
+  vi.restoreAllMocks();
 });
 afterAll(async () => {
   await actor?.close();
@@ -123,34 +112,11 @@ function snapshot(name: string) {
 }
 
 function interceptInterruptionReply(afterCommit: () => void | Promise<void>) {
-  const run = workerStore.runSqliteWorkerStoreOperation;
-  return vi
-    .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-    .mockImplementation(
-      <Operations extends SqliteWorkerOperations, T>(
-        store: SqliteWorkerStore<Operations>,
-        operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-        stateContext?: Parameters<typeof run>[2],
-        assertCurrent?: Parameters<typeof run>[3],
-        createAdmission?: Parameters<typeof run>[4],
-      ) =>
-        run(
-          store,
-          (scope) =>
-            operation({
-              execute: async (command, options) => {
-                const result = await scope.execute(command, options);
-                if (command.type === "session.pendingInputs.interruptHistory") {
-                  await afterCommit();
-                }
-                return result;
-              },
-            }),
-          stateContext,
-          assertCurrent,
-          createAdmission,
-        ),
-    );
+  return probe.observe((type) => {
+    if (type === "session.pendingInputs.interruptHistory") {
+      return afterCommit();
+    }
+  });
 }
 
 it("pages and reads exact actor inputs while preserving terminal disposition custody", async () => {
@@ -241,7 +207,7 @@ it("recovers exact committed interruption IDs after losing the ordinary reply wi
       ["lost-first", "queued"],
     ]);
   } finally {
-    delivery.mockRestore();
+    delivery();
     releaseSessionPendingInputOwner(owner);
   }
 });
@@ -285,6 +251,6 @@ it("joins an accepted pending-history composition before releasing its actor bor
   } finally {
     resume.resolve();
     await Promise.allSettled([reading, borrowed.release()]);
-    delivery.mockRestore();
+    delivery();
   }
 });

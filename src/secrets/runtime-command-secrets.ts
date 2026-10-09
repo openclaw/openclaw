@@ -101,20 +101,11 @@ function restoreInactiveWebCommandSecretTargets(params: {
   resolvedConfig: OpenClawConfig;
   targetIds: ReadonlySet<string>;
   inactiveRefPaths: string[];
-  providerOverrides: CommandSecretProviderOverrides | undefined;
-  allowedPaths?: ReadonlySet<string>;
-  forcedActivePaths?: ReadonlySet<string>;
-  optionalActivePaths?: ReadonlySet<string>;
+  isInactivePath: (path: string) => boolean;
 }): string[] {
-  if (!hasProviderOverrides(params.providerOverrides)) {
-    return params.inactiveRefPaths;
-  }
   const inactive = new Set(params.inactiveRefPaths);
   const defaults = params.sourceConfig.secrets?.defaults;
   for (const target of discoverConfigSecretTargetsByIds(params.sourceConfig, params.targetIds)) {
-    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
-      continue;
-    }
     if (!pluginIdFromRuntimeWebPath(target.path)) {
       continue;
     }
@@ -124,51 +115,13 @@ function restoreInactiveWebCommandSecretTargets(params: {
     if (!ref) {
       continue;
     }
-    if (
-      params.forcedActivePaths?.has(target.path) ||
-      params.optionalActivePaths?.has(target.path)
-    ) {
-      continue;
-    }
-    if (
-      isProviderOverridePath({
-        config: params.sourceConfig,
-        path: target.path,
-        providerOverrides: params.providerOverrides,
-      })
-    ) {
+    if (!params.isInactivePath(target.path)) {
       continue;
     }
     inactive.add(target.path);
     setPathExistingStrict(params.resolvedConfig, target.pathSegments, target.value);
   }
   return [...inactive];
-}
-
-function filterInactiveRefPaths(params: {
-  config: OpenClawConfig;
-  inactiveRefPaths: readonly string[];
-  providerOverrides: CommandSecretProviderOverrides | undefined;
-  allowedPaths?: ReadonlySet<string>;
-  forcedActivePaths?: ReadonlySet<string>;
-  optionalActivePaths?: ReadonlySet<string>;
-}): string[] {
-  return params.inactiveRefPaths.filter((path) => {
-    if (params.allowedPaths && !params.allowedPaths.has(path)) {
-      return false;
-    }
-    if (params.forcedActivePaths?.has(path) || params.optionalActivePaths?.has(path)) {
-      return false;
-    }
-    if (!hasProviderOverrides(params.providerOverrides)) {
-      return true;
-    }
-    return !isProviderOverridePath({
-      config: params.config,
-      path,
-      providerOverrides: params.providerOverrides,
-    });
-  });
 }
 
 async function resolveForcedActiveCommandSecretTargets(params: {
@@ -290,30 +243,39 @@ async function resolveCommandSecretsFromSnapshot(
   });
 
   const warningSource = context?.warnings ?? activeSnapshot.warnings;
-  let inactiveRefPaths = filterInactiveRefPaths({
-    config: sourceConfig,
-    providerOverrides: params.providerOverrides,
-    allowedPaths: params.allowedPaths,
-    forcedActivePaths: params.forcedActivePaths,
-    optionalActivePaths: params.optionalActivePaths,
-    inactiveRefPaths: [
-      ...new Set(
-        warningSource
-          .filter((warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")
-          .map((warning) => warning.path),
-      ),
-    ],
-  });
-  inactiveRefPaths = restoreInactiveWebCommandSecretTargets({
-    sourceConfig,
-    resolvedConfig,
-    targetIds: params.targetIds,
-    inactiveRefPaths,
-    providerOverrides: params.providerOverrides,
-    allowedPaths: params.allowedPaths,
-    forcedActivePaths: params.forcedActivePaths,
-    optionalActivePaths: params.optionalActivePaths,
-  });
+  const isInactivePath = (path: string) => {
+    if (
+      (params.allowedPaths && !params.allowedPaths.has(path)) ||
+      params.forcedActivePaths?.has(path) ||
+      params.optionalActivePaths?.has(path)
+    ) {
+      return false;
+    }
+    return (
+      !hasOverrides ||
+      !isProviderOverridePath({
+        config: sourceConfig,
+        path,
+        providerOverrides: params.providerOverrides,
+      })
+    );
+  };
+  let inactiveRefPaths = [
+    ...new Set(
+      warningSource
+        .filter((warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")
+        .map((warning) => warning.path),
+    ),
+  ].filter(isInactivePath);
+  if (hasOverrides) {
+    inactiveRefPaths = restoreInactiveWebCommandSecretTargets({
+      sourceConfig,
+      resolvedConfig,
+      targetIds: params.targetIds,
+      inactiveRefPaths,
+      isInactivePath,
+    });
+  }
 
   const analyzeAssignments = () =>
     analyzeCommandSecretAssignmentsFromSnapshot({

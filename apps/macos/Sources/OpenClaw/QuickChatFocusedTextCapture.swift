@@ -56,19 +56,18 @@ enum QuickChatFocusedTextCollector {
         var rendered = ""
         var visitedElementCount = 0
         var textEntryCount = 0
-        var wasStructurallyTruncated = false
-        var wasTextTruncated = false
+        var wasTruncated = false
 
         traversal: while let next = stack.popLast() {
             // Unresponsive AX targets can stall per-message; a wall-clock deadline and
             // cooperative cancellation keep the walk bounded regardless of app health.
             if isCancelled() || deadline.map({ ContinuousClock.now >= $0 }) == true {
-                wasStructurallyTruncated = true
+                wasTruncated = true
                 break
             }
             guard visitedNodeIDs.insert(next.node.identity).inserted else { continue }
             guard visitedElementCount < maximumElements else {
-                wasStructurallyTruncated = true
+                wasTruncated = true
                 break
             }
             visitedElementCount += 1
@@ -85,14 +84,10 @@ enum QuickChatFocusedTextCollector {
                 ownTexts.append(candidate)
                 let piece = rendered.isEmpty ? candidate : "\n\(candidate)"
                 let remaining = maximumCharacters + 1 - rendered.count
-                guard remaining > 0 else {
-                    wasTextTruncated = true
-                    break traversal
-                }
                 rendered.append(contentsOf: piece.prefix(remaining))
                 textEntryCount += 1
                 if piece.count >= remaining {
-                    wasTextTruncated = true
+                    wasTruncated = true
                     break traversal
                 }
             }
@@ -100,7 +95,7 @@ enum QuickChatFocusedTextCollector {
             if next.depth >= maximumDepth {
                 let overflow = next.node.children(limit: 1)
                 if !overflow.nodes.isEmpty || overflow.wasTruncated {
-                    wasStructurallyTruncated = true
+                    wasTruncated = true
                 }
                 continue
             }
@@ -108,7 +103,7 @@ enum QuickChatFocusedTextCollector {
             let remainingElements = maximumElements - visitedElementCount
             let childResult = next.node.children(limit: max(1, remainingElements))
             if childResult.wasTruncated {
-                wasStructurallyTruncated = true
+                wasTruncated = true
             }
             let descendantTexts = next.parentTexts + ownTexts
             for child in childResult.nodes.reversed() {
@@ -116,10 +111,6 @@ enum QuickChatFocusedTextCollector {
             }
         }
 
-        if !stack.isEmpty {
-            wasStructurallyTruncated = true
-        }
-        let wasTruncated = wasStructurallyTruncated || wasTextTruncated
         if wasTruncated {
             rendered = Self.appendingTruncationMarker(to: rendered, maximumCharacters: maximumCharacters)
         }
@@ -311,7 +302,6 @@ private struct QuickChatAXTextTreeNode: QuickChatTextTreeNode, Sendable {
             kAXRowsAttribute,
             kAXContentsAttribute,
         ]
-        let resolvedLimit = max(1, limit)
         var nodes: [any QuickChatTextTreeNode] = []
         var seen = Set<UInt64>()
         var wasTruncated = false
@@ -324,7 +314,7 @@ private struct QuickChatAXTextTreeNode: QuickChatTextTreeNode, Sendable {
                 &count) == .success,
                 count > 0
             else { continue }
-            let remaining = resolvedLimit - nodes.count
+            let remaining = limit - nodes.count
             guard remaining > 0 else {
                 wasTruncated = true
                 break

@@ -23,9 +23,10 @@ import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
 import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
+import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { persistedMessageEntryId, readPendingSendStatus } from "../chat-thread.ts";
-import { hasForwardedSource, isInterSessionGroup } from "../chat-turn-boundary.ts";
+import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { activityHeadline, selectActivityHeadline } from "./chat-activity-headline.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
@@ -59,7 +60,7 @@ import {
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
 import { chatResponsiveLayout } from "./chat-responsive-layout.ts";
-import { renderInterSessionActivity } from "./chat-session-activity.ts";
+import { renderSessionActivity } from "./chat-session-activity.ts";
 import {
   renderBrowserTabPreviews,
   renderToolCard,
@@ -194,6 +195,7 @@ export function renderActivityGroup(
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
   const groupSummaryLabel = summarizeToolGroup(visibleActivity, {
     includeInlineOutcomes: activityExpanded,
+    ownSessionLaunches: ownSessionLaunchCalls(cards),
   });
   const toolCardOverrides = new Map<ToolCard, unknown>();
   function renderOperation(group: ToolCallGroup<ToolCard>): unknown {
@@ -300,17 +302,10 @@ export function renderActivityGroup(
           groupSummaryLabel,
           currentActivity,
           opts.pluginToolIcons,
+          describeToolGroup(visibleActivity)
+            .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
+            .map(({ label }) => label),
         )}
-        ${
-          headline
-            ? describeToolGroup(visibleActivity)
-                .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
-                .map(
-                  ({ label }) =>
-                    html`<span class="chat-activity-group__outcome muted">${label}</span>`,
-                )
-            : nothing
-        }
         ${renderToolReviewOutcome(reviewOutcome, approvalReviews[0]?.label)}
         ${
           activityExpanded
@@ -394,8 +389,8 @@ export function renderMessageGroupContent(group: MessageGroup, options: RenderMe
 export function renderMessageGroup(group: MessageGroup, options: RenderMessageGroupOptions) {
   const sourceSessionKey = group.senderSession?.sessionKey;
   const opts = resolveFileLinkOwnerOptions(group, options);
-  if (isInterSessionGroup(group)) {
-    return renderInterSessionActivity(group, opts, (item, index) => {
+  if (isSessionActivityGroup(group)) {
+    return renderSessionActivity(group, opts, (item, index) => {
       const prepared = prepareGroupMessage(group, item, opts);
       return {
         content: renderPreparedGroupMessage(

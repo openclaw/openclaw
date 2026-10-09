@@ -55,11 +55,10 @@ export function createWindowsTaskAutoStartRecovery(params: {
   };
   const onSigint = () => onSignal(130);
   const onSigterm = () => onSignal(143);
-  const onSigbreak = () => onSignal(130);
   const removeSignalHandlers = () => {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
-    process.off("SIGBREAK", onSigbreak);
+    process.off("SIGBREAK", onSigint);
     unregisterSignalExitBarrier();
   };
   const restore = (
@@ -178,7 +177,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
   };
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
-  process.on("SIGBREAK", onSigbreak);
+  process.on("SIGBREAK", onSigint);
   unregisterSignalExitBarrier = registerSignalExitBarrier(restore);
   // The parent retains failed-handoff compensation; the fresh worker adopts
   // this observed suspension and enables only at its activation boundary.

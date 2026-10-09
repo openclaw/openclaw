@@ -49,7 +49,7 @@ If an automatic compaction's summary times out while the turn is still active (t
 
 This applies in safeguard mode too, which gives up its identifier-retention guarantee for that compaction: older facts that were never summarized leave the model context, and later compactions do not bring them back, because each one starts from the previous compaction boundary. The transcript still keeps every message for history and explicit retrieval. Without this exception, every following turn would wait out the same timeout and the session would stay unusable.
 
-The built-in OpenClaw runtime performs required checkpointing and compaction before inference. In persistent Gateway sessions, optional memory flushing and compaction wait until reply delivery has settled and its foreground owner has closed. That work uses a separate session owner and the turn's remaining time. A new message cancels and settles optional work before reading the session for its own inference.
+The built-in OpenClaw runtime performs required checkpointing and compaction before inference. This includes helper-completion and approval-follow-up turns; their user-facing model selection remains unchanged. In persistent Gateway sessions, optional memory flushing and compaction wait until reply delivery has settled and its foreground owner has closed. That work uses a separate session owner and the turn's remaining time. A new message cancels and settles optional work before reading the session for its own inference.
 
 One-shot `openclaw agent --local` commands skip optional post-turn work; the next command performs required maintenance before inference. Generic CLI backends keep their existing synchronous host compaction, and native runtimes retain their own compaction policy. Optional maintenance failures are logged without replacing an already completed reply. Cancellation, restart, or a replaced session still fences active writers.
 
@@ -93,7 +93,14 @@ compaction, but cannot run manual `/compact`.
 /compact Focus on the API design decisions
 ```
 
+If a turn is active, `/compact` gives it up to 60 seconds to finish before
+cancelling it and waiting up to 15 more seconds for it to stop. When cancellation
+succeeds, the command's reply asks you to resend the interrupted request, including
+when the run is still stopping and compaction cannot proceed.
+
 Client-side compaction in the built-in OpenClaw runtime passes focus to both older-history and split-turn-prefix summaries. The host limits operator-provided focus to 800 Unicode code points and escapes it as prompt data before adding it to model requests.
+
+Automatic session title generation runs in the background and does not block manual compaction. Gateway compaction requests promptly refuse admitted turns and accepted queued work. Once foreground admission has ended, a completed reply that is still saving or cleaning up can take up to 15 seconds to settle before the request rechecks the session. In-band commands exclude their own execution from this wait, but still wait for other completed writers.
 
 Client-side manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
 
@@ -150,6 +157,8 @@ This works with local models too, for example a second Ollama model dedicated to
 
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
 
+Preflight compaction also uses that chain when the primary auth profile is already in cooldown. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
+
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain, except a summary deadline or an HTTP 408 or 504, which commits the compaction without a summary instead (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.
 
 ### Identifier preservation
@@ -164,7 +173,19 @@ that size. This is useful for long-running sessions where provider-side context
 management may keep model context healthy while persisted transcript history
 keeps growing. Set a positive byte count or size string such as `"20mb"` to opt
 in; `0` or an unset value disables the guard. It does not split raw bytes; it
-asks the normal compaction pipeline to create a semantic summary. For Codex
+asks the normal compaction pipeline to create a semantic summary. If compaction
+is declined or leaves history over the limit, the turn continues with a bounded
+view of recent history. OpenClaw omits the oldest whole turns, keeps tool calls
+with their results, and preserves the system instructions and current request.
+An oversized historical turn may be omitted in full. This fallback does not
+rewrite saved messages or count a failed attempt as successful compaction.
+It shows a notice even with compaction notifications disabled; resend any
+essential details from omitted history. The bound applies to selected history,
+not the fixed instructions, tool definitions, or current request.
+
+Suppressed byte-compaction retries still use a bounded view on subsequent turns.
+Retained history remains available on disk and may continue growing; this is not
+a storage-retention limit. For Codex
 app-server sessions, the same threshold caps native rollout transcripts and
 oversized native threads restart fresh.
 
@@ -227,7 +248,7 @@ If an older version or transcript redaction removes the complete window needed f
 
 ### Successor transcripts
 
-A context engine may return an explicit compacted successor session identity within the same agent, session key, and store. OpenClaw publishes the accepted successor before maintenance, hooks, or retries use it, while retaining the current writer's ownership. Cancelling afterward does not roll that completed transition back. The built-in SQLite compactor keeps the current session identity and does not create a second runtime transcript.
+A context engine may return an explicit compacted successor session identity within the same agent, session key, and store. OpenClaw publishes the accepted successor before maintenance, hooks, or retries use it, while retaining the current writer's ownership. Cancelling afterward does not roll that completed transition back. The active reply follows the accepted identity for its remaining session-state reads; unrelated resets and cancellation still stop stale work. Tool-policy classification retains its independently captured session identity. The built-in SQLite compactor keeps the current session identity and does not create a second runtime transcript.
 
 A [worker placement](/gateway/cloud-workers) cannot transfer ownership to a different session identity during compaction. Custom engines must keep the current identity while the placement owns the session, or the operator must move the session back to the Gateway before retrying. A rejected transition leaves the original session and worker claim intact.
 

@@ -12,7 +12,6 @@ import {
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
 
-/** Parse repeated `--section` values into known configure wizard sections and invalid entries. */
 export function parseConfigureWizardSections(raw: unknown): {
   sections: WizardSection[];
   invalid: string[];
@@ -80,7 +79,6 @@ export const confirm = (
     ...params,
     message: stylePromptMessage(params.message),
   });
-/** Styled select prompt wrapper that also normalizes option hints. */
 export const select = <T>(
   params: Parameters<typeof clackSelect<T>>[0],
 ): ReturnType<typeof clackSelect<T>> => clackSelect(styleSelectParams(params));

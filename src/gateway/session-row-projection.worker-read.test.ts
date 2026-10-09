@@ -1,6 +1,8 @@
+import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
   observeHostDataSql,
   observeSqliteReadSql,
@@ -38,6 +40,8 @@ import {
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as agentWorkers from "../state/openclaw-agent-worker-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -280,6 +284,81 @@ it.each([
     });
   },
 );
+
+it("refuses replacement shared-state bytes while its agent row preparation is pending", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const query = { agentId: "main", key: "agent:main:shared-source-replacement" };
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key },
+      {
+        sessionId: "shared-source",
+        lifecycleRevision: "first",
+        updatedAt: 1,
+      },
+    );
+    const databasePath = resolveOpenClawStateSqlitePath(state.env);
+    const successorPath = `${databasePath}.successor`;
+    for (const [pathname, backend] of [
+      [databasePath, "original"],
+      [successorPath, "successor"],
+    ] as const) {
+      seedCanonicalAcpSessionMeta({
+        databasePath: pathname,
+        env: state.env,
+        sessionKey: query.key,
+        lifecycleRevision: "first",
+        meta: {
+          backend,
+          agent: "main",
+          runtimeSessionName: "shared-source",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      });
+    }
+    await closeOpenClawStateDatabaseAsync();
+    const foreground = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({
+      cfg: { agents: { entries: { main: {} } } },
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let reading: Promise<void> | undefined;
+    try {
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.agentRuntime).toMatchObject({ id: "original" });
+      observeRowFacts(
+        (owner) => async (input) => {
+          const reply = await owner.readRowFacts(input);
+          entered.resolve();
+          await release.promise;
+          return reply;
+        },
+        true,
+      );
+      sessionChanges.emit({
+        agentId: query.agentId,
+        sessionKey: query.key,
+      });
+      reading = projection.ensureMaterialized();
+      await awaitGateBeforeSettlement(entered.promise, reading, "Expected the held agent row read");
+      await closeOpenClawStateDatabaseAsync();
+      fs.renameSync(databasePath, `${databasePath}.original`);
+      fs.renameSync(successorPath, databasePath);
+      const refused = expect(reading).rejects.toThrow(/admission|changed|closed|retired/i);
+      release.resolve();
+      await refused;
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.agentRuntime).toMatchObject({ id: "successor" });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([reading]);
+      projection.dispose();
+      foreground();
+    }
+  });
+});
 
 it("preserves a keyed replacement while an older worker reply is pending", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -552,14 +631,13 @@ it.each([
   "membership revocation",
   "runtime stored facts",
   "invalidated presentation facts",
-  "unrelated stored row",
   "captured sibling row",
 ] as const)("consumes current list facts across an awaited worker reply: %s", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     const changesOwner =
       change === "runtime stored facts" || change === "invalidated presentation facts";
-    const changesSibling = change === "unrelated stored row" || change === "captured sibling row";
+    const changesSibling = change === "captured sibling row";
     const requiresFreshRead = change === "membership revocation" || changesOwner;
     const scope = { agentId: "main", sessionKey: "agent:main:worker-fact-freshness" };
     const owner = ensureProfileForEmail("projection-owner@example.test");

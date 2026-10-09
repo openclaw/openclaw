@@ -1,17 +1,10 @@
 import { GoogleGenAI, type HttpOptions, ResourceScope } from "@google/genai";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
-import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildManagedModelFetch } from "../transports/host-policy.js";
-import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import {
-  buildGoogleGenerateContentParams,
-  buildGoogleSimpleThinking,
-  type GoogleProviderOptions,
-  runGoogleGenerateContentLifecycle,
-} from "./google-shared.js";
-import { buildBaseOptions } from "./simple-options.js";
+import type { Model, StreamFunction } from "../types.js";
+import { createGoogleGenerateContentStreams } from "./google-provider-stream.js";
+import type { GoogleProviderOptions } from "./google-shared.js";
 
 interface GoogleVertexOptions extends GoogleProviderOptions {
   project?: string;
@@ -21,40 +14,10 @@ interface GoogleVertexOptions extends GoogleProviderOptions {
 const API_VERSION = "v1";
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 
-let toolCallCounter = 0;
-
-export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOptions> = (
-  model: Model<"google-vertex">,
-  context: Context,
-  options?: GoogleVertexOptions,
-) => {
-  const stream = new AssistantMessageEventStream();
-  const output = createAssistantOutput(model, "google-vertex");
-
-  void runGoogleGenerateContentLifecycle({
-    stream,
-    model,
-    output,
-    options,
-    createClient: () => createClient(model, options),
-    buildParams: () => buildGoogleGenerateContentParams(model, context, options),
-    nextToolCallId: (name) => `${name}_${Date.now()}_${++toolCallCounter}`,
-  });
-
-  return stream;
-};
-
-export const streamSimpleGoogleVertex: StreamFunction<"google-vertex", SimpleStreamOptions> = (
-  model: Model<"google-vertex">,
-  context: Context,
-  options?: SimpleStreamOptions,
-) => {
-  const base = buildBaseOptions(model, options, undefined);
-  return streamGoogleVertex(model, context, {
-    ...base,
-    thinking: buildGoogleSimpleThinking(model, options),
-  } satisfies GoogleVertexOptions);
-};
+const streams = createGoogleGenerateContentStreams("google-vertex", createClient);
+export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOptions> =
+  streams.stream;
+export const streamSimpleGoogleVertex = streams.streamSimple;
 
 function createClient(model: Model<"google-vertex">, options?: GoogleVertexOptions): GoogleGenAI {
   const apiKey = resolveApiKey(options);

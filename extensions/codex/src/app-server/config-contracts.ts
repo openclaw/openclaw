@@ -86,6 +86,7 @@ export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
   connectionClass: CodexAppServerConnectionClass;
   remoteWorkspaceRoot?: string;
+  nativeHookRelay?: { url: string; credentialDirectory: string };
   codeModeOnly: boolean;
   loopDetectionPreToolUseRelay: boolean;
   requestTimeoutMs: number;

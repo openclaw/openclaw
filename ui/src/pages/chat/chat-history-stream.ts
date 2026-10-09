@@ -1,7 +1,6 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { accumulatedStreamText, advanceAccumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
   isHiddenAssistantStreamText,
@@ -25,10 +24,7 @@ import {
   reconcileChatRunFromSessionRow,
   setChatRunError,
 } from "./run-lifecycle.ts";
-import {
-  latestPersistedSteerBoundary,
-  resolveCumulativeAssistantTail,
-} from "./stream-causal-boundary.ts";
+import { replaceChatStream } from "./stream-causal-boundary.ts";
 import { materializeVisibleStreamState } from "./stream-reconciliation.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
@@ -78,25 +74,6 @@ function resolveInFlightAssistantText(bufferedText: unknown): string | null {
     : null;
 }
 
-function replayedCommentaryItemIds(
-  run: NonNullable<ChatHistoryResult["inFlightRun"]>,
-): ReadonlySet<string> {
-  const itemIds = new Set<string>();
-  for (const event of run.events ?? []) {
-    const itemId = event.data.itemId;
-    if (
-      event.runId === run.runId &&
-      event.stream === "item" &&
-      event.data.kind === "preamble" &&
-      typeof itemId === "string" &&
-      itemId.trim()
-    ) {
-      itemIds.add(itemId.trim());
-    }
-  }
-  return itemIds;
-}
-
 function runProjectionsUnchanged(
   previous: ReturnType<typeof getChatSessionProjection>["runs"],
   current: ReturnType<typeof getChatSessionProjection>["runs"],
@@ -132,18 +109,6 @@ export function readRunProjections(state: ChatState, sessionKey: string, agentId
   ).runs;
 }
 
-function mergeInFlightAssistantText(snapshot: string | null, live: string | null): string | null {
-  if (!snapshot || live?.startsWith(snapshot)) {
-    return live ?? snapshot;
-  }
-  if (!live || snapshot.startsWith(live)) {
-    return snapshot;
-  }
-  // Divergence: live deltas are newer than the bounded snapshot, so the local
-  // cumulative buffer wins — a lagging snapshot must not rewind streamed text.
-  return live;
-}
-
 export function applyHistoryRun(params: {
   state: ChatState;
   run: ChatHistoryResult["inFlightRun"];
@@ -153,7 +118,6 @@ export function applyHistoryRun(params: {
   runProjectionsBeforeApply: ReturnType<typeof getChatSessionProjection>["runs"];
   currentRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
   resetStream: boolean;
-  activeStreamBeforeReset: string | null;
 }): void {
   const {
     state,
@@ -164,7 +128,6 @@ export function applyHistoryRun(params: {
     runProjectionsBeforeApply,
     currentRunProjections,
     resetStream,
-    activeStreamBeforeReset,
   } = params;
   const inFlightRunId = run?.runId?.trim();
   if (!inFlightRunId || !run) {
@@ -270,13 +233,6 @@ export function applyHistoryRun(params: {
     state.chatRunId === inFlightRunId &&
     projectedInFlightRun?.status === "streaming" &&
     runProjectionsUnchanged(previousRunProjections, currentRunProjections, inFlightRunId);
-  const retainsLiveStream =
-    sameRunContinued ||
-    (state.chatRunId === inFlightRunId &&
-      (activeStreamBeforeReset !== null ||
-        state.chatStreamSegments?.some(
-          (segment) => !segment.runId || segment.runId === inFlightRunId,
-        )));
   const activeRunIds = sessionInfo?.activeRunIds;
   const inFlightRunIsActive =
     isSessionRunActive(sessionInfo ?? {}) &&
@@ -307,7 +263,7 @@ export function applyHistoryRun(params: {
     const recoveringRun = state.chatRunId !== inFlightRunId;
     // Canonical run projections change on every live delta or terminal.
     // Their identity fences ABA races where a run starts and finishes while
-    // history is pending; deltas from this same live run must still merge.
+    // history is pending; the same live run retains its ordered text baseline.
     adoptStartedChatRun(state, inFlightRunId, Date.now());
     if (recoveringRun && sessionInfo) {
       observeChatRunModel(state, inFlightRunId, sessionInfo);
@@ -319,45 +275,19 @@ export function applyHistoryRun(params: {
   }
   const snapshotStartedAt =
     typeof run.startedAt === "number" && Number.isFinite(run.startedAt) ? run.startedAt : null;
-  const liveText = replacesOwnedRun
-    ? null
-    : sameRunContinued
-      ? mergeInFlightAssistantText(
-          resolveInFlightAssistantText(extractText(projectedInFlightRun?.message)),
-          activeStreamBeforeReset,
-        )
-      : activeStreamBeforeReset;
-  state.chatStream = mergeInFlightAssistantText(resolveInFlightAssistantText(run.text), liveText);
-  state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
-  // A retained pane gets its boundary from session.message. Only fresh adoption
-  // reconstructs it from history, with the persisted prefix as cumulative evidence.
-  const boundary = retainsLiveStream
-    ? null
-    : latestPersistedSteerBoundary(state.chatMessages, inFlightRunId);
-  const tail =
-    state.chatStream === null
-      ? null
-      : resolveCumulativeAssistantTail(
-          state.chatMessages,
-          state.chatStream,
-          inFlightRunId,
-          boundary?.index,
-          replayedCommentaryItemIds(run),
-        );
-  const prefix = state.chatStream?.slice(0, state.chatStream.length - (tail?.length ?? 0)) ?? "";
-  const accumulated = accumulatedStreamText(state.chatStreamSegments ?? []);
-  if (boundary || advanceAccumulatedStreamText(accumulated, prefix) !== accumulated) {
-    state.chatStreamSegments = [
-      ...(state.chatStreamSegments ?? []),
-      {
-        text: prefix,
-        ts: state.chatStreamStartedAt,
-        runId: inFlightRunId,
-        ...(boundary ? { boundaryRunId: boundary.runId } : {}),
-        ...(prefix ? { persisted: true } : { boundaryMarker: true }),
-      },
-    ];
+  const advancedDuringRead =
+    previousRunProjections[inFlightRunId]?.message !==
+    runProjectionsBeforeApply[inFlightRunId]?.message;
+  // Ordered live frames already establish their baseline, including shrinking
+  // replacements. A pending history snapshot cannot extend that baseline by text.
+  if (advancedDuringRead && !replacesOwnedRun) {
+    state.chatStream = resolveInFlightAssistantText(
+      extractText(runProjectionsBeforeApply[inFlightRunId]?.message),
+    );
+  } else {
+    replaceChatStream(state, resolveInFlightAssistantText(run.text));
   }
+  state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
   const startup = run.events?.findLast(
     (event) => event.runId === inFlightRunId && event.stream === "run_status",
   );

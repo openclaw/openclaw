@@ -1,10 +1,13 @@
 import {
   embeddedAgentLog,
   type AgentMessage,
+  cancelPendingAgentQuestionForSession,
+  claimPendingAgentQuestionAnswer,
   type queueAgentHarnessMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { NativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerIndeterminateTransportError,
@@ -17,6 +20,61 @@ type AgentHarnessQueueMessageOptions = NonNullable<Parameters<typeof queueAgentH
 export type CodexSteeringPreparation = Parameters<
   NonNullable<NativeSessionBindingAuthority["withPreparedCurrent"]>
 >[1][number];
+export type CodexQuestionInputAuthority = NonNullable<
+  Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"]
+>;
+
+export function createCodexQuestionInputHandlers(sessionKey: string, assertActive: () => void) {
+  const questionAuthority = (
+    kind: CodexQuestionInputAuthority["kind"],
+    assertSource: (() => void) | undefined,
+    toolAuthorityPreparation?: CodexSteeringPreparation,
+  ): CodexQuestionInputAuthority => ({
+    kind,
+    toolAuthorityPreparation,
+    assertCurrent: () => {
+      assertSource?.();
+      assertActive();
+    },
+  });
+  const claimPendingUserInputAnswer = async (
+    text: string,
+    optionsLocal?: CodexSteeringQueueOptions,
+    assertCurrent?: () => void,
+    authorityKind: CodexQuestionInputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    toolAuthorityPreparation?: CodexSteeringPreparation,
+  ) => {
+    if (optionsLocal?.isInboundUserMessage !== true || hasPromptImageInput(optionsLocal)) {
+      return false;
+    }
+    assertActive();
+    return await claimPendingAgentQuestionAnswer({
+      sessionKey,
+      text,
+      authority: questionAuthority(authorityKind, assertCurrent, toolAuthorityPreparation),
+      sourceRecorder: optionsLocal.userTurnTranscriptRecorder,
+      // Older supported hosts use the ordinary-question callback. Current hosts
+      // prefer the recorder owner so staged secret inputs commit before consumption.
+      persist: optionsLocal.userTurnTranscriptRecorder
+        ? async () => {
+            await optionsLocal.userTurnTranscriptRecorder?.persistApproved();
+          }
+        : undefined,
+    });
+  };
+  const cancelPendingUserInput = (
+    resolvedBy: string,
+    assertCurrent?: () => void,
+    authorityKind: CodexQuestionInputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    toolAuthorityPreparation?: CodexSteeringPreparation,
+  ) =>
+    cancelPendingAgentQuestionForSession({
+      sessionKey,
+      resolvedBy,
+      authority: questionAuthority(authorityKind, assertCurrent, toolAuthorityPreparation),
+    });
+  return { claimPendingUserInputAnswer, cancelPendingUserInput };
+}
 
 export class CodexSteeringAcceptedUnconfirmedError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -72,7 +130,6 @@ export function createCodexSteeringQueue(params: {
     text: string;
     resolve: () => void;
     reject: (error: unknown) => void;
-    settled: boolean;
   };
   type PreparedSteerMessage = PendingSteerMessage & {
     prepared: Awaited<ReturnType<typeof params.prepareMessage>>;
@@ -120,21 +177,19 @@ export function createCodexSteeringQueue(params: {
   };
 
   const resolveItem = (item: PreparedSteerMessage) => {
-    if (item.settled) {
+    if (!pendingMessages.has(item)) {
       return;
     }
     acceptItem(item);
-    item.settled = true;
     pendingMessages.delete(item);
     item.onQueueSettled?.();
     item.resolve();
   };
 
   const rejectItem = (item: PendingSteerMessage, error: unknown) => {
-    if (item.settled) {
+    if (!pendingMessages.has(item)) {
       return;
     }
-    item.settled = true;
     pendingMessages.delete(item);
     reportItemAcceptance(item, false);
     item.onQueueSettled?.();
@@ -192,7 +247,7 @@ export function createCodexSteeringQueue(params: {
   };
 
   const sendBatch = async (items: PendingSteerMessage[]) => {
-    const pendingItems = items.filter((item) => !item.settled);
+    const pendingItems = items.filter((item) => pendingMessages.has(item));
     let liveItems: PreparedSteerMessage[] = [];
     if (pendingItems.length === 0) {
       return;
@@ -203,7 +258,7 @@ export function createCodexSteeringQueue(params: {
       assertActive();
       const prepared: PreparedSteerMessage[] = [];
       const isCurrent = (item: PendingSteerMessage) => {
-        if (item.settled) {
+        if (!pendingMessages.has(item)) {
           return false;
         }
         try {
@@ -380,7 +435,6 @@ export function createCodexSteeringQueue(params: {
         text,
         resolve,
         reject,
-        settled: false,
       };
       pendingMessages.add(item);
       batchedMessages.push(item);

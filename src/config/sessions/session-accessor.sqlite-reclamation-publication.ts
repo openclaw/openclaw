@@ -67,6 +67,9 @@ export function collectReclamationChangedSessionKeys(
   plan: SqliteSessionReclamationPlan,
   result: SqliteSessionReclamationResult,
 ): string[] {
+  if (result.kind === "history-eviction" && !result.value.deleted) {
+    return [];
+  }
   switch (result.kind) {
     case "lifecycle-projection-commit":
       return [
@@ -80,7 +83,6 @@ export function collectReclamationChangedSessionKeys(
       ];
     case "deletion-plan":
     case "lifecycle-projection-plan":
-    case "lifecycle-projection-count":
       return [];
     case "maintenance-plan":
       return result.value.archivedEntries.map(({ sessionKey }) => sessionKey);

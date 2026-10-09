@@ -4,6 +4,7 @@ import { createProcessAdapterEvents } from "../../process/supervisor/adapters/pr
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import * as failoverErrors from "../failover-error.js";
+import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
 import { executeDeps } from "./execute-deps.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
@@ -145,6 +146,52 @@ describe("CLI execution cancellation", () => {
     setCliRunnerExecuteTestDeps({ getProcessSupervisor: restoreProcessSupervisor });
     vi.restoreAllMocks();
   });
+
+  it.each([true, false])(
+    "marks only rejected protocol on interruption (protocol=%s)",
+    async (protocol) => {
+      const controller = new AbortController();
+      const context = createRunContext({ runId: "interrupted-output", signal: controller.signal });
+      context.preparedBackend.backend.command = process.execPath;
+      context.preparedBackend.backend.output = "jsonl";
+      context.preparedBackend.backend.jsonlDialect = "claude-stream-json";
+      context.backendResolved.parseJsonlEvent = (line) => {
+        if (JSON.parse(line).type === "parser-failure") {
+          throw new Error("Unrelated parser failure");
+        }
+        return null;
+      };
+      context.executionTarget = {
+        kind: "plugin",
+        async *execute() {
+          yield {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              stop_reason: null,
+              content: [
+                {
+                  type: "text",
+                  text: protocol ? '<invoke name="Read">' : "Ordinary partial prose",
+                },
+              ],
+            },
+          };
+          if (!protocol) {
+            yield { type: "parser-failure" };
+          }
+          controller.abort();
+          throw new Error("Interrupted fixture");
+        },
+      };
+
+      await expect(executePreparedCliRun(context)).rejects.toMatchObject(
+        protocol
+          ? { code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE }
+          : { name: "AbortError", message: "CLI run aborted" },
+      );
+    },
+  );
 
   it("does not start approval after a node response races with cancellation", async () => {
     const controller = new AbortController();
@@ -454,7 +501,7 @@ describe("CLI execution cancellation", () => {
     expect(coerce).not.toHaveBeenCalled();
   });
 
-  it.each(["rejected option", "abort", "terminal", "observed activity"] as const)(
+  it.each(["terminal", "observed activity"] as const)(
     "preserves plugin checkpoint failure ownership: %s",
     async (kind) => {
       const message = "unknown option '--checkpoint'";
@@ -465,9 +512,6 @@ describe("CLI execution cancellation", () => {
               code: "cli_max_turns",
             })
           : new Error(message);
-      if (kind === "abort") {
-        failure.name = "AbortError";
-      }
       const coerce = vi.spyOn(failoverErrors, "coerceToFailoverError").mockImplementation(() => {
         throw new Error("provider coercion was consulted");
       });
@@ -497,15 +541,7 @@ describe("CLI execution cancellation", () => {
       };
 
       const result = executePreparedCliRun(context, "resume-1");
-      if (kind === "rejected option") {
-        await expect(result).rejects.toMatchObject({
-          reason: "session_expired",
-          code: "cli_resume_at_unsupported",
-          cause: failure,
-        });
-      } else {
-        await expect(result).rejects.toBe(failure);
-      }
+      await expect(result).rejects.toBe(failure);
       expect(coerce).not.toHaveBeenCalled();
       expect(createChildAdapterMock).not.toHaveBeenCalled();
     },

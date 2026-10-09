@@ -1,4 +1,3 @@
-// Builds grouped Vitest duration reports or compares two grouped reports.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -237,9 +236,6 @@ export function parseTestGroupReportArgs(argv: string[]) {
   if (!["area", "folder", "top"].includes(args.groupBy)) {
     throw new Error(`Unsupported --group-by value: ${args.groupBy}`);
   }
-  if (args.compare && (!args.compare.before || !args.compare.after)) {
-    throw new Error("--compare requires before and after report paths");
-  }
   if (
     args.compare &&
     (args.configs.length > 0 ||
@@ -429,9 +425,8 @@ export function spawnText(command: string, args: readonly string[], options: Spa
       if (tailBytes < 1) {
         return;
       }
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
       const currentTail = target === "stderr" ? stderrTail : outputTail;
-      let nextTail = buffer.byteLength >= tailBytes ? buffer : Buffer.concat([currentTail, buffer]);
+      let nextTail = chunk.byteLength >= tailBytes ? chunk : Buffer.concat([currentTail, chunk]);
       if (nextTail.byteLength > tailBytes) {
         nextTail = nextTail.subarray(nextTail.byteLength - tailBytes);
       }
@@ -480,11 +475,10 @@ export function spawnText(command: string, args: readonly string[], options: Spa
         return;
       }
 
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
-      outputBytes += buffer.byteLength;
-      appendTail(buffer);
+      outputBytes += chunk.byteLength;
+      appendTail(chunk);
       if (streamName === "stderr") {
-        appendTail(buffer, "stderr");
+        appendTail(chunk, "stderr");
       }
       if (outputBytes > maxBuffer) {
         outputExceeded = true;
@@ -872,12 +866,6 @@ export function resolveReportRunSpecs(
   });
 }
 
-function printRunLine(run: TestGroupRun) {
-  console.log(
-    `[test-group-report] ${run.label} status=${run.status} wall=${formatMs(run.elapsedMs)} rss=${formatBytesAsMb(run.maxRssBytes)} report=${run.reportPath}`,
-  );
-}
-
 function printSlowTestsForRun(entry: ReportInputEntry, maxTestMs: number | null) {
   if (maxTestMs === null || !fs.existsSync(entry.reportPath)) {
     return;
@@ -926,7 +914,9 @@ export async function runReportPlans(params: {
         timeoutMs: params.args.timeoutMs,
         killGraceMs: params.args.killGraceMs,
       });
-      printRunLine(run);
+      console.log(
+        `[test-group-report] ${run.label} status=${run.status} wall=${formatMs(run.elapsedMs)} rss=${formatBytesAsMb(run.maxRssBytes)} report=${run.reportPath}`,
+      );
       let includeEntry = true;
       if (run.status !== 0) {
         failed = true;

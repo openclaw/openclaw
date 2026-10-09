@@ -6,21 +6,28 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { observeSessionMaintenanceChanges } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
+import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.sqlite-projection.js";
 import * as reclamationRun from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { prepareSessionMaintenancePreservation } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as workspaceRetention from "./worker-environments/node-workspace-retain-coordinator.js";
-import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
+import {
+  placementTurnOwner,
+  type WorkerSessionPlacementRecord,
+  type WorkerSessionTurnClaim,
+} from "./worker-environments/placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./worker-environments/placement-store.js";
+import { advancePlacementFixtureToActive } from "./worker-environments/placement-test-fixtures.js";
 
 const runtimeFactoryMocks = vi.hoisted(() => ({
   createDispatch: vi.fn(),
@@ -192,6 +199,180 @@ async function preservedSessionKeys() {
 }
 
 describe("worker placement session maintenance ownership", () => {
+  it.each(["claim", "release"] as const)(
+    "refreshes unpublished maintenance inventory during a concurrent worker %s",
+    async (publication) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const database = openOpenClawStateDatabase();
+        const store = createWorkerSessionPlacementStore({ database });
+        const identity = {
+          sessionId: "concurrent-worker-session",
+          sessionKey: "agent:main:concurrent-worker-session",
+          agentId: "main",
+        };
+        const active = await advancePlacementFixtureToActive(store, database, identity);
+        const turn = {
+          ...identity,
+          owner: placementTurnOwner(active),
+          claimId: "concurrent-worker-claim",
+          runId: "concurrent-worker-run",
+        };
+        let claim = publication === "release" ? await store.claimTurn(turn) : undefined;
+        const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+        const preservedEntry = { sessionId: identity.sessionId, updatedAt: 1 };
+        await patchSessionEntryCore(
+          { ...identity, storePath, env: state.env },
+          () => preservedEntry,
+          { fallbackEntry: preservedEntry, skipMaintenance: true },
+        );
+        const preservedSnapshot = loadSessionEntryReadOnly({
+          ...identity,
+          env: state.env,
+          storePath,
+        });
+        const { runtime } = createMaintenanceRuntime({
+          placements: [active],
+          preservationStore: store,
+        });
+        const sidecar = await startMaintenanceRuntime(runtime);
+        const read = stateReads.executeExistingOpenClawStateRead;
+        let preservationReads = 0;
+        const interleave = vi
+          .spyOn(stateReads, "executeExistingOpenClawStateRead")
+          .mockImplementation(async (...args) => {
+            const result = await read(...args);
+            if (args[1].type === "workers.placementPreservation" && ++preservationReads === 1) {
+              // Commit after the real worker read, before its inventory can be published.
+              if (claim) {
+                await store.releaseTurnIfOwned(claim);
+                claim = undefined;
+              } else {
+                claim = await store.claimTurn(turn);
+              }
+            }
+            return result;
+          });
+        const trigger = {
+          agentId: "main",
+          env: state.env,
+          storePath,
+          sessionKey: "agent:main:concurrent-maintenance-trigger",
+        };
+        try {
+          await expect(
+            applySessionEntryLifecycleMutation({
+              ...trigger,
+              upserts: [
+                {
+                  sessionKey: trigger.sessionKey,
+                  entry: {
+                    sessionId: "concurrent-maintenance-trigger",
+                    updatedAt: Date.now(),
+                  },
+                },
+              ],
+              maintenanceOverride: resolveMaintenanceConfigFromInput({
+                mode: "enforce",
+                maxEntries: 1,
+                maxDiskBytes: false,
+              }),
+            }),
+          ).resolves.toMatchObject({ afterCount: 2 });
+          expect(preservationReads).toBe(2);
+          expect(loadSessionEntryReadOnly({ ...identity, env: state.env, storePath })).toEqual(
+            preservedSnapshot,
+          );
+          expect(loadSessionEntryReadOnly(trigger)?.sessionId).toBe(
+            "concurrent-maintenance-trigger",
+          );
+        } finally {
+          interleave.mockRestore();
+          if (claim) {
+            await store.releaseTurnIfOwned(claim);
+          }
+          await sidecar.stop();
+        }
+      });
+    },
+  );
+
+  it.each(["local claim", "local release", "worker dispatch"] as const)(
+    "fences a fresh lifecycle upsert only for worker placements during %s",
+    async (publication) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const store = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+        const localTurn = {
+          sessionId: "unrelated-local-session",
+          sessionKey: "agent:codex:unrelated-local-session",
+          agentId: "codex",
+          owner: { kind: "local" as const },
+          claimId: "unrelated-local-claim",
+          runId: "unrelated-local-run",
+        };
+        let claim: WorkerSessionTurnClaim | undefined;
+        if (publication === "local release") {
+          claim = await store.claimTurn(localTurn);
+        }
+        const { runtime } = createMaintenanceRuntime({ placements: [], preservationStore: store });
+        const sidecar = await startMaintenanceRuntime(runtime);
+        const prepare = store.prepareMaintenancePlacements.bind(store);
+        const interleave = vi
+          .spyOn(store, "prepareMaintenancePlacements")
+          .mockImplementationOnce(async () => {
+            const prepared = await prepare();
+            try {
+              expect(prepared.placements).toEqual([]);
+              if (publication === "worker dispatch") {
+                await store.startDispatch(localTurn);
+              } else if (claim) {
+                await store.releaseTurnIfOwned(claim);
+                claim = undefined;
+              } else {
+                claim = await store.claimTurn(localTurn);
+              }
+              if (publication !== "worker dispatch") {
+                expect(store.listForReconcile()).toEqual([]);
+              }
+              return prepared;
+            } catch (error) {
+              prepared.release();
+              throw error;
+            }
+          });
+        const scope = {
+          agentId: "main",
+          env: state.env,
+          storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+          sessionKey: "agent:main:fresh-local-session",
+        };
+        const mutate = () =>
+          applySessionEntryLifecycleMutation({
+            ...scope,
+            upserts: [
+              {
+                sessionKey: scope.sessionKey,
+                entry: { sessionId: "fresh-local-session", updatedAt: 1000 },
+              },
+            ],
+          });
+        try {
+          if (publication === "worker dispatch") {
+            await expect(mutate()).rejects.toThrow("Worker placement inventory changed");
+            expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
+          }
+          await expect(mutate()).resolves.toMatchObject({ afterCount: 1 });
+          expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe("fresh-local-session");
+        } finally {
+          interleave.mockRestore();
+          if (claim) {
+            await store.releaseTurnIfOwned(claim);
+          }
+          await sidecar.stop();
+        }
+      });
+    },
+  );
+
   it("prepares and recaptures placement preservation without caller-thread SQL", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const store = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });

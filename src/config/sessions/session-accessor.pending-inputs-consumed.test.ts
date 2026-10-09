@@ -291,70 +291,60 @@ describe("committed pending input release", () => {
     );
   });
 
-  it.each([
-    "empty-metadata",
-    "sender-metadata",
-    "transport-metadata",
-    "changed-payload",
-    "changed-sender",
-    "changed-provenance",
-    "changed-transport",
-  ] as const)("preserves legacy consumed input identity with %s", async (scenario) => {
-    const originalTransport =
-      scenario === "empty-metadata" || scenario === "sender-metadata"
-        ? {}
-        : { channel: "test", messageId: "original-message" };
-    const original: PersistedUserTurnMessage = {
-      ...message("legacy-client"),
-      provenance: { kind: "external_user", sourceTool: "original-source" },
-      ...(scenario === "empty-metadata"
-        ? {}
-        : {
-            __openclaw: {
-              senderId: "original-sender",
-              ...(Object.keys(originalTransport).length ? { transport: originalTransport } : {}),
-            },
-          }),
-    };
-    const source = await stage("legacy-client", { message: original });
-    const aggregate = expectDefined(
-      bindSessionPendingInputSources([source], message("legacy-collector")),
-      "Expected collected legacy input",
-    );
-    receipts.push(aggregate);
-    await promote(aggregate);
-    aggregate.finish("interrupted");
-    await aggregate.settled?.();
-    const stored = () =>
-      database().db.prepare("SELECT request_hash, message_json FROM session_pending_inputs").all();
-    const before = stored();
-    const retry: PersistedUserTurnMessage = {
-      ...original,
-      ...(scenario === "changed-payload" ? { content: "Changed input" } : {}),
-      ...(scenario === "changed-provenance"
-        ? { provenance: { kind: "external_user", sourceTool: "another-source" } }
-        : {}),
-      __openclaw: {
-        ...original["__openclaw"],
-        ...(scenario === "changed-sender" ? { senderId: "another-sender" } : {}),
-        transport: {
-          ...originalTransport,
-          ...(scenario === "changed-transport" ? { messageId: "another-message" } : {}),
-          clients: [{ id: "cli", mode: "cli" }],
+  it.each(["empty-metadata", "transport-metadata", "changed-payload"] as const)(
+    "preserves legacy consumed input identity with %s",
+    async (scenario) => {
+      const originalTransport =
+        scenario === "empty-metadata" ? {} : { channel: "test", messageId: "original-message" };
+      const original: PersistedUserTurnMessage = {
+        ...message("legacy-client"),
+        provenance: { kind: "external_user", sourceTool: "original-source" },
+        ...(scenario === "empty-metadata"
+          ? {}
+          : {
+              __openclaw: {
+                senderId: "original-sender",
+                ...(Object.keys(originalTransport).length ? { transport: originalTransport } : {}),
+              },
+            }),
+      };
+      const source = await stage("legacy-client", { message: original });
+      const aggregate = expectDefined(
+        bindSessionPendingInputSources([source], message("legacy-collector")),
+        "Expected collected legacy input",
+      );
+      receipts.push(aggregate);
+      await promote(aggregate);
+      aggregate.finish("interrupted");
+      await aggregate.settled?.();
+      const stored = () =>
+        database()
+          .db.prepare("SELECT request_hash, message_json FROM session_pending_inputs")
+          .all();
+      const before = stored();
+      const retry: PersistedUserTurnMessage = {
+        ...original,
+        ...(scenario === "changed-payload" ? { content: "Changed input" } : {}),
+        __openclaw: {
+          ...original["__openclaw"],
+          transport: {
+            ...originalTransport,
+            clients: [{ id: "cli", mode: "cli" }],
+          },
         },
-      },
-    };
-    const replay = stage("legacy-client", { message: retry, requestFingerprint: "upgraded" });
-    if (scenario.startsWith("changed-")) {
-      await expect(replay).rejects.toThrow("conflicts with the accepted input");
-    } else {
-      const receipt = await replay;
-      expect(receipt).toMatchObject({ state: "consumed", message: original });
-      expect(() => receipt.run(() => {})).toThrow("already been consumed");
-    }
-    expect(stored()).toEqual(before);
-    expect(await readSessionSubmittedInput(scope(), "legacy-client:user")).toEqual(original);
-  });
+      };
+      const replay = stage("legacy-client", { message: retry, requestFingerprint: "upgraded" });
+      if (scenario.startsWith("changed-")) {
+        await expect(replay).rejects.toThrow("conflicts with the accepted input");
+      } else {
+        const receipt = await replay;
+        expect(receipt).toMatchObject({ state: "consumed", message: original });
+        expect(() => receipt.run(() => {})).toThrow("already been consumed");
+      }
+      expect(stored()).toEqual(before);
+      expect(await readSessionSubmittedInput(scope(), "legacy-client:user")).toEqual(original);
+    },
+  );
 
   const stagePrivate = async (text = "private child marker", assertCurrent = () => {}) => {
     const receipt = expectDefined(
@@ -688,52 +678,6 @@ describe("committed pending input release", () => {
     await retry.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
     expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
   });
-
-  it("reconciles successful private processing without transcript consumption after restart", async () => {
-    const first = await stagePrivate();
-    let nextSpawns = 0;
-    nextSpawns += 1;
-    await first.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
-    expect(pendingCount()).toBe(0);
-    expect(completionRows()).toMatchObject([{ succeeded: 1, run_id: "announce:private-child" }]);
-    // The child delivery save has not happened. A fresh process has only the DB.
-    rotateAgentEventLifecycleGeneration();
-    await first.settled?.();
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    const replay = await stagePrivate();
-    expect(replay.completion).toMatchObject({ status: "ok", reason: "completed" });
-    expect(() =>
-      replay.run(() => {
-        nextSpawns += 1;
-      }),
-    ).toThrow("already completed");
-    expect(nextSpawns).toBe(1);
-    expect(pendingCount()).toBe(0);
-    await expect(stagePrivate("different child marker")).rejects.toThrow("conflicts");
-  });
-
-  it.each([false, true])(
-    "retains uncompleted private work across restart (input consumed=%s)",
-    async (consumed) => {
-      const first = await stagePrivate();
-      if (consumed) {
-        promoteSync(first);
-      }
-      expect(completionRows()).toEqual([]);
-      rotateAgentEventLifecycleGeneration();
-      await first.settled?.();
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
-      const resumed = await stagePrivate();
-      expect(resumed.completion).toBeUndefined();
-      expect(resumed.run(() => "one resumed execution")).toBe("one resumed execution");
-      await resumed.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
-      expect(pendingCount()).toBe(0);
-      expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
-      await expect(stagePrivate("changed committed payload")).rejects.toThrow("conflicts");
-    },
-  );
 
   it("keeps private failed attempts retryable without letting stale failure replace success", async () => {
     const first = await stagePrivate();

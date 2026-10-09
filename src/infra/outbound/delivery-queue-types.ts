@@ -47,17 +47,16 @@ export type DurableDeliveryCompletion =
     };
 
 export function hasActiveDeliveryOwner(entry: DeliveryQueueEntryState, now: number): boolean {
-  return (
-    (typeof entry.completionRetention === "object" ||
-      entry.completionRetention === "permanent" ||
-      entry.requiresProducerClaim === true) &&
-    (entry.recoveryState === "producer_claimed" ||
-      ((entry.recoveryState === "send_attempt_started" ||
-        entry.recoveryState === "unknown_after_send") &&
-        entry.requiresProducerClaim === true)) &&
-    typeof entry.availableAt === "number" &&
-    entry.availableAt > now
-  );
+  if (typeof entry.availableAt !== "number" || !(entry.availableAt > now)) {
+    return false;
+  }
+  return entry.requiresProducerClaim === true
+    ? entry.recoveryState === "producer_claimed" ||
+        entry.recoveryState === "send_attempt_started" ||
+        entry.recoveryState === "unknown_after_send"
+    : (typeof entry.completionRetention === "object" ||
+        entry.completionRetention === "permanent") &&
+        entry.recoveryState === "producer_claimed";
 }
 
 export type QueuedReplyPayloadSendingHook = {

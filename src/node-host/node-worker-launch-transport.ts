@@ -11,7 +11,13 @@ import {
 import { assertProcessGroupControl } from "../process/supervisor/service-child-group-ownership.js";
 import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "../process/supervisor/service-child-relay-host.js";
+import type { SpawnSecretInput } from "../process/supervisor/types.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import {
+  WORKER_NATIVE_INFERENCE_STARTUP_ARG,
+  WORKER_NATIVE_INFERENCE_STARTUP_FD,
+  WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES,
+} from "../worker/native-inference-startup.js";
 import {
   parseNodeWorkerConnectionFailureMessage,
   type NodeWorkerLaunchInput,
@@ -33,6 +39,11 @@ import type {
   NodeWorkerLaunchStore,
 } from "./node-worker-launch-store.js";
 import {
+  NODE_WORKER_INFERENCE_SETUP_ERROR,
+  projectNodeWorkerNativeInference,
+  type NodeWorkerNativeInferenceSnapshot,
+} from "./node-worker-native-inference.js";
+import {
   sanitizeNodeWorkerDiagnostic,
   type NodeWorkerCredentialScrubber,
 } from "./node-worker-output.js";
@@ -45,6 +56,7 @@ export type NodeWorkerChildAdapter = AwaitedStdoutChildAdapter & {
 type NodeWorkerLaunchTransportOptions = {
   bundleRoot: string;
   workerEnv: NodeJS.ProcessEnv;
+  nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
   engineEnv: NodeJS.ProcessEnv;
   input: NodeWorkerLaunchInput;
   descriptor: WorkerLaunchDescriptor;
@@ -71,6 +83,36 @@ type NodeWorkerLaunchTransport =
 export async function prepareNodeWorkerLaunchTransport(
   options: NodeWorkerLaunchTransportOptions,
 ): Promise<NodeWorkerLaunchTransport> {
+  // Only the trusted snapshot can grant inference custody. Never forward a
+  // caller-provided carrier, including to ordinary proxied children.
+  const workerEnv = { ...options.workerEnv };
+  let secretInput: SpawnSecretInput | undefined;
+  if (options.descriptor.assignment.inference === "runtime-local") {
+    if (options.containerEngine) {
+      throw new Error(
+        'Worker-local inference requires nodeHost.workerRuns.isolation to be "none"; ' +
+          "nested-container worker isolation is unsupported.",
+      );
+    }
+    if (!options.nativeInferenceSnapshot) {
+      throw new Error(NODE_WORKER_INFERENCE_SETUP_ERROR);
+    }
+    const startup = projectNodeWorkerNativeInference(
+      options.nativeInferenceSnapshot,
+      options.descriptor,
+    );
+    const encoded = JSON.stringify(startup);
+    if (Buffer.byteLength(encoded) > WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES) {
+      throw new Error(
+        "Worker-local inference startup data exceeds 2 MiB. Reduce the configured node models " +
+          "or headers, then restart the node host.",
+      );
+    }
+    secretInput = {
+      fd: WORKER_NATIVE_INFERENCE_STARTUP_FD,
+      createData: () => Buffer.from(encoded),
+    };
+  }
   const entry = resolveNodeWorkerEntry({
     bundleRoot: options.bundleRoot,
     expectedBundleHash: options.input.expectedBundleHash,
@@ -82,9 +124,11 @@ export async function prepareNodeWorkerLaunchTransport(
       entry,
       "--internal-worker-ipc",
       "--internal-worker-session",
+      ...(secretInput ? [WORKER_NATIVE_INFERENCE_STARTUP_ARG] : []),
     ];
     const workerOptions = {
-      env: options.workerEnv,
+      env: workerEnv,
+      secretInput,
       ownedWorker: true,
       stdinMode: "pipe-open",
       stdoutConsumption: "awaited",
@@ -165,7 +209,7 @@ export async function prepareNodeWorkerLaunchTransport(
       workspaceDir: options.descriptor.assignment.workspaceDir,
       gatewayNamespace: options.input.gatewayNamespace,
       launchId: options.input.launchId,
-      env: options.workerEnv,
+      env: workerEnv,
       ...(options.containerImage ? { image: options.containerImage } : {}),
     });
     const claimed = await options.store.get(options.input.launchId);

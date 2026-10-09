@@ -1,8 +1,3 @@
-/**
- * Interactive terminal theme loader.
- *
- * Validates theme JSON, resolves color variables, and exposes terminal styling helpers.
- */
 import * as fs from "node:fs";
 import { getCapabilities } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -176,8 +171,6 @@ function rgbTo256(r: number, g: number, b: number): number {
   const minC = Math.min(r, g, b);
   const spread = maxC - minC;
 
-  // Only consider grayscale if color is nearly neutral (spread < 10)
-  // AND grayscale is actually closer
   if (spread < 10 && grayDist < cubeDist) {
     return grayIndex;
   }
@@ -452,10 +445,6 @@ const cliHighlightTheme: Record<string, (s: string) => string> = {
   punctuation: (s) => interactiveAgentTheme.fg("syntaxPunctuation", s),
 };
 
-/**
- * Highlight code with syntax coloring based on file extension or language.
- * Returns array of highlighted lines.
- */
 export function highlightCode(code: string, lang?: string): string[] {
   // Validate language before highlighting to avoid stderr spam from cli-highlight
   const validLang = lang && supportsLanguage(lang) ? lang : undefined;
@@ -472,9 +461,6 @@ export function highlightCode(code: string, lang?: string): string[] {
   }
 }
 
-/**
- * Get language identifier from file path extension.
- */
 export function getLanguageFromPath(filePath: string): string | undefined {
   const ext = filePath.split(".").pop()?.toLowerCase();
   if (!ext) {

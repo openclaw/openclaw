@@ -54,7 +54,7 @@ import {
 } from "./performance.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
-import { rolloverChatStream } from "./stream-causal-boundary.ts";
+import { retainPersistedStreamPrefix } from "./stream-causal-boundary.ts";
 import {
   hasVisibleStreamParts,
   historyReplacedVisibleStream,
@@ -63,6 +63,7 @@ import {
 } from "./stream-reconciliation.ts";
 import {
   pruneHistoryReplacedStreamSegments,
+  prunePersistedAssistantStreamSegments,
   prunePersistedToolStreamMessages,
 } from "./stream-segment-pruning.ts";
 import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
@@ -199,7 +200,6 @@ export async function hydrateChatHistory(
     }
     if (isHistoryCursor(response) && response.kind === "delta") {
       const runProjectionsBeforeApply = readRunProjections(state, sessionKey, requestAgentId);
-      const activeStreamBeforeApply = state.chatRunId ? state.chatStream : null;
       const runActive = isSessionRunActive(response.sessionInfo);
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
@@ -234,7 +234,6 @@ export async function hydrateChatHistory(
         runProjectionsBeforeApply,
         currentRunProjections: historyProjection.runs,
         resetStream: !state.chatRunId || state.chatRunId === previousRunId,
-        activeStreamBeforeReset: activeStreamBeforeApply,
       });
       commitCurrentChatHistorySnapshot(state, response.deltaCursor ?? null);
       recordTiming("applied", {
@@ -337,7 +336,6 @@ export async function hydrateChatHistory(
     state.chatVerboseLevel = res.verboseLevel ?? null;
     state.chatQueueModeOverride = res.sessionInfo?.queueMode;
     state.chatEffectiveQueueMode = res.sessionInfo?.effectiveQueueMode;
-    const activeStreamBeforeReset = state.chatRunId ? state.chatStream : null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
@@ -345,13 +343,18 @@ export async function hydrateChatHistory(
         isHiddenAssistantMessage: shouldHideAssistantChatMessage,
         isHiddenStreamText: isHiddenAssistantStreamText,
       };
+      for (const message of state.chatMessages) {
+        prunePersistedAssistantStreamSegments(state, message);
+      }
       const hasVisibleStream = hasVisibleStreamParts(state, streamReconciliation);
-      const historyReplacedStream = historyReplacedVisibleStream(
-        state.chatMessages,
-        state,
-        streamReconciliation,
-      );
-      pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
+      // The live snapshot already excludes durable bytes. Equal text can be a
+      // distinct new occurrence, so only item identity can retire its live copy.
+      const historyReplacedStream =
+        !res.inFlightRun &&
+        historyReplacedVisibleStream(state.chatMessages, state, streamReconciliation);
+      if (!res.inFlightRun) {
+        pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
+      }
       const liveToolIds = state.toolStreamOrder ?? [];
       if (
         state.chatRunId &&
@@ -367,7 +370,7 @@ export async function hydrateChatHistory(
       const liveToolStreamReplaced = liveToolIds.length === 0 || historyReplacedToolStream;
       if (!hasVisibleStream || historyReplacedStream) {
         if (state.chatRunId && historyReplacedStream) {
-          rolloverChatStream(state, { runId: state.chatRunId, persisted: true });
+          retainPersistedStreamPrefix(state);
         }
         if (liveToolStreamReplaced) {
           maybeResetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
@@ -402,7 +405,12 @@ export async function hydrateChatHistory(
         if (!visibleCurrentAssistantStreamTail(state, streamReconciliation.isHiddenStreamText)) {
           state.chatStreamStartedAt = null;
         }
-        pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
+        for (const message of state.chatMessages) {
+          prunePersistedAssistantStreamSegments(state, message);
+        }
+        if (!res.inFlightRun) {
+          pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
+        }
         if (historyReplacedToolStream) {
           maybeResetToolStream(state, { preserveStreamSegments: true });
         } else {
@@ -420,7 +428,6 @@ export async function hydrateChatHistory(
       runProjectionsBeforeApply,
       currentRunProjections: historyProjection.runs,
       resetStream,
-      activeStreamBeforeReset,
     });
 
     recordTiming("applied", {

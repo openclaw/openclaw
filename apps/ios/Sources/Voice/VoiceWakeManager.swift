@@ -38,10 +38,7 @@ private enum VoiceWakeAudioError: LocalizedError {
     case invalidInputFormat
 
     var errorDescription: String? {
-        switch self {
-        case .invalidInputFormat:
-            String(localized: "Microphone input format unavailable")
-        }
+        String(localized: "Microphone input format unavailable")
     }
 }
 
@@ -55,7 +52,7 @@ enum VoiceWakeSuppressionReason: Hashable {
 
 @MainActor
 @Observable
-final class VoiceWakeManager: NSObject {
+final class VoiceWakeManager {
     var isEnabled: Bool = false
     var isListening: Bool = false
     var statusText: String = "Off"
@@ -83,7 +80,7 @@ final class VoiceWakeManager: NSObject {
     private let recognitionErrorRestartDelayNs: UInt64
     private let audioSessionDeactivationAction: (@MainActor () throws -> Void)?
 
-    override convenience init() {
+    convenience init() {
         self.init(recognitionErrorRestartDelayNs: 700_000_000, audioSessionDeactivationAction: nil)
     }
 
@@ -93,7 +90,6 @@ final class VoiceWakeManager: NSObject {
     {
         self.recognitionErrorRestartDelayNs = recognitionErrorRestartDelayNs
         self.audioSessionDeactivationAction = audioSessionDeactivationAction
-        super.init()
         self.userDefaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: UserDefaults.standard,
@@ -350,8 +346,10 @@ final class VoiceWakeManager: NSObject {
     {
         { [weak self] result, error in
             let transcript = result?.bestTranscription.formattedString
-            let segments = result.flatMap { result in
-                transcript.map { WakeWordSpeechSegments.from(transcription: result.bestTranscription, transcript: $0) }
+            let segments = result.map { result in
+                WakeWordSpeechSegments.from(
+                    transcription: result.bestTranscription,
+                    transcript: result.bestTranscription.formattedString)
             } ?? []
             let errorText = error?.localizedDescription
 

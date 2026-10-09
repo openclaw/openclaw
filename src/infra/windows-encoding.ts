@@ -163,10 +163,20 @@ export function decodeWindowsOutputBuffer(params: {
 export function decodeWindowsTextFileBuffer(
   params: Parameters<typeof decodeWindowsOutputBuffer>[0],
 ): string {
-  return decodeWindowsBufferWithFallback({
-    ...params,
-    resolveFallbackEncoding: () => params.windowsEncoding ?? resolveWindowsSystemEncoding(),
-  });
+  return (
+    decodeUtf16BomBuffer(params.buffer) ??
+    decodeWindowsBufferWithFallback({
+      ...params,
+      resolveFallbackEncoding: () => params.windowsEncoding ?? resolveWindowsSystemEncoding(),
+    })
+  );
+}
+
+function decodeUtf16BomBuffer(buffer: Buffer): string | undefined {
+  const [first, second] = buffer;
+  return (first === 0xff && second === 0xfe) || (first === 0xfe && second === 0xff)
+    ? new TextDecoder(first === 0xff ? "utf-16le" : "utf-16be").decode(buffer)
+    : undefined;
 }
 
 function decodeWindowsBufferWithFallback(params: {
@@ -181,9 +191,9 @@ function decodeWindowsBufferWithFallback(params: {
 
   // Windows PowerShell files and command output can declare UTF-16 with a BOM;
   // honor it before consulting either the system or console legacy code page.
-  const [first, second] = params.buffer;
-  if ((first === 0xff && second === 0xfe) || (first === 0xfe && second === 0xff)) {
-    return new TextDecoder(first === 0xff ? "utf-16le" : "utf-16be").decode(params.buffer);
+  const utf16 = decodeUtf16BomBuffer(params.buffer);
+  if (utf16 !== undefined) {
+    return utf16;
   }
 
   const utf8 = decodeStrictUtf8(params.buffer);

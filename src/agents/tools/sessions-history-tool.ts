@@ -43,6 +43,7 @@ import {
 import {
   createSessionVisibilityRowChecker,
   formatSessionToolAccessDenial,
+  isSessionToolMainAlias,
   resolveSessionReference,
   resolveSessionToolAccess,
   resolveSessionToolContext,
@@ -386,11 +387,7 @@ export function createSessionsHistoryTool(opts?: {
       }).sessionAgentId;
       const normalizedInputKey = sessionKeyParam.trim();
       const isCurrentSession = normalizedInputKey === "current";
-      const isConfiguredMainAlias =
-        normalizedInputKey === "main" ||
-        normalizedInputKey === "global" ||
-        normalizedInputKey === mainKey ||
-        normalizedInputKey === alias;
+      const isConfiguredMainAlias = isSessionToolMainAlias(normalizedInputKey, { mainKey, alias });
       const inputStoreOwner =
         shouldResolveSessionIdInput(sessionKeyParam) && !isConfiguredMainAlias
           ? { kind: "none" as const }

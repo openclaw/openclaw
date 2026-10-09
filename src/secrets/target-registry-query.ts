@@ -1,4 +1,3 @@
-/** Query helpers for discovering secret target registry entries. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { formatConcreteConfigPath, type ConcreteConfigPathSegment } from "../shared/dot-path.js";
@@ -278,7 +277,6 @@ function toResolvedPlanTarget(
 /**
  * Lists the full secrets target registry in public, serializable form.
  */
-/** Lists all configured secret target registry entries. */
 export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   return getCompiledSecretTargetRegistryState().compiledSecretTargetRegistry.map((entry) =>
     Object.assign(
@@ -306,9 +304,6 @@ export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   );
 }
 
-/**
- * Narrows unknown input to a target id currently present in the compiled registry.
- */
 export function isKnownSecretTargetId(value: unknown): value is string {
   return (
     typeof value === "string" && getCompiledSecretTargetRegistryState().knownTargetIds.has(value)
@@ -323,9 +318,6 @@ export function isKnownCoreSecretTargetId(value: unknown): value is string {
   );
 }
 
-/**
- * Resolves a secrets apply-plan target against registered target type and path patterns.
- */
 export function resolvePlanTargetAgainstRegistry(candidate: {
   type: string;
   pathSegments: string[];
@@ -415,9 +407,6 @@ export function resolveSecretPlanTargetByPathCore(params: {
   );
 }
 
-/**
- * Resolves an openclaw.json config path to the matching plan-capable secrets target.
- */
 export function resolveConfigSecretTargetByPath(
   pathSegments: string[],
   pathTokens: readonly ConcreteConfigPathSegment[] = pathSegments,
@@ -445,7 +434,6 @@ export function resolveConfigSecretTargetByPath(
   );
 }
 
-/** Discovers configured secret-bearing values in openclaw.json. */
 export function discoverConfigSecretTargets(
   config: OpenClawConfig,
   options: {
@@ -456,9 +444,6 @@ export function discoverConfigSecretTargets(
   return discoverConfigSecretTargetsByIds(config, undefined, options);
 }
 
-/**
- * Discovers configured openclaw.json targets, optionally limited to selected registry ids.
- */
 export function discoverConfigSecretTargetsByIds(
   config: OpenClawConfig,
   targetIds?: Iterable<string>,
@@ -500,9 +485,6 @@ export function discoverConfigSecretTargetsByIds(
   return discoverSecretTargetsFromEntries(config, discoveryEntries);
 }
 
-/**
- * Discovers secret-bearing values in auth-profiles.json store objects.
- */
 export function discoverAuthProfileSecretTargets(
   store: unknown,
   targetIds?: Iterable<string>,
@@ -517,9 +499,6 @@ export function discoverAuthProfileSecretTargets(
   return discoverSecretTargetsFromEntries(store, discoveryEntries);
 }
 
-/**
- * Lists auth-profile target entries that participate in plaintext/unresolved-ref audit.
- */
 export function listAuthProfileSecretTargetEntries(): SecretTargetRegistryEntry[] {
   return getCoreSecretTargetRegistry().filter(
     (entry) => entry.configFile === "auth-profile-store" && entry.includeInAudit,

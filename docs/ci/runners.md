@@ -106,7 +106,7 @@ These controls cover dispatches using the updated workflows in this repository.
 The OpenClaw wrapper selects the workflow from `main` for Testbox `run` and
 `warmup`, overriding configured refs and rejecting explicit historical refs.
 Its source capsule still reconstructs the checkout being tested. Old wrappers,
-direct historical-ref dispatches, other repositories, alternate workflows, and Windows probe
+direct historical-ref dispatches, other repositories, alternate workflows, and Windows check
 workflows are outside the shared pool. Organization-wide concurrency, per-token
 admission, SKU restrictions, and a hard spending stop require provider controls.
 
@@ -205,7 +205,7 @@ reconciliation, and producer work.
 Npm preflight retains `blacksmith-32vcpu-ubuntu-2404`. Main CI previously used
 the same class for test types, core type stripes, and runtime-topology checks
 to compensate for smaller delivered machines.
-In the [2026-09-01 capacity probe](https://github.com/openclaw/openclaw/actions/runs/33538827388),
+In the [2026-09-01 capacity check](https://github.com/openclaw/openclaw/actions/runs/33538827388),
 that label was the first measured class meeting the eight-CPU/24-GiB threshold
 used by OpenClaw's parallel-check policy:
 
@@ -220,7 +220,7 @@ used by OpenClaw's parallel-check policy:
 OS CPU count, affinity, Node, and CPU-time measurements agreed. Guest cgroup
 quotas were unlimited. The provider-side reason for the mismatch is unresolved;
 the table records observed capacity, not Blacksmith's advertised specifications
-or a guaranteed allocation. The probe measured capacity, not whole-release
+or a guaranteed allocation. The check measured capacity, not whole-release
 speedup or billing equivalence.
 
 Compact Node jobs retain the planner's 32-class request for two-child bins and
@@ -245,13 +245,13 @@ by the same planner and executor. Hosted routing still uses the workflow's trust
 and retry rules. This adds no jobs or runner registrations.
 
 Native compact rows that would request the 4-class now request the 8-class after
-packing. Both delivered two CPUs and 7.66 GiB in the capacity probe, while the
+packing. Both delivered two CPUs and 7.66 GiB in the capacity check, while the
 five-run September 21 sample showed a 125-second median assignment wait on the
 4-class. Logical packing classes, child processes, worker limits, and hosted
 fallbacks stay unchanged. This avoids that queue at a higher per-minute rate;
 the combined packing and hosted-check changes must establish the net cost saving.
 
-Current-target `build-artifacts` uses the existing 16-class. A [controlled Testbox proof](https://github.com/openclaw/openclaw/actions/runs/34669346942) at `3ccc3710bd6` completed all eight job compute steps in 229.3 seconds (252.8 seconds including payload setup) on four CPUs and 15.42 GiB RAM, with a 12.59 GiB cgroup peak and no recorded OOM events. The proof retained the complete parallel verifier wave and passed final source, worker-generation cleanup, and memory-event checks. The existing SDK memory gate keeps declarations serial below the capacity needed for both compiler heaps. Frozen targets and missing target classifications now request the same 16-class; hosted fallbacks, job counts, concurrency, and deadlines are unchanged. The recorded measurements establish compute fit for that tested current target, not historical targets or a guaranteed full Actions duration.
+Current-target `build-artifacts` uses the existing 16-class. A [controlled Testbox proof](https://github.com/openclaw/openclaw/actions/runs/34669346942) at `3ccc3710bd6` completed all eight job compute steps in 229.3 seconds (252.8 seconds including payload setup) on four CPUs and 15.42 GiB RAM, with a 12.59 GiB cgroup peak and no recorded OOM events. The proof retained the complete parallel verifier wave and passed final source, worker-generation cleanup, and memory-event checks. SDK declaration generation now uses one compiler program, with the existing child heap budget and native headroom. Frozen targets and missing target classifications now request the same 16-class; hosted fallbacks, job counts, concurrency, and deadlines are unchanged. The recorded measurements establish compute fit for that tested current target, not historical targets or a guaranteed full Actions duration.
 
 Existing recommendation-based promotions from the 8-class remain for `checks-node-compact-large-5` and `checks-node-compact-large-9`. Extension bundles follow the planner's runner metadata: the former bundle-16/bundle-25 overrides would attach old recommendations to different work after compaction. The former 32-to-16 overrides for `checks-node-compact-small-3`, `checks-node-compact-small-4`, and `checks-node-compact-small-10` are removed so these rows retain their planner-owned parallel or tooling capacity. Numbered bins can contain different work across profiles and revisions; the retained compact recommendations use a 24-hour window and still need ownership-based replacement when those bins change. A later recommendation identified CPU saturation for `build-artifacts` on the 16-class. Current complete-job duration and memory headroom still need measurement; the earlier controlled proof retains its original source scope.
 
@@ -410,7 +410,7 @@ Automatic canonical hybrid first attempts inspect recent hosted assignment befor
 
 Dependencies, core type stripes, and runtime topology can use optional hosted capacity within the eligible PR workload's slack. Extension package boundaries retain Blacksmith because hosted cold-archive runs exceeded 22 minutes; their compiled receipts and dependency links are not yet portable across checkout roots. Admission retains the previous boundary-row reservation so this change does not expand other offloads. Main additionally admits lint and central types. In the September 22 five-run sample, the largest independent hosted check took 664 seconds; artifact builds reached 898 seconds and therefore retain Blacksmith. These observations replace the earlier projections made against a thirty-minute main objective. The current qualification target is a complete run within fifteen minutes, including preflight, assignment, setup, and the gate; routing estimates alone do not establish it. Automatic preflight retains Blacksmith. The admission guard now rejects waits at sixty seconds to match that target; API and job deadlines remain unchanged.
 
-This is an admission decision for future jobs. A hosted stall beginning after the snapshot can still delay admitted work, and existing hosted jobs remain exposed. The probe itself can add up to ten seconds to preflight. It never changes repository variables, migrates an already queued job, or retries failed work.
+This is an admission decision for future jobs. A hosted stall beginning after the snapshot can still delay admitted work, and existing hosted jobs remain exposed. The check itself can add up to ten seconds to preflight. It never changes repository variables, migrates an already queued job, or retries failed work.
 
 Hybrid is the normal degraded-capacity mode. If Blacksmith is down: rerun the failed or stuck heavy job; it lands on hosted automatically. During a full Blacksmith outage, record whether `OPENCLAW_CI_RUNNER_BACKEND` is set and its current value, then enable the `github` circuit breaker:
 
@@ -468,7 +468,7 @@ Delete the variable only if it was previously unset; deletion selects the defaul
 gh variable delete OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw
 ```
 
-`ci.yml` does not probe Blacksmith or mutate this variable. Hybrid fallback is per job and activates only when a coordinator reruns the workflow or selected failed jobs.
+`ci.yml` does not check Blacksmith or mutate this variable. Hybrid fallback is per job and activates only when a coordinator reruns the workflow or selected failed jobs.
 
 ## Related
 

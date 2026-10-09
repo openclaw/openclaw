@@ -100,7 +100,7 @@ export function persistRegistryFixture(
   } else {
     saveSubagentRegistryToSqlite(runs);
   }
-  const events: Array<() => void> = [];
+
   const published = new Map(runs);
   for (const id of runIds ?? runs.keys()) {
     const entry = runs.get(id);
@@ -108,6 +108,5 @@ export function persistRegistryFixture(
       published.set(id, copySubagentRunRuntimeOwner(entry, structuredClone(entry)));
     }
   }
-  publishSubagentRunsAfterAtomicStore(published, runIds, events);
-  events.forEach((publish) => publish());
+  publishSubagentRunsAfterAtomicStore(published, runIds)();
 }

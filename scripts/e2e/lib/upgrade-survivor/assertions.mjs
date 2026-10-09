@@ -1,10 +1,13 @@
 import assertStrict from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-// Assertions for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
 import {
   UPGRADE_SURVIVOR_ASSERTION_SCENARIOS,
   usesStructuredToolSearchAtBaseline,
@@ -13,6 +16,7 @@ import {
   inspectNpmPackageTarball,
   validatePrepublishPluginRegistryArtifact,
 } from "../../../prepublish-plugin-registry-artifact.mjs";
+import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
 import { assert, readJson, write, writeJson } from "../fixtures/common.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { recordSuccessfulUpdateCheck } from "./diagnostics.mjs";
@@ -20,8 +24,13 @@ import {
   assertExecApprovalPolicySurvived,
   seedLegacyExecApprovalPolicy,
 } from "./exec-approval-fixture.mjs";
+import { readDatabase } from "./observations.mjs";
 import * as sessionSourceFixture from "./session-source-fixture.mjs";
-import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
+import {
+  assertUpgradeVolumeMigrated,
+  measureVolumeDoctorBudget,
+  seedUpgradeVolume,
+} from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
 // Keep unrelated packaged assertion commands independent of agent-turn helpers.
@@ -303,6 +312,41 @@ function acceptsIntent(coverage, id) {
   return Array.isArray(coverage.acceptedIntents) && coverage.acceptedIntents.includes(id);
 }
 
+function runtimeDependencyFixtures(stateDir, versioned) {
+  const version = versioned ? requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION") : undefined;
+  const plugins = versioned
+    ? ["discord", "feishu", "telegram", "whatsapp"]
+    : ["discord", "telegram", "whatsapp"];
+  return plugins.map((plugin) => {
+    const root = path.join(
+      stateDir,
+      "plugin-runtime-deps",
+      versioned ? `openclaw-${version}-${plugin}` : plugin,
+    );
+    return {
+      stampPath: path.join(root, ".openclaw-runtime-deps-stamp.json"),
+      stamp: { ...(versioned ? { packageVersion: version } : { version: 0 }), plugin, stale: true },
+      sentinel: path.join(
+        root,
+        ...(versioned ? [] : [".openclaw-runtime-deps-copy-stale"]),
+        "node_modules",
+        "stale-sentinel",
+        "package.json",
+      ),
+    };
+  });
+}
+
+function assertRuntimeDependenciesSurvived(stateDir, versioned) {
+  for (const { sentinel } of runtimeDependencyFixtures(stateDir, versioned)) {
+    assertStrict.deepEqual(
+      readJson(sentinel),
+      { name: "stale-sentinel", version: "0.0.0" },
+      `${versioned ? "versioned shared runtime cache" : "shared plugin runtime cache"} changed during update/doctor: ${sentinel}`,
+    );
+  }
+}
+
 function seedState() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
@@ -361,50 +405,10 @@ function seedState() {
     writeJson(path.join(stateDir, "credentials", "oauth.json"), fixture.legacyOAuth);
   }
 
-  const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
-  for (const plugin of ["discord", "telegram", "whatsapp"]) {
-    writeJson(path.join(runtimeRoot, plugin, ".openclaw-runtime-deps-stamp.json"), {
-      version: 0,
-      plugin,
-      stale: true,
-    });
-    write(
-      path.join(
-        runtimeRoot,
-        plugin,
-        ".openclaw-runtime-deps-copy-stale",
-        "node_modules",
-        "stale-sentinel",
-        "package.json",
-      ),
-      `${JSON.stringify({ name: "stale-sentinel", version: "0.0.0" }, null, 2)}\n`,
-    );
-  }
-  if (scenario === "versioned-runtime-deps") {
-    const version = requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION");
-    for (const plugin of ["discord", "feishu", "telegram", "whatsapp"]) {
-      writeJson(
-        path.join(
-          runtimeRoot,
-          `openclaw-${version}-${plugin}`,
-          ".openclaw-runtime-deps-stamp.json",
-        ),
-        {
-          packageVersion: version,
-          plugin,
-          stale: true,
-        },
-      );
-      write(
-        path.join(
-          runtimeRoot,
-          `openclaw-${version}-${plugin}`,
-          "node_modules",
-          "stale-sentinel",
-          "package.json",
-        ),
-        `${JSON.stringify({ name: "stale-sentinel", version: "0.0.0" }, null, 2)}\n`,
-      );
+  for (const versioned of scenario === "versioned-runtime-deps" ? [false, true] : [false]) {
+    for (const fixture of runtimeDependencyFixtures(stateDir, versioned)) {
+      writeJson(fixture.stampPath, fixture.stamp);
+      writeJson(fixture.sentinel, { name: "stale-sentinel", version: "0.0.0" });
     }
   }
 
@@ -656,6 +660,144 @@ function assertConfigSurvived() {
   }
 }
 
+function readLegacyOperatorPendingDelivery(db) {
+  return db
+    .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
+    .get("agent:ops:legacy-pending-delivery");
+}
+
+function captureLegacyOperatorPendingDelivery([stateDir, artifactRoot]) {
+  const fixturePath = path.join(artifactRoot, "legacy-operator-pending-delivery.json");
+  const witnessPath = path.join(artifactRoot, "legacy-operator-pending-delivery-before-start.json");
+  if (!fs.existsSync(fixturePath) || fs.existsSync(witnessPath)) {
+    return;
+  }
+  let witness;
+  try {
+    readDatabase(path.join(stateDir, "agents/ops/agent/openclaw-agent.sqlite"), (db) => {
+      witness = { row: readLegacyOperatorPendingDelivery(db) };
+    });
+  } catch (error) {
+    // Observation must not alter service startup; the post-update oracle rejects this receipt.
+    witness = { error: String(error) };
+  }
+  try {
+    fs.writeFileSync(witnessPath, `${JSON.stringify(witness)}\n`, { flag: "wx" });
+  } catch (error) {
+    if (error.code !== "EEXIST") {
+      throw error;
+    }
+  }
+}
+
+function assertLegacyOperatorPendingDelivery([updateJson, updateErr]) {
+  const stateDir = requireEnv("OPENCLAW_STATE_DIR");
+  const artifactRoot = requireEnv("OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT");
+  const fixture = readJson(path.join(artifactRoot, "legacy-operator-pending-delivery.json"));
+  for (const file of [updateJson, updateErr]) {
+    assert(
+      !fs.readFileSync(file, "utf8").includes("Legacy session entry state requires migration"),
+      "published update stopped on legacy pending-delivery state",
+    );
+  }
+  const db = new DatabaseSync(path.join(stateDir, "agents/ops/agent/openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
+  let liveRow;
+  let recoveredInputs = [];
+  try {
+    liveRow = readLegacyOperatorPendingDelivery(db);
+    if (
+      liveRow &&
+      JSON.parse(liveRow.entry_json).pendingFinalDelivery?.intentId !== "legacy-pending-intent"
+    ) {
+      recoveredInputs = db
+        .prepare(
+          `SELECT ${sqliteTranscriptPayloadColumns(db)} FROM transcript_events WHERE session_id = ? ORDER BY seq`,
+        )
+        .all("legacy-pending-delivery")
+        .map((event) => JSON.parse(readSqliteTranscriptPayload(event)).message);
+    }
+  } finally {
+    db.close();
+  }
+  let row = liveRow;
+  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE === "auto-auth") {
+    const witness = readJson(
+      path.join(artifactRoot, "legacy-operator-pending-delivery-before-start.json"),
+    );
+    assertStrict.equal(witness.error, undefined, "pre-start legacy delivery observation failed");
+    row = witness.row;
+  }
+  assert(row, "published update did not import legacy session into SQLite");
+  assertStrict.equal(row.current_session_id, "legacy-pending-delivery");
+  const entry = JSON.parse(row.entry_json);
+  assertStrict.equal(entry.sessionId, "legacy-pending-delivery");
+  assertStrict.deepEqual(entry.pendingFinalDelivery, {
+    kind: "replayable",
+    text: "Saved July reply",
+    createdAt: 1710000000000,
+    context: { channel: "telegram", to: "synthetic-recipient" },
+    intentId: "legacy-pending-intent",
+  });
+  assertStrict.deepEqual(
+    Object.keys(entry).filter((key) => key.startsWith("pendingFinalDelivery")),
+    ["pendingFinalDelivery"],
+  );
+  const runsDir = path.join(stateDir, "session-sqlite-migration-runs");
+  const archived = fs
+    .readdirSync(runsDir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => readJson(path.join(runsDir, name)))
+    .filter((run) => run.completedAt)
+    .flatMap((run) => run.targets.flatMap((target) => target.completedMoves))
+    .some(
+      (move) =>
+        move.kind === "legacy-store" &&
+        move.sourcePath === fixture.storePath &&
+        fs.existsSync(move.archivePath) &&
+        fs.readFileSync(move.archivePath, "utf8") === fixture.original,
+    );
+  assert(archived, "published update did not archive the original legacy session bytes");
+  assert(liveRow, "startup removed the imported legacy session");
+  assertStrict.equal(liveRow.current_session_id, "legacy-pending-delivery");
+  const liveEntry = JSON.parse(liveRow.entry_json);
+  assertStrict.equal(liveEntry.sessionId, "legacy-pending-delivery");
+  assertStrict.deepEqual(
+    Object.keys(liveEntry).filter(
+      (key) => key.startsWith("pendingFinalDelivery") && key !== "pendingFinalDelivery",
+    ),
+    [],
+  );
+  if (liveEntry.pendingFinalDelivery?.intentId === "legacy-pending-intent") {
+    assertStrict.deepEqual(liveEntry.pendingFinalDelivery, entry.pendingFinalDelivery);
+  } else {
+    assert(
+      recoveredInputs.some((message) => {
+        const provenance = message?.provenance;
+        const text =
+          typeof message?.content === "string"
+            ? message.content
+            : (message?.content ?? [])
+                .filter((part) => part.type === "text")
+                .map((part) => part.text)
+                .join("\n");
+        return (
+          message?.role === "user" &&
+          provenance?.kind === "internal_system" &&
+          provenance.sourceTool === "main_session_restart_recovery" &&
+          provenance.sourceSessionKey === "agent:ops:legacy-pending-delivery" &&
+          text.includes('The interrupted final reply was captured: "Saved July reply"')
+        );
+      }),
+      "startup replaced the legacy pending delivery without retaining its saved reply in recovery input",
+    );
+  }
+  console.log(
+    "Published updater: legacy pending delivery imported into SQLite; original JSON archived unchanged.",
+  );
+}
+
 function assertStateSurvived() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
@@ -688,22 +830,7 @@ function assertStateSurvived() {
   if (scenario === "auth-profile-v2026-7-2-beta-5") {
     assertAuthProfileMigrationSurvived(stateDir, stage);
   }
-  const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
-  for (const plugin of ["discord", "telegram", "whatsapp"]) {
-    const sentinel = path.join(
-      legacyRuntimeRoot,
-      plugin,
-      ".openclaw-runtime-deps-copy-stale",
-      "node_modules",
-      "stale-sentinel",
-      "package.json",
-    );
-    assertStrict.deepEqual(
-      readJson(sentinel),
-      { name: "stale-sentinel", version: "0.0.0" },
-      `shared plugin runtime cache changed during update/doctor: ${sentinel}`,
-    );
-  }
+  assertRuntimeDependenciesSurvived(stateDir, false);
   if (scenario === "bootstrap-persona") {
     for (const [fileName, contents] of PERSONA_FILES) {
       const actual = fs.readFileSync(path.join(workspace, fileName), "utf8");
@@ -718,21 +845,7 @@ function assertStateSurvived() {
     );
   }
   if (scenario === "versioned-runtime-deps") {
-    const version = requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION");
-    for (const plugin of ["discord", "feishu", "telegram", "whatsapp"]) {
-      const sentinel = path.join(
-        legacyRuntimeRoot,
-        `openclaw-${version}-${plugin}`,
-        "node_modules",
-        "stale-sentinel",
-        "package.json",
-      );
-      assertStrict.deepEqual(
-        readJson(sentinel),
-        { name: "stale-sentinel", version: "0.0.0" },
-        `versioned shared runtime cache changed during update/doctor: ${sentinel}`,
-      );
-    }
+    assertRuntimeDependenciesSurvived(stateDir, true);
   }
 }
 
@@ -767,10 +880,7 @@ function assertAuthProfileMigrationSurvived(stateDir, stage) {
       `auth archive changed for ${source}`,
     );
   }
-  const stateDatabase = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
-    readOnly: true,
-  });
-  try {
+  readDatabase(path.join(stateDir, "state", "openclaw.sqlite"), (stateDatabase) => {
     // Main's legacy files feed the shared owner; current runtime reads these
     // canonical state cells after Doctor retires the old agent-local rows.
     const read = stateDatabase.prepare(
@@ -815,9 +925,7 @@ function assertAuthProfileMigrationSurvived(stateDir, stage) {
       receipt?.count === 4,
       `expected four completed auth migration receipts, got ${String(receipt?.count)}`,
     );
-  } finally {
-    stateDatabase.close();
-  }
+  });
 }
 
 function assertCronScheduledAuthorityMigrated(stateDir, stage) {
@@ -830,21 +938,17 @@ function assertCronScheduledAuthorityMigrated(stateDir, stage) {
       return;
     }
     assert(fs.existsSync(databasePath), "legacy cron authority fixture missing before update");
-    const db = new DatabaseSync(databasePath, { readOnly: true });
-    try {
+    readDatabase(databasePath, (db) => {
       const rows = db.prepare("SELECT job_json FROM cron_jobs WHERE job_id LIKE 'cron-%'").all();
       assert(rows.length === 5, "baseline cron authority fixture row count changed");
       assert(
         rows.every((row) => JSON.parse(row.job_json).scheduledToolPolicy === undefined),
         "baseline unexpectedly authored current scheduled authority provenance",
       );
-    } finally {
-      db.close();
-    }
+    });
     return;
   }
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
+  readDatabase(databasePath, (db) => {
     const rows = db
       .prepare("SELECT job_id, job_json FROM cron_jobs WHERE job_id LIKE 'cron-%'")
       .all();
@@ -869,9 +973,7 @@ function assertCronScheduledAuthorityMigrated(stateDir, stage) {
         `ambiguous legacy job unexpectedly gained scheduled authority: ${id}`,
       );
     }
-  } finally {
-    db.close();
-  }
+  });
 }
 
 function assertMeetingTranscriptsMigrated(stateDir, stage) {
@@ -897,8 +999,7 @@ function assertMeetingTranscriptsMigrated(stateDir, stage) {
   );
 
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
+  readDatabase(databasePath, (db) => {
     const session = db
       .prepare(
         "SELECT session_id, started_at, next_utterance_seq FROM meeting_transcript_sessions WHERE session_id = ?",
@@ -935,9 +1036,7 @@ function assertMeetingTranscriptsMigrated(stateDir, stage) {
     assert(receipt?.status === "archived", "meeting transcript migration receipt incomplete");
     assert(receipt?.removed_source === 1, "meeting transcript source removal was not recorded");
     assert(receipt?.source_record_count === 2, "meeting transcript receipt count changed");
-  } finally {
-    db.close();
-  }
+  });
 }
 
 function assertMeetingTranscriptExport(stateDir) {
@@ -1085,8 +1184,7 @@ function assertSessionMetadataMigrated(stateDir, stage) {
   }
   if (source !== "file") {
     const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-    const db = new DatabaseSync(dbPath, { readOnly: true });
-    try {
+    readDatabase(dbPath, (db) => {
       const count = db.prepare(
         "SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?",
       );
@@ -1097,9 +1195,7 @@ function assertSessionMetadataMigrated(stateDir, stage) {
           `legacy session transcript was not imported for ${sessionId}`,
         );
       }
-    } finally {
-      db.close();
-    }
+    });
   } else {
     for (const [sessionId] of migratedSessions) {
       const expectedPath = path.join(agentSessionsDir, `${sessionId}.jsonl`);
@@ -1828,74 +1924,77 @@ function assertMobilePairingEvidence(files) {
   }
 }
 
-if (command === "list-scenarios") {
-  process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
-} else if (command === "missing-load-path") {
-  await import("./missing-load-path.mjs");
-} else if (command === "seed") {
-  seedState();
-} else if (command === "seed-legacy-operator") {
-  legacyOperator.seedLegacyOperatorState();
-} else if (command === "seed-legacy-operator-external-plugin") {
-  legacyOperator.seedLegacyOperatorExternalPlugin();
-} else if (command === "assert-legacy-operator-external-plugin") {
-  legacyOperator.assertLegacyOperatorExternalPlugin(process.argv[3]);
-} else if (command === "assert-baseline-plugin") {
-  assertBaselinePlugin(process.argv.slice(3));
-} else if (command === "seed-legacy-operator-default-cron") {
-  legacyOperator.seedLegacyOperatorDefaultCron();
-} else if (command === "seed-legacy-operator-agent") {
-  legacyOperator.seedLegacyOperatorAgent();
-} else if (command === "seed-legacy-operator-gateway") {
-  legacyOperator.seedLegacyOperatorGatewayState();
-} else if (command === "assert-legacy-operator-gateway") {
-  legacyOperator.assertLegacyOperatorGatewayState(process.argv[3] || "candidate");
-} else if (command === "legacy-operator-turn") {
-  legacyOperator.runLegacyOperatorTurn(process.argv[3]);
-} else if (command === "assert-exec-approvals") {
-  if (getScenario() === "legacy-operator-state") {
-    legacyOperator.assertLegacyOperatorApprovals(
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+const commands = {
+  "list-scenarios": () => process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`),
+  "missing-load-path": () => import("./missing-load-path.mjs"),
+  seed: seedState,
+  "seed-legacy-operator": legacyOperator?.seedLegacyOperatorState,
+  "seed-legacy-operator-external-plugin": legacyOperator?.seedLegacyOperatorExternalPlugin,
+  "assert-legacy-operator-external-plugin": ([version]) =>
+    legacyOperator.assertLegacyOperatorExternalPlugin(version),
+  "assert-baseline-plugin": assertBaselinePlugin,
+  "seed-legacy-operator-default-cron": legacyOperator?.seedLegacyOperatorDefaultCron,
+  "seed-legacy-operator-agent": legacyOperator?.seedLegacyOperatorAgent,
+  "seed-legacy-operator-gateway": legacyOperator?.seedLegacyOperatorGatewayState,
+  "seed-legacy-operator-pending-delivery": legacyOperator?.seedLegacyOperatorPendingDelivery,
+  "capture-legacy-operator-pending-delivery": () =>
+    captureLegacyOperatorPendingDelivery(process.argv.slice(3)),
+  "assert-legacy-operator-pending-delivery": () =>
+    assertLegacyOperatorPendingDelivery(process.argv.slice(3)),
+  "assert-legacy-operator-gateway": ([stage]) =>
+    legacyOperator.assertLegacyOperatorGatewayState(stage || "candidate"),
+  "legacy-operator-turn": ([stage]) => legacyOperator.runLegacyOperatorTurn(stage),
+  "assert-exec-approvals": () => {
+    if (getScenario() === "legacy-operator-state") {
+      legacyOperator.assertLegacyOperatorApprovals(
+        process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+      );
+    } else if (!["watchos-direct-node", "mobile-pairing-reconnect"].includes(getScenario())) {
+      assertExecApprovalPolicySurvived(
+        requireEnv("OPENCLAW_STATE_DIR"),
+        process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+      );
+    }
+  },
+  "volume-doctor-budget": ([file]) => {
+    const measured = measureVolumeDoctorBudget(requireEnv("OPENCLAW_STATE_DIR"));
+    const budgetSeconds = readPositiveIntEnvWithEmptyFallback(
+      "OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS",
+      measured.computedSeconds,
     );
-  } else if (!["watchos-direct-node", "mobile-pairing-reconnect"].includes(getScenario())) {
-    assertExecApprovalPolicySurvived(
-      requireEnv("OPENCLAW_STATE_DIR"),
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+    const budget = { ...measured, budgetSeconds };
+    writeJson(file, budget);
+    console.error(`SQLite volume Doctor budget: ${JSON.stringify(budget)}`);
+    process.stdout.write(String(budgetSeconds));
+  },
+  "seed-volume": async ([volume]) => {
+    assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
+    const stateDir = requireEnv("OPENCLAW_STATE_DIR");
+    await seedUpgradeVolume(stateDir, volume);
+  },
+  "assert-config": assertConfigSurvived,
+  "assert-restart-serving-turn": ([file]) => assertRestartServingTurn(file),
+  "assert-state": () => {
+    assertStateSurvived();
+    assertConfiguredPluginInstalls();
+  },
+  "assert-meeting-transcript-export": () => {
+    assert(
+      getScenario() === "meeting-transcripts-sqlite",
+      "transcript export requires the meeting scenario",
     );
-  }
-} else if (command === "seed-volume") {
-  assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
-  const stateDir = requireEnv("OPENCLAW_STATE_DIR");
-  await seedUpgradeVolume(stateDir, process.argv[3]);
-} else if (command === "assert-config") {
-  assertConfigSurvived();
-} else if (command === "assert-restart-serving-turn") {
-  await assertRestartServingTurn(process.argv[3]);
-} else if (command === "assert-state") {
-  assertStateSurvived();
-  assertConfiguredPluginInstalls();
-} else if (command === "assert-meeting-transcript-export") {
-  assert(
-    getScenario() === "meeting-transcripts-sqlite",
-    "transcript export requires the meeting scenario",
-  );
-  assertMeetingTranscriptExport(requireEnv("OPENCLAW_STATE_DIR"));
-} else if (command === "assert-npm-plugin-install") {
-  assertNpmPluginInstall(process.argv.slice(3));
-} else if (command === "assert-companion-installs") {
-  assertCompanionPluginInstalls(process.argv.slice(3));
-} else if (command === "assert-recovered-plugin-installs") {
-  assertRecoveredPluginInstalls(process.argv.slice(3));
-} else if (command === "assert-status-json") {
-  assertStatusJson(process.argv.slice(3));
-} else if (command === "assert-recoverable-update-json") {
-  assertRecoverableUpdateJson(process.argv.slice(3));
-} else if (command === "assert-successful-update-json") {
-  assertSuccessfulUpdateJson(process.argv.slice(3));
-} else if (command === "assert-repair-json") {
-  assertRepairJson(process.argv.slice(3));
-} else if (command === "assert-mobile-pairing-evidence") {
-  assertMobilePairingEvidence(process.argv.slice(3));
-} else {
+    assertMeetingTranscriptExport(requireEnv("OPENCLAW_STATE_DIR"));
+  },
+  "assert-npm-plugin-install": assertNpmPluginInstall,
+  "assert-companion-installs": assertCompanionPluginInstalls,
+  "assert-recovered-plugin-installs": assertRecoveredPluginInstalls,
+  "assert-status-json": assertStatusJson,
+  "assert-recoverable-update-json": assertRecoverableUpdateJson,
+  "assert-successful-update-json": assertSuccessfulUpdateJson,
+  "assert-repair-json": assertRepairJson,
+  "assert-mobile-pairing-evidence": assertMobilePairingEvidence,
+};
+if (!Object.hasOwn(commands, command)) {
   throw new Error(`unknown upgrade-survivor assertion command: ${command ?? "<missing>"}`);
 }
+await commands[command](process.argv.slice(3));

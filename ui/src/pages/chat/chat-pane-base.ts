@@ -38,6 +38,7 @@ import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
   resolveUiConversationIdentity,
+  scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
@@ -252,7 +253,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (!this.state?.connected || this.state.client !== this.context?.gateway.snapshot.client) {
       return false;
     }
-    const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
+    const phase = getChatHistoryLoadState(this.state).phase;
     return phase === "committed" || phase === "failed";
   }
   protected readonly synchronizeForegroundTranscript = () => {
@@ -411,6 +412,22 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       : undefined;
   }
 
+  protected projectChildRoster(
+    target: ReturnType<typeof resolveUiConversationIdentity> | undefined,
+  ) {
+    const sessions = target ? this.swarmHydrator?.rows : undefined;
+    return {
+      swarm: target && this.swarmEnabled ? { ...target, sessions: sessions ?? [] } : undefined,
+      subagentSessions: sessions,
+      subagentSessionsHydrated: Boolean(target && this.swarmHydrator?.hydrated),
+      subagentSessionsRead: Boolean(target && this.swarmHydrator?.childrenRead),
+      // Carry the admitted owner forward; route aliases do not identify child ancestry.
+      subagentParentKey: target
+        ? scopedSessionArtifactKey(target.sessionKey, target.agentId)
+        : undefined,
+    };
+  }
+
   protected isCurrentSessionArchived(state: ChatPageHost): boolean {
     return (
       state.selectedChatSessionArchived ||
@@ -485,6 +502,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     pendingRoute?: boolean;
   };
   protected swarmHydrator: SwarmRosterHydrator | null = null;
+  protected swarmEnabled = true;
   protected readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
   protected readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
   protected readonly pendingPanelToggleRequests = new Map<

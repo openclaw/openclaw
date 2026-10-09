@@ -725,7 +725,7 @@ describe("maturity docs renderer CLI", () => {
     },
   );
 
-  it("keeps historical outcomes but leaves current coverage unscored", async () => {
+  it("keeps historical category counts but leaves current coverage unscored", async () => {
     const outputDir = tempDirs.make("openclaw-maturity-identity-output-");
     const evidenceDir = tempDirs.make("openclaw-maturity-identity-evidence-");
     writeQaEvidence({
@@ -776,7 +776,7 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).toContain(historicalCategory.name);
     expect(scorecard).toContain(historicalCategory.id);
     expect(scorecard.replace(/ +\|/gu, " |")).toContain(
-      `| missing | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
+      `| ${historicalCategory.name} | ${historicalCategory.id} | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
     );
   });
 
@@ -815,7 +815,7 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).toContain(historicalCategory.name);
     expect(scorecard).toContain(historicalCategory.id);
     expect(scorecard.replace(/ +\|/gu, " |")).toContain(
-      `| missing | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
+      `| ${historicalCategory.name} | ${historicalCategory.id} | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
     );
   });
 

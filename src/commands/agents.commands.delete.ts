@@ -326,7 +326,7 @@ export async function agentsDeleteCommand(
       await prepareAgentDeleteDatabases(cfg, agentId, agentDir);
       deletion.assertCurrent();
       const commitRoster = async () =>
-        await withAgentExecApprovalsRemoved(agentId, async () => {
+        await withAgentExecApprovalsRemoved(deletion.entry, async () => {
           deletion.assertCurrent();
           if (configured) {
             await replaceConfigFile({

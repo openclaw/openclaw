@@ -1,5 +1,7 @@
 import { statSync } from "node:fs";
 import path from "node:path";
+import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-projection.js";
+import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
@@ -44,20 +46,28 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import type { SessionColdRestorationGuard } from "./session-cold-storage-guard.types.js";
 import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import type {
   SessionColdMutationPlan,
   SessionColdBatchPrepared,
-  SessionColdMutationResult,
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
-  SessionColdTurnGuard,
 } from "./session-cold-storage-worker.js";
+import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
-import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import {
+  projectionLane,
+  withSessionHistoryWorkerReadCandidates,
+} from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import {
+  parseTranscriptAppendRefusal,
+  SessionTranscriptWriterClaimReboundError,
+} from "./session-transcript-writer-claim-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { listConfiguredSessionStoreAgentIds } from "./targets.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -262,6 +272,7 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
       admissionIdentities: [
         ...(collectActiveSessionWorkAdmissions().get(options.ownerStorePath) ?? []),
       ],
+      liveSessionKeys: [...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex())],
       cooledSessionIds: [...cooled],
       beforeMs: options.beforeMs,
       maxTranscripts: options.maxTranscripts,
@@ -318,12 +329,16 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
               externalizations: batch.externalizations,
               beforeMs: options.beforeMs,
               protectionKeys: batch.protectionKeys,
+              liveSessionKeys: input.liveSessionKeys,
             },
             () => {
               assertCurrent();
               const admissions = collectActiveSessionWorkAdmissions().get(options.ownerStorePath);
               if (
-                [...(admissions ?? [])].some((identity) =>
+                [
+                  ...(admissions ?? []),
+                  ...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
+                ].some((identity) =>
                   batch.protectionKeys.includes(normalizeStoreSessionKey(identity)),
                 )
               ) {
@@ -363,13 +378,27 @@ export class SessionColdTurnReboundError extends Error {
   }
 }
 
+export class SessionColdSourceReboundError extends Error {
+  constructor(readonly refusal: NonNullable<SessionColdMutationResult["refusedSource"]>) {
+    super("Session source changed before cold transcript restoration");
+    this.name = "SessionColdSourceReboundError";
+  }
+}
+
 export async function restoreSessionColdTranscript(
   scope: SessionTranscriptReadScope,
   assertCurrent?: () => void,
   preparation?: SessionColdReadPreparation,
-  turnGuard?: SessionColdTurnGuard,
+  guard?: SessionColdRestorationGuard,
 ): Promise<void> {
   assertCurrent?.();
+  const binding = captureIncognitoSessionBinding(scope);
+  if (binding) {
+    binding.admissionSignal?.throwIfAborted();
+    binding.actor.assertReadable();
+    // An actor has no cold archive to restore; loss must still reject this continuation.
+    return;
+  }
   let resolved = preparation?.target;
   if (
     !resolved &&
@@ -413,32 +442,36 @@ export async function restoreSessionColdTranscript(
       }
       const source = createOpenClawAgentDatabasePathMatcher();
       source(target.path, target.path);
-      return await withSessionHistoryWorkerDatabase(options, async (owner) => {
-        const assertAllowed = () => {
-          assertPreparedCurrent();
-          owner.assertCurrent();
-          if (!source.isCurrent()) {
-            throw new Error(
-              "Session store changed while preparing its metadata. Retry the request.",
-            );
-          }
-        };
-        return await restoreSessionColdTranscript(
-          captured,
-          assertAllowed,
-          {
-            target,
-            readMetadata: async () => {
-              const metadata = await owner.readColdMetadata({
-                sessionId: target.sessionId,
-                env: captured.env,
-              });
-              return metadata.archive;
+      return await withSessionHistoryWorkerDatabase(
+        options,
+        async (owner) => {
+          const assertAllowed = () => {
+            assertPreparedCurrent();
+            owner.assertCurrent();
+            if (!source.isCurrent()) {
+              throw new Error(
+                "Session store changed while preparing its metadata. Retry the request.",
+              );
+            }
+          };
+          return await restoreSessionColdTranscript(
+            captured,
+            assertAllowed,
+            {
+              target,
+              readMetadata: async () => {
+                const metadata = await owner.readColdMetadata({
+                  sessionId: target.sessionId,
+                  env: captured.env,
+                });
+                return metadata.archive;
+              },
             },
-          },
-          turnGuard,
-        );
-      });
+            guard,
+          );
+        },
+        projectionLane,
+      );
     }
   }
   const options = toDatabaseOptions(resolved);
@@ -474,12 +507,22 @@ export async function restoreSessionColdTranscript(
         databaseOptions: workerDatabaseOptions(options),
         sessionId: resolved.sessionId,
         archive,
-        turnGuard,
+        guard,
       },
       assertCurrent,
     );
     if (result.turnRebound) {
       throw new SessionColdTurnReboundError(result.turnRebound);
+    }
+    if (result.refusedSource) {
+      throw new SessionColdSourceReboundError(result.refusedSource);
+    }
+    if (result.writerRefusal !== undefined) {
+      const refusal = parseTranscriptAppendRefusal(result.writerRefusal);
+      if (!refusal) {
+        throw new Error("Cold transcript writer refusal has an invalid identity");
+      }
+      throw new SessionTranscriptWriterClaimReboundError(refusal);
     }
     assertCurrent?.();
     // Keep viewed history hot without changing canonical transcript timestamps or bytes.

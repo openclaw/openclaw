@@ -1,5 +1,3 @@
-// Shared model-provider brand icon resolution and rendering for surfaces
-// that show provider rows (chat model picker, model providers settings page).
 // Icon assets live in ui/public/provider-icons/ProviderIcon-<name>.svg;
 // shared styles live under .provider-brand-icon in styles/components.css.
 import { html } from "lit";
@@ -93,7 +91,6 @@ const PROVIDER_ICON_NAMES = new Set([
 // Canonical provider id → icon asset name for providers whose brand mark ships
 // under a different slug than their catalog id.
 const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
-  "acp-copilot": "copilot",
   anthropic: "claude",
   "amazon-bedrock": "bedrock",
   "aws-bedrock": "bedrock",
@@ -131,6 +128,8 @@ const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
 // Brand display names for provider ids whose title-cased id reads wrong.
 const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   "acp-copilot": "GitHub Copilot CLI",
+  "acp-kilocode": "Kilo Code (ACP)",
+  "acp-qwen": "Qwen Code (ACP)",
   anthropic: "Anthropic",
   "claude-cli": "Claude CLI",
   google: "Google",
@@ -143,8 +142,12 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   opencode: "OpenCode",
   openrouter: "OpenRouter",
   qwen: "Qwen Cloud",
+  xai: "xAI",
   zai: "Z.AI",
 };
+
+// ACPX native harnesses publish their catalogs under `acp-<agent>` provider ids.
+const ACP_HARNESS_PROVIDER = /^acp-(.+)$/u;
 
 /** Title-cased fallback label built from the provider id ("z-ai" → "Z Ai"). */
 export function formatRawProviderLabel(provider: string): string {
@@ -157,9 +160,11 @@ export function formatRawProviderLabel(provider: string): string {
 
 /** Brand display name for a (normalized, lowercase) provider id. */
 export function providerDisplayLabel(provider: string): string {
-  return Object.hasOwn(PROVIDER_DISPLAY_LABELS, provider)
-    ? PROVIDER_DISPLAY_LABELS[provider]!
-    : formatRawProviderLabel(provider);
+  if (Object.hasOwn(PROVIDER_DISPLAY_LABELS, provider)) {
+    return PROVIDER_DISPLAY_LABELS[provider]!;
+  }
+  const acpAgent = ACP_HARNESS_PROVIDER.exec(provider)?.[1];
+  return acpAgent ? `${providerDisplayLabel(acpAgent)} (ACP)` : formatRawProviderLabel(provider);
 }
 
 /** Provider id from a canonical `provider/model` reference, or null when absent. */
@@ -173,10 +178,13 @@ export function providerIdFromModelRef(modelRef: string): string | null {
 function resolveProviderIconName(provider: string): string | null {
   const normalized = provider.trim().toLowerCase();
   const icon = PROVIDER_ICON_ALIASES[normalized] ?? normalized;
-  return PROVIDER_ICON_NAMES.has(icon) ? icon : null;
+  if (PROVIDER_ICON_NAMES.has(icon)) {
+    return icon;
+  }
+  const acpAgent = ACP_HARNESS_PROVIDER.exec(normalized)?.[1];
+  return acpAgent ? resolveProviderIconName(acpAgent) : null;
 }
 
-/** Whether a provider identity has a bundled brand mark. */
 export function hasProviderBrandIcon(provider: string): boolean {
   return resolveProviderIconName(provider) !== null;
 }
@@ -265,12 +273,7 @@ export function renderProviderFallbackIcon(label: string, options?: { className?
   `;
 }
 
-/**
- * Brand icon span for a provider id; falls back to a lettered badge when no
- * brand mark ships. `className` lets surfaces attach their sizing class.
- */
 export function renderProviderBrandIcon(provider: string, options?: { className?: string }) {
-  const surfaceClass = options?.className ? ` ${options.className}` : "";
   const icon = resolveProviderIconName(provider);
   if (!icon) {
     return renderProviderFallbackIcon(provider, options);
@@ -278,6 +281,6 @@ export function renderProviderBrandIcon(provider: string, options?: { className?
   return renderBrandIcon(
     inferControlUiPublicAssetPath(`provider-icons/ProviderIcon-${icon}.svg`),
     icon,
-    surfaceClass.trim(),
+    options?.className?.trim() ?? "",
   );
 }

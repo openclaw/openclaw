@@ -9,6 +9,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import type { WorkerConnectionIdentity } from "../../../gateway/worker-environments/connection-identity.js";
 import { createWorkerLiveEventReceiver } from "../../../gateway/worker-environments/live-events.js";
@@ -306,8 +307,7 @@ it.each(["end", "error"] as const)(
       throw new Error("expected worker session entry");
     }
     const sessionTarget = {
-      ...placementIdentity,
-      storePath,
+      ...captureSessionTranscriptTargetBinding({ ...placementIdentity, storePath }),
       expectedLifecycleRevision: entry.lifecycleRevision,
       expectedWriterRunId: entry.activeWriterRunId,
     };

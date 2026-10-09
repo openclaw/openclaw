@@ -15,7 +15,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId } from "./accounts.js";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
-import { buildSlackPresentationBlocks, canRenderSlackPresentation } from "./blocks-render.js";
+import { buildSlackPresentationBlocksIfComplete, type SlackBlock } from "./blocks-render.js";
 import { normalizeSlackOutboundText } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
@@ -64,7 +64,7 @@ function resolveSlackPresentationText(
 function renderSlackActionPresentation(
   presentation: ReturnType<typeof normalizeMessagePresentation>,
 ): {
-  blocks?: ReturnType<typeof buildSlackPresentationBlocks>;
+  blocks?: SlackBlock[];
   usesPresentationTextFallback: boolean;
 } {
   if (!presentation) {
@@ -75,10 +75,9 @@ function renderSlackActionPresentation(
       (block.type === "text" || block.type === "context") &&
       block.text.trim().length > SLACK_SECTION_TEXT_MAX,
   );
-  const renderedBlocks =
-    !needsCompleteTextFallback && canRenderSlackPresentation(presentation)
-      ? buildSlackPresentationBlocks(presentation)
-      : undefined;
+  const renderedBlocks = needsCompleteTextFallback
+    ? undefined
+    : buildSlackPresentationBlocksIfComplete(presentation);
   const usesPresentationTextFallback = !renderedBlocks || renderedBlocks.length > SLACK_MAX_BLOCKS;
   const blocks = usesPresentationTextFallback ? undefined : renderedBlocks;
   return {
@@ -87,7 +86,6 @@ function renderSlackActionPresentation(
   };
 }
 
-/** Translate generic channel action requests into Slack-specific tool invocations and payload shapes. */
 export async function handleSlackMessageAction(params: {
   providerId: string;
   ctx: ChannelMessageActionContext;

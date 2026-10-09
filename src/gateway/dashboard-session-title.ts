@@ -42,7 +42,7 @@ const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
 const DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS = 1_000;
 const WORKTREE_SESSION_TITLE_WAIT_MS = 30_000;
 const DASHBOARD_SESSION_TITLE_PROMPT =
-  "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.";
+  "Generate a concise session title (3-6 words, max 60 characters) from the supplied source message. Use the language the message is written in, not the language of quoted literals, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.";
 
 function decodeTextAttachmentPrefix(attachment: ChatAttachment, maxChars: number): string | null {
   const mimeType = attachment.mimeType?.trim().toLowerCase();
@@ -159,9 +159,67 @@ function normalizeDashboardSessionTitle(raw: string): string | null {
   if (!firstLine) {
     return null;
   }
-  const unwrapped = firstLine.replace(/^\s*(?:title\s*:\s*)?/i, "").replace(/^["'`]+|["'`]+$/g, "");
-  const normalized = unwrapped.replace(/\s+/g, " ").trim();
-  return normalized ? truncateUtf16Safe(normalized, DASHBOARD_SESSION_TITLE_MAX_CHARS) : null;
+  const title = truncateUtf16Safe(
+    firstLine
+      .replace(/^title\s*:\s*/i, "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    DASHBOARD_SESSION_TITLE_MAX_CHARS,
+  );
+  const quotes = /["'`„“”«»‘’]/gu;
+  const quotePairs: Record<string, string> = {
+    '"': '"',
+    "'": "'",
+    "`": "`",
+    "„": "“",
+    "“": "”",
+    "«": "»",
+    "»": "«",
+    "‘": "’",
+  };
+  const pending: Array<{ index: number; close: string }> = [];
+  const removed = new Set<number>();
+  // Pair after truncation so a cut-off span cannot leave a dangling delimiter.
+  for (const match of title.matchAll(quotes)) {
+    const character = match[0];
+    const index = match.index;
+    const opening = pending.at(-1);
+    const before = title.slice(0, index);
+    const after = title.slice(index + 1);
+    if (/['’]/u.test(character) && /[\p{L}\p{M}\p{N}]$/u.test(before)) {
+      if (/^[\p{L}\p{M}\p{N}]/u.test(after)) {
+        continue;
+      }
+      if (after || /s$/iu.test(before)) {
+        // Look past contractions before treating a possessive as a wrapper's closer.
+        const nextDelimiter = /‘|(?<![\p{L}\p{M}\p{N}])['’]|['’](?![\p{L}\p{M}\p{N}])/u.exec(after);
+        if (
+          opening?.close !== character ||
+          (nextDelimiter?.[0] === character &&
+            !/^[\p{L}\p{M}\p{N}]/u.test(after.slice(nextDelimiter.index + 1)))
+        ) {
+          continue;
+        }
+      }
+    }
+    if (opening?.close === character) {
+      pending.pop();
+      removed.delete(opening.index);
+      if (/^[\s"'`„“”«»‘’]*$/u.test(title.slice(0, opening.index) + title.slice(index + 1))) {
+        removed.add(opening.index);
+        removed.add(index);
+      }
+    } else if (quotePairs[character]) {
+      pending.push({ index, close: quotePairs[character] });
+      removed.add(index);
+    } else if (/[”’]/u.test(character)) {
+      removed.add(index);
+    }
+  }
+  const normalized = title
+    .replace(quotes, (quote, index) => (removed.has(index) ? "" : quote))
+    .trim();
+  return /[^\s"'`„“”«»‘’]/u.test(normalized) ? normalized : null;
 }
 
 async function generateDashboardSessionTitle(params: {
@@ -209,7 +267,7 @@ async function generateDashboardSessionTitle(params: {
         await import("../auto-reply/reply/conversation-label-generator.js");
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();
-      const generated = await generateConversationLabelWithFallback({
+      return await generateConversationLabelWithFallback({
         userMessage: sourceText,
         prompt: DASHBOARD_SESSION_TITLE_PROMPT,
         cfg: params.cfg,
@@ -225,9 +283,6 @@ async function generateDashboardSessionTitle(params: {
         operatorAuthority: params.operatorAuthority,
         ...(params.utilityOnly ? { utilityOnly: true } : {}),
       });
-      if (generated) {
-        return normalizeDashboardSessionTitle(generated);
-      }
     } catch {
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();

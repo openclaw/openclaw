@@ -29,6 +29,7 @@ import {
   getGatewayShutdownCleanupSignal,
 } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
@@ -37,11 +38,10 @@ import {
 } from "./openclaw-agent-db-lifecycle.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import {
-  AgentDatabaseExecutionAdmissionClosedError,
-  type AgentDatabaseExecutionScope,
-  type AgentDatabaseRequestExecutionSource,
-  type OpenClawAgentDatabaseExecution,
+import type {
+  AgentDatabaseExecutionScope,
+  AgentDatabaseRequestExecutionSource,
+  OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
@@ -518,7 +518,9 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
               { retireNativeOnFailure: true },
             );
           } catch (error) {
-            if (outcome.ok && failures.length === 0) {
+            if (error instanceof AgentDatabaseExecutionAdmissionClosedError) {
+              // Refused cleanup retired its captured native generation, including TEMP bindings.
+            } else if (outcome.ok && failures.length === 0) {
               reportCompletedPublicationCleanupFailure(error);
             } else {
               failures.push(error);

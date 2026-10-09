@@ -479,6 +479,6 @@ describe("pairing connect details", () => {
           minimumProbeProtocol: 4,
         },
       }),
-    ).toBe("protocol mismatch: Control UI v5, Gateway v4, probe min v4");
+    ).toBe("protocol mismatch: Control UI v5, Gateway v4, connection check min v4");
   });
 });

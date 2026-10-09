@@ -10,6 +10,8 @@ const enSessionPlacement = {
     placementFactMachine: "Machine",
     placementFactState: "State",
     placementFactDisk: "Disk",
+    placementFactInference: "Inference",
+    inferenceWorker: "Direct from worker",
     placementDiskFree: "{free} free",
     runsOnDevice: "Runs on device",
     runsOnWorker: "Runs on worker",
@@ -55,9 +57,9 @@ const enSessionPlacement = {
     dispatchSessionAction: "Continue on worker",
     stoppingSession: "Stopping session…",
     finishingSessionMove: "Finishing session move…",
-    syncingCloudFiles: "Cloud · syncing files",
+    syncingCloudFiles: "Worker · syncing files",
     syncingCloudFilesComposer: "Send now; your message starts automatically after workspace sync.",
-    syncingCloudFilesDetail: "Safely applying cloud edits",
+    syncingCloudFilesDetail: "Finalizing worker workspace",
     failedSessionTitle: "Runner failed",
     failedSessionRestartPrompt: "Restart this session to continue.",
     failedSessionStopPrompt: "Stop the failed worker before restarting this session.",
@@ -67,8 +69,7 @@ const enSessionPlacement = {
 
 export const registerSessionPlacementEnglish = Object.assign(
   () => {
-    // SAFETY: The canonical English catalog defines sessionsView as an object; this only extends it.
-    Object.assign(en.sessionsView as TranslationMap, enSessionPlacement.sessionsView);
+    Object.assign(en.sessionsView, enSessionPlacement.sessionsView);
   },
   { catalog: enSessionPlacement },
 );

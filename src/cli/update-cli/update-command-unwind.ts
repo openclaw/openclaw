@@ -44,6 +44,10 @@ export async function withUpdateCommandRecoveryUnwind(
           }),
           runId: run.runId,
         });
+  const pendingFailure = (cause: unknown, original: unknown) =>
+    new UpdateCommandPendingRecoveryFailure(primaryResult(original), formatErrorMessage(cause), {
+      cause,
+    });
   const settlePending = async (error: UpdateCommandFailure) => {
     if (opts.recovery) {
       return error;
@@ -71,11 +75,7 @@ export async function withUpdateCommandRecoveryUnwind(
     run.executorFence?.assertCurrent();
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
-      throw await settlePending(
-        new UpdateCommandPendingRecoveryFailure(primaryResult(error), formatErrorMessage(error), {
-          cause: error,
-        }),
-      );
+      throw await settlePending(pendingFailure(error, error));
     }
     try {
       run.executorFence?.assertCurrent();
@@ -97,11 +97,7 @@ export async function withUpdateCommandRecoveryUnwind(
       error instanceof UpdateRecoveryRequiredError ||
       opts.recovery
     ) {
-      throw await settlePending(
-        new UpdateCommandPendingRecoveryFailure(primaryResult(error), formatErrorMessage(error), {
-          cause: error,
-        }),
-      );
+      throw await settlePending(pendingFailure(error, error));
     }
     failure = { error };
   }
@@ -121,11 +117,7 @@ export async function withUpdateCommandRecoveryUnwind(
         cause,
       });
     }
-    throw new UpdateCommandPendingRecoveryFailure(
-      primaryResult(failure?.error ?? cause),
-      formatErrorMessage(cause),
-      { cause },
-    );
+    throw pendingFailure(cause, failure?.error ?? cause);
   }
   if (!recoveryState.ledgerHandoffOwned) {
     // The admitted newer runtime owns canonical history after handoff. The old
@@ -146,11 +138,7 @@ export async function withUpdateCommandRecoveryUnwind(
     try {
       await admitRecovery();
     } catch (error) {
-      const pending = new UpdateCommandPendingRecoveryFailure(
-        primaryResult(failure?.error ?? error),
-        formatErrorMessage(error),
-        { cause: error },
-      );
+      const pending = pendingFailure(error, failure?.error ?? error);
       if (
         failure &&
         !(failure.error instanceof UpdateCommandFailure) &&
@@ -168,11 +156,7 @@ export async function withUpdateCommandRecoveryUnwind(
           try {
             await admitRecovery();
           } catch (cause) {
-            throw new UpdateCommandPendingRecoveryFailure(
-              primaryResult(original),
-              formatErrorMessage(cause),
-              { cause },
-            );
+            throw pendingFailure(cause, original);
           }
           const recorded = await prepareUnexpectedUpdateCommandFailure(
             original,

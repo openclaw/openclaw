@@ -15,10 +15,6 @@ type TelegramAutoSelectFamilyDecision = {
 
 let wsl2SyncCache: boolean | undefined;
 
-function isWSL2SyncCached(): boolean {
-  return (wsl2SyncCache ??= isWSL2Sync());
-}
-
 type TelegramDnsResultOrderDecision = {
   value: "ipv4first" | "verbatim";
   source: string;
@@ -40,23 +36,13 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
     return { value: params.network.autoSelectFamily, source: "config" };
   }
   // WSL2 has unstable IPv6 connectivity; disable autoSelectFamily to use IPv4 directly
-  if (isWSL2SyncCached()) {
+  if ((wsl2SyncCache ??= isWSL2Sync())) {
     return { value: false, source: "default-wsl2" };
   }
   return { value: true, source: "default-node22" };
 }
 
-/**
- * Resolve DNS result order setting for Telegram network requests.
- * Some networks/ISPs have issues with IPv6 causing fetch failures.
- * Setting "ipv4first" prioritizes IPv4 addresses in DNS resolution.
- *
- * Priority:
- * 1. Environment variable OPENCLAW_TELEGRAM_DNS_RESULT_ORDER
- * 2. Config: channels.telegram.network.dnsResultOrder
- * 3. Process default: dns.getDefaultResultOrder()
- * 4. Default: "ipv4first" on Node 22+ (to work around common IPv6 issues)
- */
+// Default to IPv4 first to work around networks with broken IPv6 connectivity.
 export function resolveTelegramDnsResultOrderDecision(params?: {
   network?: TelegramNetworkConfig;
 }): TelegramDnsResultOrderDecision {

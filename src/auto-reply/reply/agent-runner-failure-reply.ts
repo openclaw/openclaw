@@ -161,8 +161,7 @@ const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
 const CODEX_EXECUTION_NODE_DISCONNECTED_RE =
   /^Codex execution node disconnected; start a fresh attempt\. \((?:execution node (?:failed|disconnected)|execution socket (?:closed|failed))(?:: [^\r\n]{1,240})?\)(?:\r?\n|$)/u;
 
-function buildCodexAppServerFailureText(message: string): string | null {
-  const normalizedMessage = collapseRepeatedFailureDetail(message);
+function buildCodexAppServerFailureText(normalizedMessage: string): string | null {
   if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
     return "⚠️ This Codex session changed before your message could run. Please send it again.";
   }
@@ -178,7 +177,6 @@ function buildCodexAppServerFailureText(message: string): string | null {
   return null;
 }
 
-/** Formats the reply shown when preflight compaction fails before a run. */
 export function buildPreflightCompactionFailureText(
   message: string,
   options?: { includeDetails?: boolean },
@@ -263,6 +261,19 @@ export function buildExternalRunFailureReply(
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
   const useHeartbeatFailureCopy = options?.useHeartbeatFailureCopy ?? options?.isHeartbeat === true;
+  const buildUnclassifiedReply = (includeHeartbeatDetails: boolean): ExternalRunFailureReply => {
+    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
+    return {
+      text: useHeartbeatFailureCopy
+        ? renderHeartbeatRunFailureCopy(
+            includeHeartbeatDetails ? resolveExternalRunFailureDetail(sanitizedMessage) : undefined,
+          )
+        : options?.includeDetails
+          ? formatForwardedExternalRunFailureText(sanitizedMessage)
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: !options?.isHeartbeat,
+    };
+  };
   const approvalMessage = resolveExecutionApprovalFailureMessage(normalizedMessage);
   if (approvalMessage) {
     return { text: `⚠️ ${approvalMessage}`, isGenericRunnerFailure: false };
@@ -288,15 +299,7 @@ export function buildExternalRunFailureReply(
         isGenericRunnerFailure: false,
       };
     }
-    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
-    return {
-      text: useHeartbeatFailureCopy
-        ? renderHeartbeatRunFailureCopy(resolveExternalRunFailureDetail(sanitizedMessage))
-        : options?.includeDetails
-          ? formatForwardedExternalRunFailureText(sanitizedMessage)
-          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      isGenericRunnerFailure: !options?.isHeartbeat,
-    };
+    return buildUnclassifiedReply(true);
   }
   const failoverFacts =
     options?.failoverFacts ??
@@ -389,19 +392,8 @@ export function buildExternalRunFailureReply(
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
-    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
-    const detail = options.includeDetails
-      ? resolveExternalRunFailureDetail(sanitizedMessage)
-      : undefined;
-    return {
-      text: useHeartbeatFailureCopy
-        ? renderHeartbeatRunFailureCopy(detail)
-        : options.includeDetails
-          ? formatForwardedExternalRunFailureText(sanitizedMessage)
-          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      // Heartbeat-backed event turns must remain visible even when they use generic wording.
-      isGenericRunnerFailure: false,
-    };
+    // Heartbeat-backed event turns remain visible even with generic wording.
+    return buildUnclassifiedReply(options.includeDetails === true);
   }
   const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
   if (codexAppServerFailure) {
@@ -504,7 +496,6 @@ export function buildEmptyInteractiveReplyPayload(params: {
   });
 }
 
-/** Converts known agent-run failures into user-facing reply payloads. */
 export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
   sessionCtx: TemplateContext;

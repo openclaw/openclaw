@@ -38,42 +38,6 @@ type QaGatewayProcessCommand = {
   envKeys: string[];
 };
 
-type QaGatewayProcessHandoff = {
-  version: 1;
-  generation: string;
-  pid: number;
-  uid: number;
-  gid: number;
-  procStartTicks: string;
-  pgrp: number;
-  commandFile: {
-    path: string;
-    sha256: string;
-  };
-};
-
-type QaGatewayProcessSandboxProof = {
-  version: 1;
-  generation: string;
-  status: "pass";
-  envKeys: string[];
-};
-
-type QaGatewayProcessRuntimeProof = {
-  version: 1;
-  generation: string;
-  status: "pass";
-  pid: number;
-  uid: number;
-  gid: number;
-  procStartTicks: string;
-  pgrp: number;
-  state: string;
-  cwd: string;
-  executablePath: string;
-  cmdlineSha256: string;
-};
-
 export type QaGatewayVerifiedProcessIdentity = {
   generation: string;
   pid: number;
@@ -165,7 +129,7 @@ function parseSha256(value: unknown, label: string) {
   return digest;
 }
 
-function parseQaGatewayProcessHandoff(value: unknown): QaGatewayProcessHandoff {
+function parseQaGatewayProcessHandoff(value: unknown) {
   if (!isRecord(value) || value.version !== PROCESS_BOUNDARY_VERSION) {
     throw new Error("invalid process-boundary identity");
   }
@@ -191,7 +155,7 @@ function parseQaGatewayProcessHandoff(value: unknown): QaGatewayProcessHandoff {
   };
 }
 
-function parseQaGatewayProcessSandboxProof(value: unknown): QaGatewayProcessSandboxProof {
+function parseQaGatewayProcessSandboxProof(value: unknown) {
   if (
     !isRecord(value) ||
     value.version !== PROCESS_BOUNDARY_VERSION ||
@@ -209,7 +173,7 @@ function parseQaGatewayProcessSandboxProof(value: unknown): QaGatewayProcessSand
   };
 }
 
-function parseQaGatewayProcessRuntimeProof(value: unknown): QaGatewayProcessRuntimeProof {
+function parseQaGatewayProcessRuntimeProof(value: unknown) {
   if (!isRecord(value) || value.version !== PROCESS_BOUNDARY_VERSION || value.status !== "pass") {
     throw new Error("invalid process-boundary runtime proof");
   }
@@ -781,5 +745,3 @@ export async function shouldRetainQaGatewayCredentialLease(env: NodeJS.ProcessEn
     return true;
   }
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

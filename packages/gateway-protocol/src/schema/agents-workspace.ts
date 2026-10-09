@@ -1,4 +1,3 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
@@ -13,7 +12,6 @@ import { NonEmptyString } from "./primitives.js";
  * reviewed mutation contract exists.
  */
 
-/** One file or folder in an agent workspace directory listing. */
 export const AgentsWorkspaceEntrySchema = closedObject({
   path: NonEmptyString,
   name: NonEmptyString,
@@ -22,7 +20,6 @@ export const AgentsWorkspaceEntrySchema = closedObject({
   updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
-/** Lists one directory of an agent workspace. */
 export const AgentsWorkspaceListParamsSchema = closedObject({
   agentId: NonEmptyString,
   path: Type.Optional(Type.String()),
@@ -40,7 +37,6 @@ export const AgentsWorkspaceListResultSchema = closedObject({
   offset: Type.Integer({ minimum: 0 }),
 });
 
-/** One workspace file preview payload (UTF-8 text or base64 image). */
 export const AgentsWorkspaceFileSchema = closedObject({
   path: NonEmptyString,
   name: NonEmptyString,
@@ -57,7 +53,6 @@ export const AgentsWorkspaceGetParamsSchema = closedObject({
   path: NonEmptyString,
 });
 
-/** Result for reading one workspace file. */
 export const AgentsWorkspaceGetResultSchema = closedObject({
   agentId: NonEmptyString,
   file: AgentsWorkspaceFileSchema,

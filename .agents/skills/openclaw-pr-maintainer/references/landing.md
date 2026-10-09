@@ -530,8 +530,14 @@ replaying an accepted or uncertain request.
 A failed or timed-out merge response can still mean GitHub merged it. Reconcile
 remote state and ancestry before retrying. Verify the final merge commit is on
 current main; do not count a draft, pending check, or local summary as landing.
-After `merge-run` removes its worktree, switch command execution back to a
-persistent checkout. Once the requested outcome and required verification are
+Run closeout from a persistent checkout only after the owning session has exited
+or released its cwd. Changing a child command's cwd does not move its parent
+agent or shell; never remove a worktree containing a live process's cwd, including
+any subdirectory. Native cleanup refuses observed cwd holders. Preserve that
+refusal; do not bypass it with raw `git worktree remove`, `rm`, or a custom script.
+If your own session still holds the worktree, finish the report with its retained
+path and defer removal to a later closeout after the session ends.
+Once the requested outcome and required verification are
 complete, remove task-owned test logs, receipts, proof archives, and scratch.
 This includes `.crabbox` outputs and task-owned archives under `.local` or
 temporary directories. Existing published PR evidence needs no local duplicate.

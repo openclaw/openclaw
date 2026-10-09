@@ -219,7 +219,7 @@ export function renderChatPreferencesSection(props: ConfigProps) {
                 }
                 input.setCustomValidity("");
                 input.value = normalized ?? "";
-                props.setChatMessageMaxWidth(normalized);
+                props.onAppearanceChange({ chatMessageMaxWidth: normalized });
               }}
             />
           `,
@@ -229,14 +229,14 @@ export function renderChatPreferencesSection(props: ConfigProps) {
           description: html`${t("configView.chatPrefs.showTaskProgressHint")}<br />
             ${showTaskProgressDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: props.chatShowTaskProgress,
-          onChange: props.setChatShowTaskProgress,
+          onChange: (enabled) => props.onAppearanceChange({ chatShowTaskProgress: enabled }),
         })}
         ${renderSettingsToggleRow({
           title: t("configView.chatPrefs.collapseTaskProgress"),
           description: html`${t("configView.chatPrefs.collapseTaskProgressHint")}<br />
             ${collapseTaskProgressDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: props.chatCollapseTaskProgress,
-          onChange: props.setChatCollapseTaskProgress,
+          onChange: (enabled) => props.onAppearanceChange({ chatCollapseTaskProgress: enabled }),
           disabled: !props.chatShowTaskProgress,
         })}
         ${renderSettingsSelectRow({
@@ -248,7 +248,8 @@ export function renderChatPreferencesSection(props: ConfigProps) {
             { value: "enter", label: t("chat.sendShortcutEnter") },
             { value: "modifier-enter", label: t("chat.sendShortcutModifierEnter") },
           ],
-          onChange: (value) => props.setChatSendShortcut(normalizeChatSendShortcut(value)),
+          onChange: (value) =>
+            props.onAppearanceChange({ chatSendShortcut: normalizeChatSendShortcut(value) }),
         })}
         ${renderSettingsRow({
           title: t("chat.followUpMode"),
@@ -261,9 +262,10 @@ export function renderChatPreferencesSection(props: ConfigProps) {
               .value=${followUpSelection}
               @change=${(event: Event) => {
                 const value = (event.currentTarget as HTMLSelectElement).value;
-                props.setChatFollowUpMode(
-                  value === "server" ? undefined : normalizeChatFollowUpMode(value),
-                );
+                props.onAppearanceChange({
+                  chatFollowUpMode:
+                    value === "server" ? undefined : normalizeChatFollowUpMode(value),
+                });
               }}
             >
               <option value="server" ?selected=${followUpSelection === "server"}>
@@ -299,14 +301,15 @@ export function renderChatPreferencesSection(props: ConfigProps) {
             { value: "viewer", label: t("chat.catalogOpenTargetViewer") },
             { value: "terminal", label: t("chat.catalogOpenTargetTerminal") },
           ],
-          onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
+          onChange: (value) =>
+            props.onAppearanceChange({ catalogOpenTarget: normalizeCatalogOpenTarget(value) }),
         })}
         ${renderSettingsToggleRow({
           title: t("configView.chatPrefs.openLinksExternally"),
           description: html`${t("configView.chatPrefs.openLinksExternallyHint")}<br />
             ${t("configView.chatPrefs.openLinksExternallyStorage")}`,
           checked: props.openLinksExternally,
-          onChange: props.setOpenLinksExternally,
+          onChange: (enabled) => props.onAppearanceChange({ openLinksExternally: enabled }),
         })}
         ${renderSettingsMediaDeviceField(props, "microphone")}
         ${renderSettingsMediaDeviceField(props, "camera")}
@@ -315,7 +318,7 @@ export function renderChatPreferencesSection(props: ConfigProps) {
           description: html`${t("chat.composer.holdToRecordSettingDescription")}<br />
             ${holdToRecordDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: props.composerHoldToRecord,
-          onChange: props.setComposerHoldToRecord,
+          onChange: (enabled) => props.onAppearanceChange({ composerHoldToRecord: enabled }),
         })}
       </div>
     </section>
@@ -362,7 +365,7 @@ export function renderLobsterPetSection(props: ConfigProps) {
             ${lobsterVisitsDefaultDescription}
             ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`,
           checked: lobsterPetVisits,
-          onChange: props.setLobsterPetVisits,
+          onChange: (enabled) => props.onAppearanceChange({ lobsterPetVisits: enabled }),
         })}
         ${renderSettingsToggleRow({
           title: t("quickSettings.appearance.lobsterSounds"),
@@ -373,7 +376,7 @@ export function renderLobsterPetSection(props: ConfigProps) {
             )}<br />
             ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: lobsterPetSounds,
-          onChange: props.setLobsterPetSounds,
+          onChange: (enabled) => props.onAppearanceChange({ lobsterPetSounds: enabled }),
           onAct: (enabled) => {
             if (enabled) {
               previewLobsterChirp();
@@ -485,14 +488,14 @@ export function renderSidebarPreferencesSection(props: ConfigProps) {
           description: html`${t("configView.sidebarPrefs.liveActivityHint")}<br />
             ${liveActivityDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: props.sidebarLiveActivity,
-          onChange: props.setSidebarLiveActivity,
+          onChange: (enabled) => props.onAppearanceChange({ sidebarLiveActivity: enabled }),
         })}
         ${renderSettingsToggleRow({
           title: t("configView.sidebarPrefs.deleteConfirm"),
           description: html`${t("configView.sidebarPrefs.deleteConfirmHint")}<br />
             ${deleteConfirmDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: sessionDeleteConfirm,
-          onChange: props.setSessionDeleteConfirm,
+          onChange: (enabled) => props.onAppearanceChange({ sessionDeleteConfirm: enabled }),
         })}
       </div>
       ${

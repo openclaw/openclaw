@@ -391,7 +391,7 @@ that Actions metadata, including private repository data accessible to the
 agent, is shared with the widget/session audience.
 
 Author guidance is conditional on a usable connected agent identity, not a
-tool-construction-time probe. `board.widget.put` verifies and revalidates that
+tool-construction-time check. `board.widget.put` verifies and revalidates that
 identity before saving HTML (including materialized Canvas documents) or
 registered widgets declaring this host capability. The same preparation owner
 serves pinning and reads, including source-config preview-credential scrubbing
@@ -503,19 +503,21 @@ The canonical table definitions, constraints, and indexes are in
 for schema versions, migration and downgrade rules, and the review checkpoint for
 material storage changes. Do not use a copied SQL sketch as the schema contract.
 
-Ordinary disk snapshots, widget-document reads, and mutations borrow the canonical
-per-agent SQLite worker connection.
-The Boards backend runs the existing synchronous transaction kernels and checks
-current caller authority at transaction entry and commit. Committed changes
+Ordinary disk snapshots and widget-document reads use the existing session
+history read worker. Mutations borrow the canonical per-agent SQLite writer
+connection, where the Boards backend checks current caller authority at
+transaction entry and commit. Committed changes
 invalidate the host's exact session projection before the mutation returns;
 cleanup failures do not turn a completed write into a retryable failure.
 Existing-session write preflight, source-handle acquisition,
 schema/bootstrap/migration, and board-presence projection retain their existing
 owners. Reads capture
 their physical store before waiting and join the same per-agent FIFO as writes.
-The worker reads one coherent snapshot without creating missing board tables;
-the host then checks current authority and starts consumption before releasing
-the queue. External consumer promises run without holding that queue, so queued
+The read worker retains its admitted read-only connection and reads one coherent
+snapshot without creating missing board tables or opening a writer publication.
+The host checks the captured physical identity, native mutation witness, and
+current authority before starting consumption and releasing the queue.
+External consumer promises run without holding that queue, so queued
 revocation cannot be overtaken by a later protected publication. Gateway close
 rejects new requests and joins accepted reads and publication cleanup before
 worker teardown. Incognito reads and writes continue on their process-held

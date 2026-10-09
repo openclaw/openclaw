@@ -14,6 +14,7 @@ import {
   createOpenAICompletionsToolCallDeltaNormalizer,
   createOpenAIEncryptedToolCallReasoningTracker,
   finalizeOpenAICompletionsToolCalls,
+  hasOpenAICompletionsDeltaContent,
 } from "../providers/openai-completions-tool-calls.js";
 import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import {
@@ -403,8 +404,6 @@ export async function processCompletionsStream(
     if (!rawChunk || typeof rawChunk !== "object") {
       continue;
     }
-    // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
-    notifyLlmRequestActivity(options?.signal);
     const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
     output.responseId ||= chunk.id;
     // Retain the provider-returned model when it differs from the requested id so
@@ -413,24 +412,30 @@ export async function processCompletionsStream(
     if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
       output.responseModel ||= chunk.model;
     }
-    let hasReasoningUsageActivity = false;
-    if (chunk.usage) {
-      output.usage = parseOpenAICompletionsUsage(chunk.usage, model, {
+    const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+    const usage = chunk.usage || choice?.usage;
+    const hasReasoningUsageActivity = Boolean(
+      usage && hasOpenAICompletionsReasoningUsageActivity(usage),
+    );
+    if (usage) {
+      output.usage = parseOpenAICompletionsUsage(usage, model, {
         includeReasoningTokens: !directMode,
       });
-      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(chunk.usage);
     }
-    const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+    const rawChoiceDelta = choice?.delta ?? choice?.message;
+    // Classify before legacy-tool buffering and hidden-reasoning display filtering.
+    notifyLlmRequestActivity(
+      options?.signal,
+      Boolean(
+        usage ||
+        choice?.finish_reason ||
+        (rawChoiceDelta &&
+          (rawChoiceDelta.tool_calls?.length || hasOpenAICompletionsDeltaContent(rawChoiceDelta))),
+      ),
+    );
     if (!choice) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       continue;
-    }
-    const choiceUsage = choice.usage;
-    if (!chunk.usage && choiceUsage) {
-      output.usage = parseOpenAICompletionsUsage(choiceUsage, model, {
-        includeReasoningTokens: !directMode,
-      });
-      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
     if (choice.finish_reason) {
       const finishReasonResult = mapOpenAIStopReason(choice.finish_reason, {
@@ -442,7 +447,6 @@ export async function processCompletionsStream(
         output.errorMessage = finishReasonResult.errorMessage;
       }
     }
-    const rawChoiceDelta = choice.delta ?? choice.message;
     if (!rawChoiceDelta) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       continue;

@@ -7,6 +7,7 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
 import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
 import {
   type DurableFinalDeliveryRequirement,
@@ -16,6 +17,7 @@ import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-par
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import {
+  durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
   sendStructuredDurableMessageBatchCore,
 } from "../message/send.js";
@@ -65,7 +67,12 @@ type DurableInboundReplyDeliveryResult =
     }
   | { status: "handled_visible"; delivery: ChannelDeliveryResult }
   | { status: "handled_no_send"; reason: "no_visible_result"; delivery: ChannelDeliveryResult }
-  | { status: "failed"; error: unknown; sentBeforeError?: true };
+  | {
+      status: "failed";
+      error: unknown;
+      /** False requires affirmative no-dispatch proof; omission preserves ambiguity. */
+      sentBeforeError?: boolean;
+    };
 
 function resolveDurableInboundReplyToId(
   params: Pick<DurableInboundReplyDeliveryParams, "ctxPayload" | "payload" | "replyToId">,
@@ -248,7 +255,14 @@ async function deliverAdmittedInboundReply(
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });
   if (send.status === "failed") {
-    return { status: "failed" as const, error: send.error };
+    return {
+      status: "failed" as const,
+      error: send.error,
+      ...(!durableMessageBatchMayHaveReachedRecipient(send) &&
+      isProvenDeliveryNotSentError(send.error)
+        ? { sentBeforeError: false }
+        : {}),
+    };
   }
   const content =
     send.status === "partial_failed"

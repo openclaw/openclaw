@@ -50,7 +50,7 @@ export function prepareIdentityFile(identityPath: string): Promise<PreparedIdent
       const previous = runtime.cached.peek(filePath);
       const pool = (runtime.pool ??= new WorkerTaskPool({
         workerUrl: resolveRuntimeProcessEntrypointUrl("identityFile"),
-        maxWorkers: 2,
+        workerClass: "file-reader",
         sharedCompute: true,
         maxPendingTasks: 256,
         maxPendingBytes: 1024 * 1024,

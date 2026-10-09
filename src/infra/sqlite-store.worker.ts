@@ -9,6 +9,7 @@ import {
   encodeOpenClawStateWorkerError,
   type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
+import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
@@ -63,6 +64,7 @@ const stateContexts = new Map<number, SqliteWorkerStateContext>();
 let sourceLoaderRegistered = false;
 let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
 let operationAdmission: { actor: number; context: SqliteWorkerOperationContext } | undefined;
+let nativeRuntimeAdmissionSent = false;
 
 function runWithActorFacts<T>(actor: number, operation: () => T): T {
   const context = stateContexts.get(actor);
@@ -463,6 +465,13 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     nativeCleanupFailure = undefined;
   }
   if (reply.ok) {
+    if (complete && !reply.cleanupFailure && !nativeRuntimeAdmissionSent) {
+      const admission = captureSqliteNativeRuntimeAdmission();
+      if (admission) {
+        reply.nativeRuntimeAdmission = admission;
+        nativeRuntimeAdmissionSent = true;
+      }
+    }
     const bytes = ownedWorkerBytes(reply.value);
     port.postMessage({ ...reply, value: bytes }, [bytes.buffer]);
   } else {

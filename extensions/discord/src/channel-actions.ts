@@ -7,7 +7,10 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { Type } from "typebox";
 import { inspectDiscordAccount } from "./account-inspect.js";
@@ -136,40 +139,38 @@ function describeDiscordMessageTool({
       },
     });
   }
-  if (actions.has("send")) {
-    schema.push({
-      actions: ["send"],
-      visibility: "all-configured",
-      properties: {
-        components: Type.Optional(
-          Type.Object(
-            {
-              blocks: Type.Optional(
-                Type.Array(Type.Unknown(), {
-                  description:
-                    "Discord Components V2 blocks such as text, buttons, selects, media, containers, and separators.",
-                }),
+  schema.push({
+    actions: ["send"],
+    visibility: "all-configured",
+    properties: {
+      components: Type.Optional(
+        Type.Object(
+          {
+            blocks: Type.Optional(
+              Type.Array(Type.Unknown(), {
+                description:
+                  "Discord Components V2 blocks such as text, buttons, selects, media, containers, and separators.",
+              }),
+            ),
+            modal: Type.Optional(
+              Type.Object(
+                {},
+                {
+                  additionalProperties: true,
+                  description: "Optional Discord modal triggered by generated components.",
+                },
               ),
-              modal: Type.Optional(
-                Type.Object(
-                  {},
-                  {
-                    additionalProperties: true,
-                    description: "Optional Discord modal triggered by generated components.",
-                  },
-                ),
-              ),
-            },
-            {
-              additionalProperties: true,
-              description:
-                "Discord Components V2 payload for send actions. Accepts the same object consumed by the Discord components adapter.",
-            },
-          ),
+            ),
+          },
+          {
+            additionalProperties: true,
+            description:
+              "Discord Components V2 payload for send actions. Accepts the same object consumed by the Discord components adapter.",
+          },
         ),
-      },
-    });
-  }
+      ),
+    },
+  });
   return {
     actions: Array.from(actions),
     capabilities: ["presentation"],
@@ -250,12 +251,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     if (!componentSpec && !nativeComponents && !embeds?.length && !filename) {
       return payloadWithDeliveryMetadata;
     }
-    const discordData =
-      payloadWithDeliveryMetadata.channelData?.discord &&
-      typeof payloadWithDeliveryMetadata.channelData.discord === "object" &&
-      !Array.isArray(payloadWithDeliveryMetadata.channelData.discord)
-        ? (payloadWithDeliveryMetadata.channelData.discord as Record<string, unknown>)
-        : {};
+    const discordData = asNonArrayRecord(payloadWithDeliveryMetadata.channelData?.discord);
     return {
       ...payloadWithDeliveryMetadata,
       channelData: {

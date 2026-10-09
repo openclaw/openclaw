@@ -11,10 +11,7 @@ export type TelephonyTtsRuntime = Pick<
 >;
 
 /** Provider facade used by Twilio/webhook code for telephony synthesis. */
-export type TelephonyTtsProvider = {
-  synthesisTimeoutMs: number;
-  synthesizeForTelephony: (text: string) => Promise<Buffer>;
-};
+export type TelephonyTtsProvider = Awaited<ReturnType<typeof createTelephonyTtsProvider>>;
 
 export const TELEPHONY_DEFAULT_TTS_TIMEOUT_MS = 8000;
 
@@ -65,7 +62,7 @@ export async function createTelephonyTtsProvider(params: {
   logger?: {
     warn?: (message: string) => void;
   };
-}): Promise<TelephonyTtsProvider> {
+}) {
   const { coreConfig, ttsOverride, runtime, logger } = params;
   const preparedConfig = await runtime.prepareTtsRequest({
     cfg: coreConfig,

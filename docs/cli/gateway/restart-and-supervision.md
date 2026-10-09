@@ -65,6 +65,12 @@ retains exit status `78` and parks a managed LaunchAgent when possible. A refuse
 shared-state database cannot record a new lifecycle row; the error log explains
 the refusal, and deep status reports it instead of an unavailable shutdown record.
 
+When the shared-state database cannot be read at all (for example, the file is
+damaged), `openclaw gateway status --deep` fails with exit status `1` and names
+the database path and read error instead of reporting a config read failure.
+Stop OpenClaw processes, then restore that file from a verified backup, as
+`openclaw doctor` also advises.
+
 Foreground/manual Gateways, in-process restarts selected by `OPENCLAW_NO_RESPAWN=1`, and other supervisors retain exit status `1` when
 cleanup cannot finish before the shutdown deadline.
 
@@ -201,11 +207,11 @@ openclaw gateway restart-handoff consume --expected-pid <pid> --json
 
 Protocol version `1` supports the `consume` operation. Consumption validates the expected PID and bounded handoff fields inside one immediate SQLite transaction. An accepted handoff is deleted before success is returned, so concurrent or replayed consumers cannot both accept it. A PID mismatch is retained for the matching owner; missing, expired, and invalid rows do not authorize a restart.
 
-Valid machine requests return JSON with exit code `0`, including non-restart results. Invalid arguments return `reason: "invalid-expected-pid"` with exit code `2`; state-store failures return `reason: "store-unavailable"` with exit code `1`. Supervisors should probe `capabilities` on the exact runtime or launcher they will use rather than infer support from an OpenClaw version string or read the private SQLite schema directly.
+Valid machine requests return JSON with exit code `0`, including non-restart results. Invalid arguments return `reason: "invalid-expected-pid"` with exit code `2`; state-store failures return `reason: "store-unavailable"` with exit code `1`. Supervisors should check `capabilities` on the exact runtime or launcher they will use rather than infer support from an OpenClaw version string or read the private SQLite schema directly.
 
 External supervisor implementations should also apply these acceptance rules:
 
-- Bound capability probes with a timeout that accounts for full CLI cold-start latency on the deployed runtime and storage, rather than assuming warm-start timing.
+- Bound capability checks with a timeout that accounts for full CLI cold-start latency on the deployed runtime and storage, rather than assuming warm-start timing.
 - If capability negotiation or handoff consumption refuses replacement, exit promptly with a nonzero status so the process manager's recovery policy can run. Do not remain alive without a Gateway child or listener.
 - Treat supervisor process liveness as distinct from replacement startup and channel readiness. Report success only after the new Gateway owns its listener and `/startupz` returns `status: "started"`; monitor `/readyz` separately for configured-channel health, while `/healthz` proves liveness only.
 

@@ -14,7 +14,10 @@ import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasSlackAccountCredentials } from "./account-configured.js";
-import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
+import {
+  buildSlackAccountSurfaceFields,
+  type SlackAccountSurfaceFields,
+} from "./account-surface-fields.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
 
 export { resolveSlackReplyToMode } from "./account-reply-mode.js";
@@ -231,17 +234,7 @@ export function resolveSlackAccount(params: {
     appTokenSource,
     userTokenSource,
     config: merged,
-    groupPolicy: merged.groupPolicy,
-    textChunkLimit: merged.textChunkLimit,
-    mediaMaxMb: merged.mediaMaxMb,
-    reactionNotifications: merged.reactionNotifications,
-    reactionAllowlist: merged.reactionAllowlist,
-    replyToMode: merged.replyToMode,
-    replyToModeByChatType: merged.replyToModeByChatType,
-    actions: merged.actions,
-    slashCommand: merged.slashCommand,
-    dm: merged.dm,
-    channels: merged.channels,
+    ...buildSlackAccountSurfaceFields(merged),
   };
 }
 

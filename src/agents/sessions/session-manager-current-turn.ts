@@ -29,9 +29,10 @@ export const sessionManagerReadTranscriptStart: unique symbol = Symbol.for(
   "openclaw.session-manager.read-transcript-start",
 );
 
-export type CurrentTurnReplayWitness = {
-  anchor: TranscriptEntryAnchor;
+export type CurrentTurnReplaySelection = {
+  entryId: string;
   version: SessionTranscriptContextVersion;
+  assertCurrent: () => void;
 };
 
 type CurrentTurnView = {
@@ -96,15 +97,16 @@ export function resolveCurrentTurnEntryId(
   return next.value;
 }
 
-export async function prepareCurrentTurnReplayWitness(
+export async function prepareCurrentTurnReplaySelection(
   readView: () => CurrentTurnView & {
     target: SessionManagerPersistenceTarget | undefined;
     version: SessionTranscriptContextVersion | undefined;
+    pendingDeliberateAppend: boolean;
   },
   matchesUser: (entry: SessionEntry | undefined) => boolean,
   signal?: AbortSignal,
   manager?: object,
-): Promise<CurrentTurnReplayWitness | undefined> {
+): Promise<CurrentTurnReplaySelection | undefined> {
   const view = readView();
   if (!view.target || !view.version) {
     return undefined;
@@ -112,21 +114,24 @@ export async function prepareCurrentTurnReplayWitness(
   const version = { ...view.version };
   const entryCount = view.entries.size;
   const assertOwned = captureOwnedTranscriptWriteAssertion(view.target);
+  const reader = prepareSessionManagerHydration(view.target, undefined, signal, manager);
   const assertCurrent = () => {
+    signal?.throwIfAborted();
     assertOwned();
+    reader.assertCurrent();
     const current = readView();
     if (
       current.target !== view.target ||
       current.version !== view.version ||
       current.entries !== view.entries ||
       current.entries.size !== entryCount ||
-      current.parentId !== view.parentId
+      current.parentId !== view.parentId ||
+      current.pendingDeliberateAppend !== view.pendingDeliberateAppend
     ) {
       throw new Error("Session manager changed during replay preparation");
     }
   };
   assertCurrent();
-  const reader = prepareSessionManagerHydration(view.target, undefined, signal, manager);
   const walk = walkSessionCurrentTurn(view.parentId, view.remainingAncestors);
   let next = walk.next();
   let entry: SessionEntry | undefined;
@@ -156,7 +161,10 @@ export async function prepareCurrentTurnReplayWitness(
     version,
     includeEntry: false,
   });
-  reader.assertCurrent();
   assertCurrent();
-  return result.anchor ? { anchor: result.anchor, version: result.version } : undefined;
+  if (!result.anchor) {
+    return undefined;
+  }
+  assertCurrent();
+  return { entryId: userId, version, assertCurrent };
 }

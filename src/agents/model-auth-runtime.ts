@@ -1,6 +1,3 @@
-/**
- * Snapshot-aware and synthetic provider-auth availability.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
@@ -31,7 +28,6 @@ export type RuntimeProviderAuthLookup = {
   syntheticAuthProviderRefs?: readonly string[];
 };
 
-/** Builds stable env/synthetic auth lookup data for repeated provider checks. */
 export function createRuntimeProviderAuthLookup(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -231,7 +227,6 @@ function resolveRuntimeAvailableProviderAuth<T>(
   return false;
 }
 
-/** Fast auth-availability check for runtime provider/model selection. */
 export function hasRuntimeAvailableProviderAuth(params: RuntimeProviderAuthParams): boolean {
   return resolveRuntimeAvailableProviderAuth(params, (provider) =>
     Boolean(

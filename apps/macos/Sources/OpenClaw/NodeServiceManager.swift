@@ -167,12 +167,8 @@ extension NodeServiceManager {
         let ok = parsed?.object["ok"] as? Bool
         let message = (parsed?.object["error"] as? String) ?? (parsed?.object["message"] as? String)
         let success = response.success && (ok ?? true)
-        if success {
-            return CommandResult(success: true, message: nil, parsed: parsed)
-        }
-
-        if quiet {
-            return CommandResult(success: false, message: message, parsed: parsed)
+        if success || quiet {
+            return CommandResult(success: success, message: success ? nil : message, parsed: parsed)
         }
 
         let detail = message ?? TextSummarySupport.summarizeLastLine(response.stderr)

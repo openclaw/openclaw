@@ -1,6 +1,6 @@
 // Stale hashed-chunk recovery for lazy routes and the entry stylesheet.
 //
-// A gateway update replaces `ui/dist` in place, so a document loaded before the
+// A gateway update replaces `dist/control-ui` in place, so a document loaded before the
 // update still references the old hashed chunk URLs; the first visit to a lazy
 // route after the update 404s and the dynamic import rejects ("Importing a
 // module script failed"). Secure-context browsers recover through the service

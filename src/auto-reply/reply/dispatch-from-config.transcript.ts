@@ -89,11 +89,11 @@ export function captureDeliveredTranscriptMirror(params: {
     if (info.kind !== "final") {
       return payload;
     }
-    if (getReplyPayloadMetadata(payload)?.finalDeliveryCapture !== params.captureToken) {
+    const payloadMetadata = getReplyPayloadMetadata(payload);
+    if (payloadMetadata?.finalDeliveryCapture !== params.captureToken) {
       return payload;
     }
     observedFinal = true;
-    const payloadMetadata = getReplyPayloadMetadata(payload);
     const payloadMirror = payloadMetadata?.sourceReplyTranscriptMirror;
     if (
       payloadMirror &&

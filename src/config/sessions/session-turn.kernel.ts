@@ -169,7 +169,7 @@ export function createSessionTranscriptTurnKernel(
           projection,
         );
         if (appended) {
-          appendedMessages.push(appended);
+          appendedMessages.push(appended.result);
         }
       }
       if (

@@ -19,7 +19,7 @@ import {
   createLeasedCodexLifecycleHarness,
   createParams as createThreadLifecycleParams,
   resetThreadLifecycleTestFixtures,
-  startOrResumeThread,
+  startOrResumeThreadWithoutSkills as startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-thread-adoption-");
