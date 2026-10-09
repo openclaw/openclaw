@@ -133,6 +133,7 @@ are complete. The synchronous SDK methods and native Promise wrappers remain
 synchronous compatibility paths; receipt publication does not migrate their SQL
 to a worker. There is no schema, stored-byte, retention, durability, permission,
 or update-format change.
+
 ### Foreign observation and recertification
 
 The shared-state current-reader owner retains one unpinned probe connection per
