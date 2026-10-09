@@ -29,6 +29,8 @@ type TelegramMessageProcessorTurnContext = {
   onDispatchStart?: () => Promise<void> | void;
   /** The turn holds its FIFO slot in the session lane while it waits for adoption. */
   onTurnDeferred?: () => void;
+  /** The turn waits behind earlier spool rows; its buffer may release the sender key. */
+  onTurnAdmissionWait?: () => void;
   spooledReplayAbortSignal?: AbortSignal;
   spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
   finalizeSpooledReplayResult?: (

@@ -250,6 +250,13 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
               deferredClaims.add(deferredClaim.promise);
             }
           };
+          const markDeferredHandoff = (admitDownstream?: () => void) => {
+            handedOff = true;
+            deferredHandoff = true;
+            trackDeferredClaim();
+            admitDownstream?.();
+            releaseStartCapacity();
+          };
           const settleLifecycle = async (settle: () => void | Promise<void>, deferred = true) => {
             handedOff = true;
             if (deferred) {
@@ -268,13 +275,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             ...lifecycle,
             admission: "exclusive",
             onAdopted: () => settleLifecycle(() => lifecycle.onAdopted(), false),
-            onDeferred: () => {
-              handedOff = true;
-              deferredHandoff = true;
-              trackDeferredClaim();
-              lifecycle.onDeferred();
-              releaseStartCapacity();
-            },
+            onDeferred: () => markDeferredHandoff(lifecycle.onDeferred),
             onAdoptionFinalizing: () => {
               handedOff = true;
               deferredHandoff = true;
@@ -337,7 +338,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           }
           if (result?.kind === "deferred") {
             if (!deferredHandoff) {
-              wrappedLifecycle.onDeferred();
+              // Buffered channel work is not reply admission: the drain releases
+              // its lane but keeps its admission turn until onDeferred/onAdopted.
+              markDeferredHandoff();
             }
             return { kind: "deferred" };
           }

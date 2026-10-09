@@ -43,8 +43,13 @@ type InboundDebounceFlush = {
   completion: Promise<void>;
 };
 
+type InboundDebounceAdmissionTurn = {
+  wait: (options?: { onBlocked?: () => void }) => Promise<void>;
+};
+
 type InboundDebounceAdmissionLifecycleInput = {
   abortSignal?: AbortSignal;
+  admissionTurn?: InboundDebounceAdmissionTurn;
   onAdopted?: () => void | Promise<void>;
   onDeferred?: () => boolean | void;
   onDeferredHeartbeat?: () => void;
@@ -57,6 +62,13 @@ type InboundDebounceAdmissionLifecycleInput = {
 /** Lifecycle shape passed to a channel dispatch so it can signal session-lane admission. */
 type InboundDebounceAdmissionLifecycle = {
   abortSignal: AbortSignal;
+  /** Durable ingress order, forwarded for the channel turn kernel to await. */
+  admissionTurn?: InboundDebounceAdmissionTurn;
+  /**
+   * The flush is blocked behind earlier ingress claims: release this debounce key
+   * and its caller without admitting the source claims, so later input still flows.
+   */
+  onAdmissionWait?: () => void;
   onAdopted: () => Promise<void>;
   onDeferred: () => boolean | void;
   onDeferredHeartbeat?: () => void;
@@ -86,6 +98,8 @@ function createInboundDebounceFlush(params: {
   const source = params.lifecycle;
   const lifecycle: InboundDebounceAdmissionLifecycle = {
     abortSignal: source?.abortSignal ?? new AbortController().signal,
+    ...(source?.admissionTurn ? { admissionTurn: source.admissionTurn } : {}),
+    onAdmissionWait: markAdmitted,
     onAdopted: async () => {
       await source?.onAdopted?.();
       markAdmitted();

@@ -190,7 +190,10 @@ export function createTelegramInboundBuffers({
             50_000)),
     // Spooled processing returns at durable turn adoption. A deferred turn already holds
     // its FIFO slot in the session lane, so it releases this sender's key: queued batches
-    // and immediate items have no claim heartbeat while they wait here.
+    // and immediate items have no claim heartbeat while they wait here. A turn held behind
+    // earlier spool rows keeps its ingress order, so it releases the key (and the chat's
+    // update handler) too; otherwise a waiting immediate item would block the next member
+    // of the earlier sender's burst.
     onFlush: (bufferedEntries, createFlush) =>
       createFlush({
         dispatch: async (lifecycle) => {
@@ -267,6 +270,7 @@ export function createTelegramInboundBuffers({
               onTurnDeferred: () => {
                 lifecycle.onDeferred();
               },
+              onTurnAdmissionWait: lifecycle.onAdmissionWait,
             });
             settleSpooledReplayParticipants(participants, result);
           } catch (error) {

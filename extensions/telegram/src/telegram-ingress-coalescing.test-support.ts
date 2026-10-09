@@ -125,6 +125,26 @@ export function forwardedPhotoUpdate(params: { updateId: number; messageId: numb
   };
 }
 
+export const groupSenders = {
+  ada: { id: 111, first_name: "Ada" },
+  bo: { id: 222, first_name: "Bo" },
+};
+
+/** Moves a fixture update into one shared group chat, sent by `sender`. */
+export function inSharedGroup<T extends { message: object }>(
+  update: T,
+  sender: { id: number; first_name: string },
+): T {
+  return {
+    ...update,
+    message: {
+      ...update.message,
+      chat: { id: -100_500, type: "supergroup" as const, title: "Team" },
+      from: { ...sender, is_bot: false },
+    },
+  };
+}
+
 export function textUpdate(params: { updateId: number; messageId: number; text: string }) {
   return {
     update_id: params.updateId,

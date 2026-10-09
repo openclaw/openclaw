@@ -21,7 +21,11 @@ import {
   registerLiveIngressDrainInstance,
 } from "./ingress-claim-owner.js";
 import { createIngressWriter } from "./ingress-claim-writes.js";
-import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
+import { createIngressAdmissionTurns } from "./ingress-drain-admission.js";
+import type {
+  ChannelIngressAdmissionTurn,
+  ChannelIngressDispatchLifecycle,
+} from "./ingress-drain-lifecycle.js";
 import {
   activeClaimKey,
   createIngressSettleOwner,
@@ -138,6 +142,7 @@ export function createChannelIngressDrain<
   const deferredLaneOccupancy = options.deferredLaneOccupancy ?? "hold";
   const activeByClaim = new Map<string, ActiveHandlerState<TPayload, TMetadata>>();
   const laneOwnerByKey = new Map<string, ActiveHandlerState<TPayload, TMetadata>>();
+  const admissionTurns = createIngressAdmissionTurns(activeByClaim);
   let disposed = false;
 
   const log = (message: string) => {
@@ -189,6 +194,18 @@ export function createChannelIngressDrain<
       laneOwnerByKey.delete(state.laneKey);
     }
     state.occupiesLane = false;
+    admissionTurns.notify();
+  };
+
+  // Deferred holds the claim; watchdog remains armed until adoption or abandon.
+  const enterDeferred = (state: ActiveHandlerState<TPayload, TMetadata>) => {
+    state.phase = "deferred";
+    if (deferredLaneOccupancy === "release") {
+      if (laneOwnerByKey.get(state.laneKey) === state) {
+        laneOwnerByKey.delete(state.laneKey);
+      }
+      state.occupiesLane = false;
+    }
   };
 
   const markLeaseReclaimed = (state: ActiveHandlerState<TPayload, TMetadata>) => {
@@ -334,9 +351,11 @@ export function createChannelIngressDrain<
 
   const createLifecycle = (
     state: ActiveHandlerState<TPayload, TMetadata>,
+    admissionTurn: ChannelIngressAdmissionTurn,
   ): ChannelIngressDispatchLifecycle => {
     return {
       abortSignal: state.abortController.signal,
+      admissionTurn,
       readLaneBacklog: async () => {
         const { pending, claims } = await readUnsettled();
         const waiting = [
@@ -378,21 +397,19 @@ export function createChannelIngressDrain<
         }
         // Complete at adoption, not settle — frees the lane for later events.
         state.phase = "adopted";
+        admissionTurns.notify();
         clearStallTimer(state);
         await state.settleOnce(() => completeClaimWithRetry(state.claim));
       },
       onDeferred: () => {
-        if (state.phase !== "dispatching") {
+        // Reply-lane admission may follow a buffered (already deferred) dispatch result.
+        if (state.phase === "dispatching") {
+          enterDeferred(state);
+        } else if (state.phase !== "deferred" || state.admittedDownstream) {
           return;
         }
-        // Deferred holds the claim; watchdog remains armed until adoption or abandon.
-        state.phase = "deferred";
-        if (deferredLaneOccupancy === "release") {
-          if (laneOwnerByKey.get(state.laneKey) === state) {
-            laneOwnerByKey.delete(state.laneKey);
-          }
-          state.occupiesLane = false;
-        }
+        state.admittedDownstream = true;
+        admissionTurns.notify();
       },
       onDeferredHeartbeat: () => {
         // A cleared watchdog marks adoption finalization or retired ownership.
@@ -456,6 +473,8 @@ export function createChannelIngressDrain<
       startedAt: now(),
       phase: "dispatching" as const,
       occupiesLane: true,
+      dispatchSeq: 0,
+      admittedDownstream: false,
       guillotined: false,
       superseded: false,
       task: Promise.resolve(),
@@ -468,7 +487,7 @@ export function createChannelIngressDrain<
     // not own yet, only for the post-dispatch registration to re-own it.
     activeByClaim.set(activeClaimKey(claim), state);
     laneOwnerByKey.set(laneKey, state);
-    const lifecycle = createLifecycle(state);
+    const lifecycle = createLifecycle(state, admissionTurns.register(state));
     armStallWatchdog(state);
     armClaimRefresh(state);
 
@@ -508,7 +527,11 @@ export function createChannelIngressDrain<
           return;
         }
         if (result?.kind === "deferred") {
-          lifecycle.onDeferred();
+          // Without onDeferred the work is still buffered or preflighting in the
+          // channel: release the lane, but keep its admission turn.
+          if (state.phase === "dispatching") {
+            enterDeferred(state);
+          }
           return;
         }
         if (result?.kind === "failed-retryable") {
@@ -758,6 +781,7 @@ export function createChannelIngressDrain<
     disposed = true;
     options.abortSignal?.removeEventListener("abort", abortActiveClaims);
     abortActiveClaims();
+    admissionTurns.dispose();
     // Snapshot: removeActive mutates activeByClaim during this sweep.
     const activeStates = Array.from(activeByClaim.values());
     for (const state of activeStates) {

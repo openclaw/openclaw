@@ -588,6 +588,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
     });
   return await runPreparedChannelTurnCore(
     {
+      cfg: params.cfg,
       channel: params.channel,
       accountId: params.accountId,
       routeSessionKey: params.routeSessionKey,

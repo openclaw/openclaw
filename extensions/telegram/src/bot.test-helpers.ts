@@ -86,8 +86,10 @@ export async function runTelegramChannelInboundEventWithHarness(
               replyOptions: plan.replyOptions,
               replyResolver: plan.replyResolver,
             }),
+          // Mirrors the routed kernel, which also adopts the reply-options lifecycle.
           runDispatchLifecycle: {
-            turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+            turnAdoptionLifecycle:
+              params.turnAdoptionLifecycle ?? plan.replyOptions?.turnAdoptionLifecycle,
             onDispatchSkipped: () => params.turnAdoptionLifecycle?.onAbandoned?.(),
           },
         };

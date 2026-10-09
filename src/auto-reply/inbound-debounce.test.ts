@@ -444,6 +444,57 @@ describe("createInboundDebouncer", () => {
     expect(onError.mock.calls[0]?.[0]).toBe(sessionError);
   });
 
+  it("forwards the source ingress admission turn to the turn it dispatches", async () => {
+    const admissionTurn = { wait: async () => {} };
+    const dispatched: unknown[] = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: (_items, createFlush) =>
+        createFlush({
+          lifecycle: { admissionTurn },
+          dispatch: async (lifecycle) => {
+            dispatched.push(lifecycle.admissionTurn);
+            await lifecycle.onAdopted();
+          },
+        }),
+    });
+
+    await debouncer.enqueue({ key: "sender", id: "reply" });
+    expect(dispatched).toEqual([admissionTurn]);
+  });
+
+  it("releases a flush blocked on its ingress admission turn without admitting the source", async () => {
+    const reachedTurn = createDeferred();
+    const earlierAdmitted = createDeferred();
+    const onDeferred = vi.fn();
+    const onAdopted = vi.fn(async () => {});
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: (_items, createFlush) =>
+        createFlush({
+          lifecycle: { onDeferred, onAdopted },
+          dispatch: async (lifecycle) => {
+            // Stands in for the turn kernel finding an earlier sender still buffered.
+            lifecycle.onAdmissionWait?.();
+            reachedTurn.resolve();
+            await earlierAdmitted.promise;
+            await lifecycle.onAdopted();
+          },
+        }),
+    });
+
+    // The caller (a transport handler holding the chat lane) returns while the turn waits.
+    await debouncer.enqueue({ key: "later-sender", id: "reply" });
+    await reachedTurn.promise;
+    expect(onDeferred).not.toHaveBeenCalled();
+    expect(onAdopted).not.toHaveBeenCalled();
+    earlierAdmitted.resolve();
+    await debouncer.drain();
+    expect(onAdopted).toHaveBeenCalledOnce();
+  });
+
   it("drains same-key flushes queued before their completion is tracked", async () => {
     const started: string[] = [];
     const firstCompletion = createDeferred();

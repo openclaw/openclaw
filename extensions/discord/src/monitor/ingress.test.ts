@@ -25,14 +25,14 @@ type DiscordIngressPayload = {
   rawMessage: APIMessage;
 };
 
-function createRawMessage(id: string, channelId = "channel-1"): APIMessage {
+function createRawMessage(id: string, channelId = "channel-1", authorId = "user-1"): APIMessage {
   return {
     id,
     channel_id: channelId,
     content: "hello",
     author: {
-      id: "user-1",
-      username: "alice",
+      id: authorId,
+      username: authorId,
       discriminator: "0",
       avatar: null,
     },
@@ -170,6 +170,78 @@ describe("Discord durable ingress", () => {
         ).toHaveLength(1);
       } finally {
         finishActive.resolve();
+        await handler.deactivate();
+      }
+    });
+  });
+
+  it("keeps a later sender's turn behind an earlier message still before reply admission", async () => {
+    await withQueue(async (queue, stateDir) => {
+      const firstStarted = createDeferred<DiscordIngressLifecycle>();
+      const releaseFirst = createDeferred<void>();
+      const laterEntered = createDeferred<void>();
+      const laterProcessed = createDeferred<void>();
+      const markerProcessed = createDeferred<void>();
+      const processed: string[] = [];
+      const params = createDiscordHandlerParams();
+      const baseContext = await createBaseDiscordMessageContext(
+        { threadBindings: params.threadBindings },
+        { storePath: path.join(stateDir, "sessions.json") },
+      );
+      const handler = createDiscordMessageHandler({
+        ...params,
+        client: {} as never,
+        testing: {
+          preflightDiscordMessage: async (input) => ({
+            ...baseContext,
+            data: input.data,
+            message: input.data.message,
+            turnAdoptionLifecycle: input.turnAdoptionLifecycle,
+            abortSignal: input.abortSignal,
+          }),
+          // Stands in for the channel turn kernel, which awaits this turn first.
+          processDiscordMessage: async (ctx) => {
+            const lifecycle = ctx.turnAdoptionLifecycle;
+            if (!lifecycle) {
+              throw new Error("Expected a durable Discord lifecycle");
+            }
+            if (ctx.message.id === "2002") {
+              laterEntered.resolve();
+            }
+            await lifecycle.admissionTurn?.wait();
+            processed.push(ctx.message.id);
+            if (ctx.message.id === "2001") {
+              // Still preflighting: no reply admission until the test releases it.
+              firstStarted.resolve(lifecycle);
+              await releaseFirst.promise;
+              lifecycle.onDeferred();
+              return;
+            }
+            await lifecycle.onAdopted();
+            (ctx.message.id === "2002" ? laterProcessed : markerProcessed).resolve();
+          },
+          createIngressMonitor: (monitorParams) =>
+            createDiscordIngressMonitor({ ...monitorParams, queue }),
+        },
+      });
+      try {
+        await handler(createRawMessage("2001", "channel-1", "user-1"), {} as never);
+        const first = await firstStarted.promise;
+        await handler(createRawMessage("2002", "channel-1", "user-2"), {} as never);
+        await laterEntered.promise;
+        // Another lane still flows, and gives the held turn time to overtake.
+        await handler(createRawMessage("2003", "channel-2", "user-2"), {} as never);
+        await markerProcessed.promise;
+        expect(processed).toEqual(["2001", "2003"]);
+
+        // Queued reply admission releases the later sender before adoption.
+        releaseFirst.resolve();
+        await laterProcessed.promise;
+        expect(processed).toEqual(["2001", "2003", "2002"]);
+        await first.onAdopted();
+        expect(await queue.listClaims()).toEqual([]);
+      } finally {
+        releaseFirst.resolve();
         await handler.deactivate();
       }
     });

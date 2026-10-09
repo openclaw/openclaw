@@ -10,6 +10,7 @@ import {
   resolveChannelIngressPolicy,
   resolveStableChannelIngressPolicy,
 } from "../channels/message-access/runtime.js";
+import { combineIngressAdmissionTurns } from "../channels/message/ingress-drain-lifecycle.js";
 /**
  * High-level runtime resolver for inbound channel access decisions.
  *
@@ -270,6 +271,9 @@ export function fanInChannelIngressLifecycles(
     }
   };
   const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
+  const admissionTurn = combineIngressAdmissionTurns(
+    lifecycles.map((lifecycle) => lifecycle.admissionTurn),
+  );
   const deferredHeartbeatIntervals = lifecycles
     .map((lifecycle) => lifecycle.deferredHeartbeatIntervalMs)
     .filter(
@@ -290,6 +294,7 @@ export function fanInChannelIngressLifecycles(
         lifecycles.length === 1
           ? first.abortSignal
           : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
+      ...(admissionTurn ? { admissionTurn } : {}),
       onAdopted: async () => {
         handedOff = true;
         await adoptAll();

@@ -5,8 +5,10 @@ describe("channel ingress drain lifecycle", () => {
   it("binds only the reply-lane ownership surface", async () => {
     const abort = new AbortController();
     const calls: string[] = [];
+    const admissionTurn = { wait: async () => {} };
     const bound = bindIngressLifecycleToReplyOptions({
       abortSignal: abort.signal,
+      admissionTurn,
       onAdoptionFinalizing: () => {
         calls.push("finalizing");
       },
@@ -36,6 +38,8 @@ describe("channel ingress drain lifecycle", () => {
       abortSignal: abort.signal,
       deferredHeartbeatIntervalMs: 1_234,
     });
+    // The channel turn kernel orders reply admission with this turn.
+    expect(bound.turnAdoptionLifecycle.admissionTurn).toBe(admissionTurn);
     expect("onFailed" in bound.turnAdoptionLifecycle).toBe(false);
     expect("onCancelled" in bound.turnAdoptionLifecycle).toBe(false);
     expect("onAdopted" in bound).toBe(false);

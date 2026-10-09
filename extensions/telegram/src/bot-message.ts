@@ -362,6 +362,9 @@ export const createTelegramMessageProcessor = (
         const result = await runTelegramDispatch({
           admission: "exclusive",
           abortSignal: turnAbortSignal,
+          // Buffers and preflight run per sender; reply admission keeps spool order.
+          ...(participant.admissionTurn ? { admissionTurn: participant.admissionTurn } : {}),
+          onAdmissionWait: () => turnContext.onTurnAdmissionWait?.(),
           onAdopted: async () => {
             if (adopted) {
               return;
@@ -379,6 +382,7 @@ export const createTelegramMessageProcessor = (
           },
           onDeferred: () => {
             deferred = true;
+            participant.markDeferred();
             drainLifecycle?.onDeferred();
             turnContext.onTurnDeferred?.();
           },

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { hasFinalChannelTurnDispatch } from "./dispatch-result.js";
 import {
@@ -110,6 +111,56 @@ describe("prepared channel turn lifecycle", () => {
     expect(result.dispatchResult.queuedFinal).toBe(true);
     expect(events).toEqual(["record", "dispatch", "adopted"]);
     expect(onAdopted).toHaveBeenCalledOnce();
+  });
+
+  it("records an ordinary turn only after earlier ingress claims reach reply admission", async () => {
+    const events: string[] = [];
+    const waitStarted = createDeferred();
+    const earlierAdmitted = createDeferred();
+    const onAdmissionWait = vi.fn();
+    const turnAdoptionLifecycle = {
+      onAdopted: vi.fn(async () => undefined),
+      onAdmissionWait,
+      admissionTurn: {
+        wait: (options?: { onBlocked?: () => void }) => {
+          options?.onBlocked?.();
+          waitStarted.resolve();
+          return earlierAdmitted.promise;
+        },
+      },
+    };
+    const turn = createTurn();
+    turn.recordInboundSession = createRecordInboundSession(events);
+    turn.runDispatchLifecycle = { turnAdoptionLifecycle, onDispatchSkipped: vi.fn() };
+    const result = run(turn, { turnAdoptionLifecycle });
+
+    await waitStarted.promise;
+    // The channel may release its synchronous holds while the turn keeps its place.
+    expect(onAdmissionWait).toHaveBeenCalledOnce();
+    expect(events).toEqual([]);
+    expect(turn.runDispatch).not.toHaveBeenCalled();
+    earlierAdmitted.resolve();
+    expectDispatched(await result);
+    expect(events).toEqual(["record"]);
+  });
+
+  it("lets an authorized control command skip the ingress admission order", async () => {
+    const wait = vi.fn(() => new Promise<void>(() => {}));
+    const turnAdoptionLifecycle = {
+      onAdopted: vi.fn(async () => undefined),
+      admissionTurn: { wait },
+    };
+    const turn = createTurn();
+    turn.ctxPayload = createCtx({
+      Body: "/stop",
+      RawBody: "/stop",
+      CommandBody: "/stop",
+      CommandAuthorized: true,
+    });
+    turn.runDispatchLifecycle = { turnAdoptionLifecycle, onDispatchSkipped: vi.fn() };
+
+    expectDispatched(await run(turn, { turnAdoptionLifecycle }));
+    expect(wait).not.toHaveBeenCalled();
   });
 
   it("settles prepared resources when observe-only suppresses dispatch", async () => {
