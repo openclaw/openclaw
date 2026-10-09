@@ -215,7 +215,8 @@ describe("prepareEmbeddedRunTerminal", () => {
   it.each([
     { assistantTexts: ["Earlier", "  Latest 😀  ", "\t\r\n"], expected: "Latest 😀" },
     { assistantTexts: ["Earlier", "\ufeff\u2003Latest\u00a0", "\u2028"], expected: "Latest" },
-    { assistantTexts: ["Earlier", " \u200b "], expected: "\u200b" },
+    { assistantTexts: ["Earlier", " \u200b "], expected: "Earlier" },
+    { assistantTexts: [" \u200b\u200d\u2060 "], expected: undefined },
     { assistantTexts: ["  First line \n second line  "], expected: "First line \n second line" },
     { assistantTexts: ["Earlier", " \ud800text\udc00 "], expected: "\ud800text\udc00" },
     { assistantTexts: ["", " \t\r\n", "\ufeff\u2003"], expected: undefined },
