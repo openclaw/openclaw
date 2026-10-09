@@ -536,6 +536,16 @@ describe("gateway settings and layout persistence", () => {
     expect(loadLocalUserIdentity()).toEqual({ name: null, avatar: null });
   });
 
+  it("persists the browser-local custom theme payload when present", () => {
+    const gwUrl = expectedGatewayUrl("");
+    const customTheme = createImportedCustomThemeFixture();
+    saveSettings(makeUiSettings(gwUrl, { theme: "custom", customTheme }));
+    const settings = loadSettings();
+    expect(settings.theme).toBe("custom");
+    expect(settings.customTheme?.label).toBe("Light Green");
+    expect(settings.customTheme?.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
+  });
+
   it("falls back to claw when persisted custom theme palettes are invalid", () => {
     localStorage.setItem(
       `openclaw.control.settings.v1:${expectedGatewayUrl("")}`,

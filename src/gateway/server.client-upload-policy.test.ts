@@ -11,6 +11,7 @@ import { agentHandlers } from "./server-methods/agent.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { handleDirectExternalChatSend } from "./server-methods/chat-send-external-entry.js";
 import { sessionCreateHandlers } from "./server-methods/sessions-create.js";
+import { sessionMessagingHandlers } from "./server-methods/sessions-messaging.js";
 import type { GatewayRequestHandler, RespondFn } from "./server-methods/types.js";
 import {
   installAgentAuthorityProofFixture,
@@ -21,13 +22,14 @@ import { agentCommandMock, dispatchInboundMessageMock } from "./test-helpers.js"
 const handlers: Record<string, GatewayRequestHandler> = {
   "chat.send": handleDirectExternalChatSend,
   agent: agentHandlers.agent!,
+  "sessions.send": sessionMessagingHandlers["sessions.send"]!,
   "sessions.create": sessionCreateHandlers["sessions.create"]!,
 };
 
 describe("client upload policy at the input commit owner", () => {
   const fixture = installAgentAuthorityProofFixture();
 
-  it.each(["chat.send", "sessions.steer", "sessions.create"] as const)(
+  it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as const)(
     "replays accepted %s uploads after disable without admitting fresh bytes",
     async (method) => {
       const f = await fixture({ imageCapable: true });
@@ -117,6 +119,7 @@ describe("client upload policy at the input commit owner", () => {
     ["chat.send", "document", "policy"],
     ["agent", "inline-image", "policy"],
     ["agent", "offloaded-image", "policy"],
+    ["sessions.send", "inline-image", "policy"],
     ["sessions.create", "document", "policy"],
     ["agent", "offloaded-image", "stop"],
     ["agent", "offloaded-image", "stop-and-policy"],
@@ -158,7 +161,9 @@ describe("client upload policy at the input commit owner", () => {
         agentId: "main",
         ...(method === "sessions.create"
           ? { key: `agent:main:upload-create:${f.runId}` }
-          : { sessionKey: f.sessionKey }),
+          : method === "sessions.send"
+            ? { key: f.sessionKey }
+            : { sessionKey: f.sessionKey }),
         message: "Inspect this attachment",
         ...(method === "sessions.create" ? {} : { idempotencyKey: f.runId }),
         attachments: [

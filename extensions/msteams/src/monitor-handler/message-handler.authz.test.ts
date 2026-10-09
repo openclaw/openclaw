@@ -503,6 +503,7 @@ describe("msteams message authorization and supplemental context", () => {
       root?: string;
       replyToId?: string;
       mentioned?: boolean;
+      conversationType?: string;
     }) {
       return activity(
         buildChannelActivity({
@@ -512,7 +513,7 @@ describe("msteams message authorization and supplemental context", () => {
             id: params.root
               ? `${channelConversationId};messageid=${params.root}`
               : channelConversationId,
-            conversationType: "channel",
+            conversationType: params.conversationType ?? "channel",
           },
           replyToId: params.replyToId,
           channelData: {},
@@ -567,6 +568,26 @@ describe("msteams message authorization and supplemental context", () => {
       expect(dispatch.mock.calls.at(-1)?.[0].ctx.Body).not.toContain("note in A");
       expect(dispatch.mock.calls.at(-1)?.[0].ctx.InboundHistory).toEqual([]);
       expect(dispatch).toHaveBeenCalledTimes(3);
+    });
+
+    it("keeps group-chat quotes in conversation-wide history", async () => {
+      const tempDir = tempDirs.make("msteams-history-");
+      const { handler } = setup(
+        { groupPolicy: "open", requireMention: true, historyLimit: 10 },
+        {
+          runPrepared: runPreparedInboundReply,
+          resolveStorePath: () => path.join(tempDir, "sessions.json"),
+        },
+      );
+      const conversationType = "groupChat";
+      const scope = { root: "quoted-a", replyToId: "quoted-a" };
+      await handler(message({ text: "earlier message", conversationType, ...scope }));
+      await handler(message({ text: "question", mentioned: true, conversationType }));
+      const ctx = dispatch.mock.calls.at(-1)?.[0].ctx;
+      expect(ctx?.Body).toContain("earlier message");
+      expect(ctx?.InboundHistory).toEqual([expect.objectContaining({ body: "earlier message" })]);
+      await handler(message({ text: "next question", mentioned: true, conversationType }));
+      expect(dispatch.mock.calls.at(-1)?.[0].ctx.InboundHistory).toEqual([]);
     });
   });
 });

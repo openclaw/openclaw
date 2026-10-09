@@ -660,11 +660,13 @@ describe("Brave preflight lifetime", () => {
     },
   );
 
-  it.each<[string, string, LookupAddress[], boolean?]>([
-    ["public HTTP", "http", publicAddress],
-    ["rebound HTTPS", "https", privateAddress],
-    ["redirect hostname", "https", publicAddress, true],
-  ])("preserves endpoint policy: %s", async (_name, protocol, next, redirect) => {
+  it.each<[string, string, LookupAddress[], boolean, boolean?]>([
+    ["public HTTP", "http", publicAddress, false],
+    ["rebound HTTPS", "https", privateAddress, false],
+    ["fake IPv4", "https", [{ address: "198.18.0.1", family: 4 }], true],
+    ["fake IPv6", "https", [{ address: "fc00::1", family: 6 }], true],
+    ["redirect hostname", "https", publicAddress, false, true],
+  ])("preserves endpoint policy: %s", async (_name, protocol, next, allowed, redirect) => {
     lookup.mockResolvedValueOnce(publicAddress).mockResolvedValue(next);
     if (redirect) {
       fetchNetwork.mockResolvedValueOnce(
@@ -674,8 +676,14 @@ describe("Brave preflight lifetime", () => {
     const result = createTool(`${protocol}://search.example.test`).execute({
       query: `policy-${++queryId}`,
     });
-    await expect(result).rejects.toThrow(redirect ? /allowlist/ : /private|loopback/);
-    expect(fetchNetwork).toHaveBeenCalledTimes(redirect ? 1 : 0);
+    if (allowed) {
+      await expect(result).resolves.toMatchObject({ provider: "brave" });
+      expect(fetchNetwork).toHaveBeenCalledOnce();
+      expect(lookup).toHaveBeenCalledTimes(2);
+    } else {
+      await expect(result).rejects.toThrow(redirect ? /allowlist/ : /private|loopback/);
+      expect(fetchNetwork).toHaveBeenCalledTimes(redirect ? 1 : 0);
+    }
     expect(vi.getTimerCount()).toBe(0);
   });
 });
