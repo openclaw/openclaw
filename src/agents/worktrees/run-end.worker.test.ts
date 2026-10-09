@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admissions from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { removeSessionWorktree } from "../../sessions/session-worktree-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import {
@@ -368,25 +369,14 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
   };
   const run = stateWorker.runOpenClawStateWorkerOperation;
   let writes = 0;
-  const lostReply = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      run(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === "worktrees.writeProvisionedSnapshot") {
-                writes += 1;
-                throw new Error("Synthetic lost command reply");
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-    );
+  const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
+    const result = await scope.execute(command, executeOptions);
+    if (command.type === "worktrees.writeProvisionedSnapshot") {
+      writes += 1;
+      throw new Error("Synthetic lost command reply");
+    }
+    return result;
+  });
   try {
     await insertRegistryWorktreeProvisionedChunk(env, input);
   } finally {

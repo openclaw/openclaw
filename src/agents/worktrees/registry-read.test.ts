@@ -5,6 +5,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { sqliteWorkerOwnerProbe as workerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -62,34 +63,22 @@ async function serviceFixture() {
 function holdPublication(type: "worktrees.insert" | "worktrees.update", afterCommit = false) {
   const entered = createDeferred();
   const release = createDeferred();
-  const run = stateWorker.runOpenClawStateWorkerOperation;
   let writes = 0;
-  const transport = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      run(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              if (command.type !== type) {
-                return scope.execute(command, executeOptions);
-              }
-              writes += 1;
-              if (afterCommit) {
-                await scope.execute(command, executeOptions);
-              }
-              entered.resolve();
-              await release.promise;
-              if (afterCommit) {
-                throw new Error("Synthetic lost registry reply after native commit");
-              }
-              return scope.execute(command, executeOptions);
-            },
-          }),
-        options,
-      ),
-    );
+  const transport = workerProbe.command(stateWorker, async (command, executeOptions, scope) => {
+    if (command.type !== type) {
+      return scope.execute(command, executeOptions);
+    }
+    writes += 1;
+    if (afterCommit) {
+      await scope.execute(command, executeOptions);
+    }
+    entered.resolve();
+    await release.promise;
+    if (afterCommit) {
+      throw new Error("Synthetic lost registry reply after native commit");
+    }
+    return scope.execute(command, executeOptions);
+  });
   return {
     entered: entered.promise,
     release: () => release.resolve(),
