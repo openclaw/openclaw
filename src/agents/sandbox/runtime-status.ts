@@ -106,8 +106,8 @@ export async function withSandboxRuntimeStatusInWorker<T>(
     readSource?: CapturedSessionEntryReadSource;
     assertEntryCurrent?: (entry: SessionEntry | undefined) => void;
     reader?: SessionEntryCohortReader;
-    /** Consume the full entry inside the admitted reader's final synchronous phase. */
-    onPreparedEntry?: (entry: SessionEntry | undefined, result: T) => void;
+    /** Select a full-entry consumer for the admitted reader's final synchronous phase. */
+    prepareEntryConsumer?: (result: T) => ((entry: SessionEntry | undefined) => void) | undefined;
   },
   consume: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => Promise<T>,
 ): Promise<T> {
@@ -190,15 +190,16 @@ export async function withSandboxRuntimeStatusInWorker<T>(
     assertCurrent();
     reader.assertCurrent();
     const result = await consume(sandbox);
+    const consumeEntry = source.prepareEntryConsumer?.(result);
     // Preparation may await approvals or skills. Publish its result only under
     // a new phase's witness, with the same policy predicates it prepared against.
     return withClassification((current, entry) => {
       if (!isDeepStrictEqual(current, sandbox)) {
         throw new SessionEntryChangedDuringReadError();
       }
-      source.onPreparedEntry?.(entry, result);
+      consumeEntry?.(entry);
       return result;
-    }, source.onPreparedEntry !== undefined);
+    }, consumeEntry !== undefined);
   }
   if (isNativeSessionEntryRead(scope, scope.agentId)) {
     return withSessionEntryReadOnlyInWorker(scope, assertCurrent, async (read) => {

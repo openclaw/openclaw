@@ -153,14 +153,13 @@ export async function ensureSkillSnapshot(params: {
   const existingSnapshot = nextEntry?.skillsSnapshot;
   const resolveSnapshot = (
     snapshot: SessionEntry["skillsSnapshot"],
-    onPreparedEntry?: (
-      entry: SessionEntry | undefined,
+    prepareEntryConsumer?: (
       prepared: Awaited<ReturnType<typeof resolveReusableWorkspaceSkillSnapshot>>,
-    ) => void,
+    ) => ((entry: SessionEntry | undefined) => void) | undefined,
   ) =>
     withSandboxRuntimeStatusInWorker(
       execParams,
-      { env, cwd, assertCurrent, reader: params.reader, onPreparedEntry },
+      { env, cwd, assertCurrent, reader: params.reader, prepareEntryConsumer },
       async (sandbox) => {
         const execDefaults = await resolvePreparedExecDefaultsAsync(
           prepareExecDefaults(execParams, sandbox),
@@ -214,19 +213,21 @@ export async function ensureSkillSnapshot(params: {
       sessionKey &&
       storePath &&
       (sessionEntryHandle || sessionStore)
-      ? (entry, prepared) => {
+      ? (prepared) => {
           if (prepared.shouldRefresh) {
-            return;
+            return undefined;
           }
-          assertCurrent();
-          publishReplySessionEntry(params, entry);
-          reusedSnapshot = readSkillSnapshotState(entry);
-          if (
-            entry?.sessionId === expectedSession?.sessionId &&
-            entry?.lifecycleRevision === expectedSession?.lifecycleRevision
-          ) {
-            reusedSnapshot.skillsSnapshot = prepared.snapshot;
-          }
+          return (entry) => {
+            assertCurrent();
+            publishReplySessionEntry(params, entry);
+            reusedSnapshot = readSkillSnapshotState(entry);
+            if (
+              entry?.sessionId === expectedSession?.sessionId &&
+              entry?.lifecycleRevision === expectedSession?.lifecycleRevision
+            ) {
+              reusedSnapshot.skillsSnapshot = prepared.snapshot;
+            }
+          };
         }
       : undefined,
   );

@@ -207,8 +207,8 @@ it("prepares current sandbox and approval skill eligibility without caller-threa
   }
 });
 
-it.each(["metadata", "lifecycle"] as const)(
-  "consumes the final skill preparation entry after a foreign %s change without another read",
+it.each(["metadata", "lifecycle", "refresh"] as const)(
+  "consumes current skill preparation state after a concurrent change (%s)",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const scope = {
@@ -237,10 +237,16 @@ it.each(["metadata", "lifecycle"] as const)(
       });
       const entered = createDeferredCore();
       const resume = createDeferredCore();
+      const skillsSnapshot =
+        change === "refresh" ? { prompt: "refreshed skills", skills: [] } : entry.skillsSnapshot;
       vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
         entered.resolve();
         await resume.promise;
-        return { snapshot: entry.skillsSnapshot, shouldRefresh: false, snapshotVersion: 0 };
+        return {
+          snapshot: skillsSnapshot,
+          shouldRefresh: change === "refresh",
+          snapshotVersion: 0,
+        };
       });
       const pending = ensureSkillSnapshot({
         ...scope,
@@ -257,24 +263,33 @@ it.each(["metadata", "lifecycle"] as const)(
           pending,
           "skill preparation did not start",
         );
-        const foreign = new (requireNodeSqlite().DatabaseSync)(reader.database.path);
-        try {
-          foreign
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_patch(entry_json, ?), updated_at = ?, pinned_at = ? WHERE session_key = ?",
-            )
-            .run(
-              JSON.stringify(
-                change === "metadata"
-                  ? { pinnedAt: null, updatedAt: 2, systemSent: true }
-                  : { lifecycleRevision: "replacement" },
-              ),
-              change === "metadata" ? 2 : 1,
-              change === "metadata" ? null : 1,
-              scope.sessionKey,
-            );
-        } finally {
-          foreign.close();
+        if (change === "refresh") {
+          await replaceSessionEntry(scope, {
+            ...entry,
+            pinnedAt: undefined,
+            updatedAt: 2,
+            systemSent: true,
+          });
+        } else {
+          const foreign = new (requireNodeSqlite().DatabaseSync)(reader.database.path);
+          try {
+            foreign
+              .prepare(
+                "UPDATE session_nodes SET entry_json = json_patch(entry_json, ?), updated_at = ?, pinned_at = ? WHERE session_key = ?",
+              )
+              .run(
+                JSON.stringify(
+                  change === "metadata"
+                    ? { pinnedAt: null, updatedAt: 2, systemSent: true }
+                    : { lifecycleRevision: "replacement" },
+                ),
+                change === "metadata" ? 2 : 1,
+                change === "metadata" ? null : 1,
+                scope.sessionKey,
+              );
+          } finally {
+            foreign.close();
+          }
         }
         resume.resolve();
         if (change === "lifecycle") {
@@ -284,13 +299,20 @@ it.each(["metadata", "lifecycle"] as const)(
           const result = await pending;
           expect(result).toMatchObject({
             systemSent: true,
-            skillsSnapshot: entry.skillsSnapshot,
-            sessionEntry: { updatedAt: 2, systemSent: true, skillsSnapshot: entry.skillsSnapshot },
+            skillsSnapshot,
+            sessionEntry: {
+              updatedAt: change === "refresh" ? expect.any(Number) : 2,
+              systemSent: true,
+              skillsSnapshot,
+            },
           });
           expect(result.sessionEntry).not.toHaveProperty("pinnedAt");
           expect(handle.getCurrent()).toEqual(result.sessionEntry);
+          if (change === "refresh") {
+            expect(loadSessionEntry(scope)).toMatchObject({ skillsSnapshot, systemSent: true });
+          }
         }
-        expect(phases).toHaveBeenCalledTimes(2);
+        expect(phases).toHaveBeenCalledTimes(change === "refresh" ? 3 : 2);
       } finally {
         resume.resolve();
         await Promise.allSettled([pending, databaseClaim.release()]);
