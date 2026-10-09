@@ -229,6 +229,7 @@ completion, with `source="client"` for disconnected clients and
 produce unhandled-request error logs. The metric carries no request URLs, file
 paths, or client identifiers and follows the existing diagnostics enablement
 and asynchronous queue limits.
+Normal HTTP cancellations are not retained in the stability event buffer.
 
 ### Worktree preparation
 
