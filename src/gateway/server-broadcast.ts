@@ -625,21 +625,18 @@ export function createGatewayBroadcaster(params: {
         const recipientProfileId =
           (c.connect.role ?? "operator") === "operator" ? c.preparedRecipientProfileId : undefined;
         if (
-          !presencePayload &&
           !projectSession &&
           lastFrame !== undefined &&
-          lastPayloadFragment === payloadFragment &&
           lastFrameSequence === nextSeq &&
-          lastFrameRecipientProfileId === recipientProfileId
+          lastFrameRecipientProfileId === recipientProfileId &&
+          lastPayloadFragment === payloadFragment
         ) {
+          // Encode only after reuse is known; unique recipients keep the transport's string path.
+          lastFrame = typeof lastFrame === "string" ? Buffer.from(lastFrame) : lastFrame;
           frame = lastFrame;
         } else {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
-          if (!presencePayload && !projectSession) {
-            // Share UTF-8 bytes too: ws otherwise encodes the same string for every socket.
-            if (!retained && (targetConnIds?.size ?? params.clients.size) > 1) {
-              frame = Buffer.from(frame);
-            }
+          if (!projectSession) {
             lastFrameSequence = nextSeq;
             lastFrameRecipientProfileId = recipientProfileId;
             lastPayloadFragment = payloadFragment;
