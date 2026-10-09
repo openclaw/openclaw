@@ -492,7 +492,6 @@ async function initSessionStateAttemptLocked(
     // Reacquire store-wide before a newly observed creation can invoke arbitrary hooks.
     throw new ReplySessionInitConflictError(sessionKey);
   }
-  const createdNewEntry = entry === undefined;
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const parentForkSourceEntry =
     parentSessionKey && parentSessionKey !== sessionKey
@@ -611,7 +610,6 @@ async function initSessionStateAttemptLocked(
     (((lockedModelSelection || isSystemEvent) && canReuseExistingEntry) ||
       ((((pinExpectedExistingSession || reconnectResumeRequested || softResetAllowed) &&
         canReuseExistingEntry) ||
-        recoverTerminalVisibleEntry ||
         (entryFreshness?.fresh ?? false)) &&
         !terminalMainTranscriptNewerThanRegistry));
   const activeReplyOperation = replyRunRegistry.get(sessionKey);
@@ -626,16 +624,13 @@ async function initSessionStateAttemptLocked(
   // A bare stale result is the legacy updatedAt=0 pending-reset tombstone.
   const effectiveFreshEntry = deferImplicitRolloverForActiveRun || freshEntry;
   // Keep the owed reset pending until the active writer completes.
-  const retainPendingResetMarker =
-    deferImplicitRolloverForActiveRun && !resetTriggered && entry?.updatedAt === 0;
+  const retainPendingResetMarker = deferImplicitRolloverForActiveRun && entry?.updatedAt === 0;
   // Explicit and scheduled resets both retain the prior entry for lifecycle hooks.
   const previousSessionEntry =
     (resetTriggered || !effectiveFreshEntry) && entry ? { ...entry } : undefined;
   const previousSessionEndReason = resetTriggered
     ? resolveExplicitSessionEndReason(matchedResetTriggerLower)
-    : entry
-      ? entryFreshness?.staleReason
-      : undefined;
+    : entryFreshness?.staleReason;
   const lifecycleMutationMatches = Boolean(
     previousSessionEntry &&
     lifecycleMutationIdentity?.sessionKey === sessionKey &&
@@ -655,10 +650,10 @@ async function initSessionStateAttemptLocked(
     entry && recoverTerminalVisibleEntry
       ? recoverTerminalSessionEntryForVisibleTurn(entry)
       : undefined;
-  const reusableEntry = recoveredTerminalEntry ?? entry;
-
   const baseEntry =
-    !resetTriggered && effectiveFreshEntry && canReuseExistingEntry ? reusableEntry : undefined;
+    !resetTriggered && effectiveFreshEntry && canReuseExistingEntry
+      ? (recoveredTerminalEntry ?? entry)
+      : undefined;
   const isNewSession = !baseEntry;
   const systemSent = baseEntry?.systemSent ?? false;
   const abortedLastRun = baseEntry?.abortedLastRun ?? false;
@@ -825,7 +820,6 @@ async function initSessionStateAttemptLocked(
         resetTriggered,
       })
     : undefined;
-  const resetBoundaryAppended = resetBoundary !== undefined;
   let previousSessionMemory: SessionMemoryTranscript | undefined;
   let previousSessionResetMessages: unknown[] | undefined;
   const committed = await commitReplySessionInitialization({
@@ -888,7 +882,7 @@ async function initSessionStateAttemptLocked(
           sessionId: currentEntry.sessionId,
         });
       }
-      if (resetBoundaryAppended) {
+      if (resetBoundary) {
         clearAllCliSessions(entryToCommit);
         entryToCommit.agentHarnessId = undefined;
       }
@@ -945,10 +939,10 @@ async function initSessionStateAttemptLocked(
     });
   }
   clearBootstrapSnapshotOnSessionBoundary({
-    boundaryAppended: resetBoundaryAppended,
+    boundaryAppended: resetBoundary !== undefined,
     sessionKey,
   });
-  if (createdNewEntry) {
+  if (!entry) {
     await recordSessionCreated(cfg, { sessionKey, agentId, entry: sessionEntry });
   }
   await registerMainSessionGroupWatch({

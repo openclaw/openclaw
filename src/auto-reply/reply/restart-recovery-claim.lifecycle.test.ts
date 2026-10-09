@@ -23,6 +23,7 @@ import {
 } from "../../infra/agent-lifecycle-error.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { clearOpenClawAgentDatabaseValidationCache } from "../../state/openclaw-agent-db-validation-cache.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -125,23 +126,18 @@ it.each([
           if (stage === "cold-registration") {
             await closeOpenClawAgentDatabasesAsync();
             clearOpenClawAgentDatabaseValidationCache();
-            const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
             let witnessed = 0;
-            const admission = vi
-              .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-              .mockImplementation((admit, options) =>
-                createAdmission((request, grant) => {
-                  if (
-                    request.stage === "prepare" &&
-                    isRecord(request.facts) &&
-                    request.facts.kind === "agent-registration-committed"
-                  ) {
-                    witnessed += 1;
-                    rotateAgentEventLifecycleGeneration();
-                  }
-                  admit(request, grant);
-                }, options),
-              );
+            const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+              if (
+                request.stage === "prepare" &&
+                isRecord(request.facts) &&
+                request.facts.kind === "agent-registration-committed"
+              ) {
+                witnessed += 1;
+                rotateAgentEventLifecycleGeneration();
+              }
+              admit(request, grant);
+            });
             restore = () => admission.mockRestore();
             assertBoundary = () => {
               expect(witnessed).toBe(1);

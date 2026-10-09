@@ -20,6 +20,12 @@ export async function runAutomaticTriageRepair(params: {
 }): Promise<void> {
   const { runtime, target, targetEnv, prompt, isCurrent } = params;
   const redaction = { env: targetEnv, stateDir: target.stateDir };
+  const repairTarget = () => ({
+    stateDir: target.stateDir,
+    configPath: target.configPath,
+    workspaceDir: target.defaultWorkspaceDir,
+    installRoot: params.installRoot,
+  });
   const deadline = Date.now() + 600_000;
   const controller = new AbortController();
   const signal = AbortSignal.any([params.signal, controller.signal]);
@@ -52,12 +58,7 @@ export async function runAutomaticTriageRepair(params: {
       }
       signal.throwIfAborted();
       return runUpdateRepairTurn({
-        target: {
-          stateDir: target.stateDir,
-          configPath: target.configPath,
-          workspaceDir: target.defaultWorkspaceDir,
-          installRoot: params.installRoot,
-        },
+        target: repairTarget(),
         route: selected.route,
         modelFallbacks: selected.modelFallbacks,
         prompt,
@@ -91,12 +92,7 @@ export async function runAutomaticTriageRepair(params: {
       const { runUpdateRepairMaintenance } = await import("../infra/update-repair-maintenance.js");
       const maintenance = await runUpdateRepairMaintenance({
         request: result.maintenance,
-        target: {
-          stateDir: target.stateDir,
-          configPath: target.configPath,
-          workspaceDir: target.defaultWorkspaceDir,
-          installRoot: params.installRoot,
-        },
+        target: repairTarget(),
         env: targetEnv,
         allowGatewayActivation: params.allowGatewayActivation,
         signal: params.signal,

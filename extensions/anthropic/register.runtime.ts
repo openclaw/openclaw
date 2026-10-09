@@ -45,7 +45,7 @@ import {
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { resolveFastModeSupport } from "./fast-mode-policy.js";
-import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js";
+import { projectAnthropicLiveModels } from "./live-model-projection.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createAnthropicAuthMethods, createAnthropicProvider } from "./provider-contract-api.js";
@@ -579,7 +579,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
                 "anthropic-version": "2023-06-01",
                 ...buildAnthropicDiscoveryAuthHeaders(discoveryApiKey ?? apiKey),
               }),
-              acceptUnknownModel: acceptsAnthropicLiveModelContract,
+              projectRows: projectAnthropicLiveModels,
             },
           }),
         ),

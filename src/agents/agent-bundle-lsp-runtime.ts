@@ -14,6 +14,7 @@ import {
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
+import { normalizeReservedToolNames } from "./agent-bundle-mcp-names.js";
 import {
   resolveStdioMcpServerLaunchConfig,
   describeStdioMcpServerLaunchConfig,
@@ -534,11 +535,7 @@ export async function createBundleLspToolRuntime(params: {
     return { tools: [], sessions: [], dispose: async () => {} };
   }
 
-  const reservedNames = new Set(
-    Array.from(params.reservedToolNames ?? [], (name) =>
-      normalizeOptionalLowercaseString(name),
-    ).filter(Boolean),
-  );
+  const reservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const sessions: LspSession[] = [];
   const tools: AnyAgentTool[] = [];
 

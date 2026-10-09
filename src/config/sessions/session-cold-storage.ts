@@ -55,9 +55,14 @@ import type {
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
 } from "./session-cold-storage-worker.js";
-import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
+import type {
+  SessionColdBatchOptions,
+  SessionColdBatchResult,
+  SessionColdMaintenanceResult,
+  SessionColdMutationResult,
+} from "./session-cold-storage.types.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
-import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import {
@@ -82,10 +87,7 @@ const RESTORE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const MAX_TRANSCRIPTS_PER_PASS = 128;
 const MAX_BATCH_BYTES = 64 * 1024 * 1024;
 
-export type SessionColdMaintenanceResult = {
-  archivedTranscripts: number;
-  externalizedTranscripts: number;
-};
+export type { SessionColdMaintenanceResult } from "./session-cold-storage.types.js";
 
 function workerDatabaseOptions(options: OpenClawAgentDatabaseOptions) {
   const sourceEnv = options.env ?? process.env;
@@ -287,21 +289,9 @@ async function runColdMutation(
   );
 }
 
-type ColdBatchOptions = {
-  databaseOptions: OpenClawAgentDatabaseOptions;
-  ownerStorePath: string;
-  beforeMs: number;
-  maxTranscripts: number;
-  maxBytes: number;
-  assertCurrent?: () => void;
-};
-
-type ColdBatchResult = SessionColdMaintenanceResult & {
-  envelopeBytes: number;
-  attemptedTranscripts: number;
-};
-
-async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdBatchResult> {
+async function archiveSessionColdBatch(
+  options: SessionColdBatchOptions,
+): Promise<SessionColdBatchResult> {
   const storePath = resolveOpenClawAgentSqlitePath(options.databaseOptions);
   const source = createOpenClawAgentDatabasePathMatcher();
   source(storePath, storePath);
@@ -365,7 +355,7 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
       if (!batch) {
         throw new Error("Cold archive worker returned no prepared batch");
       }
-      const empty: ColdBatchResult = {
+      const empty: SessionColdBatchResult = {
         archivedTranscripts: 0,
         externalizedTranscripts: 0,
         envelopeBytes: 0,
@@ -457,10 +447,14 @@ export async function restoreSessionColdTranscript(
 ): Promise<void> {
   signal?.throwIfAborted();
   assertCurrent?.();
-  const binding = captureIncognitoSessionBinding(scope);
+  const binding = captureIncognitoSessionSource(scope);
   if (binding) {
     binding.admissionSignal?.throwIfAborted();
-    binding.actor.assertReadable();
+    if ("kind" in binding) {
+      binding.assertCurrent();
+    } else {
+      binding.actor.assertReadable();
+    }
     // An actor has no cold archive to restore; loss must still reject this continuation.
     return;
   }

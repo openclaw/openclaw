@@ -17,6 +17,7 @@ import {
   recordAggregateTruncation,
 } from "./prompt-cache-observability.js";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
+import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 
 let testScope = 0;
 let currentTestScope = "";
@@ -44,6 +45,115 @@ function beginOpenAIObservation(
 
 describe("prompt cache observability", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it("keeps concurrent review and foreground usage in their own diagnostic sessions", () => {
+    const promptCacheKey = scopedKey("shared-provider-affinity");
+    const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+    const context = { systemPrompt: "stable", messages: [] };
+    const foregroundResult = vi.fn();
+    const reviewResult = vi.fn();
+    const foreground = createPromptCacheRequestObserver(
+      { sessionId: scopedKey("foreground"), promptCacheKey, streamStrategy: "test" },
+      foregroundResult,
+    );
+    const review = createPromptCacheRequestObserver(
+      { sessionId: scopedKey("review"), promptCacheKey, streamStrategy: "test" },
+      reviewResult,
+    );
+    review.onModelRequest(model, context);
+    foreground.onModelRequest(model, context);
+    foreground.onModelUsage({ cacheRead: 9_000 });
+    review.onModelUsage({ cacheRead: 0, input: 1_000 });
+    expect(review.getObservation()).toMatchObject({ broke: false });
+    foreground.onModelRequest(model, context);
+    foreground.onModelUsage({ cacheRead: 2_000 });
+    expect(foreground.getObservation()).toMatchObject({
+      broke: true,
+      previousCacheRead: 9_000,
+      cacheRead: 2_000,
+    });
+  });
+
+  it.each([
+    ["system", { instructions: "provider rewritten system" }],
+    ["tools", { tools: [{ type: "function", name: "changed" }] }],
+    ["message:0", { input: [{ role: "user", content: "provider rewritten history" }] }],
+    ["parameters", { reasoning: { effort: "high" } }],
+    [
+      "prefix-match",
+      {
+        input: [
+          { role: "user", content: "first" },
+          { role: "user", content: "appended" },
+        ],
+      },
+    ],
+  ] as const)(
+    "identifies final encoded %s changes despite unchanged assembled context",
+    (expected, replacement) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const observer = createPromptCacheRequestObserver(
+        { sessionId: scopedKey(`wire-${expected}`), streamStrategy: "test" },
+        () => {},
+      );
+      const payload = {
+        instructions: "original system",
+        tools: [{ type: "function", name: "read" }],
+        input: [{ role: "user", content: "first" }],
+        reasoning: { effort: "low" },
+      };
+      const request = (body: unknown, cacheRead: number) => {
+        observer.onModelRequest(
+          { provider: "openai", id: "test-model", api: "openai-responses" },
+          { systemPrompt: "original system", messages: [] },
+        );
+        const { encoded: _encoded, ...fingerprint } = prepareProviderPrompt({
+          payload: body,
+          encode: true,
+        });
+        observer.onModelUsage(
+          {
+            cacheRead,
+            contextUsage: { state: "available", promptTokens: 10_000, totalTokens: 10_100 },
+          },
+          { scopeDigest: "same-provider-scope", ...fingerprint },
+        );
+      };
+      request(payload, 9_000);
+      clock.mockReturnValue(3_000);
+      request({ ...payload, ...replacement }, 2_000);
+      expect(observer.getObservation()).toMatchObject({
+        broke: true,
+        changes: null,
+        providerPrefix: expected,
+        requestGapMs: 2_000,
+        promptTokens: 10_000,
+      });
+    },
+  );
+
+  it("does not claim a bounded message tail matched when the history grows", () => {
+    const identity = { sessionId: scopedKey("bounded-wire-tail") };
+    const message = { role: "user", content: "synthetic history" };
+    const input = Array.from({ length: 513 }, () => message);
+    const complete = (cacheRead: number) => {
+      beginOpenAIObservation(identity);
+      const { encoded: _encoded, ...fingerprint } = prepareProviderPrompt({
+        payload: { input },
+        encode: true,
+      });
+      return completePromptCacheObservation({
+        ...identity,
+        usage: { cacheRead },
+        providerPrompt: { scopeDigest: "same-provider-scope", ...fingerprint },
+      });
+    };
+    complete(9_000);
+    input.push(message);
+    expect(complete(6_000)?.providerPrefix).toBe("unverified-after:512");
+    input[513] = { ...message, content: "changed tail" };
+    expect(complete(3_000)?.providerPrefix).toBe("message-tail:512");
+  });
 
   it("keeps a two-turn tool loop append-only with bounded block hashing", () => {
     withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {

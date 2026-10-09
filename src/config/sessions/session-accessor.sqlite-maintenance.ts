@@ -40,7 +40,10 @@ import {
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
-import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import {
+  captureIncognitoSessionBinding,
+  publishIncognitoSessionEntry,
+} from "./session-incognito-binding.js";
 import {
   finalizeSessionMaintenanceInWorker,
   readSessionMaintenanceArchiveSizesInWorker,
@@ -71,6 +74,10 @@ export async function refreshSqliteSessionPlannerStatisticsBestEffort(
 ): Promise<void> {
   const isCurrent = options.isCurrent ?? (() => true);
   if (deletedEntries < SESSION_PLANNER_ANALYSIS_MIN_DELETED_ENTRIES || !isCurrent()) {
+    return;
+  }
+  // Private stores have no persistent planner statistics or pages to maintain.
+  if (captureIncognitoSessionBinding({ ...scope, storePath: scope.path })) {
     return;
   }
   const storePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
@@ -385,6 +392,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     ) => Promise<SessionLifecycleArchivedTranscript[]>;
   } = {},
 ): Promise<SessionEntryMaintenanceResult> {
+  const incognito = captureIncognitoSessionBinding({ ...scope, storePath: scope.path });
   const isCurrent = options.isCurrent ?? (() => true);
   const committedCounts = {
     archived: plans.reduce((count, plan) => count + plan.archived, 0),
@@ -462,7 +470,9 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     let changedEntryRemovals: SessionEntryMaintenancePlan["entryRemovals"];
     let committedEntryRemovals: SessionEntryMaintenancePlan["entryRemovals"];
     try {
-      const materializedPlans = await materializeSessionStateDeletePlans(batch.stateDeletePlans);
+      const materializedPlans = incognito
+        ? []
+        : await materializeSessionStateDeletePlans(batch.stateDeletePlans);
       if (!isCurrent()) {
         break;
       }
@@ -471,7 +481,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
         batch.entryRemovals.flatMap(({ expectedEntry: entry, sessionKey }) =>
           entry ? [{ entry, sessionKey }] : [],
         ),
-        async (assertCurrent) => {
+        async (assertCurrent, capture) => {
           const assertCommitAllowed = () => {
             options.retainedExecution?.assertCurrent();
             assertCurrent();
@@ -479,6 +489,32 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
               throw new Error("SQLite automatic maintenance owner retired");
             }
           };
+          if (incognito) {
+            return {
+              kind: "maintenance-finalize" as const,
+              value: await incognito.actor.sessions.lifecycle(
+                { assertCurrent: assertCommitAllowed },
+                {
+                  type: "session.lifecycle.maintenance",
+                  input: {
+                    plan: { entries: batch.entryRemovals, deletePlans: batch.stateDeletePlans },
+                  },
+                },
+                undefined,
+                capture,
+                (committed) => {
+                  for (const removal of committed.committedEntries) {
+                    publishIncognitoSessionEntry(
+                      incognito.actor,
+                      removal.sessionKey,
+                      removal.expectedEntry,
+                      undefined,
+                    );
+                  }
+                },
+              ),
+            };
+          }
           const plan = createSessionMaintenanceFinalizationOperation({
             agentId: scope.agentId,
             databaseOptions: toDatabaseOptions(scope),
@@ -498,6 +534,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
                 plan,
               });
         },
+        incognito ? { incognito: incognito.actor, callerSettlesReceipts: true } : undefined,
       );
       if (result.kind !== "maintenance-finalize") {
         throw new Error("SQLite maintenance returned another operation's result");
@@ -532,6 +569,10 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
       } else if (removal.maintenanceReason === "capped") {
         committedCounts.capped += 1;
       }
+    }
+    // Actor plans never produce disk archives or need native archive discovery.
+    if (incognito) {
+      continue;
     }
     try {
       publishedTranscripts.push(

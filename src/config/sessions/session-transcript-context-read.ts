@@ -25,6 +25,7 @@ import {
 } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { getOwnedSessionTranscriptReader } from "./transcript-write-context.js";
 
@@ -97,6 +98,7 @@ export async function readSessionTranscriptContextProjectionAsync<T>(
       return result.value;
     },
     signal,
+    targetDiscoveryLane,
   );
 }
 

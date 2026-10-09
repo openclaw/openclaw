@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryInWorker } from "../../config/sessions/session-accessor.sqlite-compaction.js";
 import { ensureSessionEntryInTransaction } from "../../config/sessions/session-accessor.sqlite-initial-entry.js";
 import { readTranscriptMutationAtSync } from "../../config/sessions/session-accessor.sqlite-metadata-read.js";
@@ -431,7 +432,23 @@ export function bindSqliteWorkerBackend(
   return {
     execute(command) {
       try {
-        return execute(command);
+        const cliWriter =
+          command.type === "session.transcript.appendMessage" ||
+          command.type === "session.metadata.append"
+            ? command.input.cliWriter
+            : undefined;
+        return runWithCliHistoryWriter(
+          cliWriter
+            ? {
+                ...cliWriter,
+                target: { ...command.input.scope, storePath: context.databasePath },
+                // Host liveness is composed into both transaction and commit grants.
+                assertCurrent: assertOpen,
+                assertReadable: assertOpen,
+              }
+            : undefined,
+          () => execute(command),
+        );
       } catch (error) {
         if (error instanceof SessionTranscriptWriterClaimReboundError) {
           const refusal = parseTranscriptAppendRefusal(error.cause);

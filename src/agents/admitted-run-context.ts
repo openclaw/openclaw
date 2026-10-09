@@ -101,8 +101,15 @@ export function createAdmittedRunOperatorAuthority(
       throw error;
     }
   });
-  const readCurrentRoleAssignment = source.readCurrentRoleAssignment;
-  const readCurrentGithubLogin = source.readCurrentGithubLogin;
+  const bindCurrentReader = (read: (() => string | null) | undefined) =>
+    read
+      ? () => {
+          assertCurrent();
+          return read();
+        }
+      : undefined;
+  const readCurrentRoleAssignment = bindCurrentReader(source.readCurrentRoleAssignment);
+  const readCurrentGithubLogin = bindCurrentReader(source.readCurrentGithubLogin);
   const authority = Object.freeze({
     profileId: source.profileId,
     recoverySnapshot: source.recoverySnapshot
@@ -120,18 +127,8 @@ export function createAdmittedRunOperatorAuthority(
       return source.modelPolicy;
     },
     assertCurrent,
-    readCurrentRoleAssignment: readCurrentRoleAssignment
-      ? () => {
-          assertCurrent();
-          return readCurrentRoleAssignment();
-        }
-      : undefined,
-    readCurrentGithubLogin: readCurrentGithubLogin
-      ? () => {
-          assertCurrent();
-          return readCurrentGithubLogin();
-        }
-      : undefined,
+    readCurrentRoleAssignment,
+    readCurrentGithubLogin,
     rolePolicy: source.rolePolicy
       ? Object.freeze({
           ...source.rolePolicy,

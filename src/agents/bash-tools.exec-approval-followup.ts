@@ -177,14 +177,15 @@ function formatDirectExecApprovalFollowupText(
     return opts.allowDenied ? formatExecDeniedUserMessage(parsed.raw) : null;
   }
 
+  const metadata =
+    parsed.kind === "finished" ? normalizeLowercaseStringOrEmpty(parsed.metadata) : "";
+  const body = redactToolPayloadText(
+    renderUserFacingText(
+      parsed.kind === "finished" || parsed.kind === "completed" ? parsed.body : parsed.raw,
+      { errorContext: !metadata.includes("code 0") },
+    ),
+  ).trim();
   if (parsed.kind === "finished") {
-    const metadata = normalizeLowercaseStringOrEmpty(parsed.metadata);
-    const body = redactToolPayloadText(
-      renderUserFacingText(parsed.body, {
-        errorContext: !metadata.includes("code 0"),
-      }),
-    ).trim();
-
     return (
       body ||
       (metadata.includes("code 0")
@@ -195,16 +196,7 @@ function formatDirectExecApprovalFollowupText(
     );
   }
 
-  if (parsed.kind === "completed") {
-    const body = redactToolPayloadText(
-      renderUserFacingText(parsed.body, { errorContext: true }),
-    ).trim();
-    return body || "Background command finished.";
-  }
-
-  return (
-    redactToolPayloadText(renderUserFacingText(parsed.raw, { errorContext: true })).trim() || null
-  );
+  return body || (parsed.kind === "completed" ? "Background command finished." : null);
 }
 
 function readGatewayStatus(value: unknown): string | undefined {

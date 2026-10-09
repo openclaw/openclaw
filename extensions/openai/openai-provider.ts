@@ -504,13 +504,12 @@ function shouldUseOpenAIResponsesTransport(params: {
   return isPlatformEndpoint;
 }
 
-function resolveAuthoredOpenAIConfigRoute(params: {
+/** Authored Completions is a current transport contract; only catalog defaults are upgraded. */
+function resolveAuthoredOpenAICompletionsRoute(params: {
   provider: string;
   modelId?: string;
   config?: { models?: { providers?: Record<string, ModelProviderConfig | undefined> } };
-}):
-  | { configuredModel?: ModelDefinitionConfig; configuredProvider: ModelProviderConfig }
-  | undefined {
+}): { api: "openai-completions"; baseUrl: string } | undefined {
   const providerConfig = resolveAuthoredOpenAIProviderConfig(params);
   if (!providerConfig) {
     return undefined;
@@ -525,52 +524,30 @@ function resolveAuthoredOpenAIConfigRoute(params: {
     // later duplicate rows fill fields the first row omitted.
     modelConfig = modelConfig ? { ...model, ...modelConfig } : model;
   }
-  return {
-    ...(modelConfig ? { configuredModel: modelConfig } : {}),
-    configuredProvider: providerConfig,
-  };
-}
-
-/** Authored Completions is a current transport contract; only catalog defaults are upgraded. */
-function resolveAuthoredOpenAICompletionsRoute(params: {
-  provider: string;
-  modelId?: string;
-  config?: { models?: { providers?: Record<string, ModelProviderConfig | undefined> } };
-}): { api: "openai-completions"; baseUrl: string } | undefined {
-  const configuredRoute = resolveAuthoredOpenAIConfigRoute(params);
-  if (!configuredRoute) {
-    return undefined;
-  }
   const effectiveApi =
-    normalizeOptionalString(configuredRoute.configuredModel?.api) ??
-    normalizeOptionalString(configuredRoute.configuredProvider.api);
+    normalizeOptionalString(modelConfig?.api) ?? normalizeOptionalString(providerConfig.api);
   if (effectiveApi !== "openai-completions") {
     return undefined;
   }
   const baseUrl =
-    normalizeOptionalString(configuredRoute.configuredModel?.baseUrl) ??
-    normalizeOptionalString(configuredRoute.configuredProvider.baseUrl) ??
+    normalizeOptionalString(modelConfig?.baseUrl) ??
+    normalizeOptionalString(providerConfig.baseUrl) ??
     resolveOpenAIDefaultBaseUrl(process.env);
   return { api: "openai-completions", baseUrl };
 }
 
-function shouldUseCodexResponsesHooks(params: {
+function shouldUseCodexResponsesHooks(params?: {
   api?: ProviderRuntimeModel["api"] | null;
   baseUrl?: string;
 }): boolean {
-  if (params.api === "openai-chatgpt-responses") {
+  if (params?.api === "openai-chatgpt-responses") {
     return true;
   }
-  return typeof params.baseUrl === "string" && isOpenAICodexBaseUrl(params.baseUrl);
+  return typeof params?.baseUrl === "string" && isOpenAICodexBaseUrl(params.baseUrl);
 }
 
 function shouldResolveDynamicModelThroughCodex(ctx: ProviderResolveDynamicModelContext): boolean {
-  if (
-    shouldUseCodexResponsesHooks({
-      api: ctx.providerConfig?.api,
-      baseUrl: ctx.providerConfig?.baseUrl,
-    })
-  ) {
+  if (shouldUseCodexResponsesHooks(ctx.providerConfig)) {
     return true;
   }
   if (
@@ -863,12 +840,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
       if (authoredCompletionsRoute) {
         return { ...ctx.model, ...authoredCompletionsRoute };
       }
-      if (
-        shouldUseCodexResponsesHooks({
-          api: ctx.model.api,
-          baseUrl: ctx.model.baseUrl,
-        })
-      ) {
+      if (shouldUseCodexResponsesHooks(ctx.model)) {
         return codexHooks.normalizeResolvedModel?.(ctx);
       }
       return shouldUseOpenAIResponsesTransport({
@@ -906,10 +878,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
       }
       const providerConfig = ctx.config?.models?.providers?.[PROVIDER_ID];
       const useCodexTransport =
-        shouldUseCodexResponsesHooks({
-          api: ctx.model?.api,
-          baseUrl: ctx.model?.baseUrl,
-        }) ||
+        shouldUseCodexResponsesHooks(ctx.model) ||
         (normalizeProviderId(ctx.provider) === PROVIDER_ID &&
           (!providerConfig?.baseUrl || isOpenAIApiBaseUrl(providerConfig.baseUrl)) &&
           isCodexCatalogAuthMode(providerConfig?.auth ?? ""));

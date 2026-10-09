@@ -116,6 +116,29 @@ export function listCliRuntimeProviderIds(
   ].toSorted();
 }
 
+function resolveCliRuntimeBinding(
+  runtime: string,
+  provider: string | undefined,
+  resolveSetup: () => ReturnType<typeof resolvePluginSetupCliBackend>,
+): CliRuntimeModelBackendBinding | undefined {
+  if (!runtime) {
+    return undefined;
+  }
+  const matchesProvider = (candidate: string) =>
+    provider === undefined || candidate === provider || runtime === provider;
+  const runtimeBinding = listCliRuntimeModelBackendBindings().find(
+    (binding) => binding.runtime === runtime && matchesProvider(binding.provider),
+  );
+  if (runtimeBinding) {
+    return runtimeBinding;
+  }
+  const setupBackend = resolveSetup();
+  const setupProvider = setupBackend && resolveCliBackendModelProvider(setupBackend.backend);
+  return setupProvider && matchesProvider(setupProvider)
+    ? { provider: setupProvider, runtime }
+    : undefined;
+}
+
 export function resolveCliRuntimeCanonicalProvider(params: {
   runtime: string | undefined;
   config?: OpenClawConfig;
@@ -124,25 +147,16 @@ export function resolveCliRuntimeCanonicalProvider(params: {
   metadataSnapshot?: PluginMetadataSnapshot | null;
 }): string | undefined {
   const runtime = normalizeProviderId(params.runtime ?? "");
-  if (!runtime) {
-    return undefined;
-  }
-  const runtimeBinding = listCliRuntimeModelBackendBindings().find(
-    (binding) => binding.runtime === runtime,
-  );
-  if (runtimeBinding) {
-    return runtimeBinding.provider;
-  }
-  if (params.includeSetupRegistry !== true || params.metadataSnapshot === null) {
-    return undefined;
-  }
-  const setupBackend = resolvePluginSetupCliBackend({
-    backend: runtime,
-    config: params.config,
-    env: params.env,
-    metadataSnapshot: params.metadataSnapshot,
-  });
-  return setupBackend ? resolveCliBackendModelProvider(setupBackend.backend) : undefined;
+  return resolveCliRuntimeBinding(runtime, undefined, () =>
+    params.includeSetupRegistry === true && params.metadataSnapshot !== null
+      ? resolvePluginSetupCliBackend({
+          backend: runtime,
+          config: params.config,
+          env: params.env,
+          metadataSnapshot: params.metadataSnapshot,
+        })
+      : undefined,
+  )?.provider;
 }
 
 export function resolveCliRuntimeModelBackendBinding(params: {
@@ -155,30 +169,11 @@ export function resolveCliRuntimeModelBackendBinding(params: {
   if (!provider || !runtime) {
     return undefined;
   }
-  const runtimeBinding = listCliRuntimeModelBackendBindings().find(
-    (binding) =>
-      binding.runtime === runtime && (binding.provider === provider || runtime === provider),
+  return resolveCliRuntimeBinding(runtime, provider, () =>
+    params.config === undefined
+      ? undefined
+      : resolvePluginSetupCliBackend({ backend: runtime, config: params.config }),
   );
-  if (runtimeBinding) {
-    return runtimeBinding;
-  }
-  if (params.config === undefined) {
-    return undefined;
-  }
-  const setupBackend = resolvePluginSetupCliBackend({
-    backend: runtime,
-    config: params.config,
-  });
-  if (!setupBackend) {
-    return undefined;
-  }
-  const setupProvider = resolveCliBackendModelProvider(setupBackend.backend);
-  return setupProvider && (setupProvider === provider || runtime === provider)
-    ? {
-        provider: setupProvider,
-        runtime,
-      }
-    : undefined;
 }
 
 export function isCliRuntimeModelBackendForProvider(params: {
