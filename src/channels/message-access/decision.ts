@@ -156,14 +156,6 @@ function eventGate(params: {
   if (authMode === "none" || authMode === "route-only") {
     return eventResult(true, "event_authorized");
   }
-  if (authMode === "command") {
-    // Command-auth events, such as button or slash command callbacks, inherit the command gate
-    // result instead of re-checking the sender allowlist.
-    return eventResult(
-      params.commandGate.allowed,
-      params.commandGate.allowed ? "event_authorized" : "event_unauthorized",
-    );
-  }
   if (authMode === "origin-subject") {
     // Origin-subject mode is used for callbacks tied to a prior message/user identity.
     if (!params.state.event.hasOriginSubject) {
@@ -186,10 +178,10 @@ function eventGate(params: {
       },
     };
   }
-  return eventResult(
-    params.senderGate.allowed,
-    params.senderGate.allowed ? "event_authorized" : "event_unauthorized",
-  );
+  // Command-auth events, such as button or slash command callbacks, inherit the command gate
+  // result instead of re-checking the sender allowlist.
+  const gate = authMode === "command" ? params.commandGate : params.senderGate;
+  return eventResult(gate.allowed, gate.allowed ? "event_authorized" : "event_unauthorized");
 }
 
 function activationGate(params: {
