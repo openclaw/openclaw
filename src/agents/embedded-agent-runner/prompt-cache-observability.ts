@@ -250,7 +250,8 @@ export function beginPromptCacheObservation(
     toolCount: tools.length,
     toolNames: tools.map((tool) => tool.name),
   };
-  const previous = trackers.get(key);
+  const cached = trackers.get(key);
+  const previous = cached?.sessionId === params.sessionId ? cached : undefined;
   const history = params.messages.map((message, index) =>
     fingerprintMessage(message, previous?.history[index]),
   );
@@ -265,11 +266,9 @@ export function beginPromptCacheObservation(
   for (const code of previous?.declaredRewrites ?? []) {
     changes.push({ code, detail: `${code} changed provider history` });
   }
-  const restarted =
-    previous?.sessionId !== params.sessionId ||
-    changes.some(
-      ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
-    );
+  const restarted = changes.some(
+    ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
+  );
   const divergence =
     previous && !restarted && !previous.declaredRewrites?.size
       ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)
