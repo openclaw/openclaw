@@ -63,6 +63,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("rematerializes activity state from accepted facts without reading the databases again", async () => {
   await withAcceptedSuffix(async ({ projection, suffix, query, entry, reads, resume }) => {
+    const revision = suffix.databaseFactsRevision;
     const owner = Symbol("activity-state");
     const target = { key: query.key, agentId: query.agentId };
     const value = {
@@ -86,6 +87,7 @@ it("rematerializes activity state from accepted facts without reading the databa
       expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
       expect(reads).toHaveLength(1);
       expect(sharedReads).not.toHaveBeenCalled();
+      expect(projection.capture(query)?.databaseFactsRevision).toBe(revision);
 
       // An explicit storage uncertainty still wins over the presentation scope.
       sessionChanges.emit({
