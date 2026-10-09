@@ -1,5 +1,6 @@
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
-import { getBatchResponseError, type EmbeddingBatchOutputLine } from "./batch-output.js";
+import type { EmbeddingBatchOutputLine } from "./batch-output.js";
+import { getBatchResponseError } from "./batch-response-error.js";
 import { formatErrorMessage } from "./error-utils.js";
 
 // Extracts provider batch error text from output and unavailable error files.
@@ -31,8 +32,8 @@ export function isEmbeddingBatchUnavailableError(error: unknown): boolean {
 
 /** Return the first useful error message from batch output lines. */
 export function extractBatchErrorMessage(lines: EmbeddingBatchOutputLine[]): string | undefined {
-  const first = lines.find((line) => line.error?.message || getBatchResponseError(line));
-  return first?.error?.message || getBatchResponseError(first);
+  const first = lines.find((line) => line.error?.message || getBatchResponseError(line.response));
+  return first?.error?.message || getBatchResponseError(first?.response);
 }
 
 /** Redact and bound provider-controlled batch diagnostics before logging them. */

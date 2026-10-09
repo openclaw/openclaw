@@ -1,3 +1,5 @@
+import { getBatchResponseError } from "./batch-response-error.js";
+
 // Parses provider batch output lines into the custom-id embedding map.
 
 const DEFAULT_BATCH_OUTPUT_RECORD_MAX_BYTES = 4 * 1024 * 1024;
@@ -130,20 +132,6 @@ export type EmbeddingBatchOutputLine = {
   };
 };
 
-/** Pull a nested response error message without assuming a fixed provider body shape. */
-export function getBatchResponseError(
-  line: EmbeddingBatchOutputLine | undefined,
-): string | undefined {
-  const body = line?.response?.body;
-  if (typeof body === "string") {
-    return body || line?.response?.message || undefined;
-  }
-  if (!body || typeof body !== "object") {
-    return line?.response?.message || undefined;
-  }
-  return body.error?.message || line?.response?.message || undefined;
-}
-
 /** Apply one output line, collecting errors and successful embeddings by custom id. */
 export function applyEmbeddingBatchOutputLine(params: {
   line: EmbeddingBatchOutputLine;
@@ -166,7 +154,7 @@ export function applyEmbeddingBatchOutputLine(params: {
   const response = params.line.response;
   const statusCode = response?.status_code ?? 0;
   if (statusCode >= 400) {
-    params.errors.push(`${customId}: ${getBatchResponseError(params.line) || "unknown error"}`);
+    params.errors.push(`${customId}: ${getBatchResponseError(response) || "unknown error"}`);
     return;
   }
 
