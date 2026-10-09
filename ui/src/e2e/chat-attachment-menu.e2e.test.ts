@@ -160,7 +160,7 @@ suite.define(() => {
             .locator('.agent-chat__attach-menu-option[value="file"]')
             .waitFor({ state: "visible" });
           expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
-            fixture.single ? ["Take photo", "Attach…"] : ["Take photo", "Photo", "File"],
+            fixture.single ? ["Attach…"] : ["Take photo", "Photo", "File"],
           );
           for (const value of ["open-skills", "open-connectors", "manage-plugins"]) {
             expect(await page.locator(`wa-dropdown-item[value="${value}"]`).isVisible()).toBe(true);

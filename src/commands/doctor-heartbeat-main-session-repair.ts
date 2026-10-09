@@ -119,11 +119,8 @@ function resolveHeartbeatMainSessionRepairCandidate(params: {
   const hasSyntheticHeartbeatOwnership =
     typeof entry.heartbeatIsolatedBaseSessionKey === "string" &&
     entry.heartbeatIsolatedBaseSessionKey.trim().length > 0;
-  if (hasSyntheticHeartbeatOwnership && !transcriptPath) {
-    return { reason: "metadata" };
-  }
   if (!transcriptPath) {
-    return null;
+    return hasSyntheticHeartbeatOwnership ? { reason: "metadata" } : null;
   }
   const summary = scanTranscriptHeartbeatMessages(transcriptPath);
   if (summary === "record-too-large") {
@@ -150,11 +147,8 @@ function resolveHeartbeatMainRecoveryKey(params: {
   }
   const stamp = formatSessionArchiveTimestamp(params.nowMs).toLowerCase();
   const base = `agent:${parsed.agentId}:heartbeat-recovered-${stamp}`;
-  if (!params.isSessionKeyOccupied(base)) {
-    return base;
-  }
-  for (let index = 2; index <= 100; index += 1) {
-    const candidate = `${base}-${index}`;
+  for (let index = 1; index <= 100; index += 1) {
+    const candidate = index === 1 ? base : `${base}-${index}`;
     if (!params.isSessionKeyOccupied(candidate)) {
       return candidate;
     }

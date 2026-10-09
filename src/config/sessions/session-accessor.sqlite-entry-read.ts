@@ -196,9 +196,10 @@ export function validateDeliveryCanonicalSessionEntry(
   sessionKey: string,
   entry: SessionEntry,
 ): SessionEntry {
-  if (resolveDeliveryProvenCanonicalSessionKey(sessionKey, entry) !== sessionKey) {
+  const canonicalKey = resolveDeliveryProvenCanonicalSessionKey(sessionKey, entry);
+  if (canonicalKey !== sessionKey) {
     throw canonicalSessionKeyMigrationRequiredError(
-      `non-canonical persisted row resolves to session key ${sessionKey}`,
+      `non-canonical persisted row resolves to session key ${canonicalKey}`,
     );
   }
   return entry;

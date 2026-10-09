@@ -53,18 +53,9 @@ describe("worker session placement moves", () => {
     });
   }
 
-  function seedAttachedEnvironment(input: {
-    environmentId: string;
-    sessionId: string;
-    ownerEpoch: number;
-    profileId?: string;
-  }): void {
-    seedAttachedPlacementEnvironment(database, input);
-  }
-
   async function seedActiveEnvironment() {
     const active = await advanceToActive();
-    seedAttachedEnvironment({
+    seedAttachedPlacementEnvironment(database, {
       environmentId: active.environmentId,
       sessionId: active.sessionId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -78,6 +69,26 @@ describe("worker session placement moves", () => {
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
     };
+  }
+
+  async function beginGatewayMove(abandonSource?: true) {
+    const active = await seedActiveEnvironment();
+    const begun = await store.beginPlacementMove({
+      sessionId: active.sessionId,
+      source: sourceFor(active),
+      target: { kind: "gateway" },
+      ...(abandonSource ? { abandonSource } : {}),
+    });
+    return { active, begun };
+  }
+
+  function reconcileMove(active: Awaited<ReturnType<typeof advanceToActive>>, generation: number) {
+    return store.startReconcile({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: generation,
+    });
   }
 
   it("reads and mutates native move state without caller-thread SQL", async () => {
@@ -109,12 +120,7 @@ describe("worker session placement moves", () => {
           error: "waiting for source",
         }),
       ).toBe(true);
-      const reconciling = await store.startReconcile({
-        sessionId: SESSION.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-        expectedGeneration: begun.placement.generation,
-      });
+      const reconciling = await reconcileMove(active, begun.placement.generation);
       expect(
         await store.completePlacementMoveSourceToLocal({
           operationId: begun.intent.operationId,
@@ -264,20 +270,9 @@ describe("worker session placement moves", () => {
   });
 
   it("persists explicit abandonment and atomically completes its exact failed source", async () => {
-    const active = await seedActiveEnvironment();
-    const begun = await store.beginPlacementMove({
-      sessionId: active.sessionId,
-      source: sourceFor(active),
-      target: { kind: "gateway" },
-      abandonSource: true,
-    });
+    const { active, begun } = await beginGatewayMove(true);
     expect(store.getPlacementMove(active.sessionId)).toMatchObject({ abandonSource: true });
-    const reconciling = await store.startReconcile({
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      expectedGeneration: begun.placement.generation,
-    });
+    const reconciling = await reconcileMove(active, begun.placement.generation);
     const recoveryError = "Worker result abandoned by forced operator teardown";
     const failed = await store.fail({
       sessionId: active.sessionId,
@@ -305,12 +300,7 @@ describe("worker session placement moves", () => {
   });
 
   it("permits draining an active placement with a pending workspace result when abandoning source", async () => {
-    const active = await advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: active.environmentId,
-      sessionId: active.sessionId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
+    const active = await seedActiveEnvironment();
     const claim = await store.claimTurn({
       ...SESSION,
       owner: {
@@ -325,11 +315,7 @@ describe("worker session placement moves", () => {
     expect(await store.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     await store.prepareWorkspaceResultClaim(claim);
 
-    const source = {
-      generation: active.generation,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-    };
+    const source = sourceFor(active);
 
     await expect(
       store.beginPlacementMove({
@@ -398,12 +384,7 @@ describe("worker session placement moves", () => {
   });
 
   it("rejects an OS stored for a non-profile target", async () => {
-    const active = await seedActiveEnvironment();
-    await store.beginPlacementMove({
-      sessionId: SESSION.sessionId,
-      source: sourceFor(active),
-      target: { kind: "gateway" },
-    });
+    await beginGatewayMove();
     database.db
       .prepare(
         "UPDATE worker_session_placement_moves SET target_os = 'override' WHERE session_id = ?",
@@ -415,41 +396,27 @@ describe("worker session placement moves", () => {
     );
   });
 
-  it("rejects OS on a Gateway move before creating storage", async () => {
-    const invalidTarget = { kind: "gateway" as const, os: "os-a" };
+  it.each([
+    ["gateway", "os-a", "operating system requires a profile target"],
+    ["profile", " ", /move operating system/u],
+    ["profile", "a".repeat(65), /move operating system/u],
+  ] as const)("rejects invalid %s OS %j before creating storage", async (kind, targetOs, error) => {
+    const target =
+      kind === "gateway" ? { kind, os: targetOs } : { kind, profileId: "cloud", os: targetOs };
     database.db.exec("DROP TABLE worker_session_placement_moves");
     await expect(
       store.beginPlacementMove({
         sessionId: SESSION.sessionId,
         source: { generation: 1, environmentId: "source", ownerEpoch: 1 },
-        target: invalidTarget,
+        target,
       }),
-    ).rejects.toThrow("operating system requires a profile target");
+    ).rejects.toThrow(error);
     expect(
       database.db
         .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'worker_session_placement_moves'")
         .get(),
     ).toBeUndefined();
   });
-
-  it.each([" ", "a".repeat(65)])(
-    "rejects an invalid move OS %j before creating storage",
-    async (targetOs) => {
-      database.db.exec("DROP TABLE worker_session_placement_moves");
-      await expect(
-        store.beginPlacementMove({
-          sessionId: SESSION.sessionId,
-          source: { generation: 1, environmentId: "source", ownerEpoch: 1 },
-          target: { kind: "profile", profileId: "cloud", os: targetOs },
-        }),
-      ).rejects.toThrow(/move operating system/u);
-      expect(
-        database.db
-          .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'worker_session_placement_moves'")
-          .get(),
-      ).toBeUndefined();
-    },
-  );
 
   it("keeps invalid move attempts from creating optional storage", async () => {
     database.db.exec("DROP TABLE worker_session_placement_moves");
@@ -479,18 +446,8 @@ describe("worker session placement moves", () => {
   it.each(["generation", "environment", "epoch"] as const)(
     "Stop retains a Move belonging to a different source %s",
     async (change) => {
-      const active = await seedActiveEnvironment();
-      const begun = await store.beginPlacementMove({
-        sessionId: SESSION.sessionId,
-        source: sourceFor(active),
-        target: { kind: "gateway" },
-      });
-      const reconciling = await store.startReconcile({
-        sessionId: SESSION.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-        expectedGeneration: begun.placement.generation,
-      });
+      const { active, begun } = await beginGatewayMove();
+      const reconciling = await reconcileMove(active, begun.placement.generation);
       // A foreign owner has replaced the intent's source before Stop's final CAS.
       const columns = {
         generation: { name: "source_generation", value: active.generation + 1 },
@@ -518,12 +475,7 @@ describe("worker session placement moves", () => {
   );
 
   it("fences move errors and Gateway completion by operation id", async () => {
-    const active = await seedActiveEnvironment();
-    const begun = await store.beginPlacementMove({
-      sessionId: SESSION.sessionId,
-      source: sourceFor(active),
-      target: { kind: "gateway" },
-    });
+    const { active, begun } = await beginGatewayMove();
 
     await expect(
       store.cancelPlacementMove({
@@ -562,12 +514,7 @@ describe("worker session placement moves", () => {
     );
     expect(observed).toEqual(["workspace reconciliation is waiting"]);
 
-    const reconciling = await store.startReconcile({
-      sessionId: SESSION.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      expectedGeneration: begun.placement.generation,
-    });
+    const reconciling = await reconcileMove(active, begun.placement.generation);
     await expect(
       store.completePlacementMoveSourceToLocal({
         operationId: "move:v1:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
@@ -599,12 +546,7 @@ describe("worker session placement moves", () => {
         os: "os-a",
       },
     });
-    const reconciling = await store.startReconcile({
-      sessionId: SESSION.sessionId,
-      environmentId: source.environmentId,
-      ownerEpoch: source.activeOwnerEpoch,
-      expectedGeneration: begun.placement.generation,
-    });
+    const reconciling = await reconcileMove(source, begun.placement.generation);
     const local = await store.completePlacementMoveSourceToLocal({
       operationId: begun.intent.operationId,
       sessionId: SESSION.sessionId,
@@ -644,19 +586,8 @@ describe("worker session placement moves", () => {
   });
 
   it("completes a persisted abandonment only after a later sweep makes its placement local", async () => {
-    const active = await seedActiveEnvironment();
-    const begun = await store.beginPlacementMove({
-      sessionId: active.sessionId,
-      source: sourceFor(active),
-      target: { kind: "gateway" },
-      abandonSource: true,
-    });
-    const reconciling = await store.startReconcile({
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      expectedGeneration: begun.placement.generation,
-    });
+    const { active, begun } = await beginGatewayMove(true);
+    const reconciling = await reconcileMove(active, begun.placement.generation);
     const recoveryError = "Worker result abandoned by forced operator teardown";
     const failed = await store.fail({
       sessionId: active.sessionId,
@@ -704,18 +635,8 @@ describe("worker session placement moves", () => {
   });
 
   it("completes an ordinary reconciled move with one durable Gateway placement", async () => {
-    const active = await seedActiveEnvironment();
-    const begun = await store.beginPlacementMove({
-      sessionId: active.sessionId,
-      source: sourceFor(active),
-      target: { kind: "gateway" },
-    });
-    const reconciling = await store.startReconcile({
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      expectedGeneration: begun.placement.generation,
-    });
+    const { active, begun } = await beginGatewayMove();
+    const reconciling = await reconcileMove(active, begun.placement.generation);
     const moves = createWorkerPlacementMoveService({
       placements: store,
       environments: { get: () => undefined },
@@ -748,12 +669,7 @@ describe("worker session placement moves", () => {
         os: "os-a",
       },
     });
-    const reconciling = await store.startReconcile({
-      sessionId: source.sessionId,
-      environmentId: source.environmentId,
-      ownerEpoch: source.activeOwnerEpoch,
-      expectedGeneration: begun.placement.generation,
-    });
+    const reconciling = await reconcileMove(source, begun.placement.generation);
     const local = await store.completePlacementMoveSourceToLocal({
       operationId: begun.intent.operationId,
       sessionId: source.sessionId,

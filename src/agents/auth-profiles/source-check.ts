@@ -7,6 +7,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
+import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
@@ -88,7 +89,10 @@ export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
 }
 
 /** Runtime source detection retains the existing readers through classification and cleanup. */
-export async function hasAnyAuthProfileStoreSourceAsync(agentDir?: string): Promise<boolean> {
+export async function hasAnyAuthProfileStoreSourceAsync(
+  agentDir?: string,
+  reader?: SessionEntryCohortReader,
+): Promise<boolean> {
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const localPath = agentDir ? resolveAuthProfileDatabasePath(agentDir) : undefined;
@@ -102,29 +106,61 @@ export async function hasAnyAuthProfileStoreSourceAsync(agentDir?: string): Prom
   }
   const context = captureOpenClawStateWorkerContext({ env });
   const legacySharedPath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir(env));
+  const paths = [...new Set([legacySharedPath, ...(localPath ? [localPath] : [])])];
+  const cohortPath =
+    reader &&
+    path.resolve(resolveStateDir(reader.database.env)) === path.resolve(resolveStateDir(env))
+      ? paths.find(
+          (databasePath) =>
+            path.resolve(databasePath) === path.resolve(reader.database.path) &&
+            resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)) ===
+              reader.database.agentId,
+        )
+      : undefined;
   // Capture both possible shared owners before the first read can yield.
   const readers = new Map(
-    [...new Set([legacySharedPath, ...(localPath ? [localPath] : [])])].map((databasePath) => [
-      databasePath,
-      prepareAgentAuthProfileRowsRead({
+    paths
+      .filter((databasePath) => databasePath !== cohortPath)
+      .map((databasePath) => [
         databasePath,
-        agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-        env,
-      }),
-    ]),
+        prepareAgentAuthProfileRowsRead({
+          databasePath,
+          agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
+          env,
+        }),
+      ]),
   );
   const usedReaders = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
   let usedShared = false;
-  const readAgent = (databasePath: string) => {
-    const reader = readers.get(databasePath)!;
-    usedReaders.add(reader);
-    return reader.read();
-  };
+  let usedCohort = false;
   const hasSource = (rows: AuthProfileRowRead): boolean =>
     rows.store.status !== "missing" ||
     (rows.state.status === "readable" && Boolean(rows.state.raw));
+  const assertCohortCurrent = () => {
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
+    reader?.assertCurrent();
+  };
+  const readAgentSource = async (databasePath: string): Promise<boolean> => {
+    if (reader && databasePath === cohortPath) {
+      usedCohort = true;
+      return reader.withRead(
+        { sessionKeys: [reader.sessionKey], snapshotFields: [], includeAuthProfileSource: true },
+        assertCohortCurrent,
+        (read) => {
+          if (typeof read.authProfileSource !== "boolean") {
+            throw new Error("Session cohort returned no auth source presence");
+          }
+          return read.authProfileSource;
+        },
+      );
+    }
+    const source = readers.get(databasePath)!;
+    usedReaders.add(source);
+    return hasSource(await source.read());
+  };
   const readSource = async () => {
-    if (localPath && hasSource(await readAgent(localPath))) {
+    if (localPath && (await readAgentSource(localPath))) {
       return true;
     }
     usedShared = true;
@@ -143,15 +179,13 @@ export async function hasAnyAuthProfileStoreSourceAsync(agentDir?: string): Prom
     if (hasLegacyAuthProfileCredentialSource(undefined, env)) {
       return true;
     }
-    return hasSource(
-      ownership.location === "state-db"
-        ? await readSharedAuthProfileRows(context)
-        : await readAgent(sharedPath),
-    );
+    return ownership.location === "state-db"
+      ? hasSource(await readSharedAuthProfileRows(context))
+      : readAgentSource(sharedPath);
   };
   const result = await withAuthProfileCleanup(readSource, async (outcome) => {
     const cleanup = await Promise.allSettled(
-      [...readers.values()].map((reader) => reader.dispose()),
+      [...readers.values()].map((source) => source.dispose()),
     );
     const failures = cleanup.flatMap((entry) =>
       entry.status === "rejected" ? [entry.reason] : [],
@@ -171,8 +205,11 @@ export async function hasAnyAuthProfileStoreSourceAsync(agentDir?: string): Prom
           );
     }
   });
-  for (const reader of usedReaders) {
-    reader.assertCurrent();
+  for (const source of usedReaders) {
+    source.assertCurrent();
+  }
+  if (usedCohort) {
+    assertCohortCurrent();
   }
   if (usedShared) {
     context.maintenanceScope?.assertAdmission();

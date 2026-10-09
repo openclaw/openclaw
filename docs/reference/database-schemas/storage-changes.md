@@ -1446,8 +1446,12 @@ the canonical selector and expected input revision while preserving admitted ID
 origin. Export bookkeeping retains the actual export lease through native
 settlement, including unknown outcomes, and validates that lease inside its write
 transaction. Pending markers commit before filesystem changes, and manifest updates
-settle before success returns. Streamed chronological reads, export snapshots, and
-host lease primitives retain their existing owners.
+settle before success returns. Meeting export snapshots now run in the existing
+shared-state reader, retaining one private snapshot through bounded chunk
+consumption and cleanup. Artifact publication uses private staging and the guarded
+filesystem copy owner; it retains the prior best-effort file and parent-directory
+sync policy. This temporarily requires one additional artifact-sized copy. Host
+lease primitives remain the final live-authority guard before file mutation.
 
 Transcript artifact ownership recovery streams raw utterances in sequence order
 through the shared-state worker and returns their canonical JSONL SHA-256 digest.
@@ -1919,6 +1923,21 @@ revoke queued requests, drain dispatched work, and join native exit. The process
 at most one reusable archive worker; competing scopes retire the previous idle worker.
 Cold preparation and mutations retain their separate one-shot workers; cold mutations
 join their existing page maintenance and native exit.
+
+History eviction prepares its deletion snapshot in that archive worker's existing
+materialization request. The final reclamation transaction rereads durable references,
+recency, and the complete snapshot; host grants recheck live session admissions and
+the captured physical database. Archive publication keeps that same source fence.
+A foreign update after materialization is resolved by that final transaction,
+and a refusal still joins worker cleanup. Retention policy, archive selection,
+schemas, and update behavior are unchanged.
+
+Deletion snapshots select the window, rewrite generation, transcript and trajectory
+tails, and parent-stream count in one statement. Missing windows still retain their
+orphan-child comparisons. Atomic reset also reuses progress-card metadata already
+read inside its write transaction, preserving revision tombstones and numeric
+validation. Neither change retains facts across operations or weakens foreign-commit
+freshness.
 
 Single-candidate reference checks narrow which node metadata reaches JavaScript.
 Rows with optional historical references still use the canonical entry parser, and
@@ -2454,6 +2473,14 @@ mechanics are engineering decisions within an authorized repair when they
 preserve those contracts. Prove FIFO ordering, current authority after awaited
 work, integrity checks, publication fencing, and settlement of write-capable
 work. Assess performance and storage costs as part of that verification.
+
+A Doctor or recovery repair that removes only invalid or unreachable rows (for
+example rows whose referenced parent row is missing) is also an engineering
+decision within an authorized repair. It must take a verified backup first,
+report what it removed, and leave valid data untouched. Record the repair, its
+backup and its upgrade-compatibility proof in the PR; no separate design
+acceptance is required. Changing which valid data is retained or deleted still
+needs acceptance.
 
 When separate acceptance is required, the discussion should identify the owning store and lifecycle, the problem being solved, alternatives that avoid new persistence, canonical versus derived data, schema and upgrade/downgrade behavior, retention and deletion behavior, concurrency and recovery invariants, performance/storage impact, rollback plan, and validation limits. The implementing PR must link that accepted decision.
 

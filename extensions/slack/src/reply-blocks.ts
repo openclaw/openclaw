@@ -25,8 +25,7 @@ import {
 import { parseSlackBlocksInput, SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import {
   buildSlackInteractiveBlocks,
-  buildSlackPresentationBlocks,
-  canRenderSlackPresentation,
+  buildSlackPresentationBlocksIfComplete,
   resolveSlackBlockOffsets,
   type SlackBlock,
   type SlackBlockRenderOptions,
@@ -378,37 +377,29 @@ function resolvePresentationRenderOptions(
   };
 }
 
-function renderNativePresentation(
-  presentation: MessagePresentation,
-  options: SlackBlockRenderOptions,
-): SlackBlock[] | undefined {
-  if (!canRenderSlackPresentation(presentation, options)) {
-    return undefined;
-  }
-  const blocks = buildSlackPresentationBlocks(presentation, options);
-  return blocks.length > 0 ? blocks : undefined;
-}
-
 function appendPresentationPart(
   segments: SlackReplyBlockSegment[],
   presentation: MessagePresentation,
   questionOptionIndices?: AskUserQuestionOptionIndices,
 ): void {
   const currentBlocks = readLastBlockSegment(segments);
-  const currentRendered = renderNativePresentation(presentation, {
+  const currentRendered = buildSlackPresentationBlocksIfComplete(presentation, {
     ...resolvePresentationRenderOptions(segments, "current"),
     questionOptionIndices,
   });
-  if (currentRendered && currentBlocks.length + currentRendered.length <= SLACK_MAX_BLOCKS) {
+  if (
+    currentRendered?.length &&
+    currentBlocks.length + currentRendered.length <= SLACK_MAX_BLOCKS
+  ) {
     appendBlockSegment(segments, currentRendered);
     return;
   }
 
-  const freshRendered = renderNativePresentation(presentation, {
+  const freshRendered = buildSlackPresentationBlocksIfComplete(presentation, {
     ...resolvePresentationRenderOptions(segments, "new-message"),
     questionOptionIndices,
   });
-  if (freshRendered) {
+  if (freshRendered?.length) {
     appendBlockSegment(segments, freshRendered, true);
     return;
   }

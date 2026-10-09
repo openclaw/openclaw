@@ -189,53 +189,24 @@ describe("plugin compatibility registry", () => {
     );
   });
 
-  it("keeps the removed context-engine host-param default as a migration tombstone", () => {
-    const record = listPluginCompatRecords().find(
-      (candidate) => candidate.code === "context-engine-legacy-host-param-default",
-    );
-
-    expect(record).toMatchObject({
-      status: "removed",
-      replacement:
-        "`ContextEngineInfo.acceptedHostParams` for restricted projection; omitted declarations receive full host params",
-    });
-    expect(record?.removeAfter).toBeUndefined();
-  });
-
-  it("keeps the removed deactivate hook alias as a migration tombstone", () => {
-    const record = listPluginCompatRecords().find(
-      (candidate) => candidate.code === "legacy-deactivate-hook-alias",
-    );
-
-    expect(record).toMatchObject({
-      status: "removed",
-      replacement: "`gateway_stop` hook",
-    });
-    expect(record?.removeAfter).toBeUndefined();
-  });
-
-  it("keeps the removed subagent spawning hook as a migration tombstone", () => {
-    const record = listPluginCompatRecords().find(
-      (candidate) => candidate.code === "legacy-subagent-spawning-hook",
-    );
-
-    expect(record).toMatchObject({
-      status: "removed",
-      replacement:
-        "`subagent_spawned` for post-launch observation; core session-binding adapters for thread routing",
-    });
-    expect(record?.removeAfter).toBeUndefined();
-  });
-
-  it("keeps the removed embedded Pi aliases as a migration tombstone", () => {
-    const record = listPluginCompatRecords().find(
-      (candidate) => candidate.code === "embedded-pi-agent-sdk-aliases",
-    );
-
-    expect(record).toMatchObject({
-      status: "removed",
-      replacement: "`runEmbeddedAgent` and `EmbeddedAgent*` SDK/runtime names",
-    });
+  it.each([
+    [
+      "context-engine-legacy-host-param-default",
+      "`ContextEngineInfo.acceptedHostParams` for restricted projection; omitted declarations receive full host params",
+    ],
+    ["legacy-deactivate-hook-alias", "`gateway_stop` hook"],
+    [
+      "legacy-subagent-spawning-hook",
+      "`subagent_spawned` for post-launch observation; core session-binding adapters for thread routing",
+    ],
+    ["embedded-pi-agent-sdk-aliases", "`runEmbeddedAgent` and `EmbeddedAgent*` SDK/runtime names"],
+    [
+      "deprecated-memory-embedding-provider-api",
+      "`api.registerEmbeddingProvider(...)` and `contracts.embeddingProviders`",
+    ],
+  ])("keeps %s as a migration tombstone", (code, replacement) => {
+    const record = listPluginCompatRecords().find((candidate) => candidate.code === code);
+    expect(record).toMatchObject({ status: "removed", replacement });
     expect(record?.removeAfter).toBeUndefined();
   });
 
@@ -248,18 +219,6 @@ describe("plugin compatibility registry", () => {
       status: "deprecated",
       replacement:
         "retain until supported published packages migrate to plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
-    });
-    expect(record?.removeAfter).toBeUndefined();
-  });
-
-  it("keeps the removed memory embedding registrar as a migration tombstone", () => {
-    const record = listPluginCompatRecords().find(
-      (candidate) => candidate.code === "deprecated-memory-embedding-provider-api",
-    );
-
-    expect(record).toMatchObject({
-      status: "removed",
-      replacement: "`api.registerEmbeddingProvider(...)` and `contracts.embeddingProviders`",
     });
     expect(record?.removeAfter).toBeUndefined();
   });

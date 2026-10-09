@@ -82,7 +82,6 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
   return true;
 }
 
-type RootMemoryFilesDetection = Awaited<ReturnType<typeof detectRootMemoryFiles>>;
 type RootMemoryStatResult = Awaited<ReturnType<typeof statIfExists>>;
 
 async function statIfExists(filePath: string) {
@@ -137,20 +136,6 @@ async function detectRootMemoryFiles(workspaceDir: string) {
 
 function formatBytes(bytes?: number): string {
   return typeof bytes === "number" ? `${bytes} bytes` : "size unknown";
-}
-
-function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection): string | null {
-  if (detection.canonicalExists && detection.legacyExists) {
-    return [
-      "Split root durable memory files detected:",
-      `- canonical: ${shortenHomePath(detection.canonicalPath)} (${formatBytes(detection.canonicalBytes)})`,
-      `- legacy: ${shortenHomePath(detection.legacyPath)} (${formatBytes(detection.legacyBytes)})`,
-      `OpenClaw uses ${CANONICAL_ROOT_MEMORY_FILENAME} as the canonical durable memory file.`,
-      `Dreaming writes durable promotions to ${CANONICAL_ROOT_MEMORY_FILENAME}, so older facts in ${LEGACY_ROOT_MEMORY_FILENAME} can be shadowed.`,
-      `Run "openclaw doctor --fix" to merge the legacy file into ${CANONICAL_ROOT_MEMORY_FILENAME} with a backup.`,
-    ].join("\n");
-  }
-  return null;
 }
 
 type RootMemoryMigrationResult = {
@@ -292,10 +277,16 @@ type WorkspaceMemoryDoctorScope = {
 
 export async function noteWorkspaceMemoryHealth(scope: WorkspaceMemoryDoctorScope): Promise<void> {
   try {
-    const rootMemoryWarning = formatRootMemoryFilesWarning(
-      await detectRootMemoryFiles(scope.workspaceDir),
-    );
-    if (rootMemoryWarning) {
+    const detection = await detectRootMemoryFiles(scope.workspaceDir);
+    if (detection.canonicalExists && detection.legacyExists) {
+      const rootMemoryWarning = [
+        "Split root durable memory files detected:",
+        `- canonical: ${shortenHomePath(detection.canonicalPath)} (${formatBytes(detection.canonicalBytes)})`,
+        `- legacy: ${shortenHomePath(detection.legacyPath)} (${formatBytes(detection.legacyBytes)})`,
+        `OpenClaw uses ${CANONICAL_ROOT_MEMORY_FILENAME} as the canonical durable memory file.`,
+        `Dreaming writes durable promotions to ${CANONICAL_ROOT_MEMORY_FILENAME}, so older facts in ${LEGACY_ROOT_MEMORY_FILENAME} can be shadowed.`,
+        `Run "openclaw doctor --fix" to merge the legacy file into ${CANONICAL_ROOT_MEMORY_FILENAME} with a backup.`,
+      ].join("\n");
       note(
         `${scope.labelAgent ? `Agent "${scope.agentId}":\n` : ""}${rootMemoryWarning}`,
         "Workspace memory",

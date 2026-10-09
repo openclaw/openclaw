@@ -20,6 +20,8 @@ import {
 import * as voiceSessionReads from "./client-voice-session-read.js";
 import {
   completeRun,
+  createCompletedMutationSession,
+  createVoiceSession,
   recordMutation,
   seedSession,
 } from "./client-voice-session.fixture.test-support.js";
@@ -50,13 +52,7 @@ describe("client voice session lifecycle", () => {
   }) => {
     const sessionKey = "agent:main:main";
     await seedSession(sessionKey, { channel: "discord", to: "channel:partial-digest" });
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey,
-      origin: "client",
-    });
-    recordMutation(voiceSessionId);
-    await completeRun(`run-${voiceSessionId}`);
+    const voiceSessionId = await createCompletedMutationSession();
     const sent = createDeferred();
     sendDurableMessageBatch.mockImplementationOnce(async () => {
       sent.resolve();
@@ -97,12 +93,7 @@ describe("client voice session lifecycle", () => {
   }) => {
     await seedSession("agent:main:main", { channel: "discord", to: "channel:voice-updates" });
     const ids = Array.from({ length: 4 }, (_, index) =>
-      createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        origin: "client",
-        voiceSessionId: `queued-digest-${index}`,
-      }),
+      createVoiceSession({ voiceSessionId: `queued-digest-${index}` }),
     );
     for (const id of ids) {
       recordMutation(id);
@@ -188,11 +179,7 @@ describe("client voice session lifecycle", () => {
       const sessionKey = "agent:main:main";
       await seedSession(sessionKey, { channel: "discord", to: "channel:original-voice" });
       const closeOriginal = prepareClientVoiceSessionClose();
-      const voiceSessionId = createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey,
-        origin: "client",
-      });
+      const voiceSessionId = createVoiceSession();
       recordMutation(voiceSessionId);
       const successorStateDir = path.join(harness.stateDir, "successor");
       const sending = createDeferred();
@@ -269,11 +256,7 @@ describe("client voice session lifecycle", () => {
       channel: "discord",
       to: "channel:voice-updates",
     });
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-    });
+    const voiceSessionId = createVoiceSession();
     for (const runId of ["run-1", "run-2"]) {
       registerClientVoiceConsultRun({
         agentId: "main",
@@ -341,31 +324,8 @@ describe("client voice session lifecycle", () => {
         channel: "discord",
         to: "channel:voice-updates",
       });
-      const voiceSessionId = createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        origin: "client",
-      });
-      registerClientVoiceConsultRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        voiceSessionId,
-        runId: "run-live",
-      });
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.started",
-        runId: "run-live",
-        toolCallId: "call-run-live",
-        toolName: "message",
-        mutatingAction: true,
-      });
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.completed",
-        runId: "run-live",
-        toolCallId: "call-run-live",
-        toolName: "message",
-        durationMs: 5,
-      });
+      const voiceSessionId = createVoiceSession();
+      recordMutation(voiceSessionId, "run-live");
       // Call ends while the consult still runs, so the digest is deferred.
       await closeClientVoiceSession({
         agentId: "main",
@@ -396,13 +356,7 @@ describe("client voice session lifecycle", () => {
         channel: "discord",
         to: "channel:voice-updates",
       });
-      const voiceSessionId = createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        origin: "client",
-      });
-      recordMutation(voiceSessionId);
-      await completeRun(`run-${voiceSessionId}`);
+      const voiceSessionId = await createCompletedMutationSession();
       sendDurableMessageBatch.mockRejectedValueOnce(new Error("channel offline"));
 
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -460,13 +414,7 @@ describe("client voice session lifecycle", () => {
         channel: "discord",
         to: "channel:voice-updates",
       });
-      const delivered = createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        origin: "client",
-      });
-      recordMutation(delivered);
-      await completeRun(`run-${delivered}`);
+      const delivered = await createCompletedMutationSession();
       await closeClientVoiceSession({
         agentId: "main",
         sessionKey: "agent:main:main",
@@ -495,12 +443,7 @@ describe("client voice session lifecycle", () => {
       ] as const) {
         const sessionKey = `agent:main:${voiceSessionId}`;
         await seedSession(sessionKey, route);
-        createOrResumeClientVoiceSession({
-          agentId: "main",
-          sessionKey,
-          origin: "client",
-          voiceSessionId,
-        });
+        createVoiceSession({ sessionKey, voiceSessionId });
         registerClientVoiceConsultRun({
           agentId: "main",
           sessionKey,
@@ -572,16 +515,9 @@ describe("client voice session lifecycle", () => {
       },
     );
     it("closes stale records and leaves recent records open", async () => {
-      const stale = createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:stale",
-        origin: "client",
-        now: 1,
-      });
-      const recent = createOrResumeClientVoiceSession({
-        agentId: "main",
+      const stale = createVoiceSession({ sessionKey: "agent:main:stale", now: 1 });
+      const recent = createVoiceSession({
         sessionKey: "agent:main:recent",
-        origin: "client",
         now: 6 * 60 * 60_000,
       });
 

@@ -76,21 +76,19 @@ export function isOperatorOwnedEnvironmentIssue(
   command: GatewayServiceCommandConfig,
   environmentValueSources: GatewayServiceInstallArgs["environmentValueSources"],
 ): boolean {
+  const hasOverride = (keys: readonly string[]) =>
+    hasGatewayServiceEnvironmentOverride(command, keys, { environmentValueSources });
   switch (issue.code) {
     case SERVICE_AUDIT_CODES.gatewayPathMissing:
     case SERVICE_AUDIT_CODES.gatewayPathMissingDirs:
     case SERVICE_AUDIT_CODES.gatewayPathNonMinimal:
-      return hasGatewayServiceEnvironmentOverride(command, ["PATH"], { environmentValueSources });
+      return hasOverride(["PATH"]);
     case SERVICE_AUDIT_CODES.gatewayTokenEmbedded:
     case SERVICE_AUDIT_CODES.gatewayTokenMismatch:
     case SERVICE_AUDIT_CODES.gatewayTokenDrift:
-      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_TOKEN"], {
-        environmentValueSources,
-      });
+      return hasOverride(["OPENCLAW_GATEWAY_TOKEN"]);
     case SERVICE_AUDIT_CODES.gatewayPasswordEmbedded:
-      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_PASSWORD"], {
-        environmentValueSources,
-      });
+      return hasOverride(["OPENCLAW_GATEWAY_PASSWORD"]);
     case SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded:
       return hasGatewayServiceEnvironmentOverride(command, issue.environmentKeys ?? [], {
         environmentValueSources,

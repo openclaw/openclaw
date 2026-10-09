@@ -22,6 +22,11 @@ import {
   resolveVolatileTabExact,
 } from "./session-tab-ephemeral-aliases.js";
 import {
+  browserSessionTabNativeIdentity,
+  browserSessionTabStorageKey,
+  resolveBrowserSessionKey,
+} from "./session-tab-identity.js";
+import {
   activeDurableStorageKeys,
   deleteVolatileSessionTab,
   forgetColdNativeActivity,
@@ -34,8 +39,6 @@ import {
 } from "./session-tab-process-state.js";
 import type { BrowserSessionTabRoute } from "./session-tab-route.js";
 import {
-  browserSessionTabNativeIdentity,
-  browserSessionTabStorageKey,
   compareBrowserSessionTabProfileAliases,
   deleteBrowserSessionTabIf,
   ensureBrowserSessionTabStoreReady,
@@ -84,7 +87,7 @@ function normalizeProfileAliases(values?: Array<string | undefined>): string[] {
 }
 
 function resolveInteractionIdentity(params: SessionTabParams): InteractionIdentity | undefined {
-  const sessionKey = normalizeOptionalLowercaseString(params.sessionKey);
+  const sessionKey = resolveBrowserSessionKey(params.sessionKey);
   const targetId = params.targetId?.trim();
   if (!sessionKey || !targetId) {
     return undefined;
@@ -224,7 +227,7 @@ export async function filterTrackedSessionBrowserTabs<
     tabs: readonly T[];
   },
 ): Promise<T[]> {
-  const sessionKey = normalizeOptionalLowercaseString(params.sessionKey);
+  const sessionKey = resolveBrowserSessionKey(params.sessionKey);
   if (!sessionKey || params.tabs.length === 0) {
     return [];
   }

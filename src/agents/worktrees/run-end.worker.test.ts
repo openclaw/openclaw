@@ -10,7 +10,6 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import {
   observeMainThreadReads,
   observeMainThreadSql,
@@ -43,9 +42,25 @@ import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
+import { interceptWorktreeWorkerOperation } from "./worker-operation.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const initializeRepository = useManagedWorktreeTestRepository();
+
+function interceptAdmission(
+  intercept: (request: admissions.SqliteWorkerAdmissionRequest, admit: () => void) => void,
+) {
+  const createAdmission = admissions.createSqliteWorkerOperationAdmission;
+  return vi
+    .spyOn(admissions, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((handler, ...options) =>
+      createAdmission(
+        (request, grant) => intercept(request, () => handler(request, grant)),
+        ...options,
+      ),
+    );
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
@@ -155,23 +170,15 @@ it("retains SQL-free effect authority across unrelated writes and revokes pendin
     expect(assertBinding).toThrow("owner or binding changed");
     expect(assertPublication).toThrow(SessionWorktreeSourceChangedError);
 
-    const createAdmission = admissions.createSqliteWorkerOperationAdmission;
     let pendingChecks = 0;
-    const inspectCommit = vi
-      .spyOn(admissions, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((handler, ...options) =>
-        createAdmission(
-          (request, grant) => {
-            if (request.stage === "commit") {
-              pendingChecks += 1;
-              expect(assertSource).toThrow(SessionWorktreeSourceChangedError);
-              expect(assertExactOwner).toThrow("owner or lifecycle changed");
-            }
-            return handler(request, grant);
-          },
-          ...options,
-        ),
-      );
+    const inspectCommit = interceptAdmission((request, admit) => {
+      if (request.stage === "commit") {
+        pendingChecks += 1;
+        expect(assertSource).toThrow(SessionWorktreeSourceChangedError);
+        expect(assertExactOwner).toThrow("owner or lifecycle changed");
+      }
+      return admit();
+    });
     try {
       await updateRegistryWorktree(
         env,
@@ -314,32 +321,21 @@ it("keeps session worktree row reads out of worker admission callbacks", async (
   const reads = observeMainThreadReads();
   const worktreeReads: string[] = [];
   let grants = 0;
-  const createAdmission = admissions.createSqliteWorkerOperationAdmission;
-  const admission = vi
-    .spyOn(admissions, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((handler, ...options) =>
-      createAdmission(
-        (request, grant) => {
-          grants += 1;
-          reads.clear();
-          try {
-            return handler(request, grant);
-          } finally {
-            for (const call of reads.calls) {
-              for (const statement of call.mock.contexts) {
-                if (
-                  statement instanceof StatementSync &&
-                  /\bworktrees\b/u.test(statement.sourceSQL)
-                ) {
-                  worktreeReads.push(statement.sourceSQL);
-                }
-              }
-            }
+  const admission = interceptAdmission((_request, admit) => {
+    grants += 1;
+    reads.clear();
+    try {
+      return admit();
+    } finally {
+      for (const call of reads.calls) {
+        for (const statement of call.mock.contexts) {
+          if (statement instanceof StatementSync && /\bworktrees\b/u.test(statement.sourceSQL)) {
+            worktreeReads.push(statement.sourceSQL);
           }
-        },
-        ...options,
-      ),
-    );
+        }
+      }
+    }
+  });
   try {
     await expect(
       removeSessionWorktree({
@@ -366,27 +362,17 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
     chunkIndex: 0,
     data: new Uint8Array([9, 8, 7]),
   };
-  const run = stateWorker.runOpenClawStateWorkerOperation;
   let writes = 0;
-  const lostReply = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      run(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === "worktrees.writeProvisionedSnapshot") {
-                writes += 1;
-                throw new Error("Synthetic lost command reply");
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-    );
+  const lostReply = interceptWorktreeWorkerOperation(
+    (execute) => async (command, executeOptions) => {
+      const result = await execute(command, executeOptions);
+      if (command.type === "worktrees.writeProvisionedSnapshot") {
+        writes += 1;
+        throw new Error("Synthetic lost command reply");
+      }
+      return result;
+    },
+  );
   try {
     await insertRegistryWorktreeProvisionedChunk(env, input);
   } finally {
@@ -396,20 +382,12 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
 
   const revoked = new Error("Synthetic current owner revoked at commit");
   let current = true;
-  const createAdmission = admissions.createSqliteWorkerOperationAdmission;
-  const revoke = vi
-    .spyOn(admissions, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((handler, ...options) =>
-      createAdmission(
-        (request, grant) => {
-          if (request.stage === "commit") {
-            current = false;
-          }
-          return handler(request, grant);
-        },
-        ...options,
-      ),
-    );
+  const revoke = interceptAdmission((request, admit) => {
+    if (request.stage === "commit") {
+      current = false;
+    }
+    return admit();
+  });
   try {
     await expect(
       clearRegistryWorktreeProvisionedChunks(env, "synthetic", {
@@ -429,35 +407,27 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
 
   const uncertain = new SqliteWorkerError("Synthetic lost native settlement", "outcome-unknown");
   let unknownWrites = 0;
-  const loseSettlement = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      run(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              if (command.type === "worktrees.writeProvisionedSnapshot") {
-                unknownWrites += 1;
-              }
-              return scope.execute(command, executeOptions);
-            },
-          }),
-        {
-          ...options,
-          createAdmission: (retained) => {
-            if (!options?.createAdmission) {
-              throw new Error("Expected run-end transaction admission");
-            }
-            const result = options.createAdmission({
-              settled: retained.settled.then(() => ({ kind: "unknown", error: uncertain })),
-            });
-            Object.defineProperty(result.admission, "committed", { get: () => undefined });
-            return result;
-          },
-        },
-      ),
-    );
+  const loseSettlement = interceptWorktreeWorkerOperation(
+    (execute) => async (command, executeOptions) => {
+      if (command.type === "worktrees.writeProvisionedSnapshot") {
+        unknownWrites += 1;
+      }
+      return execute(command, executeOptions);
+    },
+    (options) => ({
+      ...options,
+      createAdmission: (retained) => {
+        if (!options?.createAdmission) {
+          throw new Error("Expected run-end transaction admission");
+        }
+        const result = options.createAdmission({
+          settled: retained.settled.then(() => ({ kind: "unknown", error: uncertain })),
+        });
+        Object.defineProperty(result.admission, "committed", { get: () => undefined });
+        return result;
+      },
+    }),
+  );
   try {
     await withWorktreeRunEnd(env, async () => {
       const context = captureOpenClawStateWorkerContext({ env });

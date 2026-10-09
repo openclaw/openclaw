@@ -12,7 +12,7 @@ import {
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
 } from "./session-accessor.sqlite-transcript-write.js";
-import * as historyReaders from "./session-transcript-worker-readers.js";
+import * as transcriptReaders from "./session-transcript-execution-read.js";
 
 function scopeFor(state: OpenClawTestState) {
   return {
@@ -73,13 +73,13 @@ it.each(["rewrite", "close"] as const)(
       const scope = scopeFor(state);
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 42 });
       await replaceTranscriptEvents(scope, [header]);
-      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+      const createReaders = transcriptReaders.createPreparedSessionTranscriptReads;
       let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
       let intercepted = false;
       const spy = vi
-        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-        .mockImplementation((runRequest) => {
-          const readers = createReaders(runRequest);
+        .spyOn(transcriptReaders, "createPreparedSessionTranscriptReads")
+        .mockImplementation((params) => {
+          const readers = createReaders(params);
           return {
             ...readers,
             readAnchors: async (input, signal) => {

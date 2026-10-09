@@ -45,6 +45,12 @@ function claimPluginDiagnostic(seen: Set<string>, diagnostic: WorkspacePluginDia
   return true;
 }
 
+function pluginTargetResolutionError(entry: PluginVersionDriftReport["drifts"][number]): string {
+  return entry.targetResolution?.status === "unresolved"
+    ? entry.targetResolution.error
+    : "npm registry target was not resolved";
+}
+
 function pluginVersionReadinessToHealthFindings(
   readiness: PluginVersionRestartReadiness | undefined,
 ): HealthFinding[] {
@@ -94,10 +100,7 @@ function pluginVersionReadinessToHealthFindings(
     }
     const updateCommand = resolvePluginVersionDriftUpdateCommand(entry);
     const targetResolution = entry.targetResolution;
-    const targetError =
-      targetResolution?.status === "unresolved"
-        ? targetResolution.error
-        : "npm registry target was not resolved";
+    const targetError = pluginTargetResolutionError(entry);
     return {
       checkId: WORKSPACE_STATUS_CHECK_ID,
       severity: "warning",
@@ -288,14 +291,10 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
       const registryLag = resolvePluginVersionDriftRegistryLag(entry);
       return `${entry.pluginId} already holds registry version ${registryLag?.registryVersion}; no release reaches ${registryLag?.expectedVersion} yet, so no update command applies.`;
     }),
-    ...unresolvedRepairs.map(({ entry }) => {
-      const targetResolution = entry.targetResolution;
-      const detail =
-        targetResolution?.status === "unresolved"
-          ? targetResolution.error
-          : "npm registry target was not resolved";
-      return `Repair target resolution failed for ${entry.pluginId}: ${detail}. No install command generated.`;
-    }),
+    ...unresolvedRepairs.map(
+      ({ entry }) =>
+        `Repair target resolution failed for ${entry.pluginId}: ${pluginTargetResolutionError(entry)}. No install command generated.`,
+    ),
     singleDrift && updateCommands.length === 1
       ? `Fix: ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`
       : updateCommands.length > 0

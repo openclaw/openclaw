@@ -24,9 +24,15 @@ import type {
   ManagedHandoffRepair,
   ManagedHandoffLeaseTransition,
 } from "./update-managed-service-handoff-lease-types.js";
-import { hasOriginalUpdateExecutorCustody } from "./update-managed-service-handoff-original-owner.js";
+import {
+  hasOriginalUpdateExecutorCustody,
+  managedHandoffOriginalGeneration,
+} from "./update-managed-service-handoff-original-owner.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
-import { managedHandoffLeaseText as text } from "./update-managed-service-handoff-rows.js";
+import {
+  managedHandoffLeaseRow,
+  managedHandoffLeaseText as text,
+} from "./update-managed-service-handoff-rows.js";
 import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
 import {
   parseManagedHandoffLeasePayload,
@@ -107,12 +113,7 @@ export function observeManagedHandoffReclamation(
     !original.mutationOriginal &&
     original.action.kind === "update" &&
     original.action.mutationProtocol === "original-cancellation-v1"
-      ? {
-          key: original.key,
-          owner: original.owner,
-          payload: original.payload,
-          updatedAt: original.updatedAt,
-        }
+      ? managedHandoffOriginalGeneration(original)
       : undefined;
   const readPairs = () =>
     generation
@@ -154,13 +155,7 @@ export function observeManagedHandoffReclamation(
       return false;
     }
     for (const lease of commands) {
-      if (
-        !deps.deleteRow(db, lease.key, {
-          owner: lease.owner,
-          payload_json: lease.payload,
-          updated_at: lease.updatedAt,
-        })
-      ) {
+      if (!deps.deleteRow(db, lease.key, managedHandoffLeaseRow(lease))) {
         throw new Error("Managed command custody changed during reclamation");
       }
     }
@@ -249,11 +244,7 @@ export async function prepareManagedHandoffRepair(
   if (previous.action.phase !== "uncertain" && !metadata) {
     return null;
   }
-  const source = metadata?.source ?? {
-    owner: previous.owner,
-    payload_json: previous.payload,
-    updated_at: previous.updatedAt,
-  };
+  const source = metadata?.source ?? managedHandoffLeaseRow(previous);
   const { recordUpdateRunStep } = await import("./update-run-ledger.js");
   const discovered = await readManagedHandoffRepairFacts(
     rows.handle(root, source),

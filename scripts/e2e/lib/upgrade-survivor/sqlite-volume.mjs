@@ -9,6 +9,7 @@ import {
 } from "../../../lib/sqlite-transcript-payload.mjs";
 import { assert, readJson, write, writeJson } from "../fixtures/common.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+import { readDatabase } from "./observations.mjs";
 import {
   assertUpgradeVolumeSharedState,
   seedUpgradeVolumeSharedState,
@@ -318,9 +319,7 @@ export async function seedUpgradeVolume(stateDir, packageRoot) {
 }
 
 function assertHealthySqlite(databasePath, assertContents) {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  let contents;
-  try {
+  const contents = readDatabase(databasePath, (db) => {
     assert(
       db.prepare("PRAGMA journal_mode").get()?.journal_mode === "wal",
       `${databasePath} is not WAL`,
@@ -333,19 +332,14 @@ function assertHealthySqlite(databasePath, assertContents) {
       db.prepare("PRAGMA foreign_key_check").all().length === 0,
       `${databasePath} has FK errors`,
     );
-    contents = assertContents(db);
-  } finally {
-    db.close();
-  }
-  const reopened = new DatabaseSync(databasePath, { readOnly: true });
-  try {
+    return assertContents(db);
+  });
+  readDatabase(databasePath, (reopened) => {
     assert(
       reopened.prepare("PRAGMA integrity_check").get()?.integrity_check === "ok",
       `${databasePath} failed reopen`,
     );
-  } finally {
-    reopened.close();
-  }
+  });
   return contents;
 }
 
