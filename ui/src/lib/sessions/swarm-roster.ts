@@ -416,7 +416,9 @@ export class SwarmRosterHydrator {
         this.rows = parent ? mergeSwarmSessionRows(this.childRows, [parent]) : [];
         this.childrenRead = true;
         this.hydrated = childReadVersion >= this.requiredChildReadVersion;
-        this.recovered("children");
+        if (this.hydrated) {
+          this.recovered("children");
+        }
         // A child launched during this read is still missing from it.
         this.refreshNewChildren();
         params.onRows(this.rows);

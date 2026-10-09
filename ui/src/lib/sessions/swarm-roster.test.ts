@@ -587,6 +587,67 @@ describe("SwarmRosterHydrator", () => {
     },
   );
 
+  it("keeps a newer read's retry when older pagination finishes after that read fails", async () => {
+    vi.useFakeTimers();
+    const firstPage = createDeferred<SessionsListResult>();
+    const lastPage = createDeferred<SessionsListResult>();
+    let children = [row(0), row(1)];
+    let firstPageReads = 0;
+    const list = vi.fn(async (options: SessionListOptions = {}) => {
+      if (options.offset === 1) {
+        return lastPage.promise;
+      }
+      firstPageReads += 1;
+      if (firstPageReads === 2) {
+        return firstPage.promise;
+      }
+      if (firstPageReads === 3) {
+        throw new Error("Child list temporarily unavailable");
+      }
+      return result(children, 0, children.length);
+    });
+    const sessions = sessionSource(list);
+    const hydrator = new SwarmRosterHydrator();
+    try {
+      hydrator.update({
+        sessions,
+        readParent: async () => ({
+          ...parentRow(),
+          childSessions: children.map((child) => child.key),
+        }),
+        parentKey: parentRow().key,
+        sourceEpoch: 1,
+        currentRows: () => [],
+        onRows: () => undefined,
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(hydrator.hydrated).toBe(true);
+
+      const refresh = sessions.refreshList({
+        ...childSessionListQuery(parentRow().key, 10_000),
+        force: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      children = [...children, row(2)];
+      sessions.invalidateParent();
+      await vi.advanceTimersByTimeAsync(0);
+      firstPage.resolve(result([row(0)], 0, 2));
+      await refresh;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(firstPageReads).toBe(3);
+
+      lastPage.resolve(result([row(1)], 1, 2));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hydrator.hydrated).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(firstPageReads).toBe(4);
+      expect(hydrator.hydrated).toBe(true);
+      expect(hydrator.rows.map((child) => child.key)).toContain(row(2).key);
+    } finally {
+      hydrator.dispose();
+    }
+  });
+
   it("asks once for a named child the list never returns and stays hydrated afterwards", async () => {
     vi.useFakeTimers();
     // The parent keeps naming an archived child; the default list leaves it out.
