@@ -26,6 +26,15 @@ export async function prepareCommandConversationContext(params: {
   sessionAgentId: string;
 }) {
   const { cfg, opts, runContext, sessionEntry, sessionKey, sessionAgentId } = params;
+  const deliveryFormat =
+    (opts.deliver === true || opts.sourceReplyDeliveryMode === "message_tool_only") &&
+    buildDeliveryFormatPrompt({
+      cfg,
+      channel: opts.replyChannel ?? runContext.messageChannel,
+      accountId: opts.replyAccountId ?? runContext.accountId,
+      agentId: sessionAgentId,
+      allowBootstrap: true,
+    });
   let conversationPrompt: string | undefined;
   if (
     sessionEntry &&
@@ -66,8 +75,10 @@ export async function prepareCommandConversationContext(params: {
       silentToken: SILENT_REPLY_TOKEN,
     });
     if (sourceContext) {
+      // Metadata describes the conversation; delivery preflight owns formatting.
+      const metadata = buildInboundMetaSystemPrompt(ctx, cfg, { includeFormattingHints: false });
       conversationPrompt = [
-        buildInboundMetaSystemPrompt(ctx, cfg),
+        deliveryFormat ? `${metadata}\n${deliveryFormat}` : metadata,
         sourceContext,
         shared &&
           buildGroupIntro({
@@ -81,20 +92,14 @@ export async function prepareCommandConversationContext(params: {
         .join("\n\n");
     }
   }
-  const deliveryFormat =
-    !conversationPrompt &&
-    (opts.deliver === true || opts.sourceReplyDeliveryMode === "message_tool_only") &&
-    buildDeliveryFormatPrompt({
-      cfg,
-      channel: opts.replyChannel ?? runContext.messageChannel,
-      accountId: opts.replyAccountId ?? runContext.accountId,
-      agentId: sessionAgentId,
-      allowBootstrap: true,
-    });
   return conversationPrompt || deliveryFormat
     ? {
         ...opts,
-        extraSystemPrompt: [conversationPrompt, opts.extraSystemPrompt, deliveryFormat]
+        extraSystemPrompt: [
+          conversationPrompt,
+          opts.extraSystemPrompt,
+          !conversationPrompt && deliveryFormat,
+        ]
           .filter(Boolean)
           .join("\n\n"),
         ...(conversationPrompt ? { silentReplyPromptMode: "none" as const } : {}),
