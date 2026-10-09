@@ -78,9 +78,10 @@ export function resolveCopilotTransportApi(modelId: string): CopilotRuntimeApi {
 
 export function resolveCopilotModelCompat(
   modelId: string,
+  api: CopilotRuntimeApi = resolveCopilotTransportApi(modelId),
 ): ModelDefinitionConfig["compat"] | undefined {
   const normalized = normalizeOptionalLowercaseString(modelId) ?? "";
-  if (isCopilotGeminiModelId(normalized)) {
+  if (api === "openai-completions") {
     return { ...COPILOT_CHAT_COMPLETIONS_COMPAT };
   }
   // Copilot's Claude 4.5 endpoints reject Anthropic's eager tool extension,

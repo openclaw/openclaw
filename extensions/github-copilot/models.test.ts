@@ -887,6 +887,42 @@ describe("fetchCopilotModelCatalog", () => {
     });
   });
 
+  it("routes each listed model through an endpoint the account lists", async () => {
+    const models = await fetchSelectionFixture([
+      {
+        id: "kimi-k3",
+        vendor: "Moonshot AI",
+        supported_endpoints: ["/chat/completions"],
+        capabilities: { type: "chat", supports: { reasoning_effort: ["low", "high", "max"] } },
+      },
+      {
+        id: "gpt-5-mini",
+        vendor: "Azure OpenAI",
+        supported_endpoints: ["/chat/completions", "/responses", "ws:/responses"],
+        capabilities: { type: "chat" },
+      },
+      {
+        id: "claude-haiku-4.5",
+        vendor: "Anthropic",
+        supported_endpoints: ["/chat/completions", "/v1/messages"],
+        capabilities: { type: "chat" },
+      },
+    ]);
+
+    expect(models.map(({ id, api }) => [id, api])).toEqual([
+      ["kimi-k3", "openai-completions"],
+      ["gpt-5-mini", "openai-responses"],
+      ["claude-haiku-4.5", "anthropic-messages"],
+    ]);
+    expect(models[0]?.compat).toEqual({
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      supportsUsageInStreaming: false,
+      maxTokensField: "max_tokens",
+      supportedReasoningEfforts: ["low", "high", "max"],
+    });
+  });
+
   it("strips trailing slash from baseUrl when building the /models URL", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, { data: [] }));
 

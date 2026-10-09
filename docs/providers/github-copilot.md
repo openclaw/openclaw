@@ -289,7 +289,10 @@ configured default model is never replaced.
     Gemini models use the OpenAI Chat Completions transport; GPT and o-series
     models keep the OpenAI Responses transport. The bundled static catalog
     includes these transports and request compatibility settings, so Gemini
-    keeps using Chat Completions when live discovery is unavailable.
+    keeps using Chat Completions when live discovery is unavailable. When your
+    account's model list names the endpoints a model supports and the default
+    transport is not among them, OpenClaw uses a listed endpoint instead, so
+    Chat Completions-only models such as `kimi-k3` work.
   </Accordion>
 
   <Accordion title="Thinking levels">
