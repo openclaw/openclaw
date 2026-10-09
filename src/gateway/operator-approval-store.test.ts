@@ -300,7 +300,7 @@ describe("operator approval store", () => {
     using _ = vi
       .spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission")
       .mockImplementation(() => {});
-    using _receiptTransport = vi
+    const receiptTransport = vi
       .spyOn(workerAdmission, "deferSqliteWorkerCommitReceipt")
       .mockImplementation(() => {});
     const releaseWriter = vi.fn(() => {
@@ -328,6 +328,7 @@ describe("operator approval store", () => {
       });
     } finally {
       writer.close();
+      receiptTransport.mockRestore();
     }
   });
 

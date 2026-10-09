@@ -103,6 +103,15 @@ export function dispatchInputsDigest(inputs: DispatchInputs): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(wireInputs)).digest("hex")}`;
 }
 
+export function formatDispatchSelection(
+  request: Pick<DispatchRequest, "targetSha" | "workflowSha" | "inputs" | "effectiveSoak">,
+): string {
+  const { inputs } = request;
+  // Waiver values remain in the private request; operator output records selection only.
+  const waiver = inputs.telegram_waiver ? "selected (redacted)" : "omitted";
+  return `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak} telegram_waiver=${waiver}`;
+}
+
 function validateDispatchRecord(value: unknown): asserts value is DispatchRecord {
   requireDispatch(
     exactKeys(value, [

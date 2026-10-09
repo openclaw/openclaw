@@ -266,15 +266,15 @@ export async function deleteWorkspaceState(
 ): Promise<void> {
   const capturedPlan = structuredClone(plan);
   const publish = (facts: unknown) => {
-    facts = workspaceStateReceiptResult(facts);
+    const result = workspaceStateReceiptResult(facts);
     if (
-      !isRecord(facts) ||
-      facts.kind !== "workspace-deleted" ||
-      typeof facts.workspacePath !== "string"
+      !isRecord(result) ||
+      result.kind !== "workspace-deleted" ||
+      typeof result.workspacePath !== "string"
     ) {
       throw new Error("Workspace deletion has no committed result");
     }
-    retireWorkspaceFileCache(facts.workspacePath);
+    retireWorkspaceFileCache(result.workspacePath);
   };
   const deletionOwner = options.deletion;
   if (deletionOwner) {

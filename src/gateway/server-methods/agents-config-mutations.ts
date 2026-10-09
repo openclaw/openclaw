@@ -8,6 +8,8 @@ import {
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
 import { mutateConfigFileWithRetry } from "../../config/config.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
+import { copyRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -74,6 +76,7 @@ export function isImplicitAgentModelUpdate(
 
 export async function updateAgentConfigEntry(
   params: AgentConfigUpdate & { assertCurrent?: () => void },
+  writeOptions?: ConfigWriteOptions,
 ): Promise<void> {
   const selectionError = validateAgentModelSelectionUpdate(params);
   if (selectionError) {
@@ -90,7 +93,7 @@ export async function updateAgentConfigEntry(
   await mutateConfigFileWithRetry({
     afterWrite: { mode: "auto" },
     // Identity replacement may intentionally reduce the configuration size.
-    writeOptions: {
+    writeOptions: copyRuntimeConfigWriteApplication(writeOptions, {
       ...(params.identity ? { allowConfigSizeDrop: true } : {}),
       assertConfigPathForWrite: () => {
         params.assertCurrent?.();
@@ -99,7 +102,7 @@ export async function updateAgentConfigEntry(
           throw new AgentModelSelectionError(error);
         }
       },
-    },
+    }),
     mutate: async (draft) => {
       validateSelection = undefined;
       const configured = isConfiguredAgent(draft, params.agentId);
@@ -152,18 +155,19 @@ export async function deleteAgentConfigEntry(params: {
   allowMissing?: boolean;
   allowConfigSizeDrop?: boolean;
   fallbackWorkspace?: string;
+  writeOptions?: ConfigWriteOptions;
 }): Promise<{
   nextConfig: OpenClawConfig;
   result: AgentDeleteMutationResult | undefined;
 }> {
   const committed = await mutateConfigFileWithRetry<AgentDeleteMutationResult | undefined>({
     afterWrite: { mode: "auto" },
-    writeOptions: {
+    writeOptions: copyRuntimeConfigWriteApplication(params.writeOptions, {
       allowedAgentRosterRemovals: [params.agentId],
       assertConfigPathForWrite: params.assertCurrent,
       beforeCommit: params.assertCurrentAsync,
       ...(params.allowConfigSizeDrop ? { allowConfigSizeDrop: true } : {}),
-    },
+    }),
     mutate: async (draft) => {
       await params.validateConfig?.(draft);
       params.assertCurrent?.();

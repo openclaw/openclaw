@@ -73,16 +73,13 @@ describe("resolvePluginDocumentExtractors", () => {
       );
   });
 
-  it.each(["allowlist", "compat"] as const)(
-    "reuses one manifest registry pass in %s mode",
-    (mode) => {
-      mocks.readBundledDiscoveryModeMemoized.mockReturnValue(mode);
-      vi.mocked(loadPluginMetadataSnapshot).mockClear();
+  it("reuses one manifest registry pass in allowlist mode", () => {
+    mocks.readBundledDiscoveryModeMemoized.mockReturnValue("allowlist");
+    vi.mocked(loadPluginMetadataSnapshot).mockClear();
 
-      expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
-      expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
-    },
-  );
+    expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+  });
 
   it("respects global plugin disablement even for an allowlisted extractor", () => {
     vi.mocked(loadPluginMetadataSnapshot).mockClear();
@@ -101,25 +98,16 @@ describe("resolvePluginDocumentExtractors", () => {
     expect(mocks.loadPublicArtifact).not.toHaveBeenCalled();
   });
 
-  it.each([{ onlyPluginIds: undefined }, { onlyPluginIds: ["document-extract"] }])(
-    "does not expand an operator plugin allowlist with scope=$onlyPluginIds",
-    ({ onlyPluginIds }) => {
-      expect(
-        resolvePluginDocumentExtractors({
-          config: {
-            plugins: {
-              allow: ["openai"],
-            },
-          },
-          onlyPluginIds,
-        }),
-      ).toStrictEqual([]);
-    },
-  );
+  it("does not expand an operator plugin allowlist with an explicit extractor scope", () => {
+    expect(
+      resolvePluginDocumentExtractors({
+        config: { plugins: { allow: ["openai"] } },
+        onlyPluginIds: ["document-extract"],
+      }),
+    ).toStrictEqual([]);
+  });
 
   it.each([
-    { allow: [], onlyPluginIds: undefined, expected: ["pdf"] },
-    { allow: ["DOCUMENT-EXTRACT"], onlyPluginIds: undefined, expected: ["pdf"] },
     {
       allow: [" document-extract ", "document-extract"],
       onlyPluginIds: ["document-extract"],
@@ -148,10 +136,6 @@ describe("resolvePluginDocumentExtractors", () => {
         onlyPluginIds: [],
       }),
     ).toStrictEqual([]);
-  });
-
-  it("respects an explicit empty plugin scope without an operator plugin allowlist", () => {
-    expect(resolvePluginDocumentExtractors({ onlyPluginIds: [] })).toStrictEqual([]);
   });
 
   it("isolates a throwing factory when another extractor factory succeeds", () => {

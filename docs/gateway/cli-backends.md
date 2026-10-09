@@ -227,6 +227,12 @@ would otherwise invalidate cached conversation history. Git tools and workspace
 instructions remain available. This does not prevent cache misses after prompt
 changes, compaction, model or thinking changes, or cache expiry.
 
+OpenClaw disables Claude Code's saved system-prompt snapshots so resumed turns
+receive the current appended instructions, including per-turn plugin context.
+Unchanged prompts keep the warm process and stable prefix; changed prompts restart
+the process and resume the same conversation without rewriting its history.
+Changing prompt bytes can invalidate the cached prefix where they change.
+
 OpenClaw always launches Claude Code with its default permission mode.
 OpenClaw's permission responses and `PreToolUse` hook keep native tools under
 host control, including when user or enterprise settings would otherwise

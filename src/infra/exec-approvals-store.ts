@@ -441,9 +441,9 @@ function enqueueExecAuthorization(
         createAdmission: withExecApprovalsPublication(
           (operation, onCommitAdmitted) =>
             createSqliteWorkerWriteAdmission(
-              (request) => {
+              (admissionRequest) => {
                 assertBatchCurrent();
-                if (request.stage === "commit") {
+                if (admissionRequest.stage === "commit") {
                   onCommitAdmitted();
                 }
               },

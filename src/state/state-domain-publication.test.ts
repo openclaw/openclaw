@@ -111,7 +111,7 @@ it("installs all domains from a worker commit before notifying either domain", (
           }
         }
       }),
-      owner.subscribe(() => observations.push([...installed].sort())),
+      owner.subscribe(() => observations.push([...installed].toSorted())),
     );
   }
   const first = begin();
