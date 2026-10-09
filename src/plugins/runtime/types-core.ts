@@ -403,6 +403,7 @@ export type PluginRuntimeCore = {
       createSessionEntry: (
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
+      /** @deprecated Use getSessionEntryAsync. Removed at the next Plugin SDK major. */
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
       /** Worker-backed descriptive read; final synchronous authority checks still use getSessionEntry. */
       getSessionEntryAsync: (

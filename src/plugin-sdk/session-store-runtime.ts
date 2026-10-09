@@ -161,7 +161,7 @@ function preserveGenerationPrivateFields(
 /** Resolves the configured session store path without selecting a row-operation agent. */
 export { resolveSessionStorePathCore as resolveStorePath } from "../config/sessions/paths.js";
 
-/** Loads one session entry by agent/session identity. */
+/** @deprecated Use getSessionEntryAsync. Removed at the next Plugin SDK major. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
   const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
@@ -263,7 +263,7 @@ export async function patchSessionEntry(
   return entry ? projectPluginSessionEntry(entry) : null;
 }
 
-/** @deprecated Use readSessionUpdatedAtAsync. Retained until the next Plugin SDK major. */
+/** @deprecated Use readSessionUpdatedAtAsync. Removed at the next Plugin SDK major. */
 export function readSessionUpdatedAt(params: SessionStoreReadParams): number | undefined {
   return readAccessorSessionUpdatedAt(toSessionAccessScope(params));
 }
