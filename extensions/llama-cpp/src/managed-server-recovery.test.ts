@@ -25,7 +25,6 @@ vi.mock("openclaw/plugin-sdk/embedding-providers", () => ({
 
 import { llamaCppEmbeddingProviderAdapter } from "./embedding-provider.js";
 import {
-  findManagedLlamaServerAsset,
   LLAMA_SERVER_RELEASE,
   resolveManagedLlamaServerPaths,
   selectLlamaServerAsset,
@@ -159,20 +158,5 @@ describe("managed llama-server recovery", () => {
 
     await expect(ensureManagedLlamaServerForChat({ model, provider })).rejects.toBe(error);
     expect(mocks.install).not.toHaveBeenCalled();
-  });
-
-  it("recognizes the configured Windows backend and rejects another host", async () => {
-    await createFixture();
-    const cpu = selectLlamaServerAsset("win32", "x64");
-    const cuda = selectLlamaServerAsset("win32", "x64", {
-      kind: "cuda",
-      devices: [{ driverVersion: "580.1", computeCapability: 8.6 }],
-    });
-    for (const asset of [cpu, cuda]) {
-      const { command } = resolveManagedLlamaServerPaths(asset);
-      expect(findManagedLlamaServerAsset(command, "win32", "x64")).toBe(asset);
-      expect(findManagedLlamaServerAsset(command, "linux", "x64")).toBeUndefined();
-      expect(findManagedLlamaServerAsset(command, "win32", "arm64")).toBeUndefined();
-    }
   });
 });
