@@ -12,7 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import { requesterProfileSchema } from "../schema/typebox.js";
@@ -446,6 +446,15 @@ export function createSessionsHistoryTool(opts?: {
         resolvedAgentId: visibleSession.agentId,
         requesterAgentId,
       });
+      // An agent-qualified key already names its owner; repeating the same id
+      // only re-gates the read against the native roster and rejects configured
+      // ACP store owners (#164847).
+      const resolvedKeyAgentId = parseAgentSessionKey(resolvedKey)?.agentId;
+      const historyAgentId =
+        resolvedKeyAgentId &&
+        normalizeAgentId(resolvedKeyAgentId) === normalizeAgentId(targetAgentId)
+          ? undefined
+          : targetAgentId;
 
       const authorizationKey =
         targetAgentId !== requesterAgentId && !parseAgentSessionKey(resolvedKey)
@@ -488,7 +497,7 @@ export function createSessionsHistoryTool(opts?: {
             method: "chat.history",
             params: {
               sessionKey: resolvedKey,
-              agentId: targetAgentId,
+              ...(historyAgentId === undefined ? {} : { agentId: historyAgentId }),
               limit,
               ...(paginationOffset !== undefined ? { offset: paginationOffset } : {}),
               ...(pendingBefore !== undefined ? { pendingBefore } : {}),
