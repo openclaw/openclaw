@@ -169,8 +169,8 @@ export function resolveCompletionTokenReservation(
   }
   const resolved: AnthropicOptions & { maxTokens: number } = { maxTokens };
   // The managed profile expands at least as far as the standalone provider does.
-  // SAFETY: the api check above selects the anthropic-messages model shape.
   applyAnthropicThinkingOptions(
+    // SAFETY: the api check above selects the anthropic-messages model shape.
     model as Model<"anthropic-messages">,
     resolved,
     { reasoning },
