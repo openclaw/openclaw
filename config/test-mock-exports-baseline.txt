@@ -5490,7 +5490,6 @@
 ["src/commands/auth-choice.apply.plugin-provider.test.ts","../plugins/provider-oauth-flow.js","e1d2e003df0830c0274a30774b545c76502c6ac77c06e37b01e25787f872f599",1]
 ["src/commands/auth-choice.apply.plugin-provider.test.ts","../wizard/setup.post-install-migration.js","2e54236c9237705f3792de18395b3a78524808600d880a5f7fe68dfeca3e2518",1]
 ["src/commands/auth-choice.model-check.test.ts","../agents/auth-profiles.js","71ea3da4f689c73fcd902306b661d1c4b085b40a459a0745537a4bbdd9b4e6eb",1]
-["src/commands/auth-choice.model-check.test.ts","../agents/prepared-model-runtime.js","5fcd17b624b5bc3e2e039024015bfcd76ae2c6e842d98f66f4a8466905e7560e",1]
 ["src/commands/auth-choice.preferred-provider.test.ts","../plugins/provider-auth-choices.js","6633754573db2d64f7f7921852eef4aa0ffaceded3673660b452608249aed63c",1]
 ["src/commands/auth-choice.preferred-provider.test.ts","../plugins/provider-wizard.js","aaf0863ec31c9c059d14ccb79051a58eecf872a437d33a49d037ff4b4aa78959",1]
 ["src/commands/auth-choice.preferred-provider.test.ts","../plugins/providers.runtime.js","ee3d30427865569e80847bd48f4c3d031dfa156ccd5a0aabccdfaed0c7b9dac2",1]

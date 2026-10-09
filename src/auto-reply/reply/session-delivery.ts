@@ -9,7 +9,7 @@ import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
   deliveryContextKey,
-  normalizeDeliveryContext,
+  normalizeSessionDeliveryState,
 } from "../../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -132,6 +132,19 @@ export function resolveSessionDeliveryRoute(params: {
   };
 }
 
+/** Internal turns cannot retire a canonical external delivery route. */
+export function resolveSessionInputDeliveryKey(ctx: MsgContext): string | undefined {
+  const delivery = normalizeSessionDeliveryState({
+    context: {
+      channel: ctx.OriginatingChannel as string | undefined,
+      to: ctx.OriginatingTo || ctx.To,
+      accountId: ctx.AccountId,
+      threadId: ctx.MessageThreadId,
+    },
+  });
+  return delivery.kind === "external" ? deliveryContextKey(delivery.context) : undefined;
+}
+
 export function maybeRetireLegacyMainDeliveryRoute(params: {
   sessionCfg: { dmScope?: string } | undefined;
   sessionKey: string;
@@ -139,10 +152,10 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
   agentId: string;
   mainKey: string;
   isGroup: boolean;
-  ctx: MsgContext;
+  inputDeliveryKey?: string;
 }): LegacyMainDeliveryRetirement | undefined {
   const dmScope = params.sessionCfg?.dmScope ?? "main";
-  if (dmScope === "main" || params.isGroup) {
+  if (dmScope === "main" || params.isGroup || !params.inputDeliveryKey) {
     return undefined;
   }
   const canonicalMainSessionKey = buildAgentMainSessionKey({
@@ -153,25 +166,11 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
     return undefined;
   }
   const legacyMain = params.legacyMain;
-  if (!legacyMain) {
+  if (legacyMain?.delivery?.kind !== "external") {
     return undefined;
   }
   const legacyRouteKey = deliveryContextKey(deliveryContextFromSession(legacyMain));
-  if (!legacyRouteKey) {
-    return undefined;
-  }
-  const activeDirectRouteKey = deliveryContextKey(
-    normalizeDeliveryContext({
-      channel: params.ctx.OriginatingChannel as string | undefined,
-      to: params.ctx.OriginatingTo || params.ctx.To,
-      accountId: params.ctx.AccountId,
-      threadId: params.ctx.MessageThreadId,
-    }),
-  );
-  if (!activeDirectRouteKey || activeDirectRouteKey !== legacyRouteKey) {
-    return undefined;
-  }
-  if (legacyMain.delivery?.kind !== "external") {
+  if (params.inputDeliveryKey !== legacyRouteKey) {
     return undefined;
   }
   return {
