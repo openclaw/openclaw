@@ -233,12 +233,15 @@ test-project planner to find their owners. The runtime owner admits only qualifi
 configs, exact files, and partitions; ambiguous selections retain Node. No tests
 are removed from the selected inventory.
 
-The complete CLI and embedded-agent-run leaf configs also support Bun. Their
-existing pools, exclusions, and worker limits remain in effect. CLI-process and
-other agent owners keep their separate qualification policies. Dual validation
-runs each complete selected owner on Node before Bun in the same worker slot.
+The complete agents-support, CLI, embedded-agent-run, and gateway-methods leaf
+configs also support Bun. Their existing pools, exclusions, and worker limits
+remain in effect. CLI-process and other agent and Gateway owners keep their
+separate qualification policies. Agents-support and gateway-methods include
+overrides use Bun only for canonical owner patterns or literal files proven to
+belong to that owner; broad or uncertain patterns keep the complete Node
+selection. Dual validation runs each complete selected owner on Node before Bun
+in the same worker slot.
 
-Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`),
 OpenAI realtime worker messaging (`extensions/openai/realtime-quicksilver-peer-worker.test.ts`),
 plugin CommonJS interoperability (`src/plugins/plugin-module-generation.interop.test.ts`),
 plugin SDK alias boundaries (`src/plugins/sdk-alias.test.ts`),
@@ -665,8 +668,10 @@ If the PR head changes before or during evaluation, the obsolete run stops
 successfully without publishing approval for the replacement commit. The new
 head's automatic event owns its evaluation. Closing an unmerged PR, making it a
 draft, or changing its target also stops the obsolete evaluation successfully.
-Identity and permission changes and real evaluation errors still fail; a lifecycle
-change does not hide an earlier guard error.
+GitHub disabling maintainer edits as a PR closes does not prevent this clean stop
+or completion of merged review evidence. Permission changes on open PRs, other
+identity changes, and real evaluation errors still fail; a lifecycle change does
+not hide an earlier guard error. Cleanup and merge admission retain strict checks.
 
 A merge of the scheduled revision lets the security evaluation finish, including
 when enforcement starts after the merge. Both guards retain their findings in
@@ -704,8 +709,12 @@ HTTP `500`, `502`, `503`, and `504` responses and recognized connection failures
 use one-, two-, and four-second delays, sharing the three-restart limit and job
 deadline with rate-limit recovery. GitHub may have accepted the failed write, so
 the review rereads current PR, approval, role, and CI data instead of replaying an
-old decision. This recovery applies only to commit-status publication; other
-uncertain writes, cancellation, and write request timeouts remain errors.
+old decision. During enforcement, the same bounded recovery handles transient
+sticky-notice creation and update failures. Each restart rereads comments and
+updates an existing owned notice if GitHub accepted the earlier write, rather
+than blindly posting another comment. Required approval remains required.
+Automatic lockfile cleanup, other uncertain writes, cancellation, and write
+request timeouts remain outside this publication recovery.
 
 Separately, read-only `GET` and `HEAD` requests retry HTTP `500`, `502`, `503`,
 and `504` responses and recognized transient connection failures before headers

@@ -15,7 +15,16 @@ import { useSpawnBrokerTestFixture } from "../../process/spawn-broker/host.test-
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
 const enqueueSystemEventMock = vi.fn();
-const requestHeartbeatMock = vi.fn();
+const captureSessionEventTargetMock = vi.fn(async (agentId: string, sessionKey: string) => ({
+  agentId,
+  sessionKey,
+  sessionId: "captured-session",
+  generation: "captured-generation",
+}));
+const enqueueSessionEventMock = vi.fn((_text: string, _options: Record<string, unknown>) => ({
+  accepted: Promise.resolve({ ok: true }),
+  settled: Promise.resolve({ status: "completed" }),
+}));
 const runCronIsolatedAgentTurnMock = vi.fn();
 const resolveMainSessionKeyMock = vi.fn(() => "main-session");
 const resolveAgentMainSessionKeyMock = vi.fn(
@@ -40,8 +49,10 @@ vi.mock("../../infra/system-events.js", async (importOriginal) => ({
   enqueueSystemEventWithReceipt: (...args: unknown[]) =>
     enqueueSystemEventMock(...args) ? () => true : null,
 }));
-vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: requestHeartbeatMock,
+// mock-isolation: Observe hook handoff without admitting an unrelated ordinary reply turn.
+vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: captureSessionEventTargetMock,
+  enqueueSessionEventForHost: enqueueSessionEventMock,
 }));
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
@@ -200,31 +211,27 @@ describe("dispatchAgentHook trust handling", () => {
     vi.restoreAllMocks();
   });
 
-  it("queues and targets a mapped global wake for the same agent", () => {
+  it("queues and targets a deferred mapped global wake for the same agent", async () => {
     loadConfigMock.mockReturnValue({
       agents: { entries: { main: {}, hooks: {} } },
       session: { scope: "global" },
     });
 
-    dispatchWakeHook(
+    await dispatchWakeHook(
       {
         text: "Mapped wake",
-        mode: "now",
+        mode: "next-heartbeat",
         sessionKey: "hook:mapped",
       },
       "hooks",
     );
 
     expectOwnedSystemEvent("Mapped wake", "hooks");
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: "hook:wake",
-      agentId: "hooks",
-    });
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(captureSessionEventTargetMock).not.toHaveBeenCalled();
   });
 
-  it("keeps the resolved owner when a multi-agent wake omits agentId", () => {
+  it("keeps the resolved owner when a deferred multi-agent wake omits agentId", async () => {
     loadConfigMock.mockReturnValue({
       agents: {
         ownership: "explicit",
@@ -234,7 +241,7 @@ describe("dispatchAgentHook trust handling", () => {
     });
 
     enqueueSystemEventMock.mockReturnValue(false);
-    const result = dispatchWakeHook({ text: "Mapped wake", mode: "now" }, "molty");
+    const result = await dispatchWakeHook({ text: "Mapped wake", mode: "next-heartbeat" }, "molty");
 
     expect(result).toEqual({ eventOutcome: "coalesced" });
     expect(resolveAgentMainSessionKeyMock).toHaveBeenCalledWith({
@@ -244,13 +251,7 @@ describe("dispatchAgentHook trust handling", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Mapped wake", {
       sessionKey: "agent:molty:main",
     });
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: "hook:wake",
-      agentId: "molty",
-      sessionKey: "agent:molty:main",
-    });
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
   });
 
   it("gives a queued hook run its owning Gateway context and broker", async () => {
@@ -548,11 +549,9 @@ describe("dispatchAgentHook trust handling", () => {
     });
 
     await waitForFast(() =>
-      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect(enqueueSessionEventMock).toHaveBeenCalledWith(
         "Hook First (error): Error: agent exploded",
-        {
-          sessionKey: "agent:main:main",
-        },
+        expect.objectContaining({ agentId: "main", sessionKey: "agent:main:main", source: "hook" }),
       ),
     );
     await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2));
@@ -579,9 +578,9 @@ describe("dispatchAgentHook trust handling", () => {
       runId: expect.any(String),
     });
     await waitForFast(() =>
-      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect(enqueueSessionEventMock).toHaveBeenCalledWith(
         'Hook Conflict (error): Session "agent:private:canonical" changed while starting work. Retry.',
-        { sessionKey: "agent:main:main" },
+        expect.objectContaining({ agentId: "main", sessionKey: "agent:main:main", source: "hook" }),
       ),
     );
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
@@ -653,11 +652,9 @@ describe("dispatchAgentHook trust handling", () => {
     });
 
     await waitForFast(() =>
-      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect(enqueueSessionEventMock).toHaveBeenCalledWith(
         `Hook Model hook (error): ${diagnosticSummary}`,
-        {
-          sessionKey: "agent:main:main",
-        },
+        expect.objectContaining({ agentId: "main", sessionKey: "agent:main:main", source: "hook" }),
       ),
     );
     const meta = logWarnMetaFor(

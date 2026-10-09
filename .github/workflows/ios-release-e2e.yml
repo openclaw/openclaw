@@ -123,6 +123,7 @@ jobs:
 
       - name: Prepare stable Gateway selection
         env:
+          GH_TOKEN: ${{ github.token }}
           RESTORED_SELECTION: ${{ steps.gateway-selection.outputs.artifact-id != '' }}
         shell: bash
         run: |

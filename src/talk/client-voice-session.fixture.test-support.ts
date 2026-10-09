@@ -7,7 +7,28 @@ import {
   normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
-import { registerClientVoiceConsultRun } from "./client-voice-session.js";
+import {
+  createOrResumeClientVoiceSession,
+  registerClientVoiceConsultRun,
+} from "./client-voice-session.js";
+
+export function createVoiceSession(
+  params: { sessionKey?: string; voiceSessionId?: string; now?: number } = {},
+): string {
+  return createOrResumeClientVoiceSession({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    origin: "client",
+    ...params,
+  });
+}
+
+export async function createCompletedMutationSession(): Promise<string> {
+  const voiceSessionId = createVoiceSession();
+  recordMutation(voiceSessionId);
+  await completeRun(`run-${voiceSessionId}`);
+  return voiceSessionId;
+}
 
 export async function seedSession(
   sessionKey: string,

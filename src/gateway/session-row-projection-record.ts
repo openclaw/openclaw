@@ -218,12 +218,12 @@ export function markAutomation(
   }
 }
 
-/** Expire both accepted facts and worker replies still waiting to enter this row. */
-export function invalidateDatabaseFacts(row: Row) {
+/** Expire accepted facts and pending replies, retaining only independently certified facets. */
+export function invalidateDatabaseFacts(row: Row, retained?: RetainedSessionRowDatabaseFacts) {
   row.databaseFactsRevision++;
   row.pendingDatabaseFacts = undefined;
-  row.retainedDatabaseFacts = undefined;
-  row.preparedAcpMeta = undefined;
+  row.retainedDatabaseFacts = retained;
+  row.preparedAcpMeta = retained?.acpMeta;
 }
 
 export function create(target: RowTarget, entry?: SessionEntry): Row {

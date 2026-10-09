@@ -6,7 +6,9 @@ import { expandUpdateFirstHopCompatLanes } from "./lib/update-first-hop-lanes.mj
 import {
   assertSupportedUpgradeSurvivorBaselineSpec,
   CUSTOM_PLUGIN_SIBLINGS_BASELINE,
+  isPackageRecoveryScenario,
   normalizeUpgradeSurvivorBaselineSpec,
+  packageRecoveryBaselines,
   parseUpgradeSurvivorBaselineSpecs,
   parseUpgradeSurvivorScenarios,
   supportsUpgradeSurvivorScenarioAtBaseline,
@@ -92,9 +94,13 @@ export function planTargetedDockerLaneGroups({
         0,
     );
   }
-  const survivorScenarios = selectedLanes.some((lane) => BASELINE_SHARDED_LANES.has(lane))
+  const requestedScenarios = selectedLanes.some((lane) => BASELINE_SHARDED_LANES.has(lane))
     ? parseUpgradeSurvivorScenarios(upgradeSurvivorScenarios)
     : [];
+  const recoveryScenarios = requestedScenarios.filter(isPackageRecoveryScenario);
+  const survivorScenarios = requestedScenarios.filter(
+    (scenario) => !isPackageRecoveryScenario(scenario),
+  );
   let pairedScenarios;
   if (
     upgradeSurvivorBaselineScope === "legacy-operator-state" &&
@@ -106,7 +112,7 @@ export function planTargetedDockerLaneGroups({
     if (baselineSpecs.length === 0) {
       throw new Error("Supported-line pairing requires resolved baselines.");
     }
-    const requested = survivorScenarios.length > 0 ? survivorScenarios : ["base"];
+    const requested = requestedScenarios.length > 0 ? survivorScenarios : ["base"];
     pairedScenarios = new Map(baselineSpecs.map((baseline) => [baseline, []]));
     for (const scenario of requested) {
       // Keep the reported first-hop driver even when source and published
@@ -158,7 +164,33 @@ export function planTargetedDockerLaneGroups({
     pendingLanes = [];
   };
 
+  const addRecoveryGroups = (lane) => {
+    for (const scenario of recoveryScenarios) {
+      for (const baseline of packageRecoveryBaselines(scenario)) {
+        const name = `${lane}-${sanitizeLabel(baseline)}-${scenario}`;
+        // Select the exact expanded row: selecting the logical lane again would
+        // reinsert every pinned driver into each baseline job.
+        addGroup({
+          docker_lanes: name,
+          label: name,
+          published_upgrade_survivor_baselines: baseline,
+          published_upgrade_survivor_scenarios: scenario,
+          timeout_minutes: 90,
+        });
+      }
+    }
+  };
+
   for (const lane of selectedLanes) {
+    if (
+      BASELINE_SHARDED_LANES.has(lane) &&
+      recoveryScenarios.length > 0 &&
+      survivorScenarios.length === 0
+    ) {
+      flushPending();
+      addRecoveryGroups(lane);
+      continue;
+    }
     if (BASELINE_SHARDED_LANES.has(lane) && pairedScenarios) {
       flushPending();
       for (const [baseline, scenarios] of pairedScenarios) {
@@ -172,9 +204,10 @@ export function planTargetedDockerLaneGroups({
           });
         }
       }
+      addRecoveryGroups(lane);
       continue;
     }
-    if (BASELINE_SHARDED_LANES.has(lane) && survivorScenarios.length > 1) {
+    if (BASELINE_SHARDED_LANES.has(lane) && requestedScenarios.length > 1) {
       flushPending();
       for (const baselineSpec of baselineSpecs.length > 0 ? baselineSpecs : [undefined]) {
         // Filter at the policy owner before partitioning so old baselines cannot
@@ -192,6 +225,7 @@ export function planTargetedDockerLaneGroups({
           });
         }
       }
+      addRecoveryGroups(lane);
       continue;
     }
     if (BASELINE_SHARDED_LANES.has(lane) && baselineSpecs.length > 1) {
@@ -203,6 +237,7 @@ export function planTargetedDockerLaneGroups({
           published_upgrade_survivor_baselines: baselineSpec,
         });
       }
+      addRecoveryGroups(lane);
       continue;
     }
 

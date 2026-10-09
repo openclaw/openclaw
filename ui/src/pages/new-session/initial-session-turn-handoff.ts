@@ -83,7 +83,6 @@ export async function completeInitialSessionTurn(
       ? readAgentRuntimeRestrictionErrorDetails(initialRun.errorDetails)
       : undefined;
   const retry = restriction ? createDeferredCore<boolean>() : undefined;
-  let draftCleanup: Promise<void> | undefined;
   try {
     if (initialRun.status === "rejected" && options.onRejectedPrompt) {
       // The launcher and destination retain separate owners of a rejected prompt.
@@ -98,8 +97,8 @@ export async function completeInitialSessionTurn(
       options.onRejectedPrompt(initialRun.error);
     } else {
       const handedOffAttachments = retainInitialSessionTurn(options, retry?.promise);
-      // Retirement fences the submitted mutation synchronously; storage can settle after navigation.
-      draftCleanup = options.clearDraft(!handedOffAttachments);
+      // The confirmed URL must survive closing the tab without restoring the sent draft.
+      await options.clearDraft(!handedOffAttachments);
     }
     if (!options.isCurrent() || (instant && !instant.isCurrent())) {
       return;
@@ -155,6 +154,5 @@ export async function completeInitialSessionTurn(
     }
   } finally {
     retry?.resolve(false);
-    await draftCleanup;
   }
 }

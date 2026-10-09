@@ -174,6 +174,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/session-accessor.sqlite-maintenance-transaction.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readSessionMaintenanceInWorker"],
+        evidence:
+          "Only session-transcript.worker.ts:276 and openclaw-agent-execution-maintenance.ts:61 call this read-only planner; the latter owner is constructed only in openclaw-agent-execution.worker.ts:372. Shared native maintenance transactions remain T1.",
+      },
+    ],
+  ],
+  [
     "src/infra/gateway-boot-lifecycle.kernel.ts",
     [
       {
@@ -1948,9 +1959,13 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readLatestTranscriptEntry"],
+        operations: [
+          "readLatestTranscriptEntry",
+          "readTranscriptEntry",
+          "readStoredTranscriptNotes",
+        ],
         evidence:
-          "src/transcripts/store.ts:250 submits transcripts.latest → src/state/openclaw-state-worker-runtime.ts:188 → src/transcripts/store-worker-read.ts:94; other reference is ReturnType only.",
+          "Ordinary reads dispatch through store-worker-read.ts; streamed library exports dispatch through store-export.worker.ts. TranscriptsStore no longer invokes a native generator; remaining host references are types and pure helpers.",
       },
     ],
   ],

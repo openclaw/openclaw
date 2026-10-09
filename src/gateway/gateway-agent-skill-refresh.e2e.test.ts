@@ -251,7 +251,12 @@ describe("Gateway agent skill refresh", () => {
             worktree: { path: string };
           }>(
             "sessions.create",
-            { agentId: "main", worktree: true, label: "Skill refresh" },
+            {
+              agentId: "main",
+              worktree: true,
+              worktreeBaseRef: "HEAD",
+              label: "Skill refresh",
+            },
             { signal },
           );
           signal.throwIfAborted();

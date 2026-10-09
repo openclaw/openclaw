@@ -42,6 +42,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   composeSessionTranscriptWriteAssertion,
   withSessionTranscriptWriteLock,
+  type SessionTranscriptWriteLockContext,
 } from "./session-transcript-runtime.js";
 
 async function seed(env: NodeJS.ProcessEnv, locator: "physical" | "logical" = "physical") {
@@ -567,112 +568,131 @@ it("retains a committed append but suppresses queued publication when its callba
   });
 });
 
-it("settles two unawaited worker appends FIFO across the real Gateway close prelude", async ({
-  signal,
-}) => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-locked-append-close");
-  const entered = createDeferred();
-  const release = createDeferred();
-  const prelude = createDeferred();
-  const accepted: Promise<unknown>[] = [];
-  let writing: Promise<unknown> | undefined;
-  let closing: Promise<void> | undefined;
-  try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = fixture.kernels.get(port);
-    assert(kernel);
-    const scope = await seed(fixture.state.env);
-    const database = openOpenClawAgentDatabase(scope);
-    const order: string[] = [];
-    let checkedAfterAbort = false;
-    const assertCurrent = composeSessionTranscriptWriteAssertion([], () => {
-      expect(database.db.isOpen).toBe(true);
-      checkedAfterAbort ||= kernel.scheduler.signal.aborted;
-    });
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    kernel.scheduler.schedule({
-      id: "accepted-locked-append",
-      delayMs: 0,
-      async run() {
-        writing = withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
-          withSessionTranscriptWriteLock(scope, (locked) => {
-            accepted.push(
-              locked
-                .appendMessage({
-                  eventId: "first",
-                  message: { role: "assistant", content: "first" },
-                  prepareMessageAfterIdempotencyCheckAsync: async (message) => {
-                    entered.resolve();
-                    await release.promise;
-                    return message;
-                  },
-                })
-                .then((result) => {
-                  order.push("first");
-                  return result;
-                }),
-            );
-            accepted.push(
-              locked
-                .appendMessage({
-                  eventId: "second",
-                  message: { role: "assistant", content: "second" },
-                })
-                .then((result) => {
-                  order.push("second");
-                  return result;
-                }),
-            );
-            return "callback returned";
-          }),
-        );
-        expect(await writing).toBe("callback returned");
-        expect(database.db.isOpen).toBe(true);
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    vi.useRealTimers();
-    assert(writing);
-    await withinTest(
-      awaitGateBeforeSettlement(entered.promise, writing, "Lock was not admitted"),
-      signal,
-    );
-    kernel.scheduler.signal.addEventListener("abort", () => prelude.resolve(), { once: true });
-    closing = server.close({ reason: "accepted locked append close proof" });
-    await withinTest(
-      awaitGateBeforeSettlement(prelude.promise, closing, "Gateway skipped close prelude"),
-      signal,
-    );
-    expect(kernel.scheduler.signal.aborted).toBe(true);
-    expect(order).toEqual([]);
-    expect(database.db.isOpen).toBe(true);
-    release.resolve();
-    await withinTest(Promise.all([writing, closing, ...accepted]), signal);
-    expect(checkedAfterAbort).toBe(true);
-    expect(order).toEqual(["first", "second"]);
-    expect(database.db.isOpen).toBe(false);
-    const reopened = new DatabaseSync(database.path, { readOnly: true });
+it.for(["worker", "native"] as const)(
+  "settles two unawaited %s appends FIFO across the real Gateway close prelude",
+  async (kind, { signal }) => {
+    const fixture = await createGatewayMetadataCloseFixture(`gateway-${kind}-locked-close`);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const prelude = createDeferred();
+    const accepted: Promise<unknown>[] = [];
+    let writing: Promise<unknown> | undefined;
+    let closing: Promise<void> | undefined;
+    let retained: SessionTranscriptWriteLockContext | undefined;
     try {
-      const rows = reopened
-        .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
-        .all(scope.sessionId);
-      expect(
-        rows.map((row) => {
-          assert(typeof row.event_json === "string");
-          return JSON.parse(row.event_json).id;
-        }),
-      ).toEqual([scope.sessionId, "first", "second"]);
+      const port = await fixture.reservePort();
+      const server = await fixture.start(port);
+      const kernel = fixture.kernels.get(port);
+      assert(kernel);
+      const scope = await seed(fixture.state.env);
+      const database = openOpenClawAgentDatabase(scope);
+      const order: string[] = [];
+      let checkedAfterAbort = false;
+      const assertCurrent = () => {
+        expect(database.db.isOpen).toBe(true);
+        checkedAfterAbort ||= kernel.scheduler.signal.aborted;
+      };
+      // Opaque released SDK authority retains the native adapter; prepared authority uses the worker.
+      const authority =
+        kind === "native"
+          ? assertCurrent
+          : composeSessionTranscriptWriteAssertion([], assertCurrent);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      kernel.scheduler.schedule({
+        id: "accepted-locked-append",
+        delayMs: 0,
+        async run() {
+          writing = withSessionTranscriptWriteAssertion(scope, authority, () =>
+            withSessionTranscriptWriteLock(scope, (locked) => {
+              retained = locked;
+              const prepareFirst = async (message: unknown) => {
+                if (kind === "native") {
+                  expect(database.db.isTransaction).toBe(false);
+                }
+                entered.resolve();
+                await release.promise;
+                return message;
+              };
+              for (const eventId of ["first", "second"]) {
+                accepted.push(
+                  locked
+                    .appendMessage({
+                      eventId,
+                      message: { role: "assistant", content: eventId },
+                      prepareMessageAfterIdempotencyCheckAsync:
+                        eventId === "first" ? prepareFirst : undefined,
+                      ...(kind === "native"
+                        ? {
+                            beforeFreshMessageCommit: () => {
+                              expect(database.db.isTransaction).toBe(true);
+                              order.push(eventId);
+                            },
+                          }
+                        : {}),
+                    })
+                    .then((result) => {
+                      if (kind === "worker") {
+                        order.push(eventId);
+                      }
+                      return result;
+                    }),
+                );
+              }
+              return "callback returned";
+            }),
+          );
+          expect(await writing).toBe("callback returned");
+          expect(database.db.isOpen).toBe(true);
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+      assert(writing);
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, writing, "Lock was not admitted"),
+        signal,
+      );
+      kernel.scheduler.signal.addEventListener("abort", () => prelude.resolve(), { once: true });
+      closing = server.close({ reason: "accepted locked append close proof" });
+      await withinTest(
+        awaitGateBeforeSettlement(prelude.promise, closing, "Gateway skipped close prelude"),
+        signal,
+      );
+      expect(kernel.scheduler.signal.aborted).toBe(true);
+      assert(retained);
+      await expect(retained.publishUpdate()).rejects.toThrow("context is closed");
+      await expect(retained.readEvents()).rejects.toThrow("context is closed");
+      expect(order).toEqual([]);
+      expect(database.db.isOpen).toBe(true);
+      release.resolve();
+      await withinTest(Promise.all([writing, closing, ...accepted]), signal);
+      if (kind === "worker") {
+        expect(checkedAfterAbort).toBe(true);
+      }
+      expect(order).toEqual(["first", "second"]);
+      expect(database.db.isOpen).toBe(false);
+      const reopened = new DatabaseSync(database.path, { readOnly: true });
+      try {
+        const rows = reopened
+          .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
+          .all(scope.sessionId);
+        expect(
+          rows.map((row) => {
+            assert(typeof row.event_json === "string");
+            return JSON.parse(row.event_json).id;
+          }),
+        ).toEqual([scope.sessionId, "first", "second"]);
+      } finally {
+        reopened.close();
+      }
     } finally {
-      reopened.close();
+      vi.useRealTimers();
+      release.resolve();
+      await Promise.allSettled([writing, closing, ...accepted]);
+      await fixture.cleanup();
     }
-  } finally {
-    vi.useRealTimers();
-    release.resolve();
-    await Promise.allSettled([writing, closing, ...accepted]);
-    await fixture.cleanup();
-  }
-});
+  },
+);
 
 it.each(["live", "revoked", "foreign"] as const)(
   "retains logical mirror writer binding (%s)",

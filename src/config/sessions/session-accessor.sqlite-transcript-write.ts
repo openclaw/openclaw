@@ -406,7 +406,7 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
   const snapshot = runTranscriptWriteSnapshotSync(
     scope,
     (database, resolved) => {
-      const result = appendTranscriptMessageInTransaction(
+      const committed = appendTranscriptMessageInTransaction(
         database,
         resolved,
         workerOptions?.messageAlreadyRedacted
@@ -415,15 +415,18 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
         preparedMessage,
         workerOptions,
       );
+      const result = committed?.result;
       return {
         result,
-        visibleTailEntryId: result
-          ? readTranscriptVisibleTailEntryIdInTransaction(
-              database,
-              resolved.sessionId,
-              result.messageId,
-            )
-          : null,
+        visibleTailEntryId:
+          committed?.visibleTailEntryId ??
+          (result
+            ? readTranscriptVisibleTailEntryIdInTransaction(
+                database,
+                resolved.sessionId,
+                result.messageId,
+              )
+            : null),
       };
     },
     undefined,
@@ -560,7 +563,11 @@ async function runNativeTranscriptWriteLock<T>(
                       snapshotState.rows,
                     )
                   : false;
-              result = appendTranscriptMessageInTransaction(writeDatabase, resolved, options);
+              result = appendTranscriptMessageInTransaction(
+                writeDatabase,
+                resolved,
+                options,
+              )?.result;
               if (snapshotState?.kind === "current") {
                 nextSnapshotState = snapshotStillCurrent
                   ? {
@@ -593,7 +600,11 @@ async function runNativeTranscriptWriteLock<T>(
                 fencedScope,
               )?.lifecycleRevision;
               const options = prepare?.(writeDatabase) ?? requested;
-              result = appendTranscriptMessageInTransaction(writeDatabase, resolved, options);
+              result = appendTranscriptMessageInTransaction(
+                writeDatabase,
+                resolved,
+                options,
+              )?.result;
               if (result) {
                 rememberCommittedTranscriptMessageSequencesInTransaction(
                   writeDatabase,

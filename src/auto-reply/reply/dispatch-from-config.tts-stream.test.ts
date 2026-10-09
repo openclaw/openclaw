@@ -220,6 +220,13 @@ describe("source completion", () => {
       vi.spyOn(sessionAccessors, "patchSessionEntryCore").mockImplementation((...args) =>
         patch(...args),
       );
+      const sqliteEntries = await import("../../config/sessions/session-accessor.sqlite-entry.js");
+      const actualSqliteEntries = await vi.importActual<
+        typeof import("../../config/sessions/session-accessor.sqlite-entry.js")
+      >("../../config/sessions/session-accessor.sqlite-entry.js");
+      vi.spyOn(sqliteEntries, "applySessionEntryOperation").mockImplementation(
+        actualSqliteEntries.applySessionEntryOperation,
+      );
     }
     let buffered = false;
     // Hold the parser's future output fixed so this regression tests source accounting alone.

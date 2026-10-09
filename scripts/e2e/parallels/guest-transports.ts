@@ -58,6 +58,20 @@ function windowsProcessEnvScript(env: Record<string, string> = {}): string {
     .join("\n");
 }
 
+function windowsPowerShellArgs(vmName: string, script: string, currentUser = false): string[] {
+  return [
+    "exec",
+    vmName,
+    ...(currentUser ? ["--current-user"] : []),
+    "powershell.exe",
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-EncodedCommand",
+    encodePowerShell(script),
+  ];
+}
+
 function appendOutput(
   append: ((chunk: string | Uint8Array) => void) | undefined,
   result: CommandResult,
@@ -412,23 +426,17 @@ ${options.script}
 } finally {
   Write-OpenClawUtf8File $donePath 'done'
 }`;
-  const writeArgs = [
-    "exec",
+  const writeArgs = windowsPowerShellArgs(
     options.vmName,
-    "--current-user",
-    "powershell.exe",
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-EncodedCommand",
-    encodePowerShell(`${pathsScript}
+    `${pathsScript}
 New-Item -ItemType Directory -Path $runDir -Force | Out-Null
 & icacls.exe $runDir /inheritance:r /grant:r "\${env:USERNAME}:(OI)(CI)(F)" "SYSTEM:(OI)(CI)(F)" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "${safeLabel} background directory ACL setup failed" }
 Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath -Force -ErrorAction SilentlyContinue
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))
-if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not written" }`),
-  ];
+if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not written" }`,
+    true,
+  );
   let writeScript = runCommand("prlctl", writeArgs, {
     check: false,
     input: payload,
@@ -465,19 +473,13 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
       options.beforeLaunchAttempt?.();
       const launch = runCommand(
         "prlctl",
-        [
-          "exec",
+        windowsPowerShellArgs(
           options.vmName,
-          "--current-user",
-          "powershell.exe",
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-EncodedCommand",
-          encodePowerShell(`${pathsScript}
+          `${pathsScript}
 cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$scriptPath" | Out-Null
-'started'`),
-        ],
+'started'`,
+          true,
+        ),
         // A busy Windows guest can leave one Parallels Tools session wedged.
         // Keep polls short so a single transport cancellation cannot consume
         // the entire install timeout while the detached process continues.
@@ -588,9 +590,6 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
       recordPollFailure("log poll", poll);
       await sleep(Math.min(pollIntervalMs, 100));
     }
-    if (doneSeen) {
-      throw new Error(`${options.label} completed but log drain timed out`);
-    }
     throw new Error(`${options.label} timed out`);
   } finally {
     cleanupWindowsBackground(options.vmName, pathsScript, windowsLogPath, runCommand, {
@@ -622,19 +621,13 @@ async function waitForWindowsBackgroundMaterialized(params: {
   while (Date.now() < materializeDeadline) {
     const result = params.runCommand(
       "prlctl",
-      [
-        "exec",
+      windowsPowerShellArgs(
         params.vmName,
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        encodePowerShell(`${params.pathsScript}
+        `${params.pathsScript}
 if ((Test-Path $pidPath) -or (Test-Path $donePath)) {
   'materialized'
-}`),
-      ],
+}`,
+      ),
       { check: false, timeoutMs: timeoutBefore(materializeDeadline, 15_000) },
     );
     appendOutput(params.append, result);
@@ -675,17 +668,11 @@ if (Test-Path $pidPath) {
     : "";
   runCommand(
     "prlctl",
-    [
-      "exec",
+    windowsPowerShellArgs(
       vmName,
-      "powershell.exe",
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-EncodedCommand",
-      encodePowerShell(`${pathsScript}
-${stopProcessTree}`),
-    ],
+      `${pathsScript}
+${stopProcessTree}`,
+    ),
     { check: false, timeoutMs: 30_000 },
   );
   if (options.captureLog) {
@@ -706,18 +693,12 @@ ${stopProcessTree}`),
   }
   runCommand(
     "prlctl",
-    [
-      "exec",
+    windowsPowerShellArgs(
       vmName,
-      "powershell.exe",
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-EncodedCommand",
-      encodePowerShell(`${pathsScript}
+      `${pathsScript}
 Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath -Force -ErrorAction SilentlyContinue
-Remove-Item -Path $runDir -Recurse -Force -ErrorAction SilentlyContinue`),
-    ],
+Remove-Item -Path $runDir -Recurse -Force -ErrorAction SilentlyContinue`,
+    ),
     { check: false, timeoutMs: 30_000 },
   );
 }
@@ -900,24 +881,10 @@ export class WindowsGuest {
     const scriptName = guestScriptName("ps1");
     const writeScript = `$scriptPath = Join-Path $env:TEMP ${JSON.stringify(scriptName)}
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))`;
-    const write = run(
-      "prlctl",
-      [
-        "exec",
-        this.vmName,
-        "--current-user",
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        encodePowerShell(writeScript),
-      ],
-      {
-        input: `${windowsProcessEnvScript(this.getEnv())}\n${script}`,
-        timeoutMs: this.phases.remainingTimeoutMs(120_000),
-      },
-    );
+    const write = run("prlctl", windowsPowerShellArgs(this.vmName, writeScript, true), {
+      input: `${windowsProcessEnvScript(this.getEnv())}\n${script}`,
+      timeoutMs: this.phases.remainingTimeoutMs(120_000),
+    });
     this.phases.append(write.stdout);
     this.phases.append(write.stderr);
     const scriptPath = `%TEMP%\\${scriptName}`;

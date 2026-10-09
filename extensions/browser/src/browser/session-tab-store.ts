@@ -19,6 +19,11 @@ import {
   resetDurableTabAliases,
 } from "./session-tab-ephemeral-aliases.js";
 import {
+  browserSessionTabNativeIdentity,
+  browserSessionTabStorageKey,
+  resolveBrowserSessionKey,
+} from "./session-tab-identity.js";
+import {
   activeDurableStorageKeys,
   forgetColdNativeActivity,
   readColdNativeActivity,
@@ -458,37 +463,16 @@ export async function dispatchBrowserTabClose<T>(
   return await admitted?.result;
 }
 
-export function browserSessionTabStorageKey(record: {
-  sessionKey: string;
-  nativeTargetId: string;
-  profileFingerprint: string;
-  browserInstanceFingerprint: string;
-}): string {
-  return `sha256:${createHash("sha256")
-    .update(
-      JSON.stringify([
-        record.sessionKey,
-        record.nativeTargetId,
-        record.profileFingerprint,
-        record.browserInstanceFingerprint,
-      ]),
-    )
-    .digest("hex")}`;
-}
-
-export function browserSessionTabNativeIdentity(
-  record: Pick<BrowserSessionTabRecord, "sessionKey" | "profile" | "nativeTargetId">,
-): string {
-  return `${record.sessionKey}\u0000${record.profile}\u0000${record.nativeTargetId}`;
-}
-
 export function compareBrowserSessionTabProfileAliases(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export function parseBrowserSessionTabRecord(value: unknown): BrowserSessionTabRecord | undefined {
   const parsed = browserSessionTabRecordSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return parsed.success &&
+    resolveBrowserSessionKey(parsed.data.sessionKey) === parsed.data.sessionKey
+    ? parsed.data
+    : undefined;
 }
 
 export function sameBrowserSessionTabRecord(

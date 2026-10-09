@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptWriteScope } from "./session-accessor.sqlite-contract.js";
 import {
@@ -8,12 +9,18 @@ import {
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 import { validateSessionTranscriptContextInDatabase } from "./session-accessor.sqlite-model-context.js";
-import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-read.js";
+import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
+import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-transcript-incremental-read.js";
 import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
+import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
+import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
+import {
+  resolveSqliteSessionTranscriptReadFence,
+  runWithSessionTranscriptReadFence,
+} from "./session-transcript-read-fence.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry } from "./types.js";
@@ -23,40 +30,13 @@ export type SessionTranscriptAnchorSelection = {
   afterSeq?: number;
   includeSession?: boolean;
   includeHeader?: boolean;
+  includeWatermark?: boolean;
   contextValidation?: Parameters<typeof validateSessionTranscriptContextInDatabase>[2];
   contextAuthority?: true | { permissionMode: InternalSessionEntry["permissionMode"] };
   replayValidation?: Pick<
     SessionTranscriptWriteScope,
     "expectedLifecycleRevision" | "expectedWriterRunId"
-  > & { allowInitial: boolean };
-};
-
-export type SessionTranscriptAnchorFacts = {
-  anchors: TranscriptEntryAnchor[];
-  session?: { sessionId: string; lifecycleRevision?: string };
-  header?: unknown;
-  contextValidated?: true;
-  contextAuthority?: {
-    entry?: Pick<
-      InternalSessionEntry,
-      | "sessionId"
-      | "lifecycleRevision"
-      | "activeWriterRunId"
-      | "cliHistoryBoundary"
-      | "permissionMode"
-    >;
-    watermark: SessionTranscriptWatermark;
-  };
-  replayValidated?: "current" | "initial";
-  tail?: {
-    lastSeq?: number;
-    entries: {
-      entryId: string;
-      role: "user" | "assistant";
-      runId?: string;
-      anchor?: TranscriptEntryAnchor;
-    }[];
-  };
+  > & { allowInitial: boolean; admission?: UserTurnTranscriptAdmissionReceipt };
 };
 
 /** Readiness, identities and optional reply-tail facts belong to one snapshot. */
@@ -65,7 +45,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
   resolved: ResolvedTranscriptScope,
   selection: SessionTranscriptAnchorSelection,
 ): SessionTranscriptAnchorFacts {
-  const readSnapshot = (): SessionTranscriptAnchorFacts => {
+  const read = (): SessionTranscriptAnchorFacts => {
     const contextEntry = selection.contextAuthority
       ? readSessionEntryRow(database, resolved.sessionKey)?.entry
       : undefined;
@@ -114,6 +94,11 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         replayValidated = "current";
       }
     }
+    const fence = replay
+      ? runWithSessionTranscriptReadFence(replay.admission, () =>
+          resolveSqliteSessionTranscriptReadFence({ database, ...resolved }),
+        )
+      : undefined;
     const context = selection.contextValidation;
     if (context) {
       // Appends can supersede or complete a prepared replay; only snapshots retain a prefix.
@@ -125,6 +110,13 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       );
     }
     const validated = {
+      ...(selection.includeWatermark
+        ? {
+            watermark:
+              contextAuthority?.watermark ??
+              readSessionTranscriptWatermarkInDatabase(database, resolved.sessionId),
+          }
+        : {}),
       ...(contextAuthority ? { contextAuthority } : {}),
       ...(context ? { contextValidated: true as const } : {}),
       ...(replayValidated ? { replayValidated } : {}),
@@ -144,55 +136,70 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         // Lifecycle header metadata is best effort; reader admission and owner checks still fail closed.
       }
     }
-    const anchors = new Map<string, TranscriptEntryAnchor | undefined>();
-    const readAnchor = (entryId: string) => {
-      if (!anchors.has(entryId)) {
-        anchors.set(
-          entryId,
-          readActiveTranscriptEntryAnchorInTransaction({ database, resolved, entryId }),
-        );
+    const readAnchors = () => {
+      const anchors = new Map<string, TranscriptEntryAnchor | undefined>();
+      const readAnchor = (entryId: string) => {
+        if (!anchors.has(entryId)) {
+          const anchor = readActiveTranscriptEntryAnchorInTransaction({
+            database,
+            resolved,
+            entryId,
+          });
+          anchors.set(
+            entryId,
+            fence && anchor && anchor.rawSeq >= fence.beforeRawSeq ? undefined : anchor,
+          );
+        }
+        return anchors.get(entryId);
+      };
+      const selected = selection.entryIds.flatMap((entryId) => readAnchor(entryId) ?? []);
+      if (selection.afterSeq === undefined) {
+        return { anchors: selected, ...validated, ...sessionFacts, ...header };
       }
-      return anchors.get(entryId);
-    };
-    const selected = selection.entryIds.flatMap((entryId) => readAnchor(entryId) ?? []);
-    if (selection.afterSeq === undefined) {
-      return { anchors: selected, ...validated, ...sessionFacts, ...header };
-    }
-    const rows = loadTranscriptEventRowsAfterSeqInDatabase(
-      database,
-      resolved.sessionId,
-      selection.afterSeq,
-    );
-    const entries: NonNullable<SessionTranscriptAnchorFacts["tail"]>["entries"] = [];
-    for (const { event } of rows) {
-      const row = asOptionalRecord(event);
-      const message = asOptionalRecord(row?.message);
-      if (
-        typeof row?.id !== "string" ||
-        (message?.role !== "user" && message?.role !== "assistant")
-      ) {
-        continue;
+      const rows = loadTranscriptEventRowsAfterSeqInDatabase(
+        database,
+        resolved.sessionId,
+        selection.afterSeq,
+      );
+      const entries: NonNullable<SessionTranscriptAnchorFacts["tail"]>["entries"] = [];
+      for (const { event } of rows) {
+        const row = asOptionalRecord(event);
+        const message = asOptionalRecord(row?.message);
+        if (
+          typeof row?.id !== "string" ||
+          (message?.role !== "user" && message?.role !== "assistant")
+        ) {
+          continue;
+        }
+        const anchor = message.role === "user" ? readAnchor(row.id) : anchors.get(row.id);
+        const runId = readSessionTranscriptRunId(message);
+        entries.push({
+          entryId: row.id,
+          role: message.role,
+          ...(runId ? { runId } : {}),
+          ...(anchor ? { anchor } : {}),
+        });
       }
-      const anchor = message.role === "user" ? readAnchor(row.id) : anchors.get(row.id);
-      const runId = readSessionTranscriptRunId(message);
-      entries.push({
-        entryId: row.id,
-        role: message.role,
-        ...(runId ? { runId } : {}),
-        ...(anchor ? { anchor } : {}),
-      });
-    }
-    return {
-      anchors: selected,
-      ...validated,
-      ...sessionFacts,
-      ...header,
-      tail: { lastSeq: rows.at(-1)?.seq, entries },
+      return {
+        anchors: selected,
+        ...validated,
+        ...sessionFacts,
+        ...header,
+        tail: { lastSeq: rows.at(-1)?.seq, entries },
+      };
     };
+    if (selection.replayValidation && selection.entryIds.length > 0) {
+      const result = readCurrentProjectionSnapshot(database, resolved, readAnchors);
+      if (result.kind !== "value") {
+        throw new SessionTranscriptProjectionUnavailableError(resolved.sessionId);
+      }
+      return result.value;
+    }
+    return readAnchors();
   };
   return database.db.isTransaction
-    ? readSnapshot()
-    : runSqliteDeferredTransactionSync(database.db, readSnapshot, {
+    ? read()
+    : runSqliteDeferredTransactionSync(database.db, read, {
         databaseLabel: database.path,
         operationLabel: "session transcript anchors read",
       });

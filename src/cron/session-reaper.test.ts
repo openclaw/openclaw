@@ -12,6 +12,7 @@ import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as maintenanceReads from "../config/sessions/session-entry-read-maintenance.js";
 import * as sessionEntryReader from "../config/sessions/session-entry-read-runtime.js";
 import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
@@ -249,9 +250,9 @@ describe("sweepCronRunSessions", () => {
       skillsSnapshot: { prompt: "before", skills: [] },
     };
     await seedSessionEntries(storePath, { [sessionKey]: entry });
-    const read = sessionEntryReader.readExpiredCronRunEntriesInWorker;
+    const read = maintenanceReads.readExpiredCronRunEntriesInWorker;
     const intercept = vi
-      .spyOn(sessionEntryReader, "readExpiredCronRunEntriesInWorker")
+      .spyOn(maintenanceReads, "readExpiredCronRunEntriesInWorker")
       .mockImplementationOnce(async (input) => {
         const candidates = await read(input);
         expect(candidates[0]?.entry.skillsSnapshot?.prompt).toBe("before");
@@ -753,7 +754,7 @@ describe("sweepCronRunSessions", () => {
       code: "EACCES",
     });
     const listSpy = vi
-      .spyOn(sessionEntryReader, "readExpiredCronRunEntriesInWorker")
+      .spyOn(maintenanceReads, "readExpiredCronRunEntriesInWorker")
       .mockRejectedValue(eacces);
 
     try {

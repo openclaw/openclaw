@@ -173,7 +173,19 @@ that size. This is useful for long-running sessions where provider-side context
 management may keep model context healthy while persisted transcript history
 keeps growing. Set a positive byte count or size string such as `"20mb"` to opt
 in; `0` or an unset value disables the guard. It does not split raw bytes; it
-asks the normal compaction pipeline to create a semantic summary. For Codex
+asks the normal compaction pipeline to create a semantic summary. If compaction
+is declined or leaves history over the limit, the turn continues with a bounded
+view of recent history. OpenClaw omits the oldest whole turns, keeps tool calls
+with their results, and preserves the system instructions and current request.
+An oversized historical turn may be omitted in full. This fallback does not
+rewrite saved messages or count a failed attempt as successful compaction.
+It shows a notice even with compaction notifications disabled; resend any
+essential details from omitted history. The bound applies to selected history,
+not the fixed instructions, tool definitions, or current request.
+
+Suppressed byte-compaction retries still use a bounded view on subsequent turns.
+Retained history remains available on disk and may continue growing; this is not
+a storage-retention limit. For Codex
 app-server sessions, the same threshold caps native rollout transcripts and
 oversized native threads restart fresh.
 
@@ -236,7 +248,7 @@ If an older version or transcript redaction removes the complete window needed f
 
 ### Successor transcripts
 
-A context engine may return an explicit compacted successor session identity within the same agent, session key, and store. OpenClaw publishes the accepted successor before maintenance, hooks, or retries use it, while retaining the current writer's ownership. Cancelling afterward does not roll that completed transition back. The built-in SQLite compactor keeps the current session identity and does not create a second runtime transcript.
+A context engine may return an explicit compacted successor session identity within the same agent, session key, and store. OpenClaw publishes the accepted successor before maintenance, hooks, or retries use it, while retaining the current writer's ownership. Cancelling afterward does not roll that completed transition back. The active reply follows the accepted identity for its remaining session-state reads; unrelated resets and cancellation still stop stale work. Tool-policy classification retains its independently captured session identity. The built-in SQLite compactor keeps the current session identity and does not create a second runtime transcript.
 
 A [worker placement](/gateway/cloud-workers) cannot transfer ownership to a different session identity during compaction. Custom engines must keep the current identity while the placement owns the session, or the operator must move the session back to the Gateway before retrying. A rejected transition leaves the original session and worker claim intact.
 

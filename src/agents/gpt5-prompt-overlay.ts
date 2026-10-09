@@ -113,7 +113,7 @@ export function resolveGpt5SystemPromptContribution(params: {
   modelId?: string;
   legacyPluginConfig?: Record<string, unknown>;
   enabled?: boolean;
-  trigger?: "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+  trigger?: "cron" | "event" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
   includeHeartbeatGuidance?: boolean;
 }): ProviderSystemPromptContribution | undefined {
   if (params.enabled === false || !isGpt5ModelId(params.modelId)) {

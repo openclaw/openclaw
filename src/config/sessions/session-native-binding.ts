@@ -200,6 +200,9 @@ export function runSessionNativeBindingWorkerOperation<
         }
         admitted = { admission, retained };
         assertHeld();
+        if (facts.kind === "native-binding-ready" || facts.phase === "delete") {
+          params.onTransactionFacts?.(facts);
+        }
         if (facts.kind === "native-binding-ready") {
           if (members.some(({ participant }) => participant.renewalPending())) {
             readinessRefused = true;

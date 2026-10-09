@@ -153,6 +153,7 @@ it("streams bounded restore batches in one read and retains snapshot row version
     .mockImplementation((options, command, readOptions) =>
       read(options, command, {
         ...readOptions,
+        onChunkAsync: undefined,
         onChunk(value) {
           payloadBytes.push(Buffer.byteLength(JSON.stringify(value)));
           readOptions?.onChunk?.(value);
@@ -212,6 +213,7 @@ it("joins a cancelled stream without publishing partial restored rows", async ()
       read(options, command, {
         ...readOptions,
         signal: controller.signal,
+        onChunkAsync: undefined,
         onChunk(value) {
           readOptions?.onChunk?.(value);
           controller.abort(failure);
