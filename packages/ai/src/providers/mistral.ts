@@ -608,13 +608,20 @@ async function consumeChatStream(
         identity.explicitIds.add(providedCallId);
       }
       if (functionName) {
-        if (identity.functionNames.size > 0 && !identity.functionNames.has(functionName)) {
-          throw new Error(
-            "Mistral streamed tool-call continuation changed function name; refusing to merge arguments",
-          );
+        if (!block.name) {
+          block.name = functionName;
+          identity.functionNames.add(functionName);
+        } else if (block.name === functionName || identity.functionNames.has(functionName)) {
+          // Preserve one-shot name repetitions without duplicate concatenation.
+        } else if (functionName.startsWith(block.name)) {
+          // Cumulative name prefix update.
+          block.name = functionName;
+          identity.functionNames.add(functionName);
+        } else {
+          // Append nonempty name fragment to mirror pinned Mistral SDK accumulator.
+          block.name += functionName;
+          identity.functionNames.add(block.name);
         }
-        block.name = functionName;
-        identity.functionNames.add(functionName);
       }
       if (toolCallIndex !== undefined) {
         identity.indexes.add(toolCallIndex);
