@@ -782,35 +782,51 @@ describe("cron tool", () => {
     },
   );
 
-  it.each([
-    {
-      name: "unknown finite names cannot pre-authorize a future tool",
-      toolsAllow: ["future__tool"],
-      creatorToolAllowlist: ["read"],
-      resolved: ["read"],
-      expected: [],
-    },
-    {
-      name: "symbolic groups resolve before persisting the cap",
-      toolsAllow: ["group:plugins"],
-      creatorToolAllowlist: undefined,
-      resolved: ["read", { name: "configured__lookup", pluginId: "bundle-mcp" }],
-      expected: ["configured__lookup"],
-    },
-  ])("$name", async ({ toolsAllow, creatorToolAllowlist, resolved, expected }) => {
-    const resolveCreatorToolAuthority = vi.fn(async () => resolvedCreatorAuthority(resolved));
+  it("refuses an add whose finite toolsAllow matches nothing instead of saving an empty cap", async () => {
+    const resolveCreatorToolAuthority = vi.fn(async () => resolvedCreatorAuthority(["read"]));
+    await expect(
+      executeCron(
+        {
+          action: "add",
+          job: {
+            ...buildReminderAgentTurnJob(),
+            payload: { kind: "agentTurn", message: "hello", toolsAllow: ["future__tool"] },
+          },
+        },
+        {
+          agentSessionKey: "agent:main:main",
+          creatorToolAllowlist: ["read"],
+          resolveCreatorToolAuthority,
+        },
+      ),
+    ).rejects.toThrow(
+      "Cron add requested tools outside this turn's captured tool surface (future__tool)",
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("symbolic groups resolve before persisting the cap", async () => {
+    const resolveCreatorToolAuthority = vi.fn(async () =>
+      resolvedCreatorAuthority(["read", { name: "configured__lookup", pluginId: "bundle-mcp" }]),
+    );
     await executeCron(
       {
         action: "add",
         job: {
           ...buildReminderAgentTurnJob(),
-          payload: { kind: "agentTurn", message: "hello", toolsAllow },
+          payload: { kind: "agentTurn", message: "hello", toolsAllow: ["group:plugins"] },
         },
       },
-      { agentSessionKey: "agent:main:main", creatorToolAllowlist, resolveCreatorToolAuthority },
+      {
+        agentSessionKey: "agent:main:main",
+        creatorToolAllowlist: undefined,
+        resolveCreatorToolAuthority,
+      },
     );
     expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
-    expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: expected } });
+    expect(readGatewayCall().params).toMatchObject({
+      payload: { toolsAllow: ["configured__lookup"] },
+    });
   });
 
   it("does not write a default add when configured MCP authentication fails", async () => {
