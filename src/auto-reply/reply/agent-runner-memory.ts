@@ -11,6 +11,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { createCompactionAccounting } from "../../agents/embedded-agent-runner/compact.accounting.js";
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
@@ -36,10 +37,7 @@ import {
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
-import {
-  persistCompactionBoundaryWithSessionEntryAsync,
-  updateSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   SQLITE_USAGE_TAIL_MAX_EVENTS,
@@ -455,7 +453,11 @@ export async function runSessionCompactionIfNeeded(params: {
   const notifyCompaction = async (phase: CompactionNoticePhase, text?: string) => {
     terminalCompactionNoticeSent = phase !== "start";
     try {
-      await params.onCompactionNotice?.(phase, text);
+      if (text) {
+        await params.onCompactionNotice?.(phase, text);
+      } else {
+        await params.onCompactionNotice?.(phase);
+      }
     } catch (err) {
       logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
     }
@@ -577,47 +579,31 @@ export async function runSessionCompactionIfNeeded(params: {
 
   assertActive();
   params.onCompactionStart?.();
-  // Provider work can outlive the caller; never account against a replacement session row.
-  let expectedSession = entry;
   let admissionTransition: AcceptedCompactionSuccessor["admissionTransition"];
-  let hostAccountingCommitted = false;
-  const recordCompactionAccounting = async (
-    acceptedEntry: SessionEntry,
-    tokensAfter: number | undefined,
-    compactionKind: Parameters<typeof incrementCompactionCount>[0]["compactionKind"],
-    amount = 1,
-  ) => {
-    const postCompactionBytes = exceedsTranscriptByteThreshold
-      ? (await readTranscriptSize(acceptedEntry.sessionId)).byteSize
-      : undefined;
-    assertActive();
-    const transcriptByteCompactionLatch =
-      typeof postCompactionBytes === "number" &&
-      typeof maxActiveTranscriptBytes === "number" &&
-      postCompactionBytes >= maxActiveTranscriptBytes
-        ? {
-            activeBytes: postCompactionBytes,
-            sessionId: acceptedEntry.sessionId,
-            maxBytes: maxActiveTranscriptBytes,
-          }
-        : undefined;
-    const compactionCount = await incrementCompactionCount({
-      ...compactionTarget,
-      sessionStore: compactionStore,
-      amount,
-      tokensAfter,
-      compactionKind,
-      expectedSession: acceptedEntry,
-      transcriptByteCompactionLatch,
-      authorize: () => {
-        assertActive();
-        return true;
+  const accounting = createCompactionAccounting({
+    target: { ...compactionTarget, sessionId: entry.sessionId },
+    entry,
+    sessionStore: compactionStore,
+    ...(compactionTrigger === "transcript_bytes" &&
+    typeof activeTranscriptBytes === "number" &&
+    typeof maxActiveTranscriptBytes === "number"
+      ? { byteBudget: { activeBytes: activeTranscriptBytes, maxBytes: maxActiveTranscriptBytes } }
+      : {}),
+    host: {
+      assertActive,
+      sourceAuthority: { assertActive, operatorAuthority },
+      requestBudget: params.compactionRequestBudget,
+      pendingUserEntryId: params.pendingUserEntryId,
+      ...(compactionTrigger === "transcript_bytes" && isCodexRuntime
+        ? { transcriptBytePreflightHarness: "codex" as const }
+        : {}),
+      onCommitted: (accepted) => {
+        admissionTransition = accepted.admissionTransition;
+        entry = accepted.entry;
+        params.onCompactionCommitted?.(accepted);
       },
-    });
-    if (compactionCount === undefined) {
-      throw new Error("Session changed before compaction maintenance could be recorded");
-    }
-  };
+    },
+  });
   const stopHeartbeat = startFollowupRunPreAdoptionHeartbeat(
     params.followupRun.turnAdoptionLifecycle,
     params.abortSignal,
@@ -682,64 +668,7 @@ export async function runSessionCompactionIfNeeded(params: {
         ownerNumbers: params.followupRun.run.ownerNumbers,
         abortSignal: params.abortSignal,
       },
-      {
-        assertActive,
-        sourceAuthority: { assertActive, operatorAuthority },
-        requestBudget: params.compactionRequestBudget,
-        pendingUserEntryId: params.pendingUserEntryId,
-        ...(compactionTrigger === "transcript_bytes" && isCodexRuntime
-          ? {
-              transcriptBytePreflightHarness: "codex" as const,
-              ...(compactionTarget.storePath &&
-              typeof activeTranscriptBytes === "number" &&
-              typeof maxActiveTranscriptBytes === "number"
-                ? {
-                    withCompactionPersistenceAsync: async (prepared) => {
-                      const committed = await persistCompactionBoundaryWithSessionEntryAsync(
-                        {
-                          ...compactionTarget,
-                          expectedLifecycleRevision: expectedSession.lifecycleRevision,
-                          expectedWriterRunId: expectedSession.activeWriterRunId,
-                          sessionId: expectedSession.sessionId,
-                        },
-                        {
-                          prepared,
-                          transcriptByteCompactionLatch: {
-                            activeBytes: activeTranscriptBytes,
-                            sessionId: expectedSession.sessionId,
-                            maxBytes: maxActiveTranscriptBytes,
-                          },
-                        },
-                        assertActive,
-                      );
-                      hostAccountingCommitted = true;
-                      return committed;
-                    },
-                  }
-                : {}),
-              onHostCompactionTranscriptSettled: async (commit) => {
-                await recordCompactionAccounting(commit.entry, undefined, undefined, 0);
-              },
-            }
-          : {}),
-        // Record every host compaction while its session lane still excludes the next writer.
-        onHostCompactionCommitted: async (commit) => {
-          await recordCompactionAccounting(
-            commit.entry,
-            commit.tokensAfter,
-            commit.compactionKind,
-            hostAccountingCommitted ? 0 : 1,
-          );
-          hostAccountingCommitted = true;
-        },
-        onCommitted: (accepted) => {
-          admissionTransition = accepted.admissionTransition;
-          expectedSession = accepted.entry;
-          entry = accepted.entry;
-          compactionStore[compactionSessionKey] = accepted.entry;
-          params.onCompactionCommitted?.(accepted);
-        },
-      },
+      accounting.host,
     );
 
     if (!result?.ok || !result.compacted) {
@@ -753,7 +682,7 @@ export async function runSessionCompactionIfNeeded(params: {
       }
       preflightCompactionLog.warn(`preflight compaction failed: ${reason}`);
       if (exceedsTranscriptByteThreshold) {
-        await recordCompactionAccounting(expectedSession, undefined, undefined, 0);
+        await accounting.record(accounting.entry, undefined, undefined, 0);
         assertActive();
         await notifyCompaction("context_bounded");
         return compactionStore[compactionSessionKey] ?? entry;
@@ -766,12 +695,8 @@ export async function runSessionCompactionIfNeeded(params: {
       await acknowledgeReplySessionTransition(params.replyOperation, admissionTransition);
       assertActive();
     }
-    if (!hostAccountingCommitted) {
-      await recordCompactionAccounting(
-        expectedSession,
-        result.result?.tokensAfter,
-        result.compactionKind,
-      );
+    if (!accounting.committed) {
+      await accounting.record(accounting.entry, result.result?.tokensAfter, result.compactionKind);
     }
     assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;

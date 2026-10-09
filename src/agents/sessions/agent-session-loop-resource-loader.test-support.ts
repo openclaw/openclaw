@@ -38,7 +38,11 @@ export function createResourceLoader(
   };
 }
 
-export function createCompactionHandlers() {
+export function createCompactionHandlers(
+  summary = "condensed history",
+  firstKeptEntryId?: string,
+  onPreparation?: (preparation: { latestUnresolvedUserRequest?: string }) => void,
+) {
   return new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
     [
       "session_before_compact",
@@ -46,13 +50,18 @@ export function createCompactionHandlers() {
         async (event: unknown) => {
           const preparation = (
             event as {
-              preparation: { firstKeptEntryId: string; tokensBefore: number };
+              preparation: {
+                firstKeptEntryId: string;
+                latestUnresolvedUserRequest?: string;
+                tokensBefore: number;
+              };
             }
           ).preparation;
+          onPreparation?.(preparation);
           return {
             compaction: {
-              summary: "condensed history",
-              firstKeptEntryId: preparation.firstKeptEntryId,
+              summary,
+              firstKeptEntryId: firstKeptEntryId ?? preparation.firstKeptEntryId,
               tokensBefore: preparation.tokensBefore,
             },
           };

@@ -79,3 +79,27 @@ export class SessionEntryCommittedError extends Error {
     recordModelFallbackStop(this);
   }
 }
+
+export function publishCompactionReceipt(onCommitted: (() => void) | undefined): Error | undefined {
+  try {
+    onCommitted?.();
+  } catch (cause) {
+    return new Error("Compaction committed, but its receipt publication failed", { cause });
+  }
+  return undefined;
+}
+
+export function publishCompactionReceiptAfterFailure(
+  error: SessionEntryCommittedError,
+  onCommitted: (() => void) | undefined,
+): SessionEntryCommittedError {
+  const publicationFailure = publishCompactionReceipt(onCommitted);
+  return publicationFailure
+    ? new SessionEntryCommittedError(
+        error.committedEntryId,
+        error.committedTarget,
+        error.committedVersion,
+        new AggregateError([error, publicationFailure], "Compaction receipt publication failed"),
+      )
+    : error;
+}

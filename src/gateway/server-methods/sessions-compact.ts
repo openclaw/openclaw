@@ -352,6 +352,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             assertRequestCurrent();
             abortSignal?.throwIfAborted();
           };
+          let hostAccountingCommitted = false;
           try {
             result = await runGatewaySessionCompaction(
               {
@@ -371,9 +372,12 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 onCommitted: (accepted) => {
                   expectedEntry = accepted.entry;
                 },
+                onHostCompactionCommitted: (commit) => {
+                  hostAccountingCommitted = commit.accountingCommitted === true;
+                },
               },
             );
-            if (result.ok && result.compacted) {
+            if ((result.ok && result.compacted) || hostAccountingCommitted) {
               // Skip terminal persistence when session ownership rotated during compaction.
               const persistProjection = await applySessionPatchProjection({
                 agentId: target.agentId,
@@ -395,10 +399,12 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                     ok: true,
                     entry: {
                       ...existingEntry,
-                      ...projectCompactionAccountingPatch(existingEntry, {
-                        compactionKind: result.compactionKind,
-                        tokensAfter: result.result?.tokensAfter,
-                      }),
+                      ...(hostAccountingCommitted
+                        ? {}
+                        : projectCompactionAccountingPatch(existingEntry, {
+                            compactionKind: result.compactionKind,
+                            tokensAfter: result.result?.tokensAfter,
+                          })),
                     },
                   };
                 },
@@ -409,7 +415,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             emitCompactionEnd(false, formatErrorMessage(err));
             throw err;
           }
-          if (result.ok && result.compacted) {
+          if ((result.ok && result.compacted) || hostAccountingCommitted) {
             if (!persisted) {
               const reason = `Session ${key} changed before compaction completed. Retry.`;
               emitCompactionEnd(false, reason);
@@ -442,8 +448,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             },
             undefined,
           );
-          if (result.ok) {
-            emitCompacted(result.compacted);
+          if (result.ok || hostAccountingCommitted) {
+            emitCompacted(hostAccountingCommitted || result.compacted);
           }
         },
       });

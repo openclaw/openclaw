@@ -2919,6 +2919,15 @@ Schemas, stored values, permissions, retention, and update behavior are unchange
 
 ## Migrate a caller
 
+Manual transcript-byte compaction reads active statistics through the existing
+transcript reader. AgentSession appends the compaction boundary through the
+session metadata worker, including its atomic session count and byte latch.
+The host retains writer and session authority, rechecks it at transaction and
+commit admission, and publishes the committed receipt before adopting the view.
+Cancellation after commit preserves that receipt without replacing a successor's
+model context. Synchronous SDK appends and process-held incognito databases retain
+their current native owner. Schemas, stored bytes, retention, configuration, and
+update behavior are unchanged.
 Manual `sessions.compact` requests with `maxLines` retain their selected physical
 store and prepared caller and sharing authority through cold restoration. The
 existing entry worker reads the target, source predicates, and cold metadata in

@@ -2376,7 +2376,6 @@
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../agent-bundle-lsp-runtime.js","eaef1afe8c054ec174113e95122fca2b322d1f49137284dda2f866fcdbbb80b2",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../agent-bundle-mcp-tools.js","acfb668893707ad2a5611d45cc9d482e8e6dd4663161aad303696bbaf368c61a",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../agent-project-settings.js","104677f028b40af926349900592558be96a4572d7c5003bc9b1454509b421cb4",1]
-["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../agent-scope.js","537e28919d6d94961eb9ee7d19215d60a9ce0405654de5ae26a472855dc78322",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../agent-settings.js","b1dbb876eae754108a8e9ed88fb7b5e460904a983e8de81d0c0ba07d4fe8840c",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../bootstrap-files.js","fc66198f938572e2694bb16bb033fe5698e33860917fdc6af5f6a82ba6c83606",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../channel-tools.js","ebf27c080018f77554a19f61fc8c33c6d7c23a05f85507fd1dd7c0edca685ed0",1]

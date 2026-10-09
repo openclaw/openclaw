@@ -3,6 +3,7 @@ import type {
   CommittedCompactionAppend,
   PreparedCompactionAppend,
 } from "../../agents/sessions/session-compaction-persistence.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -104,11 +105,16 @@ function persistCompactionBoundary(
     preparedTarget.agentId !== resolved.agentId ||
     preparedTarget.sessionId !== resolved.sessionId ||
     preparedTarget.sessionKey !== resolved.sessionKey ||
-    resolveOpenClawAgentSqlitePath(toDatabaseOptions(preparedTarget)) !==
-      resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved))
+    readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(toDatabaseOptions(preparedTarget)))
+      .canonicalPath !==
+      readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)))
+        .canonicalPath
   ) {
     throw new SessionTranscriptWriterClaimReboundError();
   }
+  // Equivalent spellings must borrow the same connection during the outer transaction.
+  preparedScope.storePath = fencedScope.storePath;
+  preparedTarget.path = resolved.path;
   return runOpenClawAgentWriteTransaction(
     (database) => {
       if (worker && database.db !== worker.database) {

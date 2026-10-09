@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { ensureSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { publishCommittedSessionIdentity } from "../../config/sessions/session-accessor.sqlite-identity.js";
@@ -28,7 +27,6 @@ import {
   withSessionTranscriptWriteAssertion,
   type InitialSessionTranscriptWriter,
 } from "../../config/sessions/transcript-write-context.js";
-import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -53,6 +51,8 @@ import {
 import {
   committedTranscriptViewError,
   SessionEntryCommittedError,
+  publishCompactionReceipt,
+  publishCompactionReceiptAfterFailure,
   receiveSessionManagerCommit,
 } from "./session-manager-persistence-error.js";
 import type { SessionEntry, SessionHeader, SessionLeafControl } from "./session-manager-types.js";
@@ -60,6 +60,7 @@ import {
   withSessionManagerWrite,
   type SessionManagerWriteAdmission,
 } from "./session-manager-write-admission.js";
+import { createSessionManagerWriteViewGuard } from "./session-manager-write-view.js";
 
 export class SessionManagerPersistence extends SessionManagerCore {
   #initialWriter: InitialSessionTranscriptWriter | undefined;
@@ -136,6 +137,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     expectedMutationAt?: number | null,
     retryMutationConflicts = true,
     assertNavigation?: () => void,
+    compaction?: { assertActive?: () => void; onCommitted?: () => void },
   ): Promise<PersistWorkerRecordResult> {
     this.assertTranscriptWriteActive();
     const target = this.persistenceTarget;
@@ -170,6 +172,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       assertNavigation?.();
       initialWriter?.assertActive();
       assertOwned();
+      compaction?.assertActive?.();
     };
     const admission = resolveSessionTranscriptReadFence(captured);
     const persistCompaction = getSessionCompactionPersistenceAsync(this);
@@ -188,10 +191,13 @@ export class SessionManagerPersistence extends SessionManagerCore {
         }),
       ).catch((error: unknown) => {
         if (error instanceof SessionEntryCommittedError) {
-          this.invalidateTranscriptView(error);
+          const failure = publishCompactionReceiptAfterFailure(error, compaction?.onCommitted);
+          this.invalidateTranscriptView(failure);
+          throw failure;
         }
         throw error;
       });
+      const publicationFailure = publishCompactionReceipt(compaction?.onCommitted);
       try {
         assertCurrent();
         if (initialWriter?.committedFence) {
@@ -210,6 +216,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return {
         result: { appended: true, effectiveParentId: committed.result.parentId },
         committedVersion: committed.after,
+        publicationFailure,
       };
     }
     let wireEvent: SessionMetadataWorkerOperations["session.metadata.append"]["input"]["event"];
@@ -324,6 +331,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
           }
           return { ...result, failure: receipt.failure };
         };
+        let compactionCommitted = false;
+        let publicationFailure: Error | undefined;
         let loadedVersion = this.transcriptVersion;
         const append = async (initialMutationAt: number | null | undefined) => {
           let mutationAt = initialMutationAt;
@@ -364,6 +373,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
               cause: snapshot.ok ? undefined : snapshot.error,
             });
           }
+          if (entry.type === "compaction") {
+            compactionCommitted = true;
+            publicationFailure = publishCompactionReceipt(compaction?.onCommitted);
+          }
           return {
             committed: { ...snapshot.value, result: snapshot.value.result },
             reload: outcome.reload,
@@ -377,6 +390,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
           );
         } catch (error) {
           if (
+            compactionCommitted ||
             !retryMutationConflicts ||
             expectedMutationAt !== undefined ||
             !(error instanceof SqliteTranscriptMutationConflictError)
@@ -420,6 +434,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
           },
           reload: reload?.ok ? reload.value : undefined,
           committedVersion: committed.after,
+          publicationFailure,
           viewFailure:
             outcome.failure ??
             (reload?.ok === false ? committedTranscriptViewError(reload.error) : undefined),
@@ -537,34 +552,11 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const scope = this.persistenceTarget;
     const initialWriter = this.#initialWriter;
     const persistCompaction = getSessionCompactionPersistence(this);
-    const sessionId = this.sessionId;
-    const isCurrentView = () =>
-      this.sessionId === sessionId &&
-      sameSessionTranscriptTargetBinding(scope, this.persistenceTarget);
-    const onPendingTransaction = (database: DatabaseSync) => {
-      if (!isCurrentView()) {
-        return;
-      }
-      const previous = this.captureTranscriptView(true);
-      stageSqliteTransactionState(database, {
-        stage: () => {},
-        commit: () => {},
-        rollback: () => {
-          if (isCurrentView()) {
-            Object.assign(this, previous);
-          }
-        },
-      });
-    };
-    const viewGuard = {
-      assertCurrent: () => {
-        this.assertTranscriptViewAvailable();
-        if (!isCurrentView()) {
-          throw new SessionTranscriptWriterClaimReboundError();
-        }
-      },
-      onPendingTransaction,
-    };
+    const viewGuard = createSessionManagerWriteViewGuard(
+      this,
+      () => this.captureTranscriptView(true),
+      () => this.assertTranscriptViewAvailable(),
+    );
     const appendEvent = (
       event: unknown,
       appendOptions: Parameters<typeof appendTranscriptEventSnapshotSync>[2],

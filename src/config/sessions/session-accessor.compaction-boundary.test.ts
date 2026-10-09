@@ -1,13 +1,19 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, describe, expect, it } from "vitest";
+import {
+  isSessionNodePayloadSelect,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import {
+  withSessionCompactionPersistence,
   withSessionCompactionPersistenceAsync,
   type CommittedCompactionAppend,
 } from "../../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -284,6 +290,94 @@ describe("awaited compaction persistence", () => {
 });
 
 describe("persistCompactionBoundaryWithSessionEntrySync", () => {
+  it.each([false, true])(
+    "publishes the boundary, count, and byte latch in one commit (incognito=%s)",
+    async (incognito) => {
+      const dir = sessionDirs.make();
+      const scope = {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey: incognito
+          ? "agent:main:dashboard:incognito-compaction-boundary"
+          : "agent:main:compaction-boundary",
+        env: { OPENCLAW_STATE_DIR: dir },
+        storePath: path.join(dir, "sessions.json"),
+      };
+      const expected = {
+        sessionId: scope.sessionId,
+        lifecycleRevision: "lifecycle",
+        activeWriterRunId: "writer",
+      };
+      await upsertSessionEntryCore(scope, {
+        ...expected,
+        compactionCount: 0,
+        updatedAt: 1,
+      });
+      const manager = await SessionManager.openAsync(scope, dir);
+      const keptId = expectDefined(
+        await manager.appendMessageAsync({ role: "user", content: "keep", timestamp: 1 }),
+        "Compaction fixture must append its retained user entry",
+      );
+      const before = loadTranscriptEventsSync(scope);
+
+      let reads: ReturnType<typeof trackSqliteStatementExecutions> | undefined;
+      let entryRows = 0;
+      let entryId: string;
+      try {
+        entryId = withSessionCompactionPersistence(
+          manager,
+          (prepared) => {
+            const database = openOpenClawAgentDatabase(
+              toDatabaseOptions(resolveSqliteTranscriptScope(scope)),
+            );
+            reads = trackSqliteStatementExecutions(database.db, ["entry"], (sql) =>
+              isSessionNodePayloadSelect(sql) && sql.includes('where "session_key" = ?')
+                ? "entry"
+                : null,
+            );
+            const committed = persistCompactionBoundaryWithSessionEntrySync(
+              {
+                ...scope,
+                expectedLifecycleRevision: expected.lifecycleRevision,
+                expectedWriterRunId: expected.activeWriterRunId,
+              },
+              {
+                prepared,
+                transcriptByteCompactionLatch: {
+                  activeBytes: 2048,
+                  sessionId: scope.sessionId,
+                  maxBytes: 1024,
+                },
+              },
+            );
+            entryRows = reads?.rowCounts.entry ?? 0;
+            reads?.restore();
+            return committed;
+          },
+          () => manager.appendCompaction("summary", keptId, 100),
+        );
+      } finally {
+        reads?.restore();
+      }
+
+      expect(loadTranscriptEventsSync(scope)).toEqual([
+        ...before,
+        expect.objectContaining({ id: entryId, type: "compaction" }),
+      ]);
+      expect(loadSessionEntry(scope)).toMatchObject({
+        compactionCount: 1,
+        transcriptByteCompactionLatch: {
+          activeBytes: 2048,
+          sessionId: scope.sessionId,
+          maxBytes: 1024,
+        },
+      });
+      // Keep authority and post-append reads; accounting reuses its freshly decoded entry.
+      expect(entryRows).toBeGreaterThan(0);
+      expect(entryRows).toBeLessThanOrEqual(3);
+    },
+  );
+
   it("rolls back accounting when the prepared boundary identity already exists", async () => {
     const dir = sessionDirs.make();
     const scope = {

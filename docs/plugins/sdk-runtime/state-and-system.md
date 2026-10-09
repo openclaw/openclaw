@@ -390,6 +390,12 @@ the same canonical SQLite worker. They retain the caller's live write authority,
 commit before dependent publication, and preserve the loaded view on failure
 before commit. See the [complete session migration table](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence).
 
+`SessionManager.appendCompactionAsync` returns a promise for the committed
+compaction entry ID. AgentSession uses it to persist durable compaction boundaries
+through the existing database worker before replacing model context. The
+synchronous `appendCompaction` method remains available for existing SDK callers;
+it can execute SQLite on the calling thread.
+
 Use `await SessionManager.appendMessageToTranscriptAsync(...)` for static appends
 of ordinary, custom, or Bash execution messages. It resolves to the persisted
 message ID after the worker commits. `SessionManager.appendMessageToTranscript`

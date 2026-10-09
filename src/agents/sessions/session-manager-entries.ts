@@ -11,7 +11,6 @@ import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js"
 import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
 import type {
   BranchSummaryEntry,
-  CompactionEntry,
   CustomEntry,
   CustomMessageEntry,
   LabelEntry,
@@ -38,58 +37,6 @@ export class SessionManagerEntries extends SessionManagerAppend {
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
     };
-  }
-
-  async appendCompactionAsync(
-    summary: string,
-    firstKeptEntryId: string,
-    tokensBefore: number,
-    details?: unknown,
-    fromHook?: boolean,
-    metadata?: CompactionEntry["__openclaw"],
-    tokensAfter?: number,
-  ): Promise<string> {
-    const entry: CompactionEntry = this.createEntry({
-      type: "compaction",
-      summary,
-      firstKeptEntryId,
-      tokensBefore,
-      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
-      details,
-      fromHook,
-      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
-    });
-    await this.appendEntryAsync(entry, {
-      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
-    });
-    return entry.id;
-  }
-
-  /** @deprecated Await appendCompactionAsync. Removal: next Plugin SDK major. */
-  appendCompaction(
-    summary: string,
-    firstKeptEntryId: string,
-    tokensBefore: number,
-    details?: unknown,
-    fromHook?: boolean,
-    metadata?: CompactionEntry["__openclaw"],
-    tokensAfter?: number,
-  ): string {
-    prepareSessionManagerSync("appendCompaction", this.persistenceTarget, this);
-    const entry: CompactionEntry = this.createEntry({
-      type: "compaction",
-      summary,
-      firstKeptEntryId,
-      tokensBefore,
-      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
-      details,
-      fromHook,
-      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
-    });
-    this.appendEntry(entry, {
-      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
-    });
-    return entry.id;
   }
 
   async appendResetBoundaryAsync(reason: ResetReason, firstKeptEntryId?: string): Promise<string> {

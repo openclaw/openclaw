@@ -1,11 +1,18 @@
-import { join } from "node:path";
+import { symlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import {
+  requireActivePluginRegistry,
+  withPluginRegistrationContext,
+} from "../../plugins/runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { getRegisteredAgentHarness, registerAgentHarness } from "../harness/registry.js";
+import type { AgentHarness } from "../harness/types.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -13,6 +20,7 @@ import {
 } from "../sessions/agent-session-loop-correctness.test-support.js";
 import type { ProviderConfigInput } from "../sessions/model-registry.js";
 import {
+  acquireAgentRunPreparedModelRuntimeMock,
   applyExtraParamsToAgentMock,
   hookRunner,
   limitHistoryTurnsMock,
@@ -20,6 +28,8 @@ import {
   resetCompactHooksHarnessMocks,
   resolveContextEngineMock,
   resolveModelMock,
+  selectAgentHarnessForPreparedModelProvidersMock,
+  selectAgentHarnessMock,
 } from "./compact.hooks.harness.js";
 
 const { requestPreparedCompaction } = vi.hoisted(() => ({
@@ -559,4 +569,265 @@ describe("direct compactor through the context-engine delegate", () => {
       }
     },
   );
+});
+
+describe("manual Codex transcript byte compaction", () => {
+  async function createCodexFixture(
+    maxActiveTranscriptBytes: number | string,
+    selection: "pinned" | "configured" = "pinned",
+    store: "direct" | "alias" = "direct",
+  ) {
+    const fixture = await createFixture("summary");
+    if (store === "alias") {
+      const alias = join(workspaceDir, "linked");
+      await symlink(dirname(fixture.target.storePath), alias, "junction");
+      fixture.target.storePath = join(alias, "openclaw-agent.sqlite");
+    }
+    const policy = await import("../harness/policy.js");
+    const actualPolicy =
+      await vi.importActual<typeof import("../harness/policy.js")>("../harness/policy.js");
+    vi.mocked(policy.resolveAgentHarnessPolicy).mockImplementation(
+      actualPolicy.resolveAgentHarnessPolicy,
+    );
+    const registry = requireActivePluginRegistry();
+    const publicCompact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    const privateNativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      authBootstrap: "harness",
+      conversationToolPolicySupport: "exact",
+      supports: () => ({ supported: true }),
+      compact: publicCompact,
+      runAttempt: async () => {
+        throw new Error("not used");
+      },
+    };
+    withPluginRegistrationContext(registry, "codex", () => {
+      registerAgentHarness(harness, {
+        nativeCompaction: privateNativeCompaction,
+      });
+    });
+    const [dispatcher, realDispatcher] = await Promise.all([
+      import("../harness/compaction.js"),
+      vi.importActual<typeof import("../harness/compaction.js")>("../harness/compaction.js"),
+    ]);
+    vi.mocked(dispatcher.maybeCompactAgentHarnessSession).mockImplementation(
+      realDispatcher.maybeCompactAgentHarnessSession,
+    );
+    const registeredHarness = getRegisteredAgentHarness("codex")?.harness;
+    const acquirePreparedRuntime = acquireAgentRunPreparedModelRuntimeMock.getMockImplementation();
+    if (!registeredHarness || !acquirePreparedRuntime) {
+      throw new Error("Expected the registered Codex compaction runtime");
+    }
+    acquireAgentRunPreparedModelRuntimeMock.mockImplementation(async (input) => {
+      const lease = await acquirePreparedRuntime(input);
+      return { ...lease, snapshot: { ...lease.snapshot, pluginRegistry: registry } };
+    });
+    selectAgentHarnessMock.mockReturnValue(registeredHarness);
+    selectAgentHarnessForPreparedModelProvidersMock.mockReturnValue(registeredHarness);
+    await accessor.upsertSessionEntryCore(fixture.target, {
+      sessionId: fixture.target.sessionId,
+      updatedAt: 1,
+      ...(selection === "pinned" ? { modelSelectionLocked: true, agentHarnessId: "codex" } : {}),
+    });
+    const hostCompact = vi.fn<ContextEngine["compact"]>(delegate);
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: hostCompact,
+    });
+    const config = fixture.runtimeContext.config;
+    return {
+      ...fixture,
+      hostCompact,
+      publicCompact,
+      privateNativeCompaction,
+      params: {
+        ...fixture.target,
+        sessionTarget: fixture.target,
+        sessionFile: fixture.target.sessionKey,
+        workspaceDir,
+        provider: model.provider,
+        model: model.id,
+        ...(selection === "pinned" ? { agentHarnessId: "codex" } : {}),
+        trigger: "manual" as const,
+        enqueue: async <T>(run: () => T | Promise<T>) => await run(),
+        config: {
+          ...config,
+          agents: {
+            ...config.agents,
+            defaults: {
+              ...config.agents.defaults,
+              compaction: { ...config.agents.defaults.compaction, maxActiveTranscriptBytes },
+              ...(selection === "configured"
+                ? {
+                    models: {
+                      [`${model.provider}/${model.id}`]: { agentRuntime: { id: "codex" } },
+                    },
+                  }
+                : {}),
+            },
+          },
+        },
+      },
+    };
+  }
+
+  it.each([
+    { selection: "pinned", nativeOutcome: "completed", store: "direct" },
+    { selection: "pinned", nativeOutcome: "failed", store: "direct" },
+    { selection: "configured", nativeOutcome: "completed", store: "direct" },
+    { selection: "configured", nativeOutcome: "failed", store: "direct" },
+    { selection: "pinned", nativeOutcome: "completed", store: "alias" },
+  ] as const)(
+    "commits the host boundary and accounting before one $nativeOutcome native request ($selection, $store store)",
+    async ({ selection, nativeOutcome, store }) => {
+      const { params, target, hostCompact, publicCompact, privateNativeCompaction } =
+        await createCodexFixture(1, selection, store);
+      publicCompact.mockImplementation(async () => {
+        expect(
+          sessions.SessionManager.open(target)
+            .getEntries()
+            .some((event) => event.type === "compaction"),
+        ).toBe(true);
+        expect(accessor.loadSessionEntryReadOnly(target)).toMatchObject({
+          compactionCount: 1,
+          transcriptByteCompactionLatch: {
+            sessionId: target.sessionId,
+            maxBytes: 1,
+            activeBytes: expect.any(Number),
+          },
+        });
+        return nativeOutcome === "completed"
+          ? { ok: true, compacted: true }
+          : { ok: false, compacted: false, reason: "native compaction failed" };
+      });
+
+      const result = await compactQueued(params);
+
+      expect(result, JSON.stringify(result)).toMatchObject(
+        nativeOutcome === "completed"
+          ? { ok: true, compacted: true }
+          : { ok: false, reason: expect.stringContaining("native compaction failed") },
+      );
+      expect(hostCompact).toHaveBeenCalledOnce();
+      expect(publicCompact).toHaveBeenCalledOnce();
+      expect(privateNativeCompaction).not.toHaveBeenCalled();
+      expect(publicCompact).toHaveBeenCalledWith(
+        expect.objectContaining({ trigger: "manual", preflightRequired: undefined }),
+      );
+      const committed = accessor.loadSessionEntryReadOnly(target);
+      expect(committed?.compactionCount).toBe(1);
+      expect(committed?.transcriptByteCompactionLatch?.activeBytes).toBeGreaterThanOrEqual(1);
+
+      if (nativeOutcome === "completed") {
+        await expect(compactQueued(params)).resolves.toMatchObject({ ok: true, compacted: true });
+        expect(hostCompact).toHaveBeenCalledOnce();
+        expect(publicCompact).toHaveBeenCalledTimes(2);
+        expect(privateNativeCompaction).not.toHaveBeenCalled();
+        expect(accessor.loadSessionEntryReadOnly(target)?.transcriptByteCompactionLatch).toEqual(
+          committed?.transcriptByteCompactionLatch,
+        );
+      }
+    },
+  );
+
+  it("rearms manual host compaction after a failed byte read and one budget of growth", async () => {
+    const maxBytes = 64;
+    const { params, target, hostCompact, publicCompact } = await createCodexFixture(maxBytes);
+    const manager = await sessions.SessionManager.openAsync(target, workspaceDir);
+    await manager.appendMessageAsync({
+      role: "user",
+      content: "old history ".repeat(512),
+      timestamp: 2,
+    });
+    await manager.appendMessageAsync(createAssistant(model, [{ type: "text", text: "Recorded." }]));
+    await manager.appendMessageAsync({
+      role: "user",
+      content: "Keep this short tail.",
+      timestamp: 3,
+    });
+    await manager.appendMessageAsync(createAssistant(model, [{ type: "text", text: "Kept." }]));
+    const { readSessionTranscriptAccountingAsync } =
+      await import("../../gateway/session-transcript-readers.js");
+    const beforeBytes = (
+      await readSessionTranscriptAccountingAsync(target, {
+        includeByteSize: true,
+        includeUsage: false,
+      })
+    ).byteSize;
+    const { historyLane } =
+      await import("../../config/sessions/session-transcript-worker-resources.js");
+    const run = historyLane.pool.run.bind(historyLane.pool);
+    let failedAccountingReplies = 0;
+    const read = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
+      let accountingRead = false;
+      return run(async () => {
+        const request = typeof input === "function" ? await input() : input;
+        accountingRead =
+          request.kind === "history-page" && request.request.kind === "active-accounting";
+        return request;
+      }, options).then((snapshot) => {
+        if (accountingRead && hostCompact.mock.calls.length > 0) {
+          failedAccountingReplies++;
+          throw new Error("Post-compaction byte read reply lost");
+        }
+        return snapshot;
+      });
+    });
+    try {
+      await expect(compactQueued(params)).resolves.toMatchObject({ ok: true, compacted: true });
+    } finally {
+      read.mockRestore();
+    }
+    expect(failedAccountingReplies).toBeGreaterThan(0);
+    const staleLatch = accessor.loadSessionEntryReadOnly(target)?.transcriptByteCompactionLatch;
+    expect(staleLatch?.activeBytes).toBe(beforeBytes);
+    const afterBytes = (
+      await readSessionTranscriptAccountingAsync(target, {
+        includeByteSize: true,
+        includeUsage: false,
+      })
+    ).byteSize;
+    expect(afterBytes).toBeLessThan(beforeBytes!);
+    expect(afterBytes).toBeGreaterThan(maxBytes);
+
+    await expect(compactQueued(params)).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(hostCompact).toHaveBeenCalledOnce();
+    const rebasedLatch = accessor.loadSessionEntryReadOnly(target)?.transcriptByteCompactionLatch;
+    expect(rebasedLatch?.activeBytes).toBeLessThan(staleLatch!.activeBytes);
+    await (
+      await sessions.SessionManager.openAsync(target, workspaceDir)
+    ).appendMessageAsync({
+      role: "user",
+      content: "x".repeat(maxBytes),
+      timestamp: 4,
+    });
+
+    await expect(compactQueued(params)).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(hostCompact).toHaveBeenCalledTimes(2);
+    expect(publicCompact).toHaveBeenCalledTimes(3);
+    expect(accessor.loadSessionEntryReadOnly(target)?.compactionCount).toBe(2);
+  });
+
+  it("keeps below-threshold manual requests native-only", async () => {
+    const { params, target, hostCompact, publicCompact, privateNativeCompaction } =
+      await createCodexFixture("20mb");
+
+    await expect(compactQueued(params)).resolves.toMatchObject({
+      ok: true,
+      compacted: true,
+      compactionKind: "native-harness",
+    });
+
+    expect(hostCompact).not.toHaveBeenCalled();
+    expect(publicCompact).toHaveBeenCalledOnce();
+    expect(privateNativeCompaction).not.toHaveBeenCalled();
+    expect(
+      accessor.loadSessionEntryReadOnly(target)?.transcriptByteCompactionLatch,
+    ).toBeUndefined();
+  });
 });

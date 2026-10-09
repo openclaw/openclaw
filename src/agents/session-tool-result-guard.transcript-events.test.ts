@@ -14,8 +14,8 @@ import {
   appendTranscriptMessageSync,
   loadSessionEntry,
   listSessionPendingInputs,
-  persistCompactionBoundaryWithSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { persistCompactionBoundaryWithSessionEntryAsync } from "../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { projectInFlightRunSnapshot } from "../gateway/chat-inflight-snapshot.js";
@@ -326,8 +326,8 @@ describe("guardSessionManager transcript updates", () => {
     for (const runId of ["run-first", "run-second"]) {
       const guarded = guardSessionManager(sessionManager, {
         runId,
-        withCompactionPersistence: (prepared) =>
-          persistCompactionBoundaryWithSessionEntrySync(target, {
+        withCompactionPersistenceAsync: (prepared) =>
+          persistCompactionBoundaryWithSessionEntryAsync(target, {
             prepared,
             transcriptByteCompactionLatch: {
               activeBytes: 2048,
@@ -337,9 +337,16 @@ describe("guardSessionManager transcript updates", () => {
           }),
       });
       const keptId = guarded.appendMessage({ role: "user", content: runId, timestamp: 1 });
-      guarded.appendCompaction("summary", keptId, 100, { source: "hook" }, true, {
-        itemId: `compaction-${runId}`,
-      });
+      const db = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
+      const hostExec = vi.spyOn(db.db, "exec");
+      try {
+        await guarded.appendCompactionAsync("summary", keptId, 100, { source: "hook" }, true, {
+          itemId: `compaction-${runId}`,
+        });
+        expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
+      } finally {
+        hostExec.mockRestore();
+      }
     }
     const compactions = SessionManager.open(target, root)
       .getBranch()
@@ -353,6 +360,35 @@ describe("guardSessionManager transcript updates", () => {
       },
     ]);
     expect(loadSessionEntry(target)?.compactionCount).toBe(2);
+  });
+
+  it("leaves the session manager unchanged when atomic compaction persistence rejects the boundary", async () => {
+    const { sessionManager, root, target } = await openPersistedSessionManager();
+    const keptId = sessionManager.appendMessage(makeUserMessage("keep", 1));
+    const guarded = guardSessionManager(sessionManager, {
+      withCompactionPersistenceAsync: (prepared) => {
+        prepared.event.id = keptId;
+        return persistCompactionBoundaryWithSessionEntryAsync(target, {
+          prepared,
+          transcriptByteCompactionLatch: {
+            activeBytes: 2048,
+            sessionId: target.sessionId,
+            maxBytes: 1024,
+          },
+        });
+      },
+    });
+
+    await expect(guarded.appendCompactionAsync("summary", keptId, 100)).rejects.toThrow(
+      `Session transcript entry was not persisted: ${keptId}: transcript-event-not-appended`,
+    );
+    expect(sessionManager.getLeafId()).toBe(keptId);
+    expect(sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toEqual([]);
+    expect(
+      SessionManager.open(target, root)
+        .getBranch()
+        .filter((entry) => entry.type === "compaction"),
+    ).toEqual([]);
   });
 
   it.each(["physical", "alias"])(

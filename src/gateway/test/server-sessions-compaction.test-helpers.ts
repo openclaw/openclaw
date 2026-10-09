@@ -5,6 +5,10 @@ import { expect } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
+import {
+  appendTranscriptEvent,
+  appendTranscriptMessage,
+} from "../../config/sessions/session-accessor.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { embeddedRunMock } from "../test-helpers.runtime-state.js";
 
@@ -111,4 +115,40 @@ export async function createCompactedSessionFixture(dir: string) {
     preCompactionLeafId,
     postCompactionLeafId,
   };
+}
+
+export async function seedTranscriptRows(params: {
+  agentId?: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  totalLines: number;
+}): Promise<void> {
+  const scope = {
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  };
+  if (params.totalLines <= 0) {
+    return;
+  }
+  await appendTranscriptEvent(scope, {
+    type: "session",
+    version: 3,
+    id: params.sessionId,
+    timestamp: "2026-06-19T12:00:00.000Z",
+    cwd: "/tmp",
+  });
+  for (let index = 0; index < params.totalLines - 1; index += 1) {
+    await appendTranscriptMessage(scope, {
+      cwd: "/tmp",
+      message: {
+        role: "user",
+        content: `line-${index}`,
+        timestamp: index,
+      },
+      now: Date.parse(`2026-06-19T12:00:${String(index % 60).padStart(2, "0")}.000Z`),
+    });
+  }
 }

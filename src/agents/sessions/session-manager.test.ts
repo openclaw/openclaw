@@ -26,6 +26,7 @@ import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { buildSessionContext, CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
@@ -64,6 +65,43 @@ function openMarker(marker: string, sessionKey: string, cwd: string): SessionMan
 }
 
 describe("SessionManager.open", () => {
+  it.each(["memory", "sqlite"] as const)(
+    "fences a committed %s compaction when receipt publication fails",
+    async (storage) => {
+      const dir = tempDirs.make("openclaw-compaction-publication-");
+      const target = {
+        agentId: "main",
+        sessionId: "compaction-publication",
+        sessionKey: "agent:main:compaction-publication",
+        storePath: path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+      };
+      const manager =
+        storage === "memory" ? SessionManager.inMemory() : SessionManager.open(target, dir);
+      const kept = manager.appendMessage(makeUserMessage("keep", 1));
+      const onCommitted = vi.fn(() => {
+        throw new Error("publication failed");
+      });
+      const failure = await manager
+        .appendCompactionAsync("summary", kept, 100, undefined, undefined, undefined, 20, {
+          onCommitted,
+        })
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({ name: "SessionCompactionCommittedError" });
+      expect(isRecordedModelFallbackStop(failure)).toBe(true);
+      expect(onCommitted).toHaveBeenCalledOnce();
+      expect(() => manager.appendCompaction("retry", kept, 100)).toThrow(
+        "do not replay the append",
+      );
+      if (storage === "sqlite") {
+        expect(
+          SessionManager.open(target, dir)
+            .getEntries()
+            .filter((entry) => entry.type === "compaction"),
+        ).toMatchObject([{ summary: "summary" }]);
+      }
+    },
+  );
+
   it("commits ordered metadata and custom messages with Windows environment semantics off-thread", async () => {
     const { dir, scope: target } = createScope("metadata-worker");
     target.storePath = path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite");

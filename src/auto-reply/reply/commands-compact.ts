@@ -310,6 +310,7 @@ export async function handleCompactCommand(
       throw new Error("command session changed");
     }
   };
+  let hostAccountingCommitted = false;
   const compaction = runtime.compactEmbeddedAgentSession(
     {
       abortSignal: params.opts?.abortSignal,
@@ -382,8 +383,12 @@ export async function handleCompactCommand(
           params.sessionStore[params.sessionKey] = accepted.entry;
         }
       },
-      onHostCompactionCommitted: () => {
+      onHostCompactionCommitted: (commit) => {
         compactionAccepted = true;
+        hostAccountingCommitted = commit.accountingCommitted === true;
+        if (hostAccountingCommitted && params.sessionStore) {
+          params.sessionStore[params.sessionKey] = commit.entry;
+        }
       },
     },
   );
@@ -400,20 +405,23 @@ export async function handleCompactCommand(
         : result.result?.tokensBefore != null
           ? `${result.compactionKind === "server-endpoint" ? "Server-side compaction" : "Compacted"} (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
           : "Compacted";
-    const compactionCount = await runtime.incrementCompactionCount({
-      agentId: sessionAgentId,
-      sessionEntry: expectedSession,
-      sessionStore: params.sessionStore,
-      sessionKey: params.sessionKey,
-      storePath: compactionStorePath,
-      tokensAfter: result.result?.tokensAfter,
-      compactionKind: result.compactionKind,
-      expectedSession,
-    });
-    if (compactionCount === undefined) {
-      return (
-        authorityFailure() ?? compactionUnavailable("session accounting failed", interruptionNotice)
-      );
+    if (!hostAccountingCommitted) {
+      const compactionCount = await runtime.incrementCompactionCount({
+        agentId: sessionAgentId,
+        sessionEntry: expectedSession,
+        sessionStore: params.sessionStore,
+        sessionKey: params.sessionKey,
+        storePath: compactionStorePath,
+        tokensAfter: result.result?.tokensAfter,
+        compactionKind: result.compactionKind,
+        expectedSession,
+      });
+      if (compactionCount === undefined) {
+        return (
+          authorityFailure() ??
+          compactionUnavailable("session accounting failed", interruptionNotice)
+        );
+      }
     }
   }
   failure = authorityFailure();

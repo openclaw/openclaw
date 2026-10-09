@@ -34,6 +34,7 @@ export type PersistWorkerRecordResult = {
   reload?: PreparedSessionTranscriptReload;
   committedVersion: SessionTranscriptContextVersion;
   viewFailure?: Error;
+  publicationFailure?: Error;
 };
 
 export type PersistRecordOptions = AppendPersistenceOptions & {

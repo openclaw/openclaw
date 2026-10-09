@@ -36,6 +36,7 @@ import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { sessionManagerPrepareCurrentTurnReplay } from "./session-manager-current-turn.js";
 
 const { prepareSessionTranscriptHydration } = transcriptHydration;
+import { readSessionTranscriptAccountingAsync } from "../../gateway/session-transcript-readers.js";
 
 function canonicalTarget(
   state: OpenClawTestState,
@@ -70,6 +71,12 @@ it.each(["canonical", "shared"])(
       }
       await waitForSessionTranscriptProjection(target);
       const expected = source.getPersistedEntries();
+      const expectedStats = {
+        eventCount: 12,
+        byteSize: source
+          .getEntries()
+          .reduce((bytes, entry) => bytes + Buffer.byteLength(JSON.stringify(entry)) + 1, 0),
+      };
       const limits = { maxBytes: 4096, maxEvents: 3 };
       const expectedBounded = SessionManager.openBounded(target, limits).buildSessionContext();
       const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
@@ -124,6 +131,12 @@ it.each(["canonical", "shared"])(
         expect(
           await reader.readCurrentTurnEntry({ ...request, entryId: "missing", includeEntry: true }),
         ).toMatchObject({ version: snapshot.version, anchor: undefined, event: undefined });
+        expect(
+          await readSessionTranscriptAccountingAsync(target, {
+            includeByteSize: true,
+            includeUsage: false,
+          }),
+        ).toEqual(expectedStats);
         expect(probes.flatMap((probe) => probe.mock.calls)).toEqual([]);
       } finally {
         probes.forEach((probe) => probe.mockRestore());
