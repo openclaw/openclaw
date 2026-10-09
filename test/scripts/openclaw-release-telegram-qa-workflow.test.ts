@@ -1108,9 +1108,13 @@ describe("release Telegram QA workflow", () => {
         requireRun("run_telegram", "Create isolated Telegram SUT identity and launcher"),
         "LAUNCHER",
       );
-      const source = launcher.match(/umask 077\n([\s\S]*?)\n\s*' openclaw-config-projection/u)?.[0];
-      expect(source).toBeTruthy();
-      const program = source!.slice(0, source!.lastIndexOf("\n")).replaceAll("'\\''", "'");
+      const source = launcher.match(
+        /\/bin\/bash --noprofile --norc -ceu '\n\s*(umask 077\n[\s\S]*?)\n\s*' openclaw-config-projection/u,
+      )?.[1];
+      if (!source) {
+        throw new Error("Expected the unprivileged SUT config seeder");
+      }
+      const program = source.replaceAll("'\\''", "'");
       const root = tempDirs.make("openclaw-telegram-plugin-projection-");
       const plugin = join(root, "hook");
       mkdirSync(plugin);
@@ -1138,6 +1142,9 @@ describe("release Telegram QA workflow", () => {
       );
       if (kind === "symlink") {
         expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "Telegram QA plugin fixture contains unsupported file types",
+        );
         return;
       }
       expect(result.status, result.stderr).toBe(0);

@@ -1681,7 +1681,10 @@ jobs:
                     case "$plugin_path" in "$temp_root/"*) ;; *) continue ;; esac
                     [[ -d "$plugin_path" && ! -L "$plugin_path" &&
                           "$(realpath -e "$plugin_path")" == "$plugin_path" ]]
-                    [[ -z "$(find "$plugin_path" ! -type f ! -type d -print -quit)" ]]
+                    [[ -z "$(find "$plugin_path" ! -type f ! -type d -print -quit)" ]] || {
+                      printf "%s\n" "Telegram QA plugin fixture contains unsupported file types" >&2
+                      exit 1
+                    }
                     case "$projection_dir/" in "$plugin_path/"*) exit 1 ;; esac
                     fixture_dir="$projection_dir/plugin-fixtures/$index"
                     mkdir -p "$fixture_dir"
