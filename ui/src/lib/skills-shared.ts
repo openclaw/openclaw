@@ -15,17 +15,12 @@ export function computeSkillMissing(skill: SkillStatusEntry): string[] {
 }
 
 export function computeSkillReasons(skill: SkillStatusEntry): string[] {
-  const reasons: string[] = [];
-  if (skill.disabled) {
-    reasons.push(t("skillStatus.disabled"));
-  }
-  if (skill.blockedByAllowlist) {
-    reasons.push(t("skillStatus.blockedAllowlist"));
-  }
-  if (skill.blockedByAgentFilter) {
-    reasons.push(t("skillStatus.blockedAgentFilter"));
-  }
-  return reasons;
+  const reasons = [
+    [skill.disabled, "skillStatus.disabled"],
+    [skill.blockedByAllowlist, "skillStatus.blockedAllowlist"],
+    [skill.blockedByAgentFilter, "skillStatus.blockedAgentFilter"],
+  ] as const;
+  return reasons.flatMap(([blocked, key]) => (blocked ? [t(key)] : []));
 }
 
 export function isSkillAvailable(skill: SkillStatusEntry): boolean {

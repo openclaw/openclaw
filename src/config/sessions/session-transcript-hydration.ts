@@ -1,7 +1,10 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
-import { assertAgentDatabaseTerminalOpenAllowed } from "../../state/openclaw-agent-db-terminal.js";
+import {
+  assertAgentDatabaseTerminalOpenAllowed,
+  revalidateAgentDatabaseTerminalOpenAsync,
+} from "../../state/openclaw-agent-db-terminal.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -168,7 +171,11 @@ export function prepareSessionTranscriptHydration(
     signal?.throwIfAborted();
     const options = toDatabaseOptions(resolvedScope);
     const databasePath = resolveOpenClawAgentSqlitePath(options);
-    assertAgentDatabaseTerminalOpenAllowed(databasePath);
+    await revalidateAgentDatabaseTerminalOpenAsync(
+      databasePath,
+      () => signal?.throwIfAborted(),
+      signal,
+    );
     try {
       const result = await withSessionHistoryWorkerDatabase(options, async (owner) => {
         const assertReadCurrent = () => {

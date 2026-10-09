@@ -164,6 +164,14 @@ The same publication decision covers agent frames, chat finals, progress snapsho
 and session lifecycle notifications. Execution settlement and cleanup continue
 independently of event publication.
 
+For completed `chat.send` turns, clients may request compaction, fork, or rewind
+as soon as they receive chat `final`. These requests join the published turn's
+remaining transcript and admission cleanup before mutating the session. A
+competing live turn still returns an active-run error.
+Lifecycle delivery captures registrations before listeners run, and later chat
+terminal publication keeps the producer's original registration. Reusing a run ID
+during a listener callback cannot make its replacement terminal.
+
 The Gateway projects lifecycle and tool start/terminal events into the bounded,
 metadata-only [audit ledger](/cli/audit). This projection records provenance and
 result codes without copying prompts, messages, tool arguments, tool results,

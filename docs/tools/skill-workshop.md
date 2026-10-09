@@ -142,8 +142,8 @@ change feed and the chat notice. Every change saves the previous version first.
 
 Writes are validated before they land:
 
-- Names use 1-63 lowercase letters, digits, or hyphens and start with a letter
-  or digit.
+- New names use 1-63 lowercase letters, digits, or hyphens and start with a letter
+  or digit. Longer names saved by earlier releases stay listed and manageable.
 - `SKILL.md` needs frontmatter whose `name` matches the skill directory and a
   `description` of 1-1024 bytes (aim for about 160). It must fit within `skills.workshop.maxSkillBytes`.
 - Support files go under `references/`, `templates/`, `scripts/`, or `assets/`,

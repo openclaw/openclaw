@@ -28,6 +28,7 @@ import {
   projectOpenAIAccountModels,
 } from "./account-models.js";
 import {
+  OPENAI_CODEX_MODELS_ENDPOINT,
   OPENAI_CODEX_RESPONSES_BASE_URL,
   classifyOpenAIBaseUrl,
   isOpenAICodexBaseUrl,
@@ -400,13 +401,10 @@ async function buildOpenAICodexLiveProviderConfig(params: {
 }): Promise<OpenAILiveProviderCatalog> {
   const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   const { getCachedLiveProviderModelRows, LiveModelCatalogHttpError } = catalogRuntime;
-  // Lazy like the catalog runtime: npm lookup code loads only for ChatGPT discovery.
-  const { resolveOpenAICodexModelsEndpoint } = await import("./codex-client-version.runtime.js");
-  const endpoint = await resolveOpenAICodexModelsEndpoint({ fetchGuard: params.fetchGuard });
   try {
     const rows = await getCachedLiveProviderModelRows({
       providerId: PROVIDER_ID,
-      endpoint,
+      endpoint: OPENAI_CODEX_MODELS_ENDPOINT,
       discoveryApiKey: params.discoveryApiKey,
       fetchGuard: params.fetchGuard,
       signal: params.signal,
@@ -421,7 +419,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       cacheKeyParts: [
         PROVIDER_ID,
         "codex-model-rows",
-        endpoint,
+        OPENAI_CODEX_MODELS_ENDPOINT,
         params.discoveryApiKey,
         params.accountId ?? "",
       ],

@@ -1781,6 +1781,7 @@ src/state/openclaw-state-worker-context.ts
 src/state/openclaw-state-worker-error-identity.ts
 src/state/openclaw-state-worker-error.ts
 src/state/openclaw-state-worker-lease.ts
+src/state/openclaw-state-worker-memory-pressure.ts
 src/state/openclaw-state-worker-operation.ts
 src/state/openclaw-state-worker-owner.ts
 src/state/openclaw-state-worker-store.ts

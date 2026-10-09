@@ -910,6 +910,7 @@ it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
       await emit(chunks.length * 2 + 2, "lifecycle", { phase: "end" });
     } else if (terminal === "dispatch") {
       broadcastChatFinal({
+        terminalEntry: undefined,
         context: { ...harness, ...broadcaster },
         runId,
         sessionKey,

@@ -180,32 +180,29 @@ export function renderAgents(props: AgentsProps) {
           canPatchConfig: props.access.canPatchConfig,
         });
       case "channels":
-        return renderAgentChannels({
-          ...props.channels,
-          context: buildAgentContext(
-            agent,
-            config,
-            props.agentFiles.agentFilesList,
-            defaultId,
-            props.agentIdentityById[agent.id] ?? null,
-          ),
-          configForm: config,
-          onSelectPanel: props.onSelectPanel,
-        });
-      case "cron":
-        return renderAgentCron({
-          ...props.cron,
-          basePath: props.basePath,
-          context: buildAgentContext(
-            agent,
-            config,
-            props.agentFiles.agentFilesList,
-            defaultId,
-            props.agentIdentityById[agent.id] ?? null,
-          ),
-          canRunNow: props.access.canRunCron,
-          onSelectPanel: props.onSelectPanel,
-        });
+      case "cron": {
+        const context = buildAgentContext(
+          agent,
+          config,
+          props.agentFiles.agentFilesList,
+          defaultId,
+          props.agentIdentityById[agent.id] ?? null,
+        );
+        return props.activePanel === "channels"
+          ? renderAgentChannels({
+              ...props.channels,
+              context,
+              configForm: config,
+              onSelectPanel: props.onSelectPanel,
+            })
+          : renderAgentCron({
+              ...props.cron,
+              basePath: props.basePath,
+              context,
+              canRunNow: props.access.canRunCron,
+              onSelectPanel: props.onSelectPanel,
+            });
+      }
       case "memory":
         return html`
           <div class="settings-group agent-memory-import-row">

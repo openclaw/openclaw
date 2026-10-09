@@ -54,6 +54,7 @@ type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   phase: "pending" | "acquired";
   owner?: symbol;
   released: Promise<void>;
+  isSettling?: () => boolean;
 };
 
 type SessionLifecycleMutationOwner = {
@@ -118,6 +119,7 @@ const {
   getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
   getCompetingSessionWorkAdmissionRelease,
+  getTerminalSessionWorkAdmissionRelease,
 } = createSessionWorkAdmissionQueries<SessionWorkAdmission>(ACTIVE_SESSION_WORK_ADMISSIONS, () =>
   CURRENT_SESSION_WORK_ADMISSIONS.getStore(),
 );
@@ -125,6 +127,7 @@ export {
   getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
   getCompetingSessionWorkAdmissionRelease,
+  getTerminalSessionWorkAdmissionRelease,
 };
 
 // Older runtime chunks can create the shared state without this newer index.
@@ -492,6 +495,8 @@ export async function beginSessionWorkAdmission(params: {
   storeWriterIdentities?: Iterable<string | undefined>;
   /** Stable process-wide identity for owners that must be observable while still pending. */
   owner?: symbol;
+  /** The execution owner has committed its terminal outcome; cleanup still retains this lease. */
+  isSettling?: () => boolean;
   /** Queue behind earlier admissions of the same owner, including pending work. */
   serializeOwner?: boolean;
   resolveGatewayContext?: GatewayContextResolver;
@@ -534,6 +539,7 @@ export async function beginSessionWorkAdmission(params: {
   const admission: SessionWorkAdmission = {
     lifecycleGeneration: getAgentRunLifecycleGeneration(),
     phase: "pending",
+    isSettling: params.isSettling,
     ...(params.owner ? { owner: params.owner } : {}),
     handoffIds: new Set(),
     identities: new Set(identities),

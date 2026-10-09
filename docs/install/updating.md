@@ -551,7 +551,8 @@ A newer candidate cannot run before an already-blocked older updater downloads i
 The candidate's dependency inventory can, however, avoid modifying old recovery
 artifacts during an update that has already passed admission.
 
-For an external-helper operation stuck at `publication-complete`, run
+For an external-helper operation stuck at `prepared`, `publishing`, or
+`publication-complete` whose live package already serves the candidate, run
 `openclaw update repair` from an independent terminal. Repair verifies the
 installed candidate's dist content inventory, manifest, launchers,
 and current update ownership before settling the operation. It archives the

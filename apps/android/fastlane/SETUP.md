@@ -10,8 +10,8 @@ For a checksum-locked, reproducible setup:
 
 ```bash
 cd apps/android
-gem install bundler -v 4.0.21
-bundle _4.0.21_ install
+gem install bundler -v 4.0.22
+bundle _4.0.22_ install
 ```
 
 The expected reproducible runtime is recorded in `apps/android/.ruby-version`.
@@ -70,7 +70,7 @@ cd apps/android
 fastlane android auth_check
 ```
 
-Use `BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane android auth_check`
+Use `BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane android auth_check`
 when reproducing the protected CI toolchain exactly.
 
 Archive locally without upload:
@@ -162,7 +162,7 @@ The Fastlane planner can be inspected without publishing:
 
 ```bash
 cd apps/android
-bundle _4.0.21_ exec fastlane android release_plan output_path:/tmp/android-release-plan.json
+bundle _4.0.22_ exec fastlane android release_plan output_path:/tmp/android-release-plan.json
 ```
 
 It lists uploaded APK and AAB version codes in a temporary edit and always aborts
@@ -188,7 +188,7 @@ fastlane android release_upload
 For the exact protected-CI toolchain:
 
 ```bash
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane android release_upload
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane android release_upload
 ```
 
 Use these direct Fastlane entry points only for maintainer debugging when

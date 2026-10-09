@@ -4587,8 +4587,6 @@
 ["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../infra/gateway-active-work.js","52099ba291d974e0911f04e89c317a6421faee7a7c99b9f28d2472cfc92eb8ad",1]
 ["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../infra/gateway-suspend-coordinator.js","58955032bcac9f7129f95ac780d776c9f5f11c8b7aa5aca7ad7ccdb2ce37a6b5",1]
 ["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../infra/launchd-stop-timeout.js","2eddb12afb2b0e40da5ca946d1367bb2e6766746fdd776ede7e8c63bbc80055e",1]
-["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../infra/restart-handoff.js","2c2c26e73845e3bb95a22abe354077780ab808d38ecb23fe5397ed354d596991",1]
-["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../infra/restart-intent.js","9cf172ece3ab3bda1f3e46adc5b69933f4e63ce8846b04e59faa4d0bc60bbea4",1]
 ["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../infra/restart-sentinel.js","5342e05052c9b7f8f05f83b77f40af471b98f4ded5b559ef1f1a6bc79350adf6",1]
 ["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../infra/update-managed-service-handoff.js","ee4eee06b50fb91bd6e266fc7ea93b762464260ff0018949b9dc745b122633c8",1]
 ["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../logging/diagnostic-stability-bundle.js","9e2a70135789d0dfd3c48440b021a5060e68a7d48e3e63f09bbc092437d27648",1]

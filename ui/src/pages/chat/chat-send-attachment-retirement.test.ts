@@ -23,7 +23,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   listStoredChatOutboxes,
   loadChatComposerSnapshot,
-  updateStoredChatComposerQueueItem,
+  updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
@@ -244,15 +244,19 @@ describe("chat attachment terminal retirement", () => {
           : null;
       if (handoff === "new-attempt") {
         expect(
-          updateStoredChatComposerQueueItem(
+          updateStoredChatComposerQueueItems(
             visible,
             sessionKey,
-            item,
-            {
-              ...item,
-              sendRunId: "replacement-attempt",
-              sendAttempts: 2,
-            },
+            [
+              {
+                expected: item,
+                next: {
+                  ...item,
+                  sendRunId: "replacement-attempt",
+                  sendAttempts: 2,
+                },
+              },
+            ],
             item.agentId,
           ),
         ).toBe(true);

@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
@@ -164,19 +165,12 @@ async function runMaintenanceDrift(
       },
     );
   } else {
-    const create = admission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        create((request, grant) => {
-          if (
-            delivery.currentCommand === "session.lifecycle.project" &&
-            request.stage === "commit"
-          ) {
-            changed();
-          }
-          callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      if (delivery.currentCommand === "session.lifecycle.project" && request.stage === "commit") {
+        changed();
+      }
+      callback(request, grant);
+    });
   }
   try {
     const operation = applySessionEntryLifecycleMutation({
@@ -276,20 +270,13 @@ it.each(["transaction", "commit"] as const)(
       const committed = vi.fn();
       let live = true;
       let revokedAtGrant = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            if (
-              delivery.currentCommand === "session.lifecycle.project" &&
-              request.stage === stage
-            ) {
-              live = false;
-              revokedAtGrant = true;
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, callback) => {
+        if (delivery.currentCommand === "session.lifecycle.project" && request.stage === stage) {
+          live = false;
+          revokedAtGrant = true;
+        }
+        callback(request, grant);
+      });
       const operation = applySessionEntryLifecycleMutation({
         ...f.scope,
         activeSessionKey: f.scope.sessionKey,
