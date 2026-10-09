@@ -473,7 +473,7 @@ describe("worker conversation reads", () => {
       await fs.mkdir(directory, { recursive: true });
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const lane = phase === "session-store-target" ? targetDiscoveryLane : historyLane;
+      const lane = targetDiscoveryLane;
       const run = lane.pool.run.bind(lane.pool);
       vi.spyOn(lane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);

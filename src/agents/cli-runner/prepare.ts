@@ -160,7 +160,10 @@ import {
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import { resolveCliSkillsPrompt } from "./skills-prompt.js";
-import { bindCliQuestionAnswerAuthority, prepareCliReplyToolAuthority } from "./tool-authority.js";
+import {
+  captureCliRunToolAuthority,
+  finalizeCliSessionEventSourcePolicy,
+} from "./tool-authority.js";
 import {
   captureCliRunStartTime,
   type CliReusableSession,
@@ -295,19 +298,11 @@ async function prepareCliRunContextWithinReadFence(
       backendResolved.resolveExecutionArgs !== undefined) ||
       (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
         backendResolved.prepareExecution !== undefined));
-  // Native callbacks retain the original caller cap, before translation clears toolsAllow.
-  // Reply-owned runs already have the richer admission snapshot; never reconstruct that one.
-  const questionOperation = params.toolAuthorityFingerprint ? params.replyOperation : undefined;
-  const questionSessionKey = params.sessionKey ?? params.sessionId;
-  const questionAbortSignal = params.abortSignal;
-  const assertQuestionSourceCurrent = params.assertCurrent;
-  const questionSnapshot = questionOperation
-    ? undefined
-    : prepareCliReplyToolAuthority(params, {
-        agentId: workspaceResolution.agentId,
-        workspaceDir,
-        cwd,
-      });
+  const callerToolAuthority = captureCliRunToolAuthority(params, {
+    agentId: workspaceResolution.agentId,
+    workspaceDir,
+    cwd,
+  });
   const toolPolicy = resolveCliRuntimeToolPolicy({
     params,
     policySessionKey,
@@ -542,25 +537,16 @@ async function prepareCliRunContextWithinReadFence(
       modelId: normalizedCatalogModel,
       contextWindow: params.contextWindow,
     }) ?? normalizedCatalogModel;
-  const questionRoute = { provider: modelProvider, model: modelId };
-  const questionFingerprint = questionOperation
-    ? await questionOperation.bindToolAuthorityRouteAsync(questionRoute)
-    : await questionSnapshot?.fingerprintAsync(questionRoute);
-  if (questionOperation) {
+  const {
+    fingerprint: questionFingerprint,
+    bindQuestionAnswerAuthority,
+    bindQuestionAnswerAuthorityForSession,
+  } = await callerToolAuthority.bindQuestions({ provider: modelProvider, model: modelId }, () =>
+    readRunOperatorAuthority(params),
+  );
+  if (callerToolAuthority.hasReplyOperation) {
     params = { ...params, toolAuthorityFingerprint: questionFingerprint };
   }
-  const bindQuestionAnswerAuthorityForSession = bindCliQuestionAnswerAuthority({
-    operation: questionOperation,
-    snapshot: questionSnapshot,
-    route: questionRoute,
-    fingerprint: questionFingerprint,
-    readSource: () => readRunOperatorAuthority(params),
-    assertSourceCurrent: assertQuestionSourceCurrent,
-    signal: questionAbortSignal,
-  });
-  const bindQuestionAnswerAuthority: NonNullable<
-    PreparedCliRunContext["bindQuestionAnswerAuthority"]
-  > = (assertActive) => bindQuestionAnswerAuthorityForSession(questionSessionKey, assertActive);
   const modelDisplay = `${params.provider}/${modelId}`;
   let openClawHistoryMessages: unknown[] | undefined;
   const loadOpenClawHistoryMessages = async () => {
@@ -1661,6 +1647,11 @@ async function prepareCliRunContextWithinReadFence(
     const buildPreparedContext = (preparedParams: PreparedCliRunContext["params"]) => ({
       params: preparedParams,
       bindQuestionAnswerAuthority,
+      sessionEventSourcePolicy: finalizeCliSessionEventSourcePolicy(
+        callerToolAuthority.sessionEventSourcePolicy,
+        preparedParams,
+        promptBuildToolsAllow,
+      ),
       effectiveAuthProfileId,
       ...(authStore ? { authProfileStore: authStore } : {}),
       agentDir,

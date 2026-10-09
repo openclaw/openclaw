@@ -422,38 +422,23 @@ async function resolvePosixIdentity(params: {
   const resolvedPath = commandFile.identity.path;
   let invocation: CliExecutableIdentity["invocation"];
   if (shebang) {
-    const interpreterPath = resolveCommandPath({
-      command: shebang.executable,
-      cwd: params.cwd,
-      env: params.env,
-    });
-    if (!interpreterPath) {
-      return undefined;
-    }
-    const interpreter = await readExecutableFileIdentity(interpreterPath, true);
-    if (!interpreter || hasShebang(interpreter.prefix)) {
-      return undefined;
-    }
-    files.push(interpreter.identity);
-    let invocationInterpreter = interpreter.identity.path;
-    if (shebang.viaEnv) {
-      const targetPath = resolveCommandPath({
-        command: shebang.viaEnv,
+    for (const command of [shebang.executable, ...(shebang.viaEnv ? [shebang.viaEnv] : [])]) {
+      const interpreterPath = resolveCommandPath({
+        command,
         cwd: params.cwd,
         env: params.env,
       });
-      if (!targetPath) {
+      if (!interpreterPath) {
         return undefined;
       }
-      const target = await readExecutableFileIdentity(targetPath, true);
-      if (!target || hasShebang(target.prefix)) {
+      const interpreter = await readExecutableFileIdentity(interpreterPath, true);
+      if (!interpreter || hasShebang(interpreter.prefix)) {
         return undefined;
       }
-      files.push(target.identity);
-      invocationInterpreter = target.identity.path;
+      files.push(interpreter.identity);
     }
     invocation = {
-      command: invocationInterpreter,
+      command: files.at(-1)!.path,
       leadingArgv: [...shebang.args, resolvedPath],
       resolution: "direct",
     };

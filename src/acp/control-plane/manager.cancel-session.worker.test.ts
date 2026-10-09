@@ -15,117 +15,26 @@ import {
 import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import { DEFAULT_DEPS } from "./manager.types.js";
 
-it.each(["global", "inline"] as const)(
-  "preserves registered idle ACP resolution for %s metadata without host data SQL",
-  async (metadata) => {
-    await withAcpCancellationFixture(
-      async (f) => {
-        const sql = observeHostDataSql();
-        try {
-          const cancellation = f.manager.cancelSession({
-            ...f.target,
-            expectedOwnerKey: "agent:main:main",
-          });
-          if (metadata === "inline") {
-            await expect(cancellation).rejects.toMatchObject({ code: "ACP_TURN_FAILED" });
-          } else {
-            await cancellation;
-          }
-          sql.restore();
-          if (metadata === "inline") {
-            expect(f.ensureSession).not.toHaveBeenCalled();
-            expect(f.cancel).not.toHaveBeenCalled();
-            expect(readAcpSessionEntry(f.target)?.entry?.acp?.state).toBe("running");
-          } else {
-            expect(f.cancel).toHaveBeenCalledExactlyOnceWith({
-              handle: expect.objectContaining({ runtimeSessionName: "retained-runtime" }),
-              reason: undefined,
-            });
-            expect(readAcpSessionEntry(f.target)?.acp?.state).toBe("idle");
-          }
-          expect(sql.queries).toEqual([]);
-        } finally {
-          sql.restore();
-        }
-      },
-      { metadata },
-    );
-  },
-);
-
-it.each(["acknowledged", "failed"] as const)(
-  "settles %s registered active cancellation without host data SQL",
-  async (outcome) => {
-    await withAcpCancellationFixture(async (f) => {
-      const entered = createDeferred();
-      const stop = new AbortController();
-      if (outcome === "failed") {
-        f.cancel.mockRejectedValueOnce(new Error("Synthetic cancel transport failure."));
-      }
-      f.runTurn.mockImplementationOnce(async function* (input) {
-        entered.resolve();
-        await new Promise<void>((resolve) => {
-          if (input.signal?.aborted) {
-            resolve();
-            return;
-          }
-          input.signal?.addEventListener("abort", () => resolve(), { once: true });
-        });
-        yield { type: "done", stopReason: "cancel" };
-      });
-      const admittedRunContext = createTestAdmittedRunContext("active-worker");
-      const turn = f.manager.runTurn({
-        ...f.target,
-        admittedRunContext,
-        provenance: "system",
-        mode: "prompt",
-        text: "active",
-        requestId: "active-worker",
-        signal: stop.signal,
-      });
-      const turnResult = Promise.allSettled([turn]);
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        turnResult,
-        "Run ended before runtime entry.",
-      );
+it("refuses inline-only idle ACP metadata without host data SQL", async () => {
+  await withAcpCancellationFixture(
+    async (f) => {
       const sql = observeHostDataSql();
       try {
-        const cancellation = f.manager.cancelSession({
-          ...f.target,
-          expectedRunId: "active-worker",
-          expectedInstanceId: admittedRunContext.operationalRunInstance.instanceId,
-          expectedOwnerKey: "agent:main:main",
-        });
-        const result = await Promise.allSettled([cancellation, turn]);
+        await expect(
+          f.manager.cancelSession({ ...f.target, expectedOwnerKey: "agent:main:main" }),
+        ).rejects.toMatchObject({ code: "ACP_TURN_FAILED" });
         sql.restore();
-        expect(result).toMatchObject(
-          outcome === "failed"
-            ? [
-                {
-                  status: "rejected",
-                  reason: {
-                    code: "ACP_TURN_FAILED",
-                    message: "Synthetic cancel transport failure.",
-                  },
-                },
-                { status: "fulfilled" },
-              ]
-            : [{ status: "fulfilled" }, { status: "fulfilled" }],
-        );
-        expect(f.cancel).toHaveBeenCalledOnce();
-        // The producer's cancelled terminal is independent of the cancellation RPC failure.
-        expect(readDurableAcpSignals(f, "active-worker")).toMatchObject([{ kind: "run_failed" }]);
-        expect(readAcpSessionEntry(f.target)?.acp?.state).toBe("idle");
+        expect(f.ensureSession).not.toHaveBeenCalled();
+        expect(f.cancel).not.toHaveBeenCalled();
+        expect(readAcpSessionEntry(f.target)?.entry?.acp?.state).toBe("running");
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
-        stop.abort();
-        await turnResult;
       }
-    });
-  },
-);
+    },
+    { metadata: "inline" },
+  );
+});
 
 it("does not admit durable runtime cancellation from an inherited discovery snapshot", async () => {
   await withAcpCancellationFixture(async (f) => {

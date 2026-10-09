@@ -63,6 +63,7 @@ import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
@@ -689,6 +690,7 @@ export async function prepareReplyAgentPayloads(state: {
       fallbackEntry: activeSessionEntry,
       activeSessionStore,
       expectedGeneration: accounting.expectedSession,
+      reader: getReplyOperationSessionReader(replyOperation),
     });
   }
 

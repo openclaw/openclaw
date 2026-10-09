@@ -2,6 +2,7 @@ import type { SessionTranscriptReadScope } from "../config/sessions/session-acce
 import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntryReplacementCommit } from "../config/sessions/session-accessor.sqlite-replacement-types.js";
 import type { ResolvedTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import type { SessionEntryCohortRequest } from "../config/sessions/session-entry-read.types.js";
 import type {
   SessionTranscriptExecutionReadInputs,
   SessionTranscriptExecutionReadResult,
@@ -312,10 +313,18 @@ export async function loadAgentRestartRecoveryOperations() {
 }
 
 export async function loadAgentEntryReadOperations() {
-  const kernel = await import("../config/sessions/session-accessor.sqlite-entry-read.js");
+  const kernel = await import("../config/sessions/session-entry-read.worker.js");
+  const { readSessionEntryCohort, readSessionEntryDataInDatabase } =
+    await import("../config/sessions/session-entry-cohort.worker.js");
   return {
-    "session.entry.read": (input: { sessionKey: string }, { open }) =>
-      kernel.readSessionEntryRow(open(), input.sessionKey)?.entry,
+    "session.entry.read": (input: { sessionKey: string } | SessionEntryCohortRequest, { open }) => {
+      const database = open();
+      return "sessionKeys" in input
+        ? readSessionEntryCohort(database, input, (request) =>
+            kernel.readExactSessionEntriesWithLifecycle(request, database),
+          )
+        : readSessionEntryDataInDatabase(database, input.sessionKey);
+    },
   } satisfies Handlers;
 }
 
@@ -341,6 +350,26 @@ export async function loadAgentCompoundOperations() {
     "session.turn.commit": turn.commitSessionTurn,
     "session.lifecycle.reset": reset.commitSessionReset,
     "session.lifecycle.project": lifecycle.commitSessionLifecycleProjection,
+  } satisfies Handlers;
+}
+
+export async function loadAgentPurgeOperations() {
+  const purge = await import("../config/sessions/session-agent-purge.worker.js");
+  return {
+    "session.agentPurge.prepare": purge.prepareSessionAgentPurge,
+    "session.agentPurge.commit": purge.commitSessionAgentPurge,
+  } satisfies Handlers;
+}
+
+export async function loadAgentMaintenanceFinalizationOperations() {
+  const finalization =
+    await import("../config/sessions/session-maintenance-finalization.worker.js");
+  const maintenanceStore =
+    await import("../config/sessions/session-accessor.sqlite-maintenance-store.js");
+  return {
+    "session.maintenance.finalize": finalization.finalizeSessionMaintenance,
+    "session.maintenance.size": (input: { sessionIds: string[] }, { open }) =>
+      maintenanceStore.readSessionTranscriptJsonlBytesInDatabase(open(), input.sessionIds),
   } satisfies Handlers;
 }
 
@@ -655,6 +684,8 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
     Awaited<ReturnType<typeof loadAgentCompoundOperations>> &
+    Awaited<ReturnType<typeof loadAgentPurgeOperations>> &
+    Awaited<ReturnType<typeof loadAgentMaintenanceFinalizationOperations>> &
     Awaited<ReturnType<typeof loadAgentNativeBindingOperations>> &
     Awaited<ReturnType<typeof loadAgentMessageCutOperations>> &
     Awaited<ReturnType<typeof loadAgentRestartRecoveryOperations>> &

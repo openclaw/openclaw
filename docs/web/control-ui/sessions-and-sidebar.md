@@ -12,10 +12,10 @@ sidebarTitle: "Sessions and sidebar"
 
 The sidebar organizes every session, and the New session page starts new ones.
 
-Once the Gateway accepts a new session, the UI opens its conversation so you can
-follow the first turn. Clearing the submitted draft and saved worktree name
-continues alongside navigation; slow cleanup does not keep the conversation on
-**Starting…**.
+New session previews the first prompt immediately while the Gateway accepts it.
+The submitted browser draft is retired before the confirmed conversation URL is
+committed, so closing the tab does not restore a sent prompt. Saved worktree-name
+preferences can finish clearing alongside navigation.
 
 ## New session names
 
@@ -301,6 +301,8 @@ selection. Bulk deletion remains bound to the sessions you selected, including
 while its confirmation dialog is open.
 
 **Rename** in the sidebar, chat header, and Sessions page starts with your custom name or the generated dashboard title. Edit the text, then save or press Enter. Saving an unchanged generated title leaves automatic naming intact; clearing a custom name restores the generated title. Channel and account decorations stay outside the editable name. Rename targets the session you started editing. If that session is deleted and recreated at the same key before you save, the edit is rejected instead of renaming the replacement. Reopen Rename on the current session to try again. Resetting the conversation keeps the same session identity and does not invalidate the edit.
+
+Automatic titles follow the language of the first message, including short instructions with quoted literals. Titles are capped at 60 characters and unmatched quotation marks are removed after truncation. Empty or quote-only model output uses a readable crustacean-themed fallback name.
 
 **New group** from the sidebar, chat header, or Sessions page keeps the original session selection while the dialog is open and the group is being saved. A deleted or replaced session is not moved; an error is shown and the new group remains available. For a sidebar multi-selection, sessions that still exist can move even if another target fails. Paging a selected session out of the visible list does not cancel its move.
 

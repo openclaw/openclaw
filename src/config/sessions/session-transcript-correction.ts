@@ -23,12 +23,14 @@ import {
 } from "./session-incognito-binding.js";
 import { executeSessionMessageRewriteOperation } from "./session-message-rewrite-domain.js";
 import {
+  acceptSessionSourceValidation,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
 } from "./session-source-authority.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import type { SessionTranscriptCorrectionCommitted } from "./session-transcript-mutation.types.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   withOwnedSessionTranscriptWriterFence,
@@ -97,6 +99,8 @@ export async function withPreparedTranscriptCorrection<T>(
           ownerSource.checks[refused.index]?.refuse(refused.facts);
           throw new Error("Transcript correction owner refusal omitted its prepared assertion");
         }
+        acceptSessionSourceValidation(ownerSource, snapshot.sourceValidation);
+        authority.assertCurrent();
         const events: TranscriptEvent[] = snapshot.rows.map((row) => JSON.parse(row.eventJson));
         const context: TranscriptCorrectionContext = {
           generation: snapshot.version.generation,
@@ -118,15 +122,26 @@ export async function withPreparedTranscriptCorrection<T>(
                 { entryId: original.id, expectedEventJson: snapshot.rows[index]!.eventJson, event },
               ];
             });
-            const committed = await actor.sessions.transcript(authority, {
-              type: "session.correction.commit",
-              input: {
-                ...input,
-                version: snapshot.version,
-                rows,
-                allowLaterAppends: afterSeq !== undefined,
+            const committed = await actor.sessions.transcript(
+              authority,
+              {
+                type: "session.correction.commit",
+                input: {
+                  ...input,
+                  version: snapshot.version,
+                  rows,
+                  allowLaterAppends: afterSeq !== undefined,
+                },
               },
-            });
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              (_refused, validation) => {
+                acceptSessionSourceValidation(ownerSource, validation);
+                authority.assertCurrent();
+              },
+            );
             if ("refusedOwnerSource" in committed) {
               const refused = committed.refusedOwnerSource;
               ownerSource.checks[refused.index]?.refuse(refused.facts);
@@ -158,6 +173,8 @@ export async function withPreparedTranscriptCorrection<T>(
                       "Transcript correction owner refusal omitted its prepared assertion",
                     );
                   }
+                  acceptSessionSourceValidation(ownerSource, validated.sourceValidation);
+                  authority.assertCurrent();
                 }
                 return context.readEvents();
               }),
@@ -311,5 +328,7 @@ export async function withPreparedTranscriptCorrection<T>(
       }
       return result.value;
     },
+    undefined,
+    targetDiscoveryLane,
   );
 }

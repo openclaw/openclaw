@@ -1,3 +1,4 @@
+import { threadId } from "node:worker_threads";
 import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import type {
   UsageCostWorkerInput,
@@ -20,7 +21,7 @@ import {
   pruneClosedHistoryDatabaseScopes,
 } from "./session-transcript-worker-scopes.js";
 import type {
-  SessionTranscriptWorkerInput,
+  SessionTranscriptWorkerRequest,
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
@@ -41,7 +42,7 @@ serveOwnedWorkerTasks(
     releaseReadValidation ??= (await import("../../state/openclaw-agent-db-validation-cache.js"))
       .releaseOpenClawAgentDatabaseReadValidation;
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
-    const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
+    const request = input as SessionTranscriptWorkerRequest | UsageCostWorkerInput;
     if (request.kind === "cli-process-history") {
       if (!channel) {
         throw new Error("Process-held history requires its host reader channel");
@@ -294,6 +295,11 @@ serveOwnedWorkerTasks(
         }
         return read.value;
       }
+      if (request.kind === "session-retirement-read") {
+        const { readSessionRetirementInWorker } =
+          await import("./session-retirement-read.worker.js");
+        return { kind: request.kind, result: readSessionRetirementInWorker(request) };
+      }
       if (request.kind === "session-exact-entries") {
         const { readExactSessionEntriesWithLifecycle } =
           await import("./session-entry-read.worker.js");
@@ -303,6 +309,21 @@ serveOwnedWorkerTasks(
       if (request.kind === "session-row-facts") {
         const { readSessionRowDatabaseFacts } = await import("./session-entry-read.worker.js");
         return readSessionRowDatabaseFacts(request);
+      }
+      if (request.kind === "session-maintenance-read") {
+        const { readSessionMaintenanceInWorker } =
+          await import("./session-accessor.sqlite-maintenance-transaction.js");
+        return {
+          kind: "session-maintenance-read" as const,
+          result: readSessionMaintenanceInWorker({
+            ...request.plan,
+            databaseOptions: {
+              ...request.database,
+              env: cloneEnvWithPlatformSemantics(request.env),
+            },
+          }),
+          workerThreadId: threadId,
+        };
       }
       if (request.kind === "session-entry-current") {
         const { readSessionEntryCurrentFacts } = await import("./session-entry-read.worker.js");
@@ -604,6 +625,7 @@ serveOwnedWorkerTasks(
                 : `history.${request.request.kind}`
               : request.kind,
             readRequest,
+            request.validation,
           )
         : { ok: true, value: await readRequest() };
     } catch (error) {

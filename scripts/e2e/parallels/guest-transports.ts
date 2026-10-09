@@ -58,6 +58,20 @@ function windowsProcessEnvScript(env: Record<string, string> = {}): string {
     .join("\n");
 }
 
+function windowsPowerShellArgs(vmName: string, script: string, currentUser = false): string[] {
+  return [
+    "exec",
+    vmName,
+    ...(currentUser ? ["--current-user"] : []),
+    "powershell.exe",
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-EncodedCommand",
+    encodePowerShell(script),
+  ];
+}
+
 function appendOutput(
   append: ((chunk: string | Uint8Array) => void) | undefined,
   result: CommandResult,
@@ -412,23 +426,17 @@ ${options.script}
 } finally {
   Write-OpenClawUtf8File $donePath 'done'
 }`;
-  const writeArgs = [
-    "exec",
+  const writeArgs = windowsPowerShellArgs(
     options.vmName,
-    "--current-user",
-    "powershell.exe",
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-EncodedCommand",
-    encodePowerShell(`${pathsScript}
+    `${pathsScript}
 New-Item -ItemType Directory -Path $runDir -Force | Out-Null
 & icacls.exe $runDir /inheritance:r /grant:r "\${env:USERNAME}:(OI)(CI)(F)" "SYSTEM:(OI)(CI)(F)" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "${safeLabel} background directory ACL setup failed" }
 Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath -Force -ErrorAction SilentlyContinue
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))
-if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not written" }`),
-  ];
+if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not written" }`,
+    true,
+  );
   let writeScript = runCommand("prlctl", writeArgs, {
     check: false,
     input: payload,
@@ -465,19 +473,13 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
       options.beforeLaunchAttempt?.();
       const launch = runCommand(
         "prlctl",
-        [
-          "exec",
+        windowsPowerShellArgs(
           options.vmName,
-          "--current-user",
-          "powershell.exe",
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-EncodedCommand",
-          encodePowerShell(`${pathsScript}
+          `${pathsScript}
 cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$scriptPath" | Out-Null
-'started'`),
-        ],
+'started'`,
+          true,
+        ),
         // A busy Windows guest can leave one Parallels Tools session wedged.
         // Keep polls short so a single transport cancellation cannot consume
         // the entire install timeout while the detached process continues.
@@ -588,9 +590,6 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
       recordPollFailure("log poll", poll);
       await sleep(Math.min(pollIntervalMs, 100));
     }
-    if (doneSeen) {
-      throw new Error(`${options.label} completed but log drain timed out`);
-    }
     throw new Error(`${options.label} timed out`);
   } finally {
     cleanupWindowsBackground(options.vmName, pathsScript, windowsLogPath, runCommand, {
@@ -622,19 +621,13 @@ async function waitForWindowsBackgroundMaterialized(params: {
   while (Date.now() < materializeDeadline) {
     const result = params.runCommand(
       "prlctl",
-      [
-        "exec",
+      windowsPowerShellArgs(
         params.vmName,
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        encodePowerShell(`${params.pathsScript}
+        `${params.pathsScript}
 if ((Test-Path $pidPath) -or (Test-Path $donePath)) {
   'materialized'
-}`),
-      ],
+}`,
+      ),
       { check: false, timeoutMs: timeoutBefore(materializeDeadline, 15_000) },
     );
     appendOutput(params.append, result);
@@ -675,17 +668,11 @@ if (Test-Path $pidPath) {
     : "";
   runCommand(
     "prlctl",
-    [
-      "exec",
+    windowsPowerShellArgs(
       vmName,
-      "powershell.exe",
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-EncodedCommand",
-      encodePowerShell(`${pathsScript}
-${stopProcessTree}`),
-    ],
+      `${pathsScript}
+${stopProcessTree}`,
+    ),
     { check: false, timeoutMs: 30_000 },
   );
   if (options.captureLog) {
@@ -706,50 +693,58 @@ ${stopProcessTree}`),
   }
   runCommand(
     "prlctl",
-    [
-      "exec",
+    windowsPowerShellArgs(
       vmName,
-      "powershell.exe",
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-EncodedCommand",
-      encodePowerShell(`${pathsScript}
+      `${pathsScript}
 Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath -Force -ErrorAction SilentlyContinue
-Remove-Item -Path $runDir -Recurse -Force -ErrorAction SilentlyContinue`),
-    ],
+Remove-Item -Path $runDir -Recurse -Force -ErrorAction SilentlyContinue`,
+    ),
     { check: false, timeoutMs: 30_000 },
   );
 }
 
-export class LinuxGuest {
-  private vmName: string;
-  private phases: PhaseRunner;
-  private getEnv: () => Record<string, string>;
+abstract class ParallelsGuest<TOptions extends PosixGuestOptions> {
+  protected phases: PhaseRunner;
+  protected runCommand = run;
+  protected checkGuestSession = false;
+  protected abstract label: string;
+  protected abstract transportArgs(args: string[], env?: Record<string, string>): string[];
 
-  constructor(vmName: string, phases: PhaseRunner, getEnv = () => ({})) {
-    this.vmName = vmName;
+  constructor(phases: PhaseRunner) {
     this.phases = phases;
-    this.getEnv = getEnv;
   }
 
-  exec(args: string[], options: PosixGuestOptions = {}): string {
+  exec(args: string[], options?: TOptions): string {
     return this.run(args, options).stdout.trim();
   }
 
-  run(args: string[], options: PosixGuestOptions = {}): CommandResult {
-    const result = run("prlctl", this.transportArgs(args, options.env), {
+  run(args: string[], options?: TOptions): CommandResult {
+    const result = this.runCommand("prlctl", this.transportArgs(args, options?.env), {
       check: false,
-      input: options.input,
-      timeoutMs: this.phases.remainingTimeoutMs(options.timeoutMs),
+      input: options?.input,
+      timeoutMs: this.phases.remainingTimeoutMs(options?.timeoutMs),
     });
-    this.phases.append(result.stdout);
-    this.phases.append(result.stderr);
-    throwIfFailed("Linux guest command", result, options.check);
+    appendCommandResult(this.phases, result);
+    if (this.checkGuestSession) {
+      throwIfGuestSessionUnavailable(this.label, result, options?.check);
+    }
+    throwIfFailed(this.label, result, options?.check);
     return result;
   }
+}
 
-  private transportArgs(args: string[], env: Record<string, string> = {}): string[] {
+export class LinuxGuest extends ParallelsGuest<PosixGuestOptions> {
+  protected label = "Linux guest command";
+  private vmName: string;
+  private getEnv: () => Record<string, string>;
+
+  constructor(vmName: string, phases: PhaseRunner, getEnv = () => ({})) {
+    super(phases);
+    this.vmName = vmName;
+    this.getEnv = getEnv;
+  }
+
+  protected transportArgs(args: string[], env: Record<string, string> = {}): string[] {
     const envArgs = Object.entries({
       HOME: "/root",
       OPENCLAW_ALLOW_ROOT: "1",
@@ -785,20 +780,18 @@ type MacosGuestInput = {
   getEnv?: () => Record<string, string>;
 };
 
-export class MacosGuest {
+export class MacosGuest extends ParallelsGuest<PosixGuestOptions> {
+  protected label = "macOS guest command";
+  protected override runCommand = runMacosHostCommand;
+  protected override checkGuestSession = true;
   private input: MacosGuestInput;
-  private phases: PhaseRunner;
 
   constructor(input: MacosGuestInput, phases: PhaseRunner) {
+    super(phases);
     this.input = input;
-    this.phases = phases;
   }
 
-  exec(args: string[], options: PosixGuestOptions = {}): string {
-    return this.run(args, options).stdout.trim();
-  }
-
-  private transportArgs(args: string[], env: Record<string, string> = {}): string[] {
+  protected transportArgs(args: string[], env: Record<string, string> = {}): string[] {
     const envArgs = Object.entries({ PATH: this.input.path, ...this.input.getEnv?.(), ...env }).map(
       ([key, value]) => `${key}=${value}`,
     );
@@ -819,19 +812,6 @@ export class MacosGuest {
           ...args,
         ]
       : ["exec", this.input.vmName, "--current-user", "/usr/bin/env", ...envArgs, ...args];
-  }
-
-  run(args: string[], options: PosixGuestOptions = {}): CommandResult {
-    const result = runMacosHostCommand("prlctl", this.transportArgs(args, options.env), {
-      check: false,
-      input: options.input,
-      timeoutMs: this.phases.remainingTimeoutMs(options.timeoutMs),
-    });
-    this.phases.append(result.stdout);
-    this.phases.append(result.stderr);
-    throwIfGuestSessionUnavailable("macOS guest command", result, options.check);
-    throwIfFailed("macOS guest command", result, options.check);
-    return result;
   }
 
   sh(script: string, env: Record<string, string> = {}): string {
@@ -869,55 +849,29 @@ export class MacosGuest {
   }
 }
 
-export class WindowsGuest {
+export class WindowsGuest extends ParallelsGuest<GuestExecOptions> {
+  protected label = "Windows guest command";
   private vmName: string;
-  private phases: PhaseRunner;
   private getEnv: () => Record<string, string>;
 
   constructor(vmName: string, phases: PhaseRunner, getEnv = () => ({})) {
+    super(phases);
     this.vmName = vmName;
-    this.phases = phases;
     this.getEnv = getEnv;
   }
 
-  exec(args: string[], options: GuestExecOptions = {}): string {
-    return this.run(args, options).stdout.trim();
-  }
-
-  run(args: string[], options: GuestExecOptions = {}): CommandResult {
-    const result = run("prlctl", ["exec", this.vmName, "--current-user", ...args], {
-      check: false,
-      input: options.input,
-      timeoutMs: this.phases.remainingTimeoutMs(options.timeoutMs),
-    });
-    this.phases.append(result.stdout);
-    this.phases.append(result.stderr);
-    throwIfFailed("Windows guest command", result, options.check);
-    return result;
+  protected transportArgs(args: string[]): string[] {
+    return ["exec", this.vmName, "--current-user", ...args];
   }
 
   powershell(script: string, options: GuestExecOptions = {}): string {
     const scriptName = guestScriptName("ps1");
     const writeScript = `$scriptPath = Join-Path $env:TEMP ${JSON.stringify(scriptName)}
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))`;
-    const write = run(
-      "prlctl",
-      [
-        "exec",
-        this.vmName,
-        "--current-user",
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        encodePowerShell(writeScript),
-      ],
-      {
-        input: `${windowsProcessEnvScript(this.getEnv())}\n${script}`,
-        timeoutMs: this.phases.remainingTimeoutMs(120_000),
-      },
-    );
+    const write = run("prlctl", windowsPowerShellArgs(this.vmName, writeScript, true), {
+      input: `${windowsProcessEnvScript(this.getEnv())}\n${script}`,
+      timeoutMs: this.phases.remainingTimeoutMs(120_000),
+    });
     this.phases.append(write.stdout);
     this.phases.append(write.stderr);
     const scriptPath = `%TEMP%\\${scriptName}`;

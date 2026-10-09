@@ -50,22 +50,6 @@ export function persistsChatCommentary(state: ChatState): boolean {
   return state.settings?.chatPersistCommentary !== false;
 }
 
-function replayInFlightRunEvents(
-  state: ChatState,
-  run: NonNullable<ChatHistoryResult["inFlightRun"]>,
-): void {
-  if (state.chatRunId !== run.runId || !Array.isArray(run.events)) {
-    return;
-  }
-  for (const event of run.events) {
-    if (!event || event.runId !== run.runId) {
-      continue;
-    }
-    // SAFETY: history replays the same agent events against the pane that owns live tool state.
-    handleAgentEvent(state as never, event as never);
-  }
-}
-
 function resolveInFlightAssistantText(bufferedText: unknown): string | null {
   return typeof bufferedText === "string" &&
     bufferedText &&
@@ -129,6 +113,10 @@ export function applyHistoryRun(params: {
     currentRunProjections,
     resetStream,
   } = params;
+  const hasOtherSendingRun = (runId: string) =>
+    state.chatQueue.some(
+      (item) => item.sendState === "sending" && item.sendRunId && item.sendRunId !== runId,
+    );
   const inFlightRunId = run?.runId?.trim();
   if (!inFlightRunId || !run) {
     if (!sessionInfo) {
@@ -139,9 +127,7 @@ export function applyHistoryRun(params: {
       localRunId &&
       sessionInfo.lastRunId !== localRunId &&
       historyRun &&
-      !state.chatQueue.some(
-        (item) => item.sendState === "sending" && item.sendRunId && item.sendRunId !== localRunId,
-      ) &&
+      !hasOtherSendingRun(localRunId) &&
       runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply) &&
       reconcileChatRunFromSessionRow(state, sessionInfo, {
         publishRunStatus: false,
@@ -164,10 +150,7 @@ export function applyHistoryRun(params: {
       sessionInfo.hasActiveRun !== true &&
       !isSessionRunActive(sessionInfo) &&
       (!state.chatRunId || state.chatRunId === terminalRunId) &&
-      !state.chatQueue.some(
-        (item) =>
-          item.sendState === "sending" && item.sendRunId && item.sendRunId !== terminalRunId,
-      ) &&
+      !hasOtherSendingRun(terminalRunId) &&
       ((sessionInfo.status !== "killed" && !knownRun) ||
         state.chatRunId === terminalRunId ||
         getChatRunOwner(state) === terminalRunId) &&
@@ -249,9 +232,7 @@ export function applyHistoryRun(params: {
     historyRun?.runId === state.chatRunId &&
     historyRun.sessionId === sessionInfo?.sessionId &&
     historyRun.isCurrent() &&
-    !state.chatQueue.some(
-      (item) => item.sendState === "sending" && item.sendRunId && item.sendRunId !== inFlightRunId,
-    ),
+    !hasOtherSendingRun(inFlightRunId),
   );
   const canAdoptInFlightRun =
     inFlightRunIsActive &&
@@ -308,5 +289,12 @@ export function applyHistoryRun(params: {
   // Disconnect cleanup intentionally removes transient activity rows while
   // retaining the owned run. Replay fills that gap; per-identity sequence
   // fences keep a delayed snapshot from replacing newer live progress.
-  replayInFlightRunEvents(state, run);
+  if (state.chatRunId === run.runId && Array.isArray(run.events)) {
+    for (const event of run.events) {
+      if (event?.runId === run.runId) {
+        // SAFETY: history replays the same agent events against the pane that owns live tool state.
+        handleAgentEvent(state as never, event as never);
+      }
+    }
+  }
 }

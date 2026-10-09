@@ -172,13 +172,12 @@ export class TranscriptPresentation implements ReactiveController {
   }
 
   hostDisconnected(): void {
-    if (this.overscanFrame !== null) {
-      cancelAnimationFrame(this.overscanFrame);
-      this.overscanFrame = null;
-    }
-    if (this.measureFrame !== null) {
-      cancelAnimationFrame(this.measureFrame);
-      this.measureFrame = null;
+    for (const field of ["overscanFrame", "measureFrame"] as const) {
+      const frame = this[field];
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+        this[field] = null;
+      }
     }
     this.presented = false;
     this.renderedRows = false;

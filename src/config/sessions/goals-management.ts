@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -13,10 +14,12 @@ import type {
 } from "./goals-operations.worker.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import {
+  acceptSessionSourceValidation,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
   type SessionSourceAssertion,
+  type SessionSourceValidation,
 } from "./session-source-authority.js";
 
 export async function mutateSessionGoalInWorker(
@@ -61,6 +64,15 @@ export async function mutateSessionGoalInWorker(
     retainedExecution: execution,
     agentId,
     candidateKind: "session-goal-management",
+    onTransactionFacts(facts) {
+      if (isRecord(facts) && facts.kind === "session-entry-patch-validated") {
+        // SAFETY: The paired goal kernel supplies its transaction's matched source indices.
+        acceptSessionSourceValidation(source, facts.sourceValidation as SessionSourceValidation);
+        source.assertCurrent();
+        return true;
+      }
+      return false;
+    },
     assertCurrent: source.assertCurrent,
     releaseSource: release,
     assertCandidate(candidate) {

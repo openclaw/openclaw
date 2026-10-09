@@ -105,8 +105,18 @@ export async function consumeAnthropicStream(params: {
       }
       pendingTextEnds.length = 0;
     };
-    const emitTextEnd = (event: Extract<AssistantMessageEvent, { type: "text_end" }>) => {
-      if (managed) {
+    const emitContentEnd = (
+      block: Extract<AnthropicStreamBlock, { type: "thinking" | "text" }>,
+      contentIndex: number,
+      deferText: boolean,
+    ) => {
+      const event: Extract<AssistantMessageEvent, { type: "thinking_end" | "text_end" }> = {
+        type: `${block.type}_end`,
+        contentIndex,
+        content: block.type === "thinking" ? block.thinking : block.text,
+        partial: output,
+      };
+      if (managed && deferText && event.type === "text_end") {
         pendingTextEnds.push(event);
       } else {
         eventSink.push(event);
@@ -175,12 +185,7 @@ export async function consumeAnthropicStream(params: {
         indexes.delete(key);
         const block = output.content[contentIndex];
         if (block?.type === kind) {
-          eventSink.push({
-            type: `${kind}_end`,
-            contentIndex,
-            content: block.type === "thinking" ? block.thinking : block.text,
-            partial: output,
-          });
+          emitContentEnd(block, contentIndex, false);
         }
       }
     };
@@ -261,12 +266,7 @@ export async function consumeAnthropicStream(params: {
             }
             delete block.index;
             emitContentStart("text", i, block.text);
-            emitTextEnd({
-              type: "text_end",
-              contentIndex: i,
-              content: block.text,
-              partial: output,
-            });
+            emitContentEnd(block, i, true);
           }
           continue;
         }
@@ -469,25 +469,13 @@ export async function consumeAnthropicStream(params: {
         }
         blockIndexes.delete(eventIndex);
         delete block.index;
-        if (block.type === "text") {
-          emitTextEnd({
-            type: "text_end",
-            contentIndex: index,
-            content: block.text,
-            partial: output,
-          });
-        } else if (block.type === "thinking") {
-          if (pendingSignature !== undefined) {
-            block.thinkingSignature = pendingSignature;
-          }
-          eventSink.push({
-            type: "thinking_end",
-            contentIndex: index,
-            content: block.thinking,
-            partial: output,
-          });
-        } else if (block.type === "toolCall") {
+        if (block.type === "thinking" && pendingSignature !== undefined) {
+          block.thinkingSignature = pendingSignature;
+        }
+        if (block.type === "toolCall") {
           sealedToolCalls.push({ block, contentIndex: index });
+        } else {
+          emitContentEnd(block, index, true);
         }
         finishReasoningContentSidecars(event.index);
         continue;

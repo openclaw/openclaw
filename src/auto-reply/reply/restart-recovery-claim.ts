@@ -12,14 +12,12 @@ import {
 } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
 import { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryTargetOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
-import {
-  buildRestartRecoveryExpectedState,
-  sessionMatchesExpectedTranscriptTurn,
-} from "../../config/sessions/session-transcript-turn-state.js";
+import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import {
   isTerminalSessionStatus,
   type InternalSessionEntry as SessionEntry,
@@ -144,6 +142,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   const executionGeneration = params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
   let recoverySourceRunId: string | undefined;
   let trackedSessionId: string | undefined;
+  let trackedLifecycleRevision: string | undefined;
   let tracked = false;
   let confirmedArmed = false;
   let readTarget: SessionEntryTargetPatchScope | undefined;
@@ -180,6 +179,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     recoveryRunId = exactRunId ?? recoveryRunId;
     recoverySourceRunId = normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId);
     trackedSessionId = entry.sessionId;
+    trackedLifecycleRevision = entry.lifecycleRevision;
     tracked = exactRunId !== undefined || isTrackedClaim(entry);
   };
   const assertReadCurrent = () => {
@@ -215,21 +215,18 @@ export function createReplyRestartRecoveryClaimController(params: {
       return result.sessionEntry;
     }
     let didCommit = false;
-    const persisted = await patchSessionEntryTarget(
+    const persisted = await applySessionEntryTargetOperation(
       preparedTarget(),
-      (current) => {
-        if (
-          !sessionMatchesExpectedTranscriptTurn(
-            { entry: current },
-            { expectedSessionId: options.sessionId, expectedSessionState },
-          )
-        ) {
-          return null;
-        }
-        didCommit = true;
-        return options.patch;
+      {
+        kind: "restart-admission",
+        sessionId: options.sessionId,
+        expectedSessionState,
+        patch: options.patch,
       },
       {
+        onCommitted: () => {
+          didCommit = true;
+        },
         workerGuard: {
           source: params.operatorAuthority?.assertCurrent,
           assertCurrent: () => {
@@ -552,73 +549,42 @@ export function createReplyRestartRecoveryClaimController(params: {
     ) {
       return;
     }
-    const persisted = await patchSessionEntryTarget(
+    const sessionId = params.getSessionId();
+    if (sessionId !== trackedSessionId) {
+      return;
+    }
+    const expected = { sessionId, lifecycleRevision: trackedLifecycleRevision };
+    const persisted = await applySessionEntryTargetOperation(
       preparedTarget(),
-      (current) => {
-        if (
-          (current.abortedLastRun === true && current.mainRestartRecovery !== undefined) ||
-          !isTrackedClaim(current)
-        ) {
-          return null;
-        }
-        // Unknown provider outcome is terminal for this live run. Retire its source without
-        // replay so later distinct turns can proceed; a crash before this point leaves the
-        // active receipt for restart-safe model reconciliation.
-        const terminalPending = current.restartRecoveryDeliveryReceiptState === "terminal-pending";
-        const preservesPendingFinal =
-          !terminalPending && current.pendingFinalDelivery !== undefined;
-        const completesHandledSilent =
-          current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
-          !preservesPendingFinal;
-        const endedAt = terminalPending || completesHandledSilent ? Date.now() : undefined;
-        const remainingRuns = current.restartRecoveryRuns?.filter((run) => !isExecutionFence(run));
-        return {
-          ...buildRestartRecoveryClaimCleanupPatch({
-            entry: current,
-            recordTerminalSource: true,
-            terminalSourceRunId: recoverySourceRunId,
-            terminalRunId: current.restartRecoveryDeliveryRunId ? undefined : executionRunId,
-          }),
-          restartRecoveryRuns: remainingRuns?.length ? remainingRuns : undefined,
-          ...(terminalPending ? { pendingFinalDelivery: undefined } : {}),
-          // Transport settlement owns this final checkpoint. Keep enough provenance for a
-          // restart to enforce hook safety until that exact pending intent is resolved.
-          ...(preservesPendingFinal
-            ? {
-                restartRecoveryBeforeAgentReplyState: current.restartRecoveryBeforeAgentReplyState,
-                restartRecoverySourceIngress: current.restartRecoverySourceIngress,
-                restartRecoveryForceSafeTools: current.restartRecoveryForceSafeTools,
-              }
-            : {}),
-          ...(endedAt !== undefined
-            ? {
-                abortedLastRun: terminalPending,
-                endedAt,
-                lifecycleRunId: undefined,
-                runtimeMs:
-                  typeof current.startedAt === "number"
-                    ? Math.max(0, endedAt - current.startedAt)
-                    : undefined,
-                status: terminalPending ? ("failed" as const) : ("done" as const),
-              }
-            : {}),
-          updatedAt: endedAt ?? Date.now(),
-        };
+      {
+        kind: "restart-claim-clear",
+        expected,
+        sessionId,
+        recoveryRunId,
+        recoverySourceRunId,
+        executionRunId,
+        executionGeneration,
       },
       {
-        // Restart recovery can reuse this run id. Validate after async patch preparation,
-        // inside the synchronous commit, so old cleanup cannot retire its successor's route.
+        // The worker owns row predicates; live host authority survives every admission wait.
         workerGuard: {
           assertCurrent: () => {
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             if (params.isRestartAbort()) {
               throw createAgentRunStaleLifecycleError();
             }
+            if (params.getSessionId() !== sessionId) {
+              throw createRestartRecoveryClaimChangedError();
+            }
           },
         },
       },
     );
-    if (persisted) {
+    // A refused reduction returns the current row; it cannot retarget this run's cache.
+    if (
+      persisted?.sessionId === expected.sessionId &&
+      persisted.lifecycleRevision === expected.lifecycleRevision
+    ) {
       params.setEntry(persisted);
     }
   };

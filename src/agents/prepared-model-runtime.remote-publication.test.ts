@@ -6,6 +6,11 @@ import {
 } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import { getPreparedReplyDispatchRuntime } from "../auto-reply/reply/prepared-reply-dispatch-context.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelsHandlers } from "../gateway/server-methods/models.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
@@ -32,6 +37,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import * as catalogWorker from "./prepared-model-catalog-worker.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
+  acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
   applyRemoteModelCatalogUpdate,
   beginPreparedModelRuntimePluginDrain,
@@ -90,7 +96,7 @@ function bundle(generatedAt: number) {
     }),
   };
 }
-async function setup() {
+async function setup(options: { allowGatewaySubagentBinding?: true } = {}) {
   stored.mockReturnValue(bundle(200));
   setRemoteModelCatalogOverlaySourcesForTest({
     bundledGeneratedAt: () => 100,
@@ -109,6 +115,7 @@ async function setup() {
     return { entries, routeVariants: entries };
   });
   await refreshPreparedModelRuntimeSnapshots(config, {
+    ...options,
     gatewayLifecycle: true,
     catalogMode: "static",
   });
@@ -139,6 +146,75 @@ async function listModels(refresh: boolean) {
   return respond.mock.calls[0]?.[1];
 }
 afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
+
+it("delivers the first reply when catalog adoption retires its captured dispatch publication", async () => {
+  await setup({ allowGatewaySubagentBinding: true });
+  const preparing = createDeferred();
+  const commit = createDeferred();
+  const preparePricing = pricing.prepareModelPricingContext;
+  const pricingSpy = vi
+    .spyOn(pricing, "prepareModelPricingContext")
+    .mockImplementationOnce(async (...args) => {
+      preparing.resolve();
+      await commit.promise;
+      return await preparePricing(...args);
+    });
+  const adoption = applyRemoteModelCatalogUpdate(() => config);
+  await preparing.promise;
+  const deliver = vi.fn(async (_payload: ReplyPayload) => undefined);
+  const dispatcher = createReplyDispatcher({ deliver });
+  try {
+    const result = await dispatchLowLevelChannelReplyFromConfig({
+      cfg: config,
+      ctx: finalizeInboundContext({
+        Body: "hello",
+        From: "synthetic-user",
+        To: "synthetic-bot",
+        AgentId: "default",
+        SessionKey: "agent:default:main",
+        MessageSid: "catalog-adoption-first-reply",
+        Provider: "synthetic-channel",
+        Surface: "synthetic-channel",
+        ChatType: "direct",
+        InboundAccessAuthorized: true,
+      }),
+      dispatcher,
+      replyResolver: async () => {
+        const runtime = getPreparedReplyDispatchRuntime()!;
+        commit.resolve();
+        expect(await adoption).toBe("published");
+        await using lease = await acquireAgentRunPreparedModelRuntime(
+          {
+            config: runtime.config,
+            agentId: runtime.agentId,
+            agentDir: runtime.agentDir,
+            workspaceDir: runtime.workspaceDir,
+            allowGatewaySubagentBinding: true,
+            runtimePluginSelections: [
+              { provider: "custom", modelId: "remote-200", runtime: "openclaw" },
+            ],
+          },
+          { catalogMode: "static", pluginGeneration: runtime.pluginGeneration },
+        );
+        expect(runtime.readFullModelCatalog?.()?.entries.map((row) => row.id)).toContain(
+          "remote-200",
+        );
+        expect(lease.pluginGeneration.remoteCatalog?.generatedAt).toBe(200);
+        expect(lease.snapshot.modelCatalog.entries.map((row) => row.id)).toContain("remote-200");
+        expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
+        return { text: "first reply completed" };
+      },
+    });
+    expect(result.queuedFinal).toBe(true);
+  } finally {
+    commit.resolve();
+    await Promise.allSettled([adoption]);
+    pricingSpy.mockRestore();
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  }
+  expect(deliver.mock.calls.map(([payload]) => payload.text)).toEqual(["first reply completed"]);
+});
 
 it("keeps downloaded catalogs pending while plugin work drains", async ({ signal }) => {
   await setup();
@@ -243,7 +319,13 @@ it("does not reuse a dynamic build captured before a remote publication", async 
     expect(error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
     return undefined;
   });
-  await first?.[Symbol.asyncDispose]();
+  try {
+    expect(first).toBeDefined();
+    expect(first?.pluginGeneration.remoteCatalog?.generatedAt).toBe(300);
+    expect(first?.snapshot.modelCatalog.entries.map((row) => row.id)).toContain("remote-300");
+  } finally {
+    await first?.[Symbol.asyncDispose]();
+  }
   await using next = await acquireReadOnlyPreparedModelRuntime(input, { catalogMode: "live" });
   expect(next.pluginGeneration?.remoteCatalog?.generatedAt).toBe(300);
   expect(next.pluginGeneration?.remoteCatalog?.pricing["custom/remote-300"]?.cost.input).toBe(300);
@@ -309,6 +391,9 @@ it("keeps discovered rows published until the adopted catalog's discovery comple
   signal,
 }) => {
   await setup();
+  const owner = getPreparedModelRuntimeSnapshot(fixture.agentInput("default", config))!;
+  // Settle startup's full discovery so the refresh below runs with this test's worker.
+  await owner.loadFullModelCatalog!();
   const discovering = createDeferred();
   const release = createDeferred();
   let held = false;
@@ -324,8 +409,7 @@ it("keeps discovered rows published until the adopted catalog's discovery comple
   });
   const rows = async () =>
     (await listModels(false)).models.map((row: { id: string }) => row.id) as string[];
-  await getPreparedModelRuntimeSnapshot(fixture.agentInput("default", config))!
-    .loadFullModelCatalog!({ refresh: true });
+  await owner.loadFullModelCatalog!({ refresh: true });
   expect(await rows()).toContain("discovered-200");
   held = true;
   const adoption = applyRemoteModelCatalogUpdate(() => config);

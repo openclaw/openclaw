@@ -44,6 +44,9 @@ function fixture() {
   });
   const context: WorkerWriteOperationContext = {
     open: () => database,
+    writeAdmitted: () => {
+      throw new Error("Exec authorizations retain their custom admission");
+    },
     stateOptions: () => options,
     write: (operation, transactionOptions) =>
       stateDatabase.runOpenClawStateWriteTransaction(

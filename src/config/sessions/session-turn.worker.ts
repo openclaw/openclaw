@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
@@ -11,12 +12,15 @@ import {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  readTranscriptContextStateInTransaction,
+  readTranscriptContextVersionInTransaction,
+} from "./session-accessor.sqlite-transcript-state.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
-import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -75,11 +79,11 @@ export function prepareSessionTurn(
   incarnation?: string,
 ) {
   const database = context.open();
-  const refusedOwnerSource = input.ownerSources?.length
-    ? readRefusedSessionSource(database, input.ownerSources, incarnation)
+  const ownerSourceValidation = input.ownerSources?.length
+    ? readSessionSourceValidation(database, input.ownerSources, incarnation)
     : undefined;
-  if (refusedOwnerSource) {
-    return { refusedOwnerSource };
+  if (ownerSourceValidation?.refusedSource) {
+    return { refusedOwnerSource: ownerSourceValidation.refusedSource };
   }
   prepareSessionTurnRouting(
     input.options.sessionTurnMutation?.routingPredicate,
@@ -117,6 +121,20 @@ export function prepareSessionTurn(
       : !expectedEntry
         ? sqliteSessionTranscriptTurnRebound(selected, input.options.sessionFile)
         : undefined;
+  const transcriptState =
+    !result && input.options.messages.length
+      ? readTranscriptContextStateInTransaction(database, scope.sessionId)
+      : undefined;
+  if (input.prepareColdTranscript && transcriptState?.coldArchive) {
+    return {
+      ownerSourceValidation,
+      result: undefined,
+      messages: [],
+      coldArchive: transcriptState.coldArchive,
+      version: undefined,
+      goalId: undefined,
+    };
+  }
   const messages = result
     ? []
     : inCustody(input, context, () =>
@@ -137,12 +155,11 @@ export function prepareSessionTurn(
         }),
       );
   return {
+    ownerSourceValidation,
     result,
     messages,
-    version:
-      !result && input.options.messages.length
-        ? readTranscriptContextVersionInTransaction(database, scope.sessionId)
-        : undefined,
+    coldArchive: undefined,
+    version: transcriptState?.version,
     goalId:
       mutation && !result && expectedEntry && input.options.messages.length
         ? applySessionGoalOperation(expectedEntry, mutation.operation, Date.now())?.id
@@ -174,7 +191,7 @@ export function applySessionTurn<T>(
       if (input.ownerSources?.length) {
         context.admit("transaction", {
           kind: "session-turn-owner",
-          refusedOwnerSource: readRefusedSessionSource(database, input.ownerSources, incarnation),
+          sourceValidation: readSessionSourceValidation(database, input.ownerSources, incarnation),
         });
       }
       const scope = {
@@ -208,7 +225,11 @@ export function applySessionTurn<T>(
                   context.admit("transaction", {
                     kind: "session-turn-fresh",
                     index,
-                    refusedSource: readRefusedSessionSource(database, append.sources, incarnation),
+                    sourceValidation: readSessionSourceValidation(
+                      database,
+                      append.sources,
+                      incarnation,
+                    ),
                   });
                 }
               },
@@ -250,6 +271,23 @@ export function applySessionTurn<T>(
           projectionNeedsReconcile = true;
         },
       });
+      const revision = getSqliteReadScopeRevision(database.db);
+      const publication = committed.identity
+        ? prepareSessionEntryReplacementPublication(
+            {
+              ...committed.identity,
+              pendingArchiveRecovery: false,
+              membershipInvalidatedKeys: [],
+              maintenancePlans: [],
+            },
+            database,
+          )
+        : undefined;
+      const custodyEntry =
+        input.custody &&
+        revision &&
+        getSqliteReadScopeRevision(database.db) === revision &&
+        publication?.current.get(input.custody.sessionKey);
       const candidate: SessionTurnCommitted = {
         kind: "session-turn",
         result: committed.result,
@@ -264,26 +302,19 @@ export function applySessionTurn<T>(
                 database,
                 input.custody.sessionKey,
                 input.custody.agentId,
+                custodyEntry && revision
+                  ? { sessionKey: input.custody.sessionKey, entry: custodyEntry, revision }
+                  : undefined,
               )
             : undefined,
-        publication: committed.identity
-          ? prepareSessionEntryReplacementPublication(
-              {
-                ...committed.identity,
-                pendingArchiveRecovery: false,
-                membershipInvalidatedKeys: [],
-                maintenancePlans: [],
-              },
-              database,
-            )
-          : undefined,
+        publication,
       };
       if (incarnation && candidate.publication?.source) {
-        candidate.publication.source = {
-          ...candidate.publication.source,
+        // The publication and its commit receipt share this locally created source.
+        Object.assign(candidate.publication.source, {
           identity: incarnation,
           incarnation,
-        };
+        });
       }
       return publish(database, candidate);
     }),

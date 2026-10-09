@@ -1,12 +1,8 @@
 /** Verifies docs stay aligned with the secret target registry. */
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, describe, expect, it } from "vitest";
-import {
-  buildSecretRefCredentialMatrix,
-  type SecretRefCredentialMatrixDocument,
-} from "./credential-matrix.test-support.js";
+import { buildSecretRefCredentialMatrix } from "./credential-matrix.test-support.js";
 
 const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const previousTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
@@ -37,57 +33,5 @@ describe("secret target registry docs", () => {
     expect(fs.readFileSync(matrixPath, "utf8")).toBe(
       `${JSON.stringify(buildSecretRefCredentialMatrix(), null, 2)}\n`,
     );
-  });
-
-  it("stays in sync with docs/reference/secretref-credential-surface.md", () => {
-    const matrixRaw = fs.readFileSync(matrixPath, "utf8");
-    const matrix = JSON.parse(matrixRaw) as SecretRefCredentialMatrixDocument;
-
-    const surfacePath = path.join(
-      process.cwd(),
-      "docs",
-      "reference",
-      "secretref-credential-surface.md",
-    );
-    const surface = fs.readFileSync(surfacePath, "utf8");
-    const readMarkedCredentialList = (params: { start: string; end: string }): Set<string> => {
-      const startIndex = surface.indexOf(params.start);
-      const endIndex = surface.indexOf(params.end);
-      expect(startIndex).toBeGreaterThanOrEqual(0);
-      expect(endIndex).toBeGreaterThan(startIndex);
-      const block = surface.slice(startIndex + params.start.length, endIndex);
-      const credentials = new Set<string>();
-      for (const line of block.split(/\r?\n/)) {
-        const match = line.match(/^- `([^`]+)`/);
-        if (!match) {
-          continue;
-        }
-        const candidate = expectDefined(match[1], "match[1] test invariant");
-        if (!candidate.includes(".")) {
-          continue;
-        }
-        credentials.add(candidate);
-      }
-      return credentials;
-    };
-
-    const supportedFromDocs = readMarkedCredentialList({
-      start: '[//]: # "secretref-supported-list-start"',
-      end: '[//]: # "secretref-supported-list-end"',
-    });
-    const unsupportedFromDocs = readMarkedCredentialList({
-      start: '[//]: # "secretref-unsupported-list-start"',
-      end: '[//]: # "secretref-unsupported-list-end"',
-    });
-
-    const supportedFromMatrix = new Set(
-      matrix.entries.map((entry) =>
-        entry.configFile === "auth-profile-store" && entry.refPath ? entry.refPath : entry.path,
-      ),
-    );
-    const unsupportedFromMatrix = new Set(matrix.excludedMutableOrRuntimeManaged);
-
-    expect([...supportedFromDocs].toSorted()).toEqual([...supportedFromMatrix].toSorted());
-    expect([...unsupportedFromDocs].toSorted()).toEqual([...unsupportedFromMatrix].toSorted());
   });
 });

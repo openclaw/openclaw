@@ -86,6 +86,7 @@ import type {
   PendingInputMutationReceipt,
 } from "./session-pending-input-operations.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
 import { prepareSessionTurnPredicates } from "./session-turn-predicate.js";
 import { applySessionTurn, prepareSessionTurn } from "./session-turn.worker.js";
 
@@ -267,7 +268,12 @@ export function createIncognitoSessionWorker(
   const entryAdmission = (
     stage: "transaction" | "commit",
     keys: readonly string[],
-    entry: { guarded?: boolean; value?: unknown; publication?: unknown },
+    entry: {
+      guarded?: boolean;
+      value?: unknown;
+      publication?: unknown;
+      sourceValidation?: SessionSourceValidation;
+    },
   ) => {
     if (stage === "transaction") {
       admit(stage, keys, undefined, undefined, entry);
@@ -287,7 +293,11 @@ export function createIncognitoSessionWorker(
         });
       },
       candidate,
-      (receipt) => ({ ...receipt, guarded: entry.guarded }),
+      (receipt) => ({
+        ...receipt,
+        guarded: entry.guarded,
+        sourceValidation: entry.sourceValidation,
+      }),
     );
   };
   const transcript = createIncognitoTranscriptWorker(
@@ -321,6 +331,11 @@ export function createIncognitoSessionWorker(
       database.db.exec("PRAGMA query_only = OFF");
     }
   };
+  const admitRead = (facts: IncognitoSessionSnapshot["facts"]) =>
+    requestSqliteWorkerOperationAdmission({
+      stage: "prepare",
+      facts: { identity, sessions: facts },
+    });
   return {
     async prepare(command: SqliteWorkerCommand<IncognitoSessionOperations>) {
       if (command.type === "session.turn.prepare" || command.type === "session.turn.commit") {
@@ -368,10 +383,7 @@ export function createIncognitoSessionWorker(
           ];
           keys.forEach(assertKey);
           const facts = keys.flatMap((key) => read(key).facts);
-          requestSqliteWorkerOperationAdmission({
-            stage: "prepare",
-            facts: { identity, sessions: facts },
-          });
+          admitRead(facts);
           return { evidence, facts };
         });
       }
@@ -390,10 +402,7 @@ export function createIncognitoSessionWorker(
           );
           entries.forEach(({ sessionKey }) => assertKey(sessionKey));
           const facts = entries.flatMap(({ sessionKey }) => read(sessionKey).facts);
-          requestSqliteWorkerOperationAdmission({
-            stage: "prepare",
-            facts: { identity, sessions: facts },
-          });
+          admitRead(facts);
           return { entries, facts };
         });
       }
@@ -412,10 +421,7 @@ export function createIncognitoSessionWorker(
           ? execute()
           : readOnly(() => {
               const result = execute();
-              requestSqliteWorkerOperationAdmission({
-                stage: "prepare",
-                facts: { identity, sessions: result.facts },
-              });
+              admitRead(result.facts);
               return result;
             });
       }
@@ -424,10 +430,7 @@ export function createIncognitoSessionWorker(
         assertKey(sessionKey);
         return readOnly(() => {
           const facts = read(sessionKey).facts;
-          requestSqliteWorkerOperationAdmission({
-            stage: "prepare",
-            facts: { identity, sessions: facts },
-          });
+          admitRead(facts);
           return { value: readPendingInput(database, command.input), facts };
         });
       }
@@ -469,10 +472,7 @@ export function createIncognitoSessionWorker(
         return isIncognitoManagerWrite(command.type)
           ? execute()
           : readOnly(() => {
-              requestSqliteWorkerOperationAdmission({
-                stage: "prepare",
-                facts: { identity, sessions: read(command.input.sessionKey).facts },
-              });
+              admitRead(read(command.input.sessionKey).facts);
               return execute();
             });
       }
@@ -512,17 +512,11 @@ export function createIncognitoSessionWorker(
           if (isIncognitoStoreComputeCommand(command)) {
             const result = execute();
             result.facts.forEach((fact) => assertKey(fact.sessionKey));
-            requestSqliteWorkerOperationAdmission({
-              stage: "prepare",
-              facts: { identity, sessions: result.facts },
-            });
+            admitRead(result.facts);
             return result;
           }
           const facts = read(command.input.sessionKey).facts;
-          requestSqliteWorkerOperationAdmission({
-            stage: "prepare",
-            facts: { identity, sessions: facts },
-          });
+          admitRead(facts);
           return execute();
         });
       }
@@ -531,10 +525,7 @@ export function createIncognitoSessionWorker(
         keys.forEach(assertKey);
         return readOnly(() => {
           const facts = keys.flatMap((key) => read(key).facts);
-          requestSqliteWorkerOperationAdmission({
-            stage: "prepare",
-            facts: { identity, sessions: facts },
-          });
+          admitRead(facts);
           const result = history.execute(command, facts);
           if (
             command.type === "session.history.completion-source.open" ||
@@ -577,10 +568,7 @@ export function createIncognitoSessionWorker(
           open: () => database,
           admit(stage, publication) {
             if (command.type === "session.turn.prepare") {
-              requestSqliteWorkerOperationAdmission({
-                stage: "prepare",
-                facts: { identity, sessions: read(sessionKey).facts },
-              });
+              admitRead(read(sessionKey).facts);
             } else {
               entryAdmission(stage, [sessionKey], { guarded: true, publication });
             }

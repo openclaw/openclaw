@@ -1,3 +1,4 @@
+import type { AgentTabIconShape } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import {
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   type ControlUiEnvironment,
@@ -57,13 +58,18 @@ type ControlUiFaviconStatus = "attention" | "working" | "done" | "disconnected" 
 
 let faviconStatus: ControlUiFaviconStatus = "idle";
 let faviconImage: HTMLImageElement | null = null;
+let faviconShape: AgentTabIconShape = "square";
 
 /** Decoded personal artwork is always rasterized here, including when idle. */
-export function applyControlUiFaviconImage(image: HTMLImageElement | null): void {
-  if (faviconImage === image) {
+export function applyControlUiFaviconImage(
+  image: HTMLImageElement | null,
+  shape: AgentTabIconShape = "square",
+): void {
+  if (faviconImage === image && faviconShape === shape) {
     return;
   }
   faviconImage = image;
+  faviconShape = shape;
   // Decoded personal images never enter the cached default-source loader.
   syncControlUiFavicon();
 }
@@ -160,8 +166,9 @@ export function syncControlUiFavicon(): void {
     );
     const image = faviconImage;
     const href = image?.src ?? baseSvg ?? original[0];
-    const type = image ? "image/png" : baseSvg ? "image/svg+xml" : original[1];
-    const signature = JSON.stringify([href, type, color, ring]);
+    const type = image || baseSvg ? "image/svg+xml" : original[1];
+    const shape = image ? faviconShape : "square";
+    const signature = JSON.stringify([href, type, color, ring, shape]);
     const previous = faviconRequests.get(icon);
     if (previous?.signature === signature && previous.image === image) {
       continue;
@@ -172,7 +179,7 @@ export function syncControlUiFavicon(): void {
       restoreFavicon(icon, [href, type]);
       continue;
     }
-    void composeFavicon(href, type, color, ring, image).then(
+    void composeFavicon(href, type, color, ring, image, shape).then(
       (result) => {
         // Asset decoding may finish after idle, a palette change, or a context teardown.
         if (icon.isConnected && faviconRequests.get(icon) === request) {
@@ -228,6 +235,7 @@ async function composeFavicon(
   color: string,
   ring: string,
   image: HTMLImageElement | null,
+  shape: AgentTabIconShape,
 ) {
   const source: FaviconSource = image
     ? { image }
@@ -264,10 +272,18 @@ async function composeFavicon(
   if (!context) {
     throw new Error("Favicon canvas unavailable");
   }
-  const scale = Math.min(32 / source.image.naturalWidth, 32 / source.image.naturalHeight);
+  context.save();
+  if (shape !== "square") {
+    context.beginPath();
+    context.roundRect(0, 0, 32, 32, shape === "circle" ? 16 : 8);
+    context.clip();
+  }
+  const fit = shape === "square" ? Math.min : Math.max;
+  const scale = fit(32 / source.image.naturalWidth, 32 / source.image.naturalHeight);
   const width = source.image.naturalWidth * scale;
   const height = source.image.naturalHeight * scale;
   context.drawImage(source.image, (32 - width) / 2, (32 - height) / 2, width, height);
+  context.restore();
   if (color) {
     context.beginPath();
     context.arc(25.5, 25.5, 5, 0, Math.PI * 2);
@@ -277,5 +293,13 @@ async function composeFavicon(
     context.lineWidth = 2;
     context.stroke();
   }
-  return { href: canvas.toDataURL("image/png"), type: "image/png" };
+  const png = canvas.toDataURL("image/png");
+  if (!image) {
+    return { href: png, type: "image/png" };
+  }
+  // Firefox batches icon candidates and prefers SVG over PNG, even when that
+  // SVG was a default briefly restored before the personal image decoded. Keep
+  // personal artwork SVG-preferred too; only our rasterized bytes are embedded.
+  const svg = `<svg xmlns="${SVG_NAMESPACE}" viewBox="0 0 32 32" width="32" height="32"><image width="32" height="32" href="${png}"/></svg>`;
+  return { href: `data:image/svg+xml,${encodeURIComponent(svg)}`, type: "image/svg+xml" };
 }

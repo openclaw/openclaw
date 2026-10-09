@@ -21,20 +21,18 @@ export function readChildRuntimeViability(params?: {
 }): ChildRuntimeViability {
   const execPath = params?.execPath ?? process.execPath;
   const access = params?.access ?? accessExecutable;
+  let available = true;
   try {
     access(execPath);
-    return { execPath, available: true };
   } catch (error) {
     // Only a removed path matches the Homebrew Cellar failure. Other access
     // errors are not this diagnostic.
-    if (
+    available = !(
       error instanceof Error &&
       (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR"))
-    ) {
-      return { execPath, available: false };
-    }
-    return { execPath, available: true };
+    );
   }
+  return { execPath, available };
 }
 
 /** Operator text for a Gateway whose retained Node binary is gone. */

@@ -50,7 +50,11 @@ import {
 } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import { extractEditorText } from "./session-message-cut-content.js";
-import type { SessionMessageCutIntent } from "./session-message-cut.types.js";
+import type {
+  SessionMessageCutIntent,
+  SessionMessageCutPreconditions,
+  SessionMessageCutResult,
+} from "./session-message-cut.types.js";
 import {
   markSessionTranscriptIndexDirtyInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
@@ -79,11 +83,6 @@ type MessageCut = {
   prefix: TranscriptEvent[];
 };
 
-type SessionTranscriptMutationResult =
-  | SessionMessageCutMutationResult
-  | SessionBranchSwitchMutationResult
-  | { status: "conflict" };
-
 type SessionTranscriptMutationMode = "fork" | "rewind" | "switch";
 type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
 
@@ -102,17 +101,13 @@ export async function forkSessionAtMessage(
 }
 
 /** Gateway-owned source predicates are checked beside the transaction's fresh session row. */
-export async function forkSessionAtMessageWithPreconditions(
-  params: SessionMessageCutMutationParams & { targetKey: string },
+export async function mutateSessionAtMessageWithPreconditions(
+  params: SessionMessageCutMutationParams,
+  mode: SessionTranscriptMutationMode,
   expectedState: SessionEntryExpectedState | undefined,
-  preconditions: { sourceRepositoryWorkspaceId: string },
-): Promise<SessionMessageCutMutationResult | { status: "conflict" }> {
-  return await mutateSqliteSessionAtMessage(
-    params,
-    "fork",
-    expectedState,
-    preconditions.sourceRepositoryWorkspaceId,
-  );
+  preconditions: SessionMessageCutPreconditions,
+): Promise<SessionMessageCutResult> {
+  return mutateSqliteSessionAtMessage(params, mode, expectedState, preconditions);
 }
 
 export async function switchSessionBranch(
@@ -130,20 +125,27 @@ function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "fork" | "rewind",
   expectedState?: SessionEntryExpectedState,
-  sourceRepositoryWorkspaceId?: string,
+  preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionMessageCutMutationResult | { status: "conflict" }>;
 function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "switch",
   expectedState?: SessionEntryExpectedState,
+  preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionBranchSwitchMutationResult | { status: "conflict" }>;
+function mutateSqliteSessionAtMessage(
+  params: SessionMessageCutMutationParams,
+  mode: SessionTranscriptMutationMode,
+  expectedState?: SessionEntryExpectedState,
+  preconditions?: SessionMessageCutPreconditions,
+): Promise<SessionMessageCutResult>;
 
 async function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
-  sourceRepositoryWorkspaceId?: string,
-): Promise<SessionTranscriptMutationResult> {
+  preconditions?: SessionMessageCutPreconditions,
+): Promise<SessionMessageCutResult> {
   const canonicalSourceKey = normalizeStoreSessionKey(params.sessionKey);
   const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
   const targetKey =
@@ -223,7 +225,11 @@ async function mutateSqliteSessionAtMessage(
           current,
           {
             type: "session.lifecycle.messageCut",
-            input: { intent, sourceRepositoryWorkspaceId, ...(mode !== "fork" ? { target } : {}) },
+            input: {
+              intent,
+              sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId,
+              ...(mode !== "fork" ? { target } : {}),
+            },
           },
           undefined,
           settlement
@@ -256,6 +262,7 @@ async function mutateSqliteSessionAtMessage(
               { ...resolved, path: actor.path },
               target,
               mutate,
+              preconditions?.assertUpstreamCurrent,
               actor,
             );
       if (result.status === "created" && projectionNeedsReconcile) {
@@ -300,10 +307,10 @@ async function mutateSqliteSessionAtMessage(
             { ...resolved, env },
             prepared,
             assertCurrent,
-            sourceRepositoryWorkspaceId,
+            preconditions,
           ),
         selection,
-        sourceRepositoryWorkspaceId,
+        preconditions,
       );
     } finally {
       selection?.release();
@@ -336,13 +343,14 @@ async function mutateSqliteSessionAtMessage(
       resolved,
       { ...intent, expectedState: preparedExpectedState },
       assertPreparedCurrent,
-      sourceRepositoryWorkspaceId,
+      preconditions,
     );
   return mode !== "fork" && preparedEntry
     ? await withSqliteSessionContextReset(
         resolved,
         { sessionKey: sourceKey, entry: preparedEntry },
         mutate,
+        preconditions?.assertUpstreamCurrent,
       )
     : await mutate();
 }
@@ -352,8 +360,8 @@ function mutatePreparedSqliteSessionAtMessage(
   resolved: ResolvedSqliteScope,
   intent: SessionMessageCutIntent,
   assertPreparedCurrent?: () => void,
-  sourceRepositoryWorkspaceId?: string,
-): Promise<SessionTranscriptMutationResult> {
+  preconditions?: SessionMessageCutPreconditions,
+): Promise<SessionMessageCutResult> {
   return runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
@@ -362,6 +370,7 @@ function mutatePreparedSqliteSessionAtMessage(
         (database) => {
           assertPreparedCurrent?.();
           params.commitGuard?.();
+          preconditions?.assertUpstreamCurrent?.();
           const identityKeys = uniqueStrings([
             ...collectSessionEntryLookupKeys(intent.sourceKey),
             ...collectSessionEntryLookupKeys(intent.targetKey),
@@ -371,18 +380,20 @@ function mutatePreparedSqliteSessionAtMessage(
             database,
             resolved,
             intent,
-            { sourceRepositoryWorkspaceId },
+            { sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId },
           );
           const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
+          const publishIdentity = prepareSessionIdentityPublication(
+            database,
+            resolved.agentId,
+            previousIdentity,
+            currentIdentity,
+          );
+          preconditions?.assertUpstreamCurrent?.();
           return {
             databasePath: database.path,
             result: mutationResult,
-            publish: prepareSessionIdentityPublication(
-              database,
-              resolved.agentId,
-              previousIdentity,
-              currentIdentity,
-            ),
+            publish: publishIdentity,
           };
         },
         toDatabaseOptions(resolved),
@@ -412,7 +423,7 @@ export function mutateSqliteSessionAtMessageInTransaction(
     onProjectionReconcileNeeded?: () => void;
     sourceRepositoryWorkspaceId?: string;
   },
-): SessionTranscriptMutationResult {
+): SessionMessageCutResult {
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };

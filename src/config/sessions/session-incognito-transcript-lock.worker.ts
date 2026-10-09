@@ -9,12 +9,15 @@ import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.s
 import { assertLockedTranscriptWriteAllowed } from "./session-accessor.sqlite-transcript-write-guard.js";
 import type { IncognitoTranscriptLockOperations } from "./session-incognito-transcript-lock-contract.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
-import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
+import type { RefusedTranscriptOwnerSource } from "./session-transcript-mutation.types.js";
 
 export function executeIncognitoTranscriptLock(
   database: OpenClawAgentDatabase,
   command: SqliteWorkerCommand<IncognitoTranscriptLockOperations>,
   incarnation: string,
+  acceptValidation: (validation: SessionSourceValidation) => void,
 ) {
   const input = command.input;
   const scope = {
@@ -26,18 +29,26 @@ export function executeIncognitoTranscriptLock(
   const version = () => ({
     ...readTranscriptContextVersionInTransaction(database, input.sessionId),
   });
-  const assertOwner = () => {
-    const refusedOwnerSource = readRefusedSessionSource(database, input.ownerSources, incarnation);
+  const assertOwner = ():
+    | RefusedTranscriptOwnerSource
+    | {
+        sourceValidation: SessionSourceValidation;
+      } => {
+    const validation = readSessionSourceValidation(database, input.ownerSources, incarnation);
+    if (command.type === "session.lock.replace") {
+      acceptValidation(validation);
+    }
+    const refusedOwnerSource = validation.refusedSource;
     if (refusedOwnerSource) {
       return { refusedOwnerSource };
     }
     assertLockedTranscriptWriteAllowed(database, scope, { ...scope, ...input.fence });
-    return undefined;
+    return { sourceValidation: validation };
   };
   if (command.type === "session.lock.replace") {
-    const refused = assertOwner();
-    if (refused) {
-      return refused;
+    const owner = assertOwner();
+    if ("refusedOwnerSource" in owner) {
+      return owner;
     }
     if (!isDeepStrictEqual(version(), command.input.expected)) {
       throw new SqliteTranscriptMutationConflictError(input.sessionId);
@@ -46,12 +57,20 @@ export function executeIncognitoTranscriptLock(
     return version();
   }
   return runSqliteDeferredTransactionSync(database.db, () => {
-    const refused = assertOwner();
-    if (refused) {
-      return refused;
+    const owner = assertOwner();
+    if ("refusedOwnerSource" in owner) {
+      return owner;
     }
     return command.type === "session.lock.events"
-      ? { version: version(), events: readTranscriptSnapshot(database, input.sessionId).events }
-      : { version: version(), facts: readTranscriptMirrorFacts(database, scope, command.input) };
+      ? {
+          version: version(),
+          events: readTranscriptSnapshot(database, input.sessionId).events,
+          sourceValidation: owner.sourceValidation,
+        }
+      : {
+          version: version(),
+          facts: readTranscriptMirrorFacts(database, scope, command.input),
+          sourceValidation: owner.sourceValidation,
+        };
   });
 }

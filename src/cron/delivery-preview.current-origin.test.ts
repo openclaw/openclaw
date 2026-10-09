@@ -9,7 +9,6 @@ import {
   resetSessionEntryLifecycle,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -182,45 +181,33 @@ describe("current cron delivery origin", () => {
           { sessionId: "interrupted-source", updatedAt: 1 },
         );
         const { db } = getOpenClawAgentDatabaseIfOpen({ agentId: "interrupted" })!;
-        clearNodeSqliteKyselyCacheForDatabase(db);
-        const prepare = db.prepare.bind(db);
-        const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
-          if (sql.includes('from "session_key_contract"')) {
-            prepareSpy.mockRestore();
-            db.exec("DROP TABLE session_key_contract");
-          }
-          return prepare(sql);
+        db.exec("DROP TABLE session_nodes");
+        const previews = await resolveCronDeliveryPreviews({
+          cfg,
+          jobs: [
+            { ...job, id: "healthy-current" },
+            interrupted,
+            {
+              ...job,
+              id: "healthy-explicit",
+              delivery: { mode: "announce", channel: "telegram", to: "other-recipient" },
+            },
+          ],
         });
-        try {
-          const previews = await resolveCronDeliveryPreviews({
-            cfg,
-            jobs: [
-              { ...job, id: "healthy-current" },
-              interrupted,
-              {
-                ...job,
-                id: "healthy-explicit",
-                delivery: { mode: "announce", channel: "telegram", to: "other-recipient" },
-              },
-            ],
-          });
-          expect(previews).toEqual({
-            "healthy-current": {
-              label: "announce -> telegram:recipient",
-              detail: `resolved from last, session ${job.sessionKey}`,
-            },
-            interrupted: {
-              label: "announce -> last",
-              detail: expect.stringMatching(/^delivery preview unavailable: .*table-missing/u),
-            },
-            "healthy-explicit": {
-              label: "announce -> telegram:other-recipient",
-              detail: "explicit",
-            },
-          });
-        } finally {
-          prepareSpy.mockRestore();
-        }
+        expect(previews).toEqual({
+          "healthy-current": {
+            label: "announce -> telegram:recipient",
+            detail: `resolved from last, session ${job.sessionKey}`,
+          },
+          interrupted: {
+            label: "announce -> last",
+            detail: expect.stringMatching(/^delivery preview unavailable: .*table-missing/u),
+          },
+          "healthy-explicit": {
+            label: "announce -> telegram:other-recipient",
+            detail: "explicit",
+          },
+        });
       },
     );
   });

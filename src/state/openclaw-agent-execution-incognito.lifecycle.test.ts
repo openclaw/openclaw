@@ -35,14 +35,20 @@ import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
 } from "../sessions/session-lifecycle-events.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { beginAgentDeletionJournal, removeAgentDeletionJournal } from "./agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournal,
+  removeAgentDeletionJournal,
+} from "../test-utils/agent-deletion-journal.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import {
   registerIncognitoLifecycleSourceTests,
   registerIncognitoMessageCutTests,
 } from "./openclaw-agent-execution-incognito.lifecycle-facades.test-support.js";
+import {
+  useIncognitoActorProbe,
+  openIncognitoTestActor,
+} from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -56,6 +62,7 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: () => 32,
 }));
 
+const probe = useIncognitoActorProbe();
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
@@ -67,21 +74,8 @@ beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-lifecycle-") };
   const posted = vi.spyOn(Worker.prototype, "postMessage");
   try {
-    const opened = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "main",
-      env,
-      authority,
-    });
-    const loss = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "loss",
-      env,
-      authority,
-    });
-    assert(opened && loss);
-    actor = opened;
-    lossActor = loss;
+    actor = await openIncognitoTestActor(env, authority);
+    lossActor = await openIncognitoTestActor(env, authority, "loss");
     const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "loss", env });
     const index = posted.mock.calls.findIndex(
       ([message]) =>
@@ -207,12 +201,7 @@ it("serializes deletion with appends, preserves siblings, and executes zero call
   const siblingClaim = actor.sessions.captureCurrent(sibling.sessionKey);
   const oldClaim = actor.sessions.captureCurrent(target.sessionKey);
   await withDeletion([target], async (assertCurrent, capture) => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const held = actor.run(authority, async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const { entered, release, held } = probe.hold(actor, authority);
     await entered.promise;
     const sql = observeHostDataSql();
     const order: string[] = [];

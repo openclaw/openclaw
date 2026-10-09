@@ -1,4 +1,5 @@
-import type { SessionSourcePredicateFacts } from "./session-source-authority.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
 import type { TranscriptAppendRefusal } from "./session-transcript-writer-claim-error.js";
 import type { SqliteExpectedSessionTranscriptTurnResult } from "./session-turn.types.js";
 
@@ -8,6 +9,25 @@ export type SessionColdMutationResult = {
   restored: boolean;
   sessionKey?: string;
   turnRebound?: SqliteExpectedSessionTranscriptTurnResult;
-  refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
+  refusedSource?: NonNullable<SessionSourceValidation["refusedSource"]>;
   writerRefusal?: TranscriptAppendRefusal;
+};
+
+export type SessionColdMaintenanceResult = {
+  archivedTranscripts: number;
+  externalizedTranscripts: number;
+};
+
+export type SessionColdBatchOptions = {
+  databaseOptions: OpenClawAgentDatabaseOptions;
+  ownerStorePath: string;
+  beforeMs: number;
+  maxTranscripts: number;
+  maxBytes: number;
+  assertCurrent?: () => void;
+};
+
+export type SessionColdBatchResult = SessionColdMaintenanceResult & {
+  envelopeBytes: number;
+  attemptedTranscripts: number;
 };

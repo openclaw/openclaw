@@ -5,6 +5,7 @@ import { normalizeStoreSessionKey } from "../../../config/sessions/store-entry.j
  * awaiting completion announces so pruning cannot delete needed transcripts.
  */
 import { registerSessionMaintenancePreserveKeysProvider } from "../../../config/sessions/store-maintenance-preserve.js";
+import { runSqliteForeignUse } from "../../../infra/sqlite-foreign-observation.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
@@ -58,8 +59,8 @@ registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
       ? (await import("./subagent-registry.store.sqlite.js"))
           .loadSubagentMaintenanceCandidatesInDatabase
       : undefined;
-    // Only this private, unpinned connection observes the snapshot interval.
-    const version = current?.dataVersion();
+    const certification = current?.createCertification();
+    const initialRefresh = certification?.beginRefresh();
     const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(
       subagentRuns,
       native ? { live: true } : undefined,
@@ -67,39 +68,46 @@ registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
     return {
       capture: () => protectedSubagentSessionKeys(prepared.capture().values()),
       refreshCandidates(sessionKeys: readonly string[]) {
-        const runs = prepared.capture();
-        const keys = protectedSubagentSessionKeys(runs.values());
-        if (!context || !originalIdentity) {
-          return keys;
-        }
-        context.admission.assertCurrent();
-        if (!current) {
-          const identity = readDatabasePathIdentitySync(context.admission.databasePath);
-          if (
-            identity.key !== originalIdentity.key ||
-            identity.birthtime !== originalIdentity.birthtime
-          ) {
-            throw new Error("Session subagent source changed before commit");
+        return runSqliteForeignUse((use) => {
+          const runs = prepared.capture();
+          const keys = protectedSubagentSessionKeys(runs.values());
+          if (!context || !originalIdentity) {
+            return keys;
           }
-        }
-        const observed = current?.dataVersion();
-        if (current && readCandidates && observed !== version) {
-          const candidates = new Set(sessionKeys.map(normalizeStoreSessionKey));
-          // Existing legacy spellings use the same normalized session owner.
-          const indexedKeys = new Set(sessionKeys);
-          for (const run of runs.values()) {
-            if (candidates.has(normalizeStoreSessionKey(run.childSessionKey))) {
-              indexedKeys.add(run.childSessionKey);
+          context.admission.assertCurrent();
+          if (!current) {
+            const identity = readDatabasePathIdentitySync(context.admission.databasePath);
+            if (
+              identity.key !== originalIdentity.key ||
+              identity.birthtime !== originalIdentity.birthtime
+            ) {
+              throw new Error("Session subagent source changed before commit");
             }
           }
-          const refreshed = current.read((database) => readCandidates(database, [...indexedKeys]));
-          if (current.dataVersion() !== observed) {
-            throw new Error("Session subagent facts changed before commit");
+          // First use certifies the worker snapshot on the original probe handle.
+          initialRefresh?.accept(use);
+          if (current && readCandidates && !certification?.isCurrent(use)) {
+            // This subset cannot recertify the full snapshot for a later candidate set.
+            const refresh = current.createCertification().beginRefresh(use);
+            const candidates = new Set(sessionKeys.map(normalizeStoreSessionKey));
+            // Existing legacy spellings use the same normalized session owner.
+            const indexedKeys = new Set(sessionKeys);
+            for (const run of runs.values()) {
+              if (candidates.has(normalizeStoreSessionKey(run.childSessionKey))) {
+                indexedKeys.add(run.childSessionKey);
+              }
+            }
+            const refreshed = current.read((database) =>
+              readCandidates(database, [...indexedKeys]),
+            );
+            if (!refresh.accept()) {
+              throw new Error("Session subagent facts changed before commit");
+            }
+            // Lost protection may over-preserve; newly durable protection must win over a stale resident row.
+            keys.push(...protectedSubagentSessionKeys(refreshed.values()));
           }
-          // Lost protection may over-preserve; newly durable protection must win over a stale resident row.
-          keys.push(...protectedSubagentSessionKeys(refreshed.values()));
-        }
-        return keys;
+          return keys;
+        });
       },
       dispose() {
         prepared.dispose();

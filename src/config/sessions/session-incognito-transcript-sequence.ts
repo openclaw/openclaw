@@ -17,6 +17,7 @@ import {
 import type { IncognitoTranscriptLockOperations } from "./session-incognito-transcript-lock-contract.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
+  acceptSessionSourceValidation,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
@@ -164,6 +165,7 @@ export function withIncognitoTranscriptWriteSequence<T>(
                   if ("refusedOwnerSource" in read) {
                     refuseOwner(read.refusedOwnerSource);
                   }
+                  acceptSessionSourceValidation(ownerSource, read.sourceValidation);
                   authority.assertCurrent();
                   publication = publishTranscriptUpdate(fenced, update);
                 },
@@ -183,6 +185,8 @@ export function withIncognitoTranscriptWriteSequence<T>(
               if ("refusedOwnerSource" in read) {
                 return refuseOwner(read.refusedOwnerSource);
               }
+              acceptSessionSourceValidation(ownerSource, read.sourceValidation);
+              authority.assertCurrent();
               observe(read.version);
               return read.events;
             }),
@@ -199,6 +203,8 @@ export function withIncognitoTranscriptWriteSequence<T>(
               if ("refusedOwnerSource" in read) {
                 return refuseOwner(read.refusedOwnerSource);
               }
+              acceptSessionSourceValidation(ownerSource, read.sourceValidation);
+              authority.assertCurrent();
               observe(read.version);
               return read.facts;
             }),
@@ -217,13 +223,26 @@ export function withIncognitoTranscriptWriteSequence<T>(
                 if ("refusedOwnerSource" in read) {
                   refuseOwner(read.refusedOwnerSource);
                 }
+                acceptSessionSourceValidation(ownerSource, read.sourceValidation);
+                authority.assertCurrent();
                 observe(read.version);
               }
               binding.admissionSignal?.throwIfAborted();
-              const replaced = await actor.sessions.transcript(authority, {
-                type: "session.lock.replace",
-                input: { ...target, events, expected: expected! },
-              });
+              const replaced = await actor.sessions.transcript(
+                authority,
+                {
+                  type: "session.lock.replace",
+                  input: { ...target, events, expected: expected! },
+                },
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                (_refused, validation) => {
+                  acceptSessionSourceValidation(ownerSource, validation);
+                  authority.assertCurrent();
+                },
+              );
               if ("refusedOwnerSource" in replaced) {
                 refuseOwner(replaced.refusedOwnerSource);
               }

@@ -164,25 +164,6 @@ function listProvidersWithTokenMethods(providers: ProviderPlugin[]): ProviderPlu
   return providers.filter((provider) => provider.auth.some((method) => method.kind === "token"));
 }
 
-function mergeSetupProviders(
-  providers: readonly ProviderPlugin[],
-  setupProviders: readonly ProviderPlugin[],
-): ProviderPlugin[] {
-  const setupById = new Map(
-    setupProviders.map((provider) => [normalizeProviderId(provider.id), provider] as const),
-  );
-  const merged = providers.map(
-    (provider) => setupById.get(normalizeProviderId(provider.id)) ?? provider,
-  );
-  const existing = new Set(merged.map((provider) => normalizeProviderId(provider.id)));
-  for (const provider of setupProviders) {
-    if (!existing.has(normalizeProviderId(provider.id))) {
-      merged.push(provider);
-    }
-  }
-  return merged;
-}
-
 function preferSetupAuthProviders(params: {
   providers: readonly ProviderPlugin[];
   config: OpenClawConfig;
@@ -205,7 +186,16 @@ function preferSetupAuthProviders(params: {
     workspaceDir: params.workspaceDir,
     ...(params.ownerPluginId ? { pluginIds: [params.ownerPluginId] } : {}),
   }).providers.map((entry) => entry.provider);
-  return mergeSetupProviders(params.providers, setupProviders);
+  const setupById = new Map(
+    setupProviders.map((provider) => [normalizeProviderId(provider.id), provider] as const),
+  );
+  const existing = new Set(params.providers.map((provider) => normalizeProviderId(provider.id)));
+  return [
+    ...params.providers.map(
+      (provider) => setupById.get(normalizeProviderId(provider.id)) ?? provider,
+    ),
+    ...setupProviders.filter((provider) => !existing.has(normalizeProviderId(provider.id))),
+  ];
 }
 
 async function resolveModelsAuthContext(params?: {

@@ -2,9 +2,12 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assertDirectoryIdentitySync, type DirectoryIdentity } from "@openclaw/fs-safe/advanced";
-import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
 import type { Root } from "./fs-safe.js";
+import {
+  createUpdateCandidatePluginPool,
+  runUpdateCandidatePluginTasks,
+} from "./update-candidate-plugin-tasks.js";
 import { assertUpdateCandidatePluginEntryStat } from "./update-candidate-plugin-tree-links.js";
 import type { UpdateCandidatePluginEntry } from "./update-candidate-plugin-tree-schema.js";
 
@@ -80,27 +83,14 @@ export async function copyUpdateCandidatePluginFiles(
   // while sharing that work across snapshot-owned isolates.
   const pool =
     files.length >= 1024
-      ? await (async () => {
-          const [{ WorkerTaskPool }, { resolveRuntimeProcessEntrypointUrl }] = await Promise.all([
-            import("./worker-task-pool.js"),
-            import("./runtime-process-url.js"),
-          ]);
-          return new WorkerTaskPool<
-            UpdateCandidatePluginFileRequest,
-            UpdateCandidatePluginFileReply
-          >({
-            workerUrl: resolveRuntimeProcessEntrypointUrl("updateCandidateState"),
-            workerClass: "compute",
-            maxPendingTasks: 4,
-            restartOnError: false,
-          });
-        })()
+      ? await createUpdateCandidatePluginPool<
+          UpdateCandidatePluginFileRequest,
+          UpdateCandidatePluginFileReply
+        >()
       : undefined;
   try {
-    const copied = await runTasksWithConcurrency({
-      limit: 4,
-      errorMode: "stop",
-      tasks: files.map((entry) => async () => {
+    await runUpdateCandidatePluginTasks(
+      files.map((entry) => async () => {
         const request = {
           entry,
           privateRoot,
@@ -122,10 +112,7 @@ export async function copyUpdateCandidatePluginFiles(
         }
         params.onProgress?.();
       }),
-    });
-    if (copied.hasError) {
-      throw copied.firstError;
-    }
+    );
   } finally {
     // The task runner drains accepted copies before retirement; snapshot cleanup
     // must wait for both the work and confirmed worker exits.

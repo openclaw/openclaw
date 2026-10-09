@@ -38,6 +38,7 @@ import type {
   IncognitoSessionRead,
   IncognitoSessionOperations,
 } from "./session-incognito-contract.js";
+import type { IncognitoEntryPatchAuthorizer } from "./session-incognito-entry-patch-contract.js";
 import {
   captureIncognitoLifecycleSettlement,
   isIncognitoLifecycleWrite,
@@ -420,7 +421,7 @@ export function createIncognitoSessionFacts(
           signal?: AbortSignal,
           onCommitted?: (value: IncognitoEntryOperations[Key]["output"]) => void,
           onRead?: (value: IncognitoEntryOperations[Key]["output"]) => void,
-          authorizePrepared?: Parameters<typeof incognitoEntryPublication>[1],
+          authorizePrepared?: IncognitoEntryPatchAuthorizer,
           authorizePublication?: (facts: unknown) => void,
         ): Promise<IncognitoEntryOperations[Key]["output"]> =>
           perform(
@@ -463,7 +464,7 @@ export function createIncognitoSessionFacts(
               captureClaim: (sessionKey, facts) => claim(sessionKey, assertBorrowed, facts),
               authorize: (held) => held.authorize(authority, "commit"),
               operation,
-              execute: (command, observeFacts) =>
+              execute: (command, observeFacts, requestSignal) =>
                 perform(
                   authority,
                   command,
@@ -476,7 +477,9 @@ export function createIncognitoSessionFacts(
                     }
                     return result.value;
                   },
-                  signal,
+                  signal && requestSignal
+                    ? AbortSignal.any([signal, requestSignal])
+                    : (requestSignal ?? signal),
                 ),
               cleanup: (command) =>
                 perform(
@@ -634,6 +637,7 @@ export function createIncognitoSessionFacts(
           restrict?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest,
           onCommitted?: (value: IncognitoTranscriptOperations[Key]["output"]) => void,
           onRead?: (value: IncognitoTranscriptOperations[Key]["output"]) => void,
+          authorizePrepared?: IncognitoEntryPatchAuthorizer,
         ): Promise<IncognitoTranscriptOperations[Key]["output"]> =>
           perform(
             authority,
@@ -647,7 +651,7 @@ export function createIncognitoSessionFacts(
             undefined,
             false,
             isIncognitoTranscriptReceiptCommand(command.type)
-              ? incognitoEntryPublication(command.type)
+              ? incognitoEntryPublication(command.type, authorizePrepared)
               : undefined,
             restrict,
             onCommitted ? (result) => onCommitted(result.value) : undefined,

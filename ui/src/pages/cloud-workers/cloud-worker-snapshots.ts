@@ -267,11 +267,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
               : code === "invalid_profile" || code === "profile_not_found"
                 ? t("cloudWorkersPage.snapshots.invalidProfile")
                 : formatUiError(error);
-        if (fromDialog) {
-          this.buildError = message;
-        } else {
-          this.error = message;
-        }
+        this[fromDialog ? "buildError" : "error"] = message;
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {

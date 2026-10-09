@@ -523,7 +523,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     });
     await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.pid}`, busy.path);
     await fs.writeFile(path.join(retired.path, "uncommitted.txt"), "archived work\n");
-    const result = await service.gc({ shouldRemoveOwner: () => true });
+    const result = await service.gc({ readOwnerState: () => "retired" });
     expect(result.removed).toEqual([retired.id]);
     expect(getRegistryWorktree(env, busy.id)?.removedAt).toBeUndefined();
     expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
@@ -542,11 +542,11 @@ describe("ManagedWorktreeService garbage collection", () => {
     const snapshot = await service.remove({ id: removed.id, reason: "test-retention" });
     const snapshotCommit = await git(repo, "rev-parse", snapshot.snapshotRef!);
     const live = await materializeRunOwnedFixture("live-owner", "session", "agent:main:live");
-    const shouldRemoveOwner = vi.fn(() => false);
+    const readOwnerState = vi.fn(() => "idle" as const);
 
-    const result = await service.gc({ shouldRemoveOwner });
+    const result = await service.gc({ readOwnerState });
 
-    expect(shouldRemoveOwner.mock.calls).toEqual([["session", live.ownerId]]);
+    expect(readOwnerState.mock.calls).toEqual([["session", live.ownerId]]);
     expect(result.removed).toEqual([]);
     expect(result.snapshotsPruned).toBe(0);
     expect(getRegistryWorktree(env, removed.id)).toMatchObject({

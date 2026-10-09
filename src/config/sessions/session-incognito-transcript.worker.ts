@@ -43,7 +43,11 @@ import {
   applySessionTranscriptEvent,
   prepareSessionMessageRewrite,
 } from "./session-message-rewrite.worker.js";
-import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
+import type {
+  SessionSourcePredicate,
+  SessionSourceValidation,
+} from "./session-source-authority.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 
 type Command = SqliteWorkerCommand<
@@ -57,12 +61,24 @@ export function createIncognitoTranscriptWorker(
   admit: (
     stage: "transaction" | "commit",
     keys: readonly string[],
-    receipt?: { value: unknown },
+    receipt?: { value?: unknown; sourceValidation?: SessionSourceValidation },
   ) => void,
   incarnation: string,
 ) {
   let keys: string[] = [];
   let recoverValue = false;
+  let sourceValidation: SessionSourceValidation | undefined;
+  const acceptValidation = (validation: SessionSourceValidation) => {
+    sourceValidation = validation;
+    if (!validation.refusedSource && recoverValue) {
+      admit("transaction", keys, { sourceValidation: validation });
+    }
+  };
+  const validateSources = (sources: SessionSourcePredicate[] | undefined) => {
+    const validation = readSessionSourceValidation(database, sources, incarnation);
+    acceptValidation(validation);
+    return validation;
+  };
   const domain = createAgentDatabaseDomainOwner({
     databasePath: database.path,
     assertCurrent: () => database.db,
@@ -85,7 +101,7 @@ export function createIncognitoTranscriptWorker(
         }
         admit("transaction", keys);
         const result = operation();
-        admit("commit", keys, recoverValue ? { value: result } : undefined);
+        admit("commit", keys, recoverValue ? { value: result, sourceValidation } : undefined);
         return result;
       },
       { agentId: database.agentId, path: database.path, env },
@@ -113,6 +129,7 @@ export function createIncognitoTranscriptWorker(
       }
     },
     execute(command: Command) {
+      sourceValidation = undefined;
       if (command.type === "session.keyById.read") {
         const value = readSessionKeyBySessionIdInDatabase(database, command.input.sessionId);
         return { value, keys: value ? [value] : [] };
@@ -150,17 +167,16 @@ export function createIncognitoTranscriptWorker(
             case "session.lock.events":
             case "session.lock.facts":
             case "session.lock.replace": {
-              const run = () => executeIncognitoTranscriptLock(database, command, incarnation);
+              const run = () =>
+                executeIncognitoTranscriptLock(database, command, incarnation, acceptValidation);
               const value = command.type === "session.lock.replace" ? write(run) : run();
               return { value, keys };
             }
             case "session.goal.mutate":
               return reply<"session.goal.mutate">(
                 write(() => {
-                  const refusedOwnerSource = readRefusedSessionSource(
-                    database,
+                  const { refusedSource: refusedOwnerSource } = validateSources(
                     command.input.sources,
-                    incarnation,
                   );
                   if (refusedOwnerSource) {
                     return { refusedOwnerSource };
@@ -169,15 +185,13 @@ export function createIncognitoTranscriptWorker(
                 }),
               );
             case "session.manualCompact.prepare": {
-              const refusedOwnerSource = readRefusedSessionSource(
-                database,
-                command.input.sources,
-                incarnation,
-              );
+              const validation = validateSources(command.input.sources);
+              const refusedOwnerSource = validation.refusedSource;
               if (refusedOwnerSource) {
                 return reply<"session.manualCompact.prepare">({ refusedOwnerSource });
               }
               return reply<"session.manualCompact.prepare">({
+                sourceValidation: validation,
                 rows: readTranscriptEventRows(database, target.sessionId),
                 sessionSnapshot: readSessionEntrySelectionSnapshot(
                   database,
@@ -189,10 +203,8 @@ export function createIncognitoTranscriptWorker(
             case "session.manualCompact.commit":
               return reply<"session.manualCompact.commit">(
                 write(() => {
-                  const refusedOwnerSource = readRefusedSessionSource(
-                    database,
+                  const { refusedSource: refusedOwnerSource } = validateSources(
                     command.input.sources,
-                    incarnation,
                   );
                   if (refusedOwnerSource) {
                     return { refusedOwnerSource };
@@ -255,11 +267,8 @@ export function createIncognitoTranscriptWorker(
                 ),
               );
             case "session.correction.prepare": {
-              const refusedOwnerSource = readRefusedSessionSource(
-                database,
-                command.input.ownerSources,
-                incarnation,
-              );
+              const validation = validateSources(command.input.ownerSources);
+              const refusedOwnerSource = validation.refusedSource;
               if (refusedOwnerSource) {
                 return reply<"session.correction.prepare">({ refusedOwnerSource });
               }
@@ -275,6 +284,7 @@ export function createIncognitoTranscriptWorker(
                 throw new SessionTranscriptWriterClaimReboundError(refusal);
               }
               return reply<"session.correction.prepare">({
+                sourceValidation: validation,
                 rows: readTranscriptEventRows(database, target.sessionId, command.input),
                 version: readTranscriptContextVersionInTransaction(database, target.sessionId),
               });
@@ -282,10 +292,8 @@ export function createIncognitoTranscriptWorker(
             case "session.correction.commit":
               return reply<"session.correction.commit">(
                 write(() => {
-                  const refusedOwnerSource = readRefusedSessionSource(
-                    database,
+                  const { refusedSource: refusedOwnerSource } = validateSources(
                     command.input.ownerSources,
-                    incarnation,
                   );
                   if (refusedOwnerSource) {
                     return { refusedOwnerSource };
@@ -396,7 +404,7 @@ export function createIncognitoTranscriptWorker(
                       },
                     },
                   );
-                  return ok({ append, projectionNeedsReconcile });
+                  return ok({ append: append?.result, projectionNeedsReconcile });
                 }),
               );
             case "session.turn.read": {

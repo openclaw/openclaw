@@ -40,6 +40,7 @@ import {
   projectForwardedMessages,
   toProjectedMessages,
 } from "./chat-display-projection.history.js";
+import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import {
   sanitizeChatHistoryContentBlock,
   sanitizeChatHistoryMessage,
@@ -117,14 +118,7 @@ function projectCurrentUserProfileAvatars(
   if (!resolveDisplay) {
     return messages;
   }
-  const project = createCurrentUserProfileMessageProjector(resolveDisplay);
-  let changed = false;
-  const projected = messages.map((message) => {
-    const row = project(message);
-    changed ||= row !== message;
-    return row;
-  });
-  return changed ? projected : messages;
+  return mapChatDisplayMessages(messages, createCurrentUserProfileMessageProjector(resolveDisplay));
 }
 
 type ChatDisplayProjectionResult = {
@@ -397,12 +391,10 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
 function projectEmptyAssistantErrorMessages(
   messages: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
-  let changed = false;
-  const projected = messages.map((message) => {
+  return mapChatDisplayMessages(messages, (message) => {
     if (message.role !== "assistant" || message.stopReason !== "error") {
       return message;
     }
-    changed = true;
     const hasDisplayableStructuredContent =
       hasAssistantDisplayableNonTextContent(message) || hasTranscriptMediaFacts(message);
     if (hasDisplayableStructuredContent) {
@@ -426,7 +418,6 @@ function projectEmptyAssistantErrorMessages(
     delete next.text;
     return next;
   });
-  return changed ? projected : messages;
 }
 
 type ChatHistoryRecoveryOptions = Pick<

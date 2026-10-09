@@ -7,7 +7,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeLease,
+  PreparedReplyDispatchRuntime,
+} from "../../agents/prepared-model-runtime.types.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import {
   deriveInboundMessageHookContext,
@@ -73,6 +76,7 @@ export async function gatherDispatchRequest(
   params: DispatchFromConfigParams,
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
   allowActiveQueueResolution = false,
+  onRuntimeLease?: (lease: PreparedModelRuntimeLease) => void,
 ) {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const ctx = isFinalizedInboundContext(params.ctx)
@@ -107,7 +111,9 @@ export async function gatherDispatchRequest(
   const state = {
     params: normalizedParams,
     messageAuditTerminal,
-    allowInboundHandlers: replyOperationRunState.heartbeat === undefined,
+    allowInboundHandlers:
+      replyOperationRunState.heartbeat === undefined &&
+      !params.replyOptions?.internalEventExecution,
     get inboundDedupeReplayUnsafe() {
       // Read the recorded input outcome even when source adoption or cleanup fails.
       // Queued followups have not transferred custody to the active run yet.
@@ -441,7 +447,9 @@ export async function gatherDispatchRequest(
         const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
         return await loadPublishedGatewayReplyDispatchRuntime({
           agentId: preparedReplyDispatchAgentId,
+          demand: params.replyOptions?.isHeartbeat ? "scheduled" : "interactive",
           abortSignal: params.replyOptions?.abortSignal,
+          onRuntimeLease,
         });
       },
     );

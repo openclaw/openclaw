@@ -53,6 +53,7 @@ import {
   publishIncognitoSessionEntry,
 } from "./session-incognito-binding.js";
 import {
+  acceptSessionSourceValidation,
   composeSessionSourceAssertion,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
@@ -352,6 +353,11 @@ export async function mutateSessionGoal(
             if (sessionEntry) {
               publishIncognitoSessionEntry(actor, input.sessionKey, previous, sessionEntry);
             }
+          },
+          undefined,
+          (_refused, validation) => {
+            acceptSessionSourceValidation(source, validation);
+            authority.assertCurrent();
           },
         );
         if ("refusedOwnerSource" in committed) {

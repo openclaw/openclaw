@@ -1,6 +1,9 @@
 import type { readTranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
 import type { SessionTranscriptWriteScope, TranscriptEvent } from "./session-accessor.types.js";
-import type { SessionSourcePredicate } from "./session-source-authority.js";
+import type {
+  SessionSourcePredicate,
+  SessionSourceValidation,
+} from "./session-source-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { RefusedTranscriptOwnerSource } from "./session-transcript-mutation.types.js";
 
@@ -17,7 +20,11 @@ export type IncognitoTranscriptLockOperations = {
   "session.lock.events": {
     input: Target;
     output:
-      | { version: SessionTranscriptContextVersion; events: TranscriptEvent[] }
+      | {
+          version: SessionTranscriptContextVersion;
+          events: TranscriptEvent[];
+          sourceValidation: SessionSourceValidation;
+        }
       | RefusedTranscriptOwnerSource;
   };
   "session.lock.facts": {
@@ -26,6 +33,7 @@ export type IncognitoTranscriptLockOperations = {
       | {
           version: SessionTranscriptContextVersion;
           facts: ReturnType<typeof readTranscriptMirrorFacts>;
+          sourceValidation: SessionSourceValidation;
         }
       | RefusedTranscriptOwnerSource;
   };

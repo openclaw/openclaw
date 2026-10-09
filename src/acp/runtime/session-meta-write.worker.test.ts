@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadExactSessionEntry,
@@ -271,6 +272,14 @@ it.each(["incognito", "file"] as const)(
               .db.prepare("SELECT count(*) AS count FROM acp_sessions")
               .get(),
           ).toEqual({ count: 0 });
+          const invalid = { ...scope, sessionKey: `${scope.sessionKey}-uncloneable` };
+          await expect(
+            upsertAcpSessionMeta({
+              ...invalid,
+              mutate: () => ({ ...META, uncloneable: () => undefined }),
+            }),
+          ).rejects.toThrow(/could not be cloned/);
+          expect(loadExactSessionEntry(invalid)?.entry).toBeUndefined();
         }
       },
     );
@@ -354,12 +363,11 @@ it.each([
           (error: unknown) => ({ ok: false as const, error }),
         );
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             reached.promise,
-            outcome.then(() => {
-              throw new Error("ACP update settled before the requested mutation boundary");
-            }),
-          ]);
+            outcome,
+            "ACP update settled before the requested mutation boundary",
+          );
           const next = {
             ...originalEntry,
             sessionId:
@@ -465,12 +473,11 @@ it("does not close a lifecycle that appears after an absent-entry close was prep
         (error: unknown) => ({ ok: false as const, error }),
       );
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           reached.promise,
-          outcome.then(() => {
-            throw new Error("ACP close settled before shared publication");
-          }),
-        ]);
+          outcome,
+          "ACP close settled before shared publication",
+        );
         await replaceSessionEntry(scope, {
           sessionId: "appeared-session",
           lifecycleRevision: "appeared-revision",

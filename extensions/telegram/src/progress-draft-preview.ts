@@ -175,10 +175,7 @@ export function renderTelegramAccountProgressDraftPreview(
   snapshot: ChannelProgressDraftCompositorSnapshot,
   params: { cfg: OpenClawConfig; accountId?: string | null },
 ): TelegramDraftPreview {
-  const accountConfig = resolveTelegramAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).config;
+  const accountConfig = resolveTelegramAccount(params).config;
   const streamMode = resolveTelegramPreviewStreamMode(accountConfig);
   return renderTelegramProgressDraftPreview(snapshot, {
     richMessages: resolveTelegramRichMessages({ ...params, accountConfig }),

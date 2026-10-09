@@ -240,14 +240,6 @@ function isSupportedGoVersion(version: GoVersion): boolean {
   );
 }
 
-function parseAptGoCandidate(output: string): GoVersion | undefined {
-  const match = /Candidate:\s*(?:\d+:)?(\d+)\.(\d+)/.exec(output);
-  if (!match) {
-    return undefined;
-  }
-  return { major: Number(match[1]), minor: Number(match[2]) };
-}
-
 function appendPathDirectory(pathEnv: string | undefined, directory: string): string {
   if ((pathEnv ?? "").split(path.delimiter).includes(directory)) {
     return pathEnv ?? directory;
@@ -324,7 +316,7 @@ async function installGoViaApt(timeoutMs: number): Promise<SkillInstallResult | 
   if (policy.code !== 0) {
     return createInstallFailure({ message: aptFailureMessage, ...policy });
   }
-  const candidate = parseAptGoCandidate(policy.stdout);
+  const candidate = parseGoVersion(/Candidate:\s*(?:\d+:)?(\d+)\.(\d+)/.exec(policy.stdout));
   if (!candidate && update.code !== 0) {
     return createInstallFailure({ message: aptFailureMessage, ...update });
   }
@@ -352,8 +344,7 @@ export type SkillInstallReadiness =
   | { ready: true }
   | { ready: false; reason: SkillInstallSkipReason };
 
-function parseGoVersion(output: string): GoVersion | undefined {
-  const match = /\bgo(\d+)\.(\d+)(?:[.\w-]*)?\b/.exec(output);
+function parseGoVersion(match: RegExpExecArray | null): GoVersion | undefined {
   if (!match) {
     return undefined;
   }
@@ -368,7 +359,7 @@ async function isGoUsableForAutoInstall(): Promise<boolean> {
   if (versionResult.code !== 0) {
     return false;
   }
-  const version = parseGoVersion(versionResult.stdout);
+  const version = parseGoVersion(/\bgo(\d+)\.(\d+)(?:[.\w-]*)?\b/.exec(versionResult.stdout));
   return version !== undefined && isSupportedGoVersion(version);
 }
 

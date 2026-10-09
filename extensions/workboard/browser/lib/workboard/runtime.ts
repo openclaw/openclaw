@@ -99,10 +99,7 @@ export function resetWorkboardConnectionState(host: WorkboardHost) {
     state.loaded = false;
     state.loadAttempted = false;
   }
-  delete runtime.cardsRevision;
-  nextWorkboardLoadGeneration(host);
-  delete runtime.loadPromise;
-  delete runtime.loadToken;
+  invalidateWorkboardLoads(host);
 }
 
 function createDefaultState(): WorkboardUiState {

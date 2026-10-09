@@ -305,11 +305,6 @@ select {
   white-space: nowrap;
 }
 
-.badge-idle {
-  background: var(--bg-elevated);
-  color: var(--text-tertiary);
-}
-
 .badge-running {
   background: var(--warning-soft);
   color: var(--warning-text);
@@ -327,6 +322,7 @@ select {
   color: var(--danger-text);
 }
 
+.badge-idle,
 .badge-pending,
 .badge-skip {
   background: var(--bg-elevated);

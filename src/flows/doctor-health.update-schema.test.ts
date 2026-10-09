@@ -81,6 +81,99 @@ describe("Doctor schema bumps under an updating parent", () => {
   });
 
   it.each([
+    "orphan",
+    "other foreign key",
+    "orphan and other foreign key",
+    "orphan with other foreign key",
+  ] as const)(
+    "repairs only orphan windows before backing up a shared-state upgrade (%s)",
+    async (damage) => {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "0");
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const shared = openOpenClawStateDatabase({ env: state.env }).path;
+        const agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        setSchemaVersion(shared, 19);
+        {
+          using db = new DatabaseSync(shared);
+          db.exec("ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state");
+        }
+        const readRows = (db: DatabaseSync) => ({
+          nodes: db.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
+          windows: db.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
+          events: db.prepare("SELECT * FROM transcript_events ORDER BY session_id, seq").all(),
+        });
+        let original: ReturnType<typeof readRows>;
+        {
+          using db = new DatabaseSync(agent);
+          db.exec(`PRAGMA foreign_keys = OFF;
+            INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at)
+            VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained","updatedAt":1}', 1);
+            INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
+            VALUES ('retained', 'agent:main:retained', 1, 1);
+            INSERT INTO transcript_events(session_id, seq, event_json, created_at)
+            VALUES ('retained', 0, '{"type":"message","message":{"role":"user","content":"keep"}}', 1);`);
+          if (damage.includes("orphan")) {
+            db.exec(`INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
+              VALUES ('orphan', 'agent:main:missing', 1, 1)`);
+          }
+          if (damage.includes("other")) {
+            db.prepare(
+              "UPDATE session_windows SET primary_conversation_id = 'missing' WHERE session_id = ?",
+            ).run(damage === "orphan with other foreign key" ? "orphan" : "retained");
+          }
+          original = readRows(db);
+        }
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const doctor = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+        if (damage === "orphan") {
+          await doctor;
+          expect(readDatabase(shared).version).toBe(20);
+          const migrationBackup = fs
+            .readdirSync(path.dirname(shared))
+            .find(
+              (name) =>
+                name.startsWith("openclaw.sqlite.pre-startup-migration-") && name.endsWith(".bak"),
+            );
+          expect(migrationBackup).toBeDefined();
+          expect(readDatabase(path.join(path.dirname(shared), migrationBackup!)).version).toBe(19);
+          expect(mocks.runContributions).toHaveBeenCalledOnce();
+          expect(runtime.log).toHaveBeenCalledWith(
+            expect.stringContaining("Removed 1 orphan session window(s)"),
+          );
+        } else {
+          await expect(doctor).rejects.toThrow(
+            /foreign_key_check.*Stop the Gateway.*doctor --fix.*restart/s,
+          );
+          expect(readDatabase(shared).version).toBe(19);
+          expect(mocks.runContributions).not.toHaveBeenCalled();
+        }
+        using db = new DatabaseSync(agent, { readOnly: true });
+        expect(readRows(db)).toEqual(
+          damage === "orphan"
+            ? {
+                ...original,
+                windows: original.windows.filter((row) => row.session_id !== "orphan"),
+              }
+            : original,
+        );
+        const backups = fs
+          .readdirSync(path.dirname(agent))
+          .filter((name) => name.startsWith("openclaw-session-window-recovery-"));
+        expect(backups).toHaveLength(damage.includes("orphan") ? 1 : 0);
+        if (backups[0]) {
+          using saved = new DatabaseSync(
+            path.join(path.dirname(agent), backups[0], "database.sqlite"),
+            { readOnly: true },
+          );
+          expect(readRows(saved)).toEqual(original);
+        }
+      });
+    },
+  );
+
+  it.each([
     { kind: "state", updaterVersion: "2026.9.2", missingMetadata: true },
     { kind: "agent", updaterVersion: "2026.9.2", missingMetadata: false },
     { kind: "agent", updaterVersion: "2026.9.2-rebuild.1", missingMetadata: false },

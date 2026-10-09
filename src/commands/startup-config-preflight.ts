@@ -7,7 +7,6 @@ import { recordStartupMigrationWarnings } from "../infra/state-migrations.messag
 import { RetiredStateFormatError } from "../infra/state-migrations.retired-files.js";
 import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
-import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import {
   assertPreflightConfigUnchanged,
   readAdmittedConfigSnapshot,
@@ -48,11 +47,8 @@ export async function runStartupConfigPreflight(
 }
 
 function readStartupStateWarnings(env: NodeJS.ProcessEnv): string[] {
-  let warnings: string[] = [];
+  const warnings: string[] = [];
   try {
-    warnings = listAgentDatabaseAdmissionRefusals({ env }).map(
-      (refusal) => `${refusal.reason}\n${refusal.repairHint}`,
-    );
     assertNoRetiredRuntimeStateFiles(resolveStateDir(env), env);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

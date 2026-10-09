@@ -5,7 +5,10 @@ import {
   type IncognitoSessionBinding,
 } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
-import type { PreparedSessionSourceAuthority } from "./session-source-authority.js";
+import {
+  acceptSessionSourceValidation,
+  type PreparedSessionSourceAuthority,
+} from "./session-source-authority.js";
 import type { RefusedTranscriptOwnerSource } from "./session-transcript-mutation.types.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import type { SessionEntry } from "./types.js";
@@ -57,10 +60,13 @@ export function trimIncognitoTranscript(
       },
       admissionSignal,
     );
-    authority.assertCurrent();
     if ("refusedOwnerSource" in prepared) {
       return refuse(prepared);
     }
+    if (options.preparation?.source) {
+      acceptSessionSourceValidation(options.preparation.source, prepared.sourceValidation);
+    }
+    authority.assertCurrent();
     options.preparation?.assertEntryCurrent(prepared.sessionSnapshot[0]?.entry);
     const retainedLines = selectRetainedLines(prepared.rows.map((row) => row.eventJson));
     if (!retainedLines) {
@@ -92,6 +98,14 @@ export function trimIncognitoTranscript(
           previous.get(target.sessionKey),
           current.get(target.sessionKey),
         );
+      },
+      undefined,
+      (_refused, validation) => {
+        if (options.preparation?.source) {
+          acceptSessionSourceValidation(options.preparation.source, validation);
+        }
+        authority.assertCurrent();
+        authority.authorize();
       },
     );
     if ("refusedOwnerSource" in result) {

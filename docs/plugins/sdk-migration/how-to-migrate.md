@@ -185,6 +185,39 @@ The synchronous fingerprint, projection, binding, and injection methods are depr
 SDK major and explicit breaking-release approval. No runtime warning, schema
 change, retention change, or update migration is introduced.
 
+## Prepare session catalog identities
+
+Use `await prepareSessionCatalogSourceActorProjector({ pluginId, sourceDomain, actors })`
+from `openclaw/plugin-sdk/session-transcript-runtime` before projecting a source catalog page.
+The returned synchronous projector reads only the prepared profile and verified GitHub facts.
+For receiver attribution, use `await prepareSessionCatalogGitHubLinker({ participants, owners })`,
+passing the page's participants and configured owner references. Its synchronous
+`linkParticipant` and `resolveOwner` methods retain every verified GitHub account and
+login, while source exports use only the person's primary account.
+If multiple hosts prepare concurrently, retain each linker's `assertCurrent` and
+invoke it before publishing a completed host or the aggregate result.
+Recheck each host's snapshot lifecycle at the same publication boundary, including
+hosts that do not link profile identities.
+
+Prepare again for each page after transport work, then project and disclose without another
+await. Profile changes during preparation reject the page; identity claims never grant access.
+Foreign commits after the identity read do not rewrite that page's attribution snapshot;
+the next unpinned page reads fresh facts. This snapshot never replaces a permission check.
+Recheck the source's current sharing policy before disclosure. The existing
+`runtime.agent.session.listSessionEntries` accepts optional `sessionKeys` to restrict
+this final read to exact persisted keys while preserving canonical listing validation.
+Selected reads include derived participants and counts by default. Guards that consume only
+sharing metadata can pass `includeParticipants: false` to skip that hydration; canonical
+validation remains enabled in both read-only and writable listings.
+Its optional `captureSource(assertCurrent)` callback captures the admitted physical store;
+invoke the supplied assertion after preparation and before the final sharing read to reject
+replacement at the same path, even when session IDs were reused.
+
+The released synchronous `createSessionCatalogSourceActorProjector` and
+`createSessionCatalogGitHubLinker` signatures remain available for existing plugins;
+bundled Session Share uses the awaited helpers. Schemas, stored data, retention,
+permissions, and update behavior are unchanged.
+
 ## Await session upstream links
 
 Use `upsertSessionUpstreamLinkAsync` and `deleteSessionUpstreamLinkAsync` from

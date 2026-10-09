@@ -31,6 +31,7 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { languageLabel, renderLanguageSelect } from "./language-select.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { renderSessionObserverSettings } from "./session-observer-settings.ts";
+import { renderSettingsSectionHeader } from "./settings-section-header.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import type { ConfigProps } from "./view-types.ts";
 
@@ -55,9 +56,7 @@ export function renderLanguageSection(props: ConfigProps) {
   const provenance = serverUiPrefProvenanceHint(props.localeProvenance);
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.language} class="settings-section">
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${t("quickSettings.language")}</h2>
-      </div>
+      ${renderSettingsSectionHeader(t("quickSettings.language"))}
       <div class="settings-group">
         ${renderSettingsRow({
           title: t("quickSettings.language"),
@@ -191,9 +190,7 @@ export function renderChatPreferencesSection(props: ConfigProps) {
   );
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.chat} class="settings-section">
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${t("configView.chatPrefs.title")}</h2>
-      </div>
+      ${renderSettingsSectionHeader(t("configView.chatPrefs.title"))}
       <div class="settings-group">
         ${renderSettingsRow({
           title: t("configView.chatPrefs.messageWidth"),
@@ -351,9 +348,7 @@ export function renderLobsterPetSection(props: ConfigProps) {
   const seenCount = LOBSTER_PET_PALETTES.filter((palette) => dexEntries.has(palette.id)).length;
   return html`
     <section class="settings-section">
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${t("quickSettings.appearance.lobsterdex")}</h2>
-      </div>
+      ${renderSettingsSectionHeader(t("quickSettings.appearance.lobsterdex"))}
       <div class="settings-group">
         ${renderSettingsToggleRow({
           title: t("quickSettings.appearance.lobsterVisits"),
@@ -478,9 +473,7 @@ export function renderSidebarPreferencesSection(props: ConfigProps) {
   );
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${t("configView.sidebarPrefs.title")}</h2>
-      </div>
+      ${renderSettingsSectionHeader(t("configView.sidebarPrefs.title"))}
       <p class="settings-section__desc">${t("configView.sidebarPrefs.hint")}</p>
       <div class="settings-group">
         ${renderSettingsToggleRow({

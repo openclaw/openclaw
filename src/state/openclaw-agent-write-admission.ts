@@ -6,27 +6,14 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { getChildLogger } from "../logging/logger.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   isActiveStoreWriter,
   runQueuedStoreWrite,
-  type StoreWriterQueue,
   type StoreWriterTiming,
 } from "../shared/store-writer-queue.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-
-// Native and SDK module graphs share the same queue and worker reservation.
-// A second queue would admit a foreground writer while reclamation owns SQLite.
-const admission = resolveGlobalSingleton(
-  Symbol.for("openclaw.agentDatabaseWriteAdmission"),
-  () => ({
-    queues: new Map<string, StoreWriterQueue>(),
-    workers: new Map<string, object>(),
-  }),
-);
-
-export const SQLITE_SESSION_WRITER_QUEUES = admission.queues;
+import { agentDatabaseWriteAdmissionState as admission } from "./openclaw-agent-write-admission-state.js";
 
 function observeWriteAdmission<T>(
   operation: "direct" | "worker" | "ordered-read",
@@ -170,7 +157,9 @@ export async function runOpenClawAgentWriteAdmissions<T>(
   options: readonly OpenClawAgentDatabaseOptions[],
   run: () => Promise<T> | T,
   reentrant = false,
+  signal?: AbortSignal,
 ): Promise<T> {
+  signal?.throwIfAborted();
   const selected = new Map(
     options.map((option) => [resolveOpenClawAgentSqlitePath(option), option]),
   );
@@ -201,6 +190,7 @@ export async function runOpenClawAgentWriteAdmissions<T>(
             () => acquire(index + 1),
             true,
             timing,
+            signal,
           ),
         );
   };

@@ -7,6 +7,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
 import { registerSessionStateWatch } from "../../../sessions/session-state-events.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
@@ -100,36 +101,31 @@ describe("requester settle watch admission", () => {
       const watchTarget = "agent:main:dashboard:settle-watch-target";
       deliver.mockImplementation(
         async (params: Parameters<typeof sendSubagentAnnounceDirectly>[0]) => {
-          const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
           const interception =
             peer || sameStoreHandoff
-              ? vi
-                  .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-                  .mockImplementation((admit, attachment) =>
-                    createAdmission((request, grant) => {
-                      if (
-                        request.stage === "commit" &&
-                        !witnessed &&
-                        request.facts !== null &&
-                        typeof request.facts === "object" &&
-                        "kind" in request.facts &&
-                        request.facts.kind === "session-entry-current"
-                      ) {
-                        witnessed = true;
-                        if (peer) {
-                          // Independent native writer changes the requester after the worker's read.
-                          peer
-                            .prepare(
-                              "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', ?) WHERE session_key = ?",
-                            )
-                            .run("replaced-requester-revision", REQUESTER_KEY);
-                        } else {
-                          publishSystemEventStoreResolver(() => storePath);
-                        }
-                      }
-                      admit(request, grant);
-                    }, attachment),
-                  )
+              ? probe.admission(workerAdmission, (request, grant, admit) => {
+                  if (
+                    request.stage === "commit" &&
+                    !witnessed &&
+                    request.facts !== null &&
+                    typeof request.facts === "object" &&
+                    "kind" in request.facts &&
+                    request.facts.kind === "session-entry-current"
+                  ) {
+                    witnessed = true;
+                    if (peer) {
+                      // Independent native writer changes the requester after the worker's read.
+                      peer
+                        .prepare(
+                          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', ?) WHERE session_key = ?",
+                        )
+                        .run("replaced-requester-revision", REQUESTER_KEY);
+                    } else {
+                      publishSystemEventStoreResolver(() => storePath);
+                    }
+                  }
+                  admit(request, grant);
+                })
               : undefined;
           const caller = createAdmittedGatewayToolCallerIdentity({
             admittedRunContext,

@@ -12,6 +12,7 @@ import {
   type IncognitoSessionActor,
 } from "../config/sessions/session-incognito-actor.js";
 import type { IncognitoSessionRunner } from "../config/sessions/session-incognito-admission.js";
+import type { IncognitoSessionOperations } from "../config/sessions/session-incognito-contract.js";
 import { forkIncognitoSessionFromParent } from "../config/sessions/session-incognito-lifecycle.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -44,27 +45,15 @@ import type {
   AgentDatabaseIncognitoAuthority,
   AgentDatabaseIncognitoIdentity,
   AgentDatabaseIncognitoOpen,
-  AgentDatabaseIncognitoOperations,
 } from "./openclaw-agent-execution-contract.js";
 import { createIncognitoAbsenceScopes } from "./openclaw-agent-execution-incognito-absence.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-cache.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 
-type Store = SqliteWorkerStore<AgentDatabaseIncognitoOperations>;
+type Store = SqliteWorkerStore<IncognitoSessionOperations>;
 export type IncognitoAgentDatabaseExecution = IncognitoSessionActor & {
   readonly acp: IncognitoAcpSessionAccess;
-  /** Retains the actor across preparation/publication, independently of its writer turn. */
-  run<T>(
-    authority: AgentDatabaseIncognitoAuthority,
-    operation: (
-      scope: Pick<
-        SqliteWorkerStore<Pick<AgentDatabaseIncognitoOperations, "database.incognito.memory">>,
-        "execute"
-      >,
-    ) => Promise<T>,
-    signal?: AbortSignal,
-  ): Promise<T>;
   /** Release this borrow, without idle eviction of the memory database. */
   release(): Promise<void>;
   /** End the whole agent's incognito database, joining accepted work and native cleanup. */
@@ -205,7 +194,7 @@ function createIncognitoAgentExecutionOwner(
         signal?.throwIfAborted();
         assertIncognitoAgentDatabasePathAvailable(options.path);
         const opened =
-          await openEphemeralAgentDatabaseSqliteWorkerStore<AgentDatabaseIncognitoOperations>(
+          await openEphemeralAgentDatabaseSqliteWorkerStore<IncognitoSessionOperations>(
             {
               moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
               databasePath: options.path,
@@ -418,6 +407,7 @@ function createIncognitoAgentExecutionOwner(
               path: params.databasePath ? path.resolve(params.databasePath) : undefined,
             });
             const readInput = {
+              signal: params.signal,
               cfg: captureRuntimeConfigWithSource(params.cfg, params.cfg),
               sessionKey: params.sessionKey,
               env,
@@ -437,6 +427,7 @@ function createIncognitoAgentExecutionOwner(
             return execution.sessions.withSharedState(async () => {
               const { prepareIncognitoAcpSessionEntryRead } =
                 await import("../acp/runtime/session-meta-worker-mutation.js");
+              readInput.signal?.throwIfAborted();
               assertReadCurrent();
               return prepareIncognitoAcpSessionEntryRead({
                 ...readInput,
@@ -477,8 +468,6 @@ function createIncognitoAgentExecutionOwner(
         },
         assertCurrent: assertBorrowed,
         assertReadable: assertReferenceCurrent,
-        run: (currentAuthority, operation, operationSignal) =>
-          run(currentAuthority, operation, operationSignal),
         release() {
           released = true;
           releasing ??= drain(borrowedWork);

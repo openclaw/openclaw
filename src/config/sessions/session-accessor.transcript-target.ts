@@ -11,6 +11,7 @@ import { resolveSessionEntrySelection } from "./session-accessor.entry.js";
 import { readSessionKeyBySessionIdInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { resolveSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
 import {
+  resolveSqliteSessionKey,
   resolveSqliteTranscriptScope,
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
@@ -71,7 +72,12 @@ export async function resolveSessionTranscriptRuntimeTarget(
       { assertCurrent: () => incognito.actor.assertReadable() },
       {
         type: "session.runtimeTarget.read",
-        input: { sessionKey: bound.sessionKey, sessionId: bound.sessionId, fence: {}, ...options },
+        input: {
+          sessionKey: resolveSqliteSessionKey(bound.sessionKey, agentId),
+          sessionId: bound.sessionId,
+          fence: {},
+          ...options,
+        },
       },
       incognito.admissionSignal,
     );

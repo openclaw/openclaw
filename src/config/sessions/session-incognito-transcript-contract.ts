@@ -26,7 +26,10 @@ import {
   type IncognitoManagerOperations,
 } from "./session-incognito-manager-contract.js";
 import type { IncognitoTranscriptLockOperations } from "./session-incognito-transcript-lock-contract.js";
-import type { SessionSourcePredicate } from "./session-source-authority.js";
+import type {
+  SessionSourcePredicate,
+  SessionSourceValidation,
+} from "./session-source-authority.js";
 import type {
   RefusedTranscriptOwnerSource,
   ManualTranscriptCompactPreparation,
@@ -67,7 +70,9 @@ export type IncognitoTranscriptOperations = IncognitoManagerOperations &
     };
     "session.manualCompact.prepare": {
       input: IncognitoTranscriptTarget & { sources: SessionSourcePredicate[] };
-      output: ManualTranscriptCompactPreparation | RefusedTranscriptOwnerSource;
+      output:
+        | (ManualTranscriptCompactPreparation & { sourceValidation: SessionSourceValidation })
+        | RefusedTranscriptOwnerSource;
     };
     "session.manualCompact.commit": {
       input: IncognitoTranscriptTarget & {
@@ -120,6 +125,7 @@ export type IncognitoTranscriptOperations = IncognitoManagerOperations &
         | {
             rows: Array<{ seq: number; eventJson: string }>;
             version: SessionTranscriptContextVersion;
+            sourceValidation: SessionSourceValidation;
           }
         | RefusedTranscriptOwnerSource;
     };
@@ -215,7 +221,7 @@ export function isIncognitoTranscriptWrite(type: keyof IncognitoTranscriptOperat
 }
 
 export function isIncognitoTranscriptReceiptCommand(
-  type: keyof IncognitoTranscriptOperations,
+  type: string,
 ): type is
   | "session.lock.replace"
   | "session.goal.mutate"

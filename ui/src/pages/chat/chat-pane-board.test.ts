@@ -70,7 +70,7 @@ type TestChatPane = HTMLElement & {
   readonly conversationPresented: boolean;
   presentedChanged: (presented: boolean) => void;
   sessionKey: string;
-  resetConfirmationOpen: boolean;
+  resetConfirmation: object | undefined;
   routeFace: "chat" | "dashboard";
   dashboardExpanded: boolean;
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
@@ -487,7 +487,7 @@ describe("chat pane board shell", () => {
     const pending = pane.createSession();
     await Promise.resolve();
 
-    expect(pane.resetConfirmationOpen).toBe(true);
+    expect(Boolean(pane.resetConfirmation)).toBe(true);
     expect(sessions.create).not.toHaveBeenCalled();
     pane.settleResetConfirmation(false);
     await expect(pending).resolves.toBe(false);
@@ -585,7 +585,7 @@ describe("chat pane board shell", () => {
     pane.updated();
 
     await expect(pending).resolves.toBe(false);
-    expect(pane.resetConfirmationOpen).toBe(false);
+    expect(Boolean(pane.resetConfirmation)).toBe(false);
     expect(sessions.create).not.toHaveBeenCalled();
     expect(sessions.reset).not.toHaveBeenCalled();
   });
@@ -601,7 +601,7 @@ describe("chat pane board shell", () => {
     const second = pane.confirmConversationReset();
 
     await expect(first).resolves.toBe(false);
-    expect(pane.resetConfirmationOpen).toBe(true);
+    expect(Boolean(pane.resetConfirmation)).toBe(true);
     pane.settleResetConfirmation(true);
     await expect(second).resolves.toBe(true);
   });
@@ -621,11 +621,11 @@ describe("chat pane board shell", () => {
       await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
       const pending = pane.confirmConversationReset();
       pane.updated();
-      expect(pane.resetConfirmationOpen).toBe(true);
+      expect(Boolean(pane.resetConfirmation)).toBe(true);
       pane.state.assistantAgentId = "main";
       pane.updated();
       await expect(pending).resolves.toBe(false);
-      expect(pane.resetConfirmationOpen).toBe(false);
+      expect(Boolean(pane.resetConfirmation)).toBe(false);
     } finally {
       pane.settleResetConfirmation(false);
       (Reflect.get(pane, "releaseBoardProviderLease") as () => void).call(pane);
@@ -637,7 +637,7 @@ describe("chat pane board shell", () => {
     pane.boardProvider = boardProviderForSession({ sessionKey: "agent:main:current" });
 
     await expect(pane.confirmConversationReset()).resolves.toBe(true);
-    expect(pane.resetConfirmationOpen).toBe(false);
+    expect(Boolean(pane.resetConfirmation)).toBe(false);
   });
 
   it("maps transient Board presentation commands onto the dashboard panel", () => {

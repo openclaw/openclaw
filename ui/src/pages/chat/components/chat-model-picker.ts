@@ -11,6 +11,7 @@ import {
 } from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
+import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import {
@@ -88,6 +89,18 @@ function closeModelPickerAfterSelection(event: MouseEvent) {
   }
 }
 
+function renderModelList(label: string, content: unknown, more = false) {
+  return html`<div
+    class="chat-controls__provider-model-list"
+    data-chat-model-list="true"
+    data-chat-model-more=${more ? "" : nothing}
+    role="listbox"
+    aria-label=${label}
+  >
+    ${content}
+  </div>`;
+}
+
 export function renderChatModelPicker(params: ChatModelPickerParams) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
   const activeModelOption = params.modelOptions.find((option) =>
@@ -131,31 +144,40 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           className: "chat-controls__trigger-provider-icon",
         })
       : nothing;
+  // A model reachable only through Claude CLI (an Anthropic ref pinned to that runtime)
+  // belongs to the Claude CLI group, not to an Anthropic API group the user may not have.
+  const groupProvider = (option: ChatModelPickerOption) =>
+    resolveModelRuntimeRoute(option.provider, option.agentRuntimeId) === "claudeCli"
+      ? "claude-cli"
+      : option.provider;
   // Default restores inheritance; it stays ahead of ranked model choices. When a
   // provider recommends models, they follow, and the rest collapse under "All models".
   const recommendingProviders = new Set(
-    params.modelOptions.filter((option) => option.recommended).map((option) => option.provider),
+    params.modelOptions.filter((option) => option.recommended).map(groupProvider),
   );
   const providerGroups = new Map<
     string,
     { lead: ChatModelPickerOption[]; more: ChatModelPickerOption[] }
   >();
   for (const option of params.modelOptions) {
-    const group = providerGroups.get(option.provider) ?? { lead: [], more: [] };
+    const provider = groupProvider(option);
+    const group = providerGroups.get(provider) ?? { lead: [], more: [] };
     if (option.isDefault) {
       group.lead.unshift(option);
     } else if (option === leadingModelOption) {
       group.lead.splice(group.lead[0]?.isDefault ? 1 : 0, 0, option);
-    } else if (option.recommended || !recommendingProviders.has(option.provider)) {
+    } else if (option.recommended || !recommendingProviders.has(provider)) {
       group.lead.push(option);
     } else {
       group.more.push(option);
     }
-    providerGroups.set(option.provider, group);
+    providerGroups.set(provider, group);
   }
   const orderedProviderGroups = [...providerGroups];
+  const leadingProvider = leadingModelOption && groupProvider(leadingModelOption);
+  const activeProvider = activeModelOption && groupProvider(activeModelOption);
   const selectedProviderIndex = orderedProviderGroups.findIndex(
-    ([provider]) => provider === leadingModelOption?.provider,
+    ([provider]) => provider === leadingProvider,
   );
   if (selectedProviderIndex > 0) {
     orderedProviderGroups.unshift(...orderedProviderGroups.splice(selectedProviderIndex, 1));
@@ -389,7 +411,10 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                 const groupLabel = t("chat.modelControls.providerModels", {
                                   provider: providerLabel,
                                 });
-                                const auth = params.providerAuth?.get(provider);
+                                // Auth labels are keyed by the canonical auth provider (Claude CLI → Anthropic).
+                                const auth = params.providerAuth?.get(
+                                  canonicalModelAuthProviderId(provider),
+                                );
                                 const showAuth =
                                   auth &&
                                   !(
@@ -424,7 +449,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                         type="button"
                                         data-chat-model-group-toggle
                                         data-chat-model-provider-toggle
-                                        aria-expanded=${String(provider === activeModelOption?.provider)}
+                                        aria-expanded=${String(provider === activeProvider)}
                                         aria-label=${`${groupLabel} (${options.length})`}
                                         aria-description=${routeDetail ?? nothing}
                                         ?disabled=${params.disabled}
@@ -459,14 +484,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                           : nothing
                                       }
                                     </div>
-                                    <div
-                                      class="chat-controls__provider-model-list"
-                                      data-chat-model-list="true"
-                                      role="listbox"
-                                      aria-label=${groupLabel}
-                                    >
-                                      ${repeat(lead, modelPickerOptionKey, renderModelOption)}
-                                    </div>
+                                    ${renderModelList(groupLabel, repeat(lead, modelPickerOptionKey, renderModelOption))}
                                     ${
                                       more.length > 0
                                         ? html`
@@ -483,7 +501,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                                 class="chat-controls__model-option-provider"
                                                 aria-hidden="true"
                                               ></span>
-                                              <span class="chat-controls__model-more-label"
+                                              <span
                                                 >${t("chat.modelControls.allModels", {
                                                   count: String(more.length),
                                                 })}</span
@@ -494,15 +512,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                                 >${icons.chevronDown}</span
                                               >
                                             </button>
-                                            <div
-                                              class="chat-controls__provider-model-list"
-                                              data-chat-model-list="true"
-                                              data-chat-model-more
-                                              role="listbox"
-                                              aria-label=${groupLabel}
-                                            >
-                                              ${repeat(more, modelPickerOptionKey, renderModelOption)}
-                                            </div>
+                                            ${renderModelList(groupLabel, repeat(more, modelPickerOptionKey, renderModelOption), true)}
                                           `
                                         : nothing
                                     }
@@ -545,13 +555,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                             : undefined,
                                         )
                                   }
-                                  <div
-                                    class="chat-controls__provider-model-list"
-                                    data-chat-model-list="true"
-                                    role="listbox"
-                                    aria-label=${group.label}
-                                  >
-                                    ${repeat(
+                                  ${renderModelList(
+                                    group.label,
+                                    repeat(
                                       group.options,
                                       (entry) => entry.value,
                                       (entry, targetIndex) =>
@@ -563,8 +569,8 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                           index: orderedOptions.length + targetIndex,
                                           onSelect: selectTarget,
                                         }),
-                                    )}
-                                  </div>
+                                    ),
+                                  )}
                                 </section>
                               `,
                             )}

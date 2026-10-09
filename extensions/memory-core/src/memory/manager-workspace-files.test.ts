@@ -18,6 +18,7 @@ import {
   listWorkspaceMemoryFiles,
   readWorkspaceText,
 } from "../memory-workspace-files.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -181,7 +182,15 @@ describe("Gateway index over Harness workspace files", () => {
     await expect(manager.readFile({ relPath: "memory/notes.md" })).rejects.toMatchObject({
       code: "WORKSPACE_ACCESS_UNAVAILABLE",
     });
-    expect((await getMemorySearchManager({ cfg, agentId: "main" })).manager).not.toBeNull();
+    expect(
+      (
+        await getMemorySearchManager({
+          runInBackgroundContext: runInMemoryTestBackgroundContext,
+          cfg,
+          agentId: "main",
+        })
+      ).manager,
+    ).not.toBeNull();
   });
 
   it("drains host edits arriving during indexing into the next watch generation", async () => {

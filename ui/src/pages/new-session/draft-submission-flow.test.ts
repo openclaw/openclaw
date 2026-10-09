@@ -240,8 +240,8 @@ describe("DraftSubmissionFlow", () => {
       expect(flow.mentions).toEqual([]);
       expect(flow.attachmentDraft.attachments).toEqual([]);
       expect(context.sessions.createResult).toHaveBeenCalledOnce();
-      expect(navigationsBeforeCleanup).toBe(1);
-      expect(context.navigateAndWait).toHaveBeenCalledOnce();
+      expect(navigationsBeforeCleanup).toBe(0);
+      expect(context.navigateAndWait).toHaveBeenCalledTimes(next === "navigation" ? 1 : 0);
       const retained = context.chatSubmissions.readInitial(
         sessionKey,
         context.gateway.snapshot.client,

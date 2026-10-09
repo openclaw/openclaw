@@ -10,6 +10,7 @@ import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcri
 import { withCodexSessionTranscriptMirrorWrite } from "../plugin-sdk/codex-session-transcript-runtime.js";
 import {
   appendAssistantMirrorMessageByIdentity,
+  resolveSessionTranscriptIdentity,
   withSessionTranscriptWrite,
   type SessionTranscriptWriteContext,
 } from "../plugin-sdk/session-transcript-runtime.js";
@@ -21,6 +22,30 @@ import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-executio
 export function registerIncognitoSdkMutationTests(
   getFixture: () => IncognitoMutationFixture,
 ): void {
+  it("resolves an unqualified SDK transcript key through its bound actor", async () => {
+    const { actor, authority, key, entry, env } = getFixture();
+    const sessionId = "sdk-unqualified-target";
+    const sessionKey = key(sessionId);
+    await actor.sessions.create(authority, { sessionKey, entry: entry(sessionId) });
+    const sql = observeMainThreadSql();
+    try {
+      await expect(
+        withIncognitoSessionActor(actor, () =>
+          resolveSessionTranscriptIdentity({
+            agentId: actor.agentId,
+            storePath: actor.path,
+            env,
+            sessionId,
+            sessionKey: "dashboard:incognito-sdk-unqualified-target",
+          }),
+        ),
+      ).resolves.toMatchObject({ agentId: actor.agentId, sessionId, sessionKey });
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+  });
+
   it("prepares SDK sequence appends outside transactions and refuses a changed read snapshot", async () => {
     const { actor, authority, key, entry, env } = getFixture();
     const sessionKey = key("sdk-sequence");

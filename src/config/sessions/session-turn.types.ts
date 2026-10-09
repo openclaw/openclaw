@@ -67,6 +67,7 @@ export type SqliteSessionTurnOptions = {
 export type SessionTurnPlan = {
   agentId: string;
   sessionKey: string;
+  prepareColdTranscript?: true;
   options: Omit<
     SqliteSessionTurnOptions,
     | "messages"

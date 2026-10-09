@@ -26,12 +26,10 @@ export function replaceChatStream(
   state: Pick<StreamRolloverState, "chatRunId" | "chatStream" | "chatStreamSegments">,
   text: string | null,
 ): void {
-  state.chatStreamSegments = state.chatStreamSegments?.flatMap<ChatStreamSegment>((segment) => {
-    if (!state.chatRunId || segment.runId !== state.chatRunId || streamSegmentHasItemId(segment)) {
-      return [segment];
-    }
-    return [];
-  });
+  state.chatStreamSegments = state.chatStreamSegments?.filter(
+    (segment) =>
+      !state.chatRunId || segment.runId !== state.chatRunId || streamSegmentHasItemId(segment),
+  );
   state.chatStream = text;
 }
 

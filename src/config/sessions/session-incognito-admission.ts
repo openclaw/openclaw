@@ -12,7 +12,6 @@ import {
   type SqliteWorkerTransferFrame,
   type SqliteWorkerTransferHandle,
 } from "../../infra/sqlite-worker-transfer.js";
-import type { AgentDatabaseIncognitoOperations } from "../../state/openclaw-agent-execution-contract.js";
 import type {
   IncognitoSessionAuthority,
   IncognitoSessionFacts,
@@ -21,7 +20,7 @@ import type {
 import type { IncognitoEntryCreationOperations } from "./session-incognito-entry-creation-contract.js";
 import type {
   IncognitoEntryPatchOperations,
-  IncognitoEntryPatchResult,
+  IncognitoEntryPatchAuthorizer,
 } from "./session-incognito-entry-patch-contract.js";
 import {
   incognitoHistoryKeys,
@@ -32,6 +31,8 @@ import {
   isIncognitoLifecycleCommand,
   type IncognitoLifecycleOperations,
 } from "./session-incognito-lifecycle-contract.js";
+import { isIncognitoTranscriptReceiptCommand } from "./session-incognito-transcript-contract.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
 import type { IncognitoSessionTurnOperations } from "./session-turn.types.js";
 
 export type IncognitoEntryOperations = IncognitoEntryCreationOperations &
@@ -99,7 +100,7 @@ export function readIncognitoGrantFacts<Key extends keyof IncognitoSessionOperat
 /** Entry receipts publish the paired kernel's acknowledged result without replay. */
 export function incognitoEntryPublication<Key extends IncognitoReceiptOperation>(
   type: Key,
-  authorizePrepared?: (refused?: IncognitoEntryPatchResult["refusedSource"]) => void,
+  authorizePrepared?: IncognitoEntryPatchAuthorizer,
   authorizePublication?: (facts: unknown) => void,
 ) {
   let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
@@ -153,7 +154,11 @@ export function incognitoEntryPublication<Key extends IncognitoReceiptOperation>
         throw new Error("Session source refusal was not rejected");
       }
       if (isRecord(facts) && facts.guarded === true) {
-        authorizePrepared?.();
+        authorizePrepared?.(
+          undefined,
+          // SAFETY: The paired entry kernel supplies the source validation for this grant.
+          facts.sourceValidation as SessionSourceValidation | undefined,
+        );
       }
       const publication =
         stage === "commit" ? candidate?.value : isRecord(facts) ? facts.publication : undefined;
@@ -199,17 +204,19 @@ export function isIncognitoEntryValidationGrant(
   previousGuarded: unknown,
 ): boolean {
   return (
-    (type === "session.entry.patch.commit" || type === "session.turn.commit") &&
+    (type === "session.entry.patch.commit" ||
+      type === "session.turn.commit" ||
+      isIncognitoTranscriptReceiptCommand(type)) &&
     phase === "transaction" &&
     request.stage === "transaction" &&
-    (type === "session.turn.commit" || previousGuarded === false) &&
+    (type !== "session.entry.patch.commit" || previousGuarded === false) &&
     isRecord(request.facts) &&
     isRecord(request.facts.entry) &&
     request.facts.entry.guarded === true
   );
 }
 
-type Scope = Pick<SqliteWorkerStore<AgentDatabaseIncognitoOperations>, "execute">;
+type Scope = Pick<SqliteWorkerStore<IncognitoSessionOperations>, "execute">;
 
 export type IncognitoSessionRunner = <T>(
   authority: IncognitoSessionAuthority,

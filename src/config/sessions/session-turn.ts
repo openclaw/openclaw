@@ -17,6 +17,7 @@ import type {
   SessionTranscriptTurnMessageAppend,
   SessionTranscriptTurnWriteContext,
 } from "./session-accessor.types.js";
+import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import {
   captureIncognitoSessionOperation,
@@ -24,10 +25,11 @@ import {
 } from "./session-incognito-binding.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import {
+  acceptSessionSourceValidation,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
-  type SessionSourcePredicateFacts,
+  type SessionSourceValidation,
 } from "./session-source-authority.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
@@ -111,6 +113,21 @@ export async function appendSessionTurnInWorker(
     custody: custody?.facts,
     relocation: custody?.relocation,
   };
+  // Observable append predicates retain their existing restoration ordering.
+  const prepareColdTranscript =
+    !incognito &&
+    !messages.some((append) => append.shouldAppend) &&
+    (Boolean(sessionTurnMutation) ||
+      messages.some(
+        (append) =>
+          append.workerPreparation ||
+          (isRecord(append.message) &&
+            append.message.role === "user" &&
+            typeof append.message.idempotencyKey === "string"),
+      ));
+  if (prepareColdTranscript) {
+    plan.prepareColdTranscript = true;
+  }
   const outcome = await (async () => {
     if (
       incognito &&
@@ -126,7 +143,10 @@ export async function appendSessionTurnInWorker(
     ) {
       throw new Error("Incognito turns require owner authority prepared for the same actor");
     }
-    if (!incognito) {
+    const restore = async () => {
+      if (incognito) {
+        return undefined;
+      }
       const { restoreSessionColdTranscript, SessionColdTurnReboundError } =
         await import("./session-cold-storage.js");
       assertCurrent();
@@ -160,6 +180,13 @@ export async function appendSessionTurnInWorker(
         }
         throw error;
       }
+      return undefined;
+    };
+    if (!prepareColdTranscript) {
+      const rebound = await restore();
+      if (rebound) {
+        return rebound;
+      }
     }
     const operation = {
       database,
@@ -169,16 +196,14 @@ export async function appendSessionTurnInWorker(
       candidateKind: "session-turn",
       onTransactionFacts(facts) {
         if (isRecord(facts) && facts.kind === "session-turn-owner") {
-          if (
-            isRecord(facts.refusedOwnerSource) &&
-            typeof facts.refusedOwnerSource.index === "number"
-          ) {
-            ownerSource?.checks[facts.refusedOwnerSource.index]?.refuse(
-              // SAFETY: The paired worker compares these exact owner predicates before any turn effect.
-              facts.refusedOwnerSource.facts as SessionSourcePredicateFacts,
-            );
-            throw new Error("Session owner source refusal omitted its authority assertion");
+          if (!ownerSource) {
+            throw new Error("Session turn omitted its owner source authority");
           }
+          acceptSessionSourceValidation(
+            ownerSource,
+            // SAFETY: The paired worker compares these predicates in the current transaction.
+            facts.sourceValidation as SessionSourceValidation,
+          );
           return true;
         }
         if (isRecord(facts) && facts.kind === "session-turn-fresh") {
@@ -186,14 +211,12 @@ export async function appendSessionTurnInWorker(
           if (!source) {
             throw new Error("Session turn omitted its fresh-message authority");
           }
+          acceptSessionSourceValidation(
+            source,
+            // SAFETY: The paired worker read these facts in the current transaction.
+            facts.sourceValidation as SessionSourceValidation,
+          );
           source.assertCurrent();
-          if (isRecord(facts.refusedSource) && typeof facts.refusedSource.index === "number") {
-            source.checks[facts.refusedSource.index]?.refuse(
-              // SAFETY: The paired worker read these facts from the current transaction.
-              facts.refusedSource.facts as SessionSourcePredicateFacts,
-            );
-            throw new Error("Session source refusal omitted its prepared assertion");
-          }
           freshCommitGuards.add(source.assertCurrent);
           return true;
         }
@@ -221,6 +244,9 @@ export async function appendSessionTurnInWorker(
               prepared.refusedOwnerSource.facts,
             );
             throw new Error("Session owner source refusal omitted its authority assertion");
+          }
+          if (ownerSource) {
+            acceptSessionSourceValidation(ownerSource, prepared.ownerSourceValidation);
           }
           return prepared;
         };
@@ -265,6 +291,9 @@ export async function appendSessionTurnInWorker(
         assertCurrent();
         if (preparation?.result) {
           return preparation.result;
+        }
+        if (preparation?.coldArchive) {
+          return { kind: "restore-cold-transcript" };
         }
         // Select one adapter for the whole turn before any message preparer can have effects.
         for (const [index, append] of accepted.entries()) {
@@ -391,78 +420,99 @@ export async function appendSessionTurnInWorker(
       Parameters<
         typeof runSessionEntryWorkerOperation<
           SessionTurnCommitted,
-          SqliteExpectedSessionTranscriptTurnResult
+          SqliteExpectedSessionTranscriptTurnResult | { kind: "restore-cold-transcript" }
         >
       >[0],
       "run"
     > & {
       run(
         prepare: () => Promise<IncognitoSessionTurnOperations["session.turn.prepare"]["output"]>,
-        commit: () => Promise<SqliteExpectedSessionTranscriptTurnResult>,
-      ): Promise<SqliteExpectedSessionTranscriptTurnResult>;
+        commit: () => Promise<
+          SqliteExpectedSessionTranscriptTurnResult | { kind: "restore-cold-transcript" }
+        >,
+      ): Promise<SqliteExpectedSessionTranscriptTurnResult | { kind: "restore-cold-transcript" }>;
     };
-    if (incognito) {
-      return incognito.actor.sessions.withSharedState(() =>
-        operation.run(
-          () =>
-            incognito.actor.sessions.entry(
-              { assertCurrent },
-              { type: "session.turn.prepare", input: plan },
-              incognito.admissionSignal,
-            ),
-          async () => {
-            incognito.admissionSignal?.throwIfAborted();
-            const candidate = await incognito.actor.sessions.entry(
-              { assertCurrent },
-              { type: "session.turn.commit", input: plan },
-              undefined,
-              (committed) => {
-                try {
-                  operation.onAcknowledged(committed);
-                } finally {
-                  if (committed.publication && committed.result.sessionEntry) {
-                    publishIncognitoSessionEntry(
-                      incognito.actor,
-                      scope.sessionKey,
-                      committed.publication.previous.get(scope.sessionKey),
-                      committed.result.sessionEntry,
-                    );
+    const run = () => {
+      if (incognito) {
+        return incognito.actor.sessions.withSharedState(() =>
+          operation.run(
+            () =>
+              incognito.actor.sessions.entry(
+                { assertCurrent },
+                { type: "session.turn.prepare", input: plan },
+                incognito.admissionSignal,
+              ),
+            async () => {
+              incognito.admissionSignal?.throwIfAborted();
+              const candidate = await incognito.actor.sessions.entry(
+                { assertCurrent },
+                { type: "session.turn.commit", input: plan },
+                undefined,
+                (committed) => {
+                  try {
+                    operation.onAcknowledged(committed);
+                  } finally {
+                    if (committed.publication && committed.result.sessionEntry) {
+                      publishIncognitoSessionEntry(
+                        incognito.actor,
+                        scope.sessionKey,
+                        committed.publication.previous.get(scope.sessionKey),
+                        committed.result.sessionEntry,
+                      );
+                    }
                   }
-                }
-              },
-              undefined,
-              undefined,
-              (facts) => {
-                if (isRecord(facts) && facts.kind === "session-turn") {
-                  if (custodyRequired) {
-                    custody?.assertCurrent(
-                      // SAFETY: The paired turn kernel supplies these transaction-local custody facts.
-                      facts.authority as SessionPendingInputAuthorityFacts,
-                      assertCurrent,
-                    );
+                },
+                undefined,
+                undefined,
+                (facts) => {
+                  if (isRecord(facts) && facts.kind === "session-turn") {
+                    if (custodyRequired) {
+                      custody?.assertCurrent(
+                        // SAFETY: The paired turn kernel supplies these transaction-local custody facts.
+                        facts.authority as SessionPendingInputAuthorityFacts,
+                        assertCurrent,
+                      );
+                    }
+                  } else {
+                    operation.onTransactionFacts(facts);
                   }
-                } else {
-                  operation.onTransactionFacts(facts);
-                }
-              },
-            );
-            await completeSessionTranscriptCommit(
-              candidate.result.appendedMessages,
-              options.onMessageCommitted,
-            );
-            return candidate.result;
-          },
-        ),
-      );
+                },
+              );
+              await completeSessionTranscriptCommit(
+                candidate.result.appendedMessages,
+                options.onMessageCommitted,
+              );
+              return candidate.result;
+            },
+          ),
+        );
+      }
+      return runSessionEntryWorkerOperation<
+        SessionTurnCommitted,
+        SqliteExpectedSessionTranscriptTurnResult | { kind: "restore-cold-transcript" }
+      >({
+        ...operation,
+        run: (worker, commit) =>
+          operation.run(
+            () => worker.execute({ type: "session.turn.prepare", input: plan }),
+            () => commit(() => worker.execute({ type: "session.turn.commit", input: plan })),
+          ),
+      });
+    };
+    for (let restorations = 0; ; restorations++) {
+      const result = await run();
+      if (!("kind" in result)) {
+        return result;
+      }
+      if (restorations === 2) {
+        throw new SessionTranscriptColdError(scope.sessionId);
+      }
+      // The read-only refusal released FIFO; restoration uses its existing guarded writer.
+      const rebound = await restore();
+      if (rebound) {
+        return rebound;
+      }
     }
-    return runSessionEntryWorkerOperation({
-      ...operation,
-      run: (worker, commit) =>
-        operation.run(
-          () => worker.execute({ type: "session.turn.prepare", input: plan }),
-          () => commit(() => worker.execute({ type: "session.turn.commit", input: plan })),
-        ),
-    });
   })().then(
     (value) => ({ ok: true as const, value }),
     (error: unknown) => ({ ok: false as const, error }),
