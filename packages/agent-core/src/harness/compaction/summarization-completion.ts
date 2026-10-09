@@ -1,3 +1,4 @@
+import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { resolveCompletionTokenReservation } from "@openclaw/ai/transports";
 import {
   resolveClaudeFable5ModelIdentity,
@@ -49,6 +50,13 @@ const OMITTED_ENTRIES_INSTRUCTION =
  * the history.
  */
 const MIN_SUMMARY_INPUT_CHARS = 4_000;
+/**
+ * Provider plugins may still raise the output limit after this request is
+ * sized (a minimum output floor, larger thinking budgets). A provider overflow
+ * then halves the conversation budget, at most this many times, before
+ * compaction fails without retrying the same request.
+ */
+const MAX_OVERFLOW_SHRINKS = 2;
 
 /**
  * Conversation budget for one summary request: the fixed cap, lowered when the
@@ -113,34 +121,54 @@ export async function runSummarizationCompletion(
     options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
   }
   const completionTokens = resolveCompletionTokenReservation(model, maxTokens, options.reasoning);
-  const conversationBudget = resolveSummaryInputChars(
+  const fullBudget = resolveSummaryInputChars(
     model,
     completionTokens,
     `${instructions}\n\n${OMITTED_ENTRIES_INSTRUCTION}`,
   );
-  const conversation = serializeConversationWithinBudget(
-    convertToLlm(params.messages),
-    Math.max(0, conversationBudget),
-  );
-  const sampled = conversation.omittedEntries > 0 || conversation.trimmedEntries > 0;
-  // A history that fits is sent unchanged; only a sample needs the minimum room.
-  // A negative budget means the instructions alone overflow the window.
-  if (conversationBudget < 0 || (sampled && conversationBudget < MIN_SUMMARY_INPUT_CHARS)) {
-    return err(
+  const budgetError = () =>
+    err<string, CompactionError>(
       new SummaryOutputBudgetError(
         `${params.errorLabel} needs more room than ${model.provider}/${model.id} has: its ${model.contextWindow}-token window cannot hold the conversation next to the instructions, previous summary and ${completionTokens}-token output. Set agents.defaults.compaction.model to a model with a larger context window.`,
       ),
     );
+  // A negative budget means the instructions alone overflow the window.
+  if (fullBudget < 0) {
+    return budgetError();
   }
-  const omissionNote = conversation.omittedEntries > 0 ? `${OMITTED_ENTRIES_INSTRUCTION}\n\n` : "";
-  const context = createSummarizationContext(
-    `<conversation>\n${conversation.text}\n</conversation>\n\n${omissionNote}${instructions}`,
-  );
-  const response = params.streamFn
-    ? await consumeAgentCoreStream(params.streamFn(params.model, context, options), params.runtime)
-    : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
-  // Usage belongs to the completed provider request even when its summary is invalid.
-  params.runtime?.internalUsageSink?.(response.usage);
+  const llmMessages = convertToLlm(params.messages);
+  let conversationBudget = fullBudget;
+  let response;
+  for (let shrink = 0; ; shrink += 1) {
+    const conversation = serializeConversationWithinBudget(llmMessages, conversationBudget);
+    const sampled = conversation.omittedEntries > 0 || conversation.trimmedEntries > 0;
+    // A history that fits is sent unchanged; only a sample needs the minimum room.
+    if (sampled && conversationBudget < MIN_SUMMARY_INPUT_CHARS) {
+      return budgetError();
+    }
+    const omissionNote =
+      conversation.omittedEntries > 0 ? `${OMITTED_ENTRIES_INSTRUCTION}\n\n` : "";
+    const context = createSummarizationContext(
+      `<conversation>\n${conversation.text}\n</conversation>\n\n${omissionNote}${instructions}`,
+    );
+    response = params.streamFn
+      ? await consumeAgentCoreStream(
+          params.streamFn(params.model, context, options),
+          params.runtime,
+        )
+      : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
+    // Usage belongs to the completed provider request even when its summary is invalid.
+    params.runtime?.internalUsageSink?.(response.usage);
+    if (response.stopReason === "aborted" || !isContextOverflow(response, model.contextWindow)) {
+      break;
+    }
+    if (shrink >= MAX_OVERFLOW_SHRINKS) {
+      return budgetError();
+    }
+    conversationBudget = Math.floor(
+      Math.min(conversationBudget, estimateStringChars(conversation.text)) / 2,
+    );
+  }
   if (response.stopReason === "aborted") {
     return err(
       new CompactionError("aborted", response.errorMessage || `${params.errorLabel} aborted`),

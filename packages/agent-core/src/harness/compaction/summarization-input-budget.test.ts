@@ -30,34 +30,51 @@ function createModel(contextWindow: number, maxTokens = 32_000): Model {
   };
 }
 
-/** Records the summary prompt the provider receives and answers with a fixed summary. */
-function createCapturingStream(): { streamFn: StreamFn; prompts: string[] } {
+/**
+ * Records the summary prompt the provider receives and answers with a fixed
+ * summary, or with a provider context-overflow error while `overflowAbove`
+ * says the prompt is too long.
+ */
+function createCapturingStream(overflowAbove?: (prompt: string) => boolean): {
+  streamFn: StreamFn;
+  prompts: string[];
+} {
   const prompts: string[] = [];
   const streamFn: StreamFn = (model, context) => {
     const block = context.messages[0]?.content;
-    prompts.push(Array.isArray(block) && block[0]?.type === "text" ? block[0].text : "");
+    const prompt = Array.isArray(block) && block[0]?.type === "text" ? block[0].text : "";
+    prompts.push(prompt);
+    const overflow = overflowAbove?.(prompt) === true;
     const stream = createAssistantMessageEventStream();
-    stream.push({
-      type: "done",
-      reason: "stop",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "summary" }],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: 1,
+    const message = {
+      role: "assistant" as const,
+      content: overflow ? [] : [{ type: "text" as const, text: "summary" }],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
-    });
+      timestamp: 1,
+    };
+    if (overflow) {
+      stream.push({
+        type: "error",
+        reason: "error",
+        error: {
+          ...message,
+          stopReason: "error",
+          errorMessage: "prompt is too long: 40000 tokens > 32768 maximum",
+        },
+      });
+    } else {
+      stream.push({ type: "done", reason: "stop", message: { ...message, stopReason: "stop" } });
+    }
     stream.end();
     return stream;
   };
@@ -575,6 +592,50 @@ describe("summary request input budget", () => {
         kept.some((index) => Math.floor(index / 200) === tenth),
         `tenth ${tenth}`,
       ).toBe(true);
+    }
+  });
+
+  it("shrinks the sample when a provider plugin raised the output limit past the window", async () => {
+    // A plugin output floor makes the first, correctly sized request overflow.
+    const { streamFn, prompts } = createCapturingStream((prompt) => prompt.length > 60_000);
+    const result = await generateSummary(
+      createLongSession(200),
+      createModel(200_000, 64_000),
+      16_384,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      streamFn,
+    );
+
+    expect(result).toEqual({ ok: true, value: "summary" });
+    expect(prompts.length).toBeGreaterThan(1);
+    expect(prompts.at(-1)?.length).toBeLessThanOrEqual(60_000);
+    expect(prompts.at(-1)).toContain("entries omitted ...]");
+  });
+
+  it("stops with a budget error when the provider keeps rejecting the request as too long", async () => {
+    const { streamFn, prompts } = createCapturingStream(() => true);
+    const result = await generateSummary(
+      createLongSession(200),
+      createModel(200_000, 64_000),
+      16_384,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      streamFn,
+    );
+
+    expect(prompts).toHaveLength(3);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(SummaryOutputBudgetError);
     }
   });
 });
