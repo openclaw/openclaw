@@ -61,6 +61,8 @@ const enLinkReader = {
       "No text diff available in this view. Open the original to inspect this file.",
     unavailableTitle: "Could not load item",
     previewUnavailable: "Could not load preview",
+    previewPullRequest: "PR #{number}",
+    previewIssue: "Issue #{number}",
     unavailable: "Try again or open the original.",
     disconnected: "This reader is unavailable on this connection. Reconnect or open the original.",
     retry: "Retry",

@@ -34,6 +34,7 @@ final class GatewayHealthMonitor {
             var failures = 0
             while !Task.isCancelled {
                 let ok = await Self.runCheck(check: check, timeoutSeconds: config.timeoutSeconds)
+                guard !Task.isCancelled else { return }
                 if ok {
                     failures = 0
                 } else {

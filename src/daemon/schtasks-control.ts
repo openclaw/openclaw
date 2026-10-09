@@ -15,11 +15,13 @@ import {
   resolveTaskName,
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
+import { describeUnverifiedPortListeners } from "./schtasks-port-diagnostics.js";
 import {
-  describeUnverifiedPortListeners,
   findInstalledProcessPid,
   isNodeHostArgv,
   readWindowsProcessSnapshot,
+} from "./schtasks-process-snapshot.js";
+import {
   resolveScheduledTaskCommandPort,
   resolveScheduledTaskGatewayContext,
   resolveScheduledTaskOwnedGatewayPids,
@@ -285,8 +287,8 @@ export async function restoreScheduledTaskDefinition(params: {
 async function changeScheduledTaskEnabledState(params: {
   env: GatewayServiceEnv;
   enabled: boolean;
-  beforeMutation?: () => Promise<void>;
-  assertCurrent?: () => void;
+  beforeMutation?: (phase?: "restore") => Promise<void>;
+  assertCurrent?: (phase?: "restore") => void;
   restoreOnFailure?: boolean;
 }): Promise<boolean> {
   const taskName = resolveTaskName(params.env);
@@ -321,8 +323,8 @@ async function changeScheduledTaskEnabledState(params: {
     if (!params.enabled && params.restoreOnFailure !== false) {
       // A timeout can follow a committed /DISABLE, so restore the proven prior state.
       try {
-        await params.beforeMutation?.();
-        params.assertCurrent?.();
+        await params.beforeMutation?.("restore");
+        params.assertCurrent?.("restore");
         const restore = await execSchtasks(["/Change", "/TN", taskName, "/ENABLE"]);
         if (restore.code !== 0) {
           const restoreDetail = (restore.stderr || restore.stdout).trim() || "unknown error";
@@ -344,8 +346,8 @@ async function changeScheduledTaskEnabledState(params: {
 export async function suspendScheduledTaskAutoStartForUpdate(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   options?: {
-    beforeMutation?: () => Promise<void>;
-    assertCurrent?: () => void;
+    beforeMutation?: (phase?: "restore") => Promise<void>;
+    assertCurrent?: (phase?: "restore") => void;
     restoreOnFailure?: boolean;
   },
 ): Promise<boolean> {
@@ -355,9 +357,9 @@ export async function suspendScheduledTaskAutoStartForUpdate(
       env,
       enabled: false,
       ...options,
-      assertCurrent: () => {
+      assertCurrent: (phase) => {
         assertNative();
-        assertCaller?.();
+        assertCaller?.(phase);
       },
     }),
   );
@@ -415,18 +417,21 @@ export async function stopScheduledTask(params: GatewayServiceControlArgs): Prom
   );
 }
 
-async function stopRegisteredScheduledTask({
+export async function stopRegisteredScheduledTask({
   env,
   stdout,
   assertCurrent,
+  beforeMutation,
   warn,
   onEndMutation,
+  onProcessStopped,
   restart = false,
   onSettlement,
   onRecovery,
 }: GatewayServiceControlArgs & {
   env: GatewayServiceEnv;
   onEndMutation?: () => void;
+  onProcessStopped?: () => void;
   restart?: boolean;
   onSettlement?: (fact: ScheduledTaskSettlement) => void;
   onRecovery?: () => void;
@@ -442,10 +447,12 @@ async function stopRegisteredScheduledTask({
     {
       warn: warn ?? ((message) => stdout.write(`Warning: ${message}\n`)),
       onStopped: onEndMutation,
+      beforeMutation,
       restart,
       onSettlement,
       onRecovery,
       end: async () => {
+        await beforeMutation?.();
         assertCurrent?.();
         const res = await execSchtasks(["/End", "/TN", taskName]);
         if (!restart && res.code !== 0 && !isScheduledTaskDefinitelyNotRunning(taskName)) {
@@ -457,13 +464,18 @@ async function stopRegisteredScheduledTask({
       },
     },
   );
+  if (terminated?.length) {
+    onProcessStopped?.();
+  }
   if (!manageGatewayPort) {
-    await terminateScheduledTaskNodeHost(env, assertCurrent);
-    await terminateInstalledStartupRuntime(env, assertCurrent);
+    if ((await terminateScheduledTaskNodeHost(env, assertCurrent, beforeMutation)).length) {
+      onProcessStopped?.();
+    }
+    await terminateInstalledStartupRuntime(env, assertCurrent, beforeMutation);
   }
   if (terminated !== null && stopPort) {
     const probeHosts = stopContext?.probeHosts ?? [];
-    if (!(await waitForGatewayPortRelease(stopPort, 5_000, { probeHosts }))) {
+    if (!(await waitForGatewayPortRelease(stopPort, probeHosts))) {
       const listenerDetails = await describeUnverifiedPortListeners(stopPort, probeHosts);
       throw new Error(
         `gateway port ${stopPort} is still busy ${restart ? "before restart" : "after stop"}; remaining listener ownership could not be verified.${listenerDetails}`,
@@ -626,9 +638,9 @@ export async function restartRegisteredScheduledTask(params: {
       );
     }
     if (replacementRuntime.status === "running" && replacementRuntime.pid) {
-      await terminateGatewayProcessTree(replacementRuntime.pid, 300, params.assertCurrent);
+      await terminateGatewayProcessTree(replacementRuntime.pid, params.assertCurrent);
     }
-    if (port && !(await waitForGatewayPortRelease(port, 5_000, { probeHosts }))) {
+    if (port && !(await waitForGatewayPortRelease(port, probeHosts))) {
       throw new Error(`replacement gateway port ${port} is occupied by an unverified process`);
     }
   }
@@ -665,7 +677,7 @@ export async function restartRegisteredScheduledTask(params: {
         () => null,
       );
       if (failedRuntime?.status === "running" && failedRuntime.pid) {
-        await terminateGatewayProcessTree(failedRuntime.pid, 300, params.assertCurrent);
+        await terminateGatewayProcessTree(failedRuntime.pid, params.assertCurrent);
       }
       throw new Error("Replacement Windows Scheduled Task did not produce running evidence.");
     }

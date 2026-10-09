@@ -63,6 +63,25 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   ...CRON_FLAT_SCHEDULE_KEYS,
 ]);
 
+// Only object-valued CronJobSchema fields accept dotted paths; scalar names
+// such as "nightly.report" must not become nested objects.
+const CRON_NESTABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
+  "delivery",
+  "failureAlert",
+  "owner",
+  "pacing",
+  "payload",
+  "schedule",
+  "trigger",
+]);
+
+/** Path segments that would reach Object.prototype when assigned while nesting. */
+const CRON_UNSAFE_KEY_SEGMENTS: ReadonlySet<string> = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
+
 function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KINDS)[number] {
   return isStringOption(value, CRON_SCHEDULE_KINDS);
 }
@@ -77,17 +96,17 @@ function isStringArrayOrNull(value: unknown): boolean {
   );
 }
 
-function moveDefinedField(params: {
-  source: Record<string, unknown>;
-  target: Record<string, unknown>;
-  from: string;
-  to?: string;
-}): boolean {
-  if (params.source[params.from] === undefined) {
+function moveDefinedField(
+  source: Record<string, unknown>,
+  target: Record<string, unknown>,
+  from: string,
+  to = from,
+): boolean {
+  if (source[from] === undefined) {
     return false;
   }
-  params.target[params.to ?? params.from] = params.source[params.from];
-  delete params.source[params.from];
+  target[to] = source[from];
+  delete source[from];
   return true;
 }
 
@@ -138,7 +157,7 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     ["stagger", "staggerMs"],
   ] as const) {
     if (schedule[to] === undefined) {
-      moveDefinedField({ source: schedule, target: schedule, from, to });
+      moveDefinedField(schedule, schedule, from, to);
     }
   }
   if (schedule.exact === true && schedule.staggerMs === undefined) {
@@ -151,7 +170,7 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     delete value.kind;
   }
 
-  const movedAt = moveDefinedField({ source: value, target: schedule, from: "at" });
+  const movedAt = moveDefinedField(value, schedule, "at");
   if (movedAt && !isCronScheduleKind(schedule.kind)) {
     schedule.kind = "at";
   }
@@ -161,23 +180,16 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     delete value.atMs;
   }
 
-  const movedEveryMs =
-    moveDefinedField({ source: value, target: schedule, from: "everyMs" }) ||
-    moveDefinedField({ source: value, target: schedule, from: "every", to: "everyMs" });
-  if (movedEveryMs && !isCronScheduleKind(schedule.kind)) {
-    schedule.kind = "every";
-  }
-
-  const movedCron =
-    moveDefinedField({ source: value, target: schedule, from: "cron", to: "expr" }) ||
-    moveDefinedField({ source: value, target: schedule, from: "expr" });
-  if (movedCron && !isCronScheduleKind(schedule.kind)) {
-    schedule.kind = "cron";
-  }
-
-  const movedCommand = moveDefinedField({ source: value, target: schedule, from: "command" });
-  if (movedCommand && !isCronScheduleKind(schedule.kind)) {
-    schedule.kind = "on-exit";
+  for (const [kind, target, sources] of [
+    ["every", "everyMs", ["everyMs", "every"]],
+    ["cron", "expr", ["cron", "expr"]],
+    ["on-exit", "command", ["command"]],
+  ] as const) {
+    // Consume only the first alias; conflicting fields remain for Gateway validation.
+    const moved = sources.some((source) => moveDefinedField(value, schedule, source, target));
+    if (moved && !isCronScheduleKind(schedule.kind)) {
+      schedule.kind = kind;
+    }
   }
 
   for (const key of [
@@ -190,9 +202,9 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     "batchMs",
     "maxBatchBytes",
   ] as const) {
-    moveDefinedField({ source: value, target: schedule, from: key });
+    moveDefinedField(value, schedule, key);
   }
-  moveDefinedField({ source: value, target: schedule, from: "stagger", to: "staggerMs" });
+  moveDefinedField(value, schedule, "stagger", "staggerMs");
 
   if (value.exact === true && schedule.staggerMs === undefined) {
     schedule.staggerMs = 0;
@@ -220,7 +232,7 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
   const payload = isRecord(value.payload) ? { ...value.payload } : {};
 
   for (const key of CRON_FLAT_PAYLOAD_KEYS) {
-    moveDefinedField({ source: value, target: payload, from: key });
+    moveDefinedField(value, payload, key);
   }
 
   if (isCronPayloadKind(value.kind) && !isCronPayloadKind(payload.kind)) {
@@ -264,6 +276,67 @@ function repairPaddedCronKeys(value: Record<string, unknown>): void {
       delete value[key];
     }
   }
+}
+
+// Strip only paired quotes around the whole dotted key, before splitting it.
+function stripCronKeyQuotes(segment: string): string {
+  if (segment.length >= 2) {
+    const first = segment[0];
+    if ((first === '"' || first === "'") && segment.endsWith(first)) {
+      return segment.slice(1, -1);
+    }
+  }
+  return segment;
+}
+
+// Recover dotted fields without overwriting canonical objects or hiding conflicts.
+function nestDottedCronKey(
+  value: Record<string, unknown>,
+  key: string,
+  entry: unknown,
+  canonicalRoots: ReadonlySet<string>,
+): "recovered" | "conflict" | "ignored" {
+  const segments = stripCronKeyQuotes(key.trim())
+    .split(".")
+    .map((segment) => segment.trim());
+  if (segments[0] === "job") {
+    segments.shift();
+  }
+  const [root, ...rest] = segments;
+  if (rest.length === 0 || !root || !CRON_NESTABLE_OBJECT_KEYS.has(root)) {
+    return "ignored";
+  }
+  if (segments.some((segment) => !segment || CRON_UNSAFE_KEY_SEGMENTS.has(segment))) {
+    return "ignored";
+  }
+  let cursor = value;
+  for (const [index, segment] of segments.entries()) {
+    const last = index === segments.length - 1;
+    if (segment in cursor) {
+      if (last) {
+        return "conflict";
+      }
+      const child = cursor[segment];
+      if (!isRecord(child)) {
+        return "conflict";
+      }
+      // Drop keys shadowed by explicit canonical objects. Newly recovered
+      // objects still accept sibling dotted fields from this pass.
+      if (canonicalRoots.has(root)) {
+        return "recovered";
+      }
+      cursor = child;
+      continue;
+    }
+    if (last) {
+      cursor[segment] = entry;
+      return "recovered";
+    }
+    const child: Record<string, unknown> = {};
+    cursor[segment] = child;
+    cursor = child;
+  }
+  return "recovered";
 }
 
 /** Converts model-friendly cron tool shorthands into the nested gateway job/patch shape. */
@@ -325,14 +398,26 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
   value: Record<string, unknown>;
 } {
   const value: Record<string, unknown> = {};
-  let found = false;
   for (const key of Object.keys(params)) {
     if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
       value[key] = params[key];
-      found = true;
     }
   }
-  return { found, value: canonicalizeCronToolObject(value) };
+  // Dotted keys run as a second pass so a canonical sibling always wins,
+  // whatever the key order the model happened to emit.
+  const canonicalRoots = new Set(Object.keys(value));
+  for (const key of Object.keys(params)) {
+    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) || params[key] === undefined) {
+      continue;
+    }
+    const outcome = nestDottedCronKey(value, key, params[key], canonicalRoots);
+    if (outcome === "conflict") {
+      // Ambiguous input: preserve the literal key so strict gateway validation
+      // rejects the conflict instead of one value silently winning.
+      value[key] = params[key];
+    }
+  }
+  return { found: Object.keys(value).length > 0, value: canonicalizeCronToolObject(value) };
 }
 
 /** Checks whether a recovered flat object has enough schedule/payload signal to create a job. */

@@ -25,8 +25,6 @@ type WorkboardLifecycleState =
 export type WorkboardLifecycle = {
   session: GatewaySessionRow | null;
   state: WorkboardLifecycleState;
-  targetStatus?: WorkboardStatus;
-  sourceUpdatedAt?: number;
 };
 
 type WorkboardDependencyParent = {
@@ -53,13 +51,7 @@ export type WorkboardDispatchSummary = {
 
 export type WorkboardRefreshSource = "initial" | "manual" | "live";
 
-export type WorkboardHealthKey =
-  | "running"
-  | "blocked"
-  | "stale"
-  | "readyUnassigned"
-  | "missingProof"
-  | "failedAttempts";
+export type WorkboardHealthKey = "stale" | "missingProof";
 
 export type WorkboardBulkDialog =
   | { kind: "delete"; cardIds: string[]; observedCards: WorkboardCard[] }
@@ -88,7 +80,7 @@ export type WorkboardUiState = {
   searchOpen: boolean;
   priorityFilter: Set<WorkboardPriority>;
   statusFilter: Set<WorkboardStatus>;
-  attentionFilter: Set<"stale" | "missingProof">;
+  attentionFilter: Set<WorkboardHealthKey>;
   donePeriod: "all" | "week";
   agentFilter: string;
   boardFilter: string;
@@ -99,9 +91,7 @@ export type WorkboardUiState = {
   collapsedStatuses: Set<WorkboardStatus>;
   expandedEmptyStatuses: Set<WorkboardStatus>;
   lastRefreshAt: number | null;
-  lastRefreshStartedAt: number | null;
   lastRefreshError: string | null;
-  lastRefreshSource: WorkboardRefreshSource | null;
   draftOpen: boolean;
   draftDiscardOpen: boolean;
   draftSaving: boolean;
@@ -128,5 +118,4 @@ export type WorkboardUiState = {
   draggedCardId: string | null;
   dragOverStatus: WorkboardStatus | null;
   dragBeforeCardId: string | null;
-  capturingSessionKeys: Set<string>;
 };

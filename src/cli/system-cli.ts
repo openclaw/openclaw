@@ -1,4 +1,3 @@
-// System CLI commands that call Gateway RPC methods for events, heartbeats, and presence.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { danger } from "../globals.js";
@@ -19,17 +18,6 @@ type SystemEventOpts = GatewayRpcOpts & {
   json?: boolean;
 };
 type SystemGatewayOpts = GatewayRpcOpts & { json?: boolean };
-
-const normalizeWakeMode = (raw: unknown) => {
-  const mode = normalizeOptionalString(raw) ?? "";
-  if (!mode) {
-    return "next-heartbeat" as const;
-  }
-  if (mode === "now" || mode === "next-heartbeat") {
-    return mode;
-  }
-  throw new Error("--mode must be now or next-heartbeat");
-};
 
 async function runSystemGatewayCommand(
   opts: SystemGatewayOpts,
@@ -85,7 +73,10 @@ export function registerSystemCli(program: Command) {
             `--text is required. Example: ${formatCliCommand('openclaw system event --text "deploy finished"')}.`,
           );
         }
-        const mode = normalizeWakeMode(opts.mode);
+        const mode = normalizeOptionalString(opts.mode) ?? "next-heartbeat";
+        if (mode !== "now" && mode !== "next-heartbeat") {
+          throw new Error("--mode must be now or next-heartbeat");
+        }
         const sessionKey = normalizeOptionalString(opts.sessionKey);
         const result = await callGatewayFromCli(
           "wake",

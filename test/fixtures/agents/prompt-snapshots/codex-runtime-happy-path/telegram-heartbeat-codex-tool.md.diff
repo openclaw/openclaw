@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=33a91fd70f05dd67fa66f182c32d6b417587c82ce5f9835857365758de3c78e1
-+++ telegram-heartbeat-codex-tool.md	sha256=90c5645a7e8bd8820ddb3097259165bfdd9a85fe712acbc07fd7d5ea2bb63b00
+--- telegram-direct-codex-message-tool.md	sha256=7ee7639a4ff82b179004de360cf94554410a8fd50f4c35bc27bd71af8e4ee062
++++ telegram-heartbeat-codex-tool.md	sha256=9f5156e4984ae761599757668424b16c00b6d5d46cf1d2a7cdc952c4ced4ce67
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Telegram Direct Codex Heartbeat Tool Turn
@@ -13,70 +13,70 @@
 -  "trigger": "user"
 +  "toolSnapshot": "codex-dynamic-tools.heartbeat-turn.json",
 +  "trigger": "heartbeat"
-@@ -98,0 +99,1 @@
+@@ -96,0 +97,1 @@
 +    "heartbeat_respond",
-@@ -138,1 +139,1 @@
+@@ -136,1 +137,1 @@
 -  "threadId": "thread-telegram-direct-codex-message-tool"
 +  "threadId": "thread-telegram-heartbeat-codex-tool"
-@@ -151,4 +151,0 @@
+@@ -149,4 +149,0 @@
 -    "openclaw_current_sender": {
 -      "kind": "untrusted",
 -      "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
 -    },
-@@ -188,2 +185,2 @@
+@@ -186,2 +183,2 @@
 -  "threadId": "thread-telegram-direct-codex-message-tool",
 -  "turnTrigger": "user"
 +  "threadId": "thread-telegram-heartbeat-codex-tool",
 +  "turnTrigger": "heartbeat"
-@@ -228,1 +225,1 @@
+@@ -226,1 +223,1 @@
 -    "dynamicToolsFrom": "codex-dynamic-tools.telegram-direct.json",
 +    "dynamicToolsFrom": "codex-dynamic-tools.heartbeat-turn.json",
-@@ -241,2 +238,2 @@
+@@ -239,2 +236,2 @@
 -    "chars": 1348,
 -    "roughTokens": 337
 +    "chars": 1218,
 +    "roughTokens": 305
-@@ -261,2 +258,2 @@
--    "chars": 67675,
--    "roughTokens": 16919
-+    "chars": 69168,
-+    "roughTokens": 17292
-@@ -273,2 +270,2 @@
--    "chars": 27378,
--    "roughTokens": 6845
-+    "chars": 27715,
-+    "roughTokens": 6929
-@@ -277,2 +274,2 @@
--    "chars": 95055,
--    "roughTokens": 23764
-+    "chars": 96885,
-+    "roughTokens": 24222
-@@ -281,2 +278,2 @@
+@@ -259,2 +256,2 @@
+-    "chars": 72531,
+-    "roughTokens": 18133
++    "chars": 74024,
++    "roughTokens": 18506
+@@ -271,2 +268,2 @@
+-    "chars": 27580,
+-    "roughTokens": 6895
++    "chars": 27917,
++    "roughTokens": 6980
+@@ -275,2 +272,2 @@
+-    "chars": 100113,
+-    "roughTokens": 25029
++    "chars": 101943,
++    "roughTokens": 25486
+@@ -279,2 +276,2 @@
 -    "chars": 879,
 -    "roughTokens": 220
 +    "chars": 1346,
 +    "roughTokens": 337
-@@ -530,6 +526,0 @@
+@@ -528,6 +524,0 @@
 -### User: OpenClaw Additional Context (openclaw_current_sender)
 -
 -```text
 -<external_openclaw_current_sender>{"sender":{"id":"1000001","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
 -```
 -
-@@ -559,1 +549,0 @@
+@@ -557,1 +547,0 @@
 -[OpenClaw conversation info: sender={"id":"1000001","name":"Pash","username":"pash"}]
-@@ -578,1 +568,1 @@
+@@ -576,1 +566,1 @@
 -{"chat_id":"user:1000001","message_id":"tg-msg-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
 +{"chat_id":"user:1000001","message_id":"heartbeat-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
-@@ -581,1 +571,1 @@
+@@ -579,1 +569,1 @@
 -Can you check whether the nightly build finished and tell me what happened?
 +Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted. If the heartbeat_respond tool is not available in this run, reply NO_REPLY when nothing needs the user's attention; when the user should be interrupted, reply with only the alert text instead of a prose report.
-@@ -586,1 +576,1 @@
+@@ -584,1 +574,1 @@
 -Full JSON: `codex-dynamic-tools.telegram-direct.json`
 +Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dynamic-tools.telegram-direct.json`)
-@@ -606,0 +597,1 @@
+@@ -604,0 +595,1 @@
 +  "heartbeat_respond",
-@@ -757,0 +749,39 @@
+@@ -755,0 +747,39 @@
 +  },
 +  {
 +    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",

@@ -38,42 +38,6 @@ type QaGatewayProcessCommand = {
   envKeys: string[];
 };
 
-type QaGatewayProcessHandoff = {
-  version: 1;
-  generation: string;
-  pid: number;
-  uid: number;
-  gid: number;
-  procStartTicks: string;
-  pgrp: number;
-  commandFile: {
-    path: string;
-    sha256: string;
-  };
-};
-
-type QaGatewayProcessSandboxProof = {
-  version: 1;
-  generation: string;
-  status: "pass";
-  envKeys: string[];
-};
-
-type QaGatewayProcessRuntimeProof = {
-  version: 1;
-  generation: string;
-  status: "pass";
-  pid: number;
-  uid: number;
-  gid: number;
-  procStartTicks: string;
-  pgrp: number;
-  state: string;
-  cwd: string;
-  executablePath: string;
-  cmdlineSha256: string;
-};
-
 export type QaGatewayVerifiedProcessIdentity = {
   generation: string;
   pid: number;
@@ -136,15 +100,8 @@ function normalizeEnvKeys(keys: readonly string[]) {
   return normalized.toSorted();
 }
 
-function parsePositiveInteger(value: unknown, label: string) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 1) {
-    throw new Error(`invalid ${label}`);
-  }
-  return value;
-}
-
-function parseNonNegativeInteger(value: unknown, label: string) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+function parseInteger(value: unknown, label: string, minimum: number) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
     throw new Error(`invalid ${label}`);
   }
   return value;
@@ -165,7 +122,7 @@ function parseSha256(value: unknown, label: string) {
   return digest;
 }
 
-function parseQaGatewayProcessHandoff(value: unknown): QaGatewayProcessHandoff {
+function parseQaGatewayProcessHandoff(value: unknown) {
   if (!isRecord(value) || value.version !== PROCESS_BOUNDARY_VERSION) {
     throw new Error("invalid process-boundary identity");
   }
@@ -176,14 +133,14 @@ function parseQaGatewayProcessHandoff(value: unknown): QaGatewayProcessHandoff {
   return {
     version: PROCESS_BOUNDARY_VERSION,
     generation: parseNonEmptyString(value.generation, "process-boundary generation"),
-    pid: parsePositiveInteger(value.pid, "process-boundary pid"),
-    uid: parseNonNegativeInteger(value.uid, "process-boundary uid"),
-    gid: parseNonNegativeInteger(value.gid, "process-boundary gid"),
+    pid: parseInteger(value.pid, "process-boundary pid", 2),
+    uid: parseInteger(value.uid, "process-boundary uid", 0),
+    gid: parseInteger(value.gid, "process-boundary gid", 0),
     procStartTicks: parseNonEmptyString(
       value.procStartTicks,
       "process-boundary process start ticks",
     ),
-    pgrp: parsePositiveInteger(value.pgrp, "process-boundary process group"),
+    pgrp: parseInteger(value.pgrp, "process-boundary process group", 2),
     commandFile: {
       path: parseNonEmptyString(commandFile.path, "process-boundary command path"),
       sha256: parseSha256(commandFile.sha256, "process-boundary command digest"),
@@ -191,7 +148,7 @@ function parseQaGatewayProcessHandoff(value: unknown): QaGatewayProcessHandoff {
   };
 }
 
-function parseQaGatewayProcessSandboxProof(value: unknown): QaGatewayProcessSandboxProof {
+function parseQaGatewayProcessSandboxProof(value: unknown) {
   if (
     !isRecord(value) ||
     value.version !== PROCESS_BOUNDARY_VERSION ||
@@ -209,7 +166,7 @@ function parseQaGatewayProcessSandboxProof(value: unknown): QaGatewayProcessSand
   };
 }
 
-function parseQaGatewayProcessRuntimeProof(value: unknown): QaGatewayProcessRuntimeProof {
+function parseQaGatewayProcessRuntimeProof(value: unknown) {
   if (!isRecord(value) || value.version !== PROCESS_BOUNDARY_VERSION || value.status !== "pass") {
     throw new Error("invalid process-boundary runtime proof");
   }
@@ -221,11 +178,11 @@ function parseQaGatewayProcessRuntimeProof(value: unknown): QaGatewayProcessRunt
     version: PROCESS_BOUNDARY_VERSION,
     generation: parseNonEmptyString(value.generation, "runtime generation"),
     status: "pass",
-    pid: parsePositiveInteger(value.pid, "runtime pid"),
-    uid: parseNonNegativeInteger(value.uid, "runtime uid"),
-    gid: parseNonNegativeInteger(value.gid, "runtime gid"),
+    pid: parseInteger(value.pid, "runtime pid", 2),
+    uid: parseInteger(value.uid, "runtime uid", 0),
+    gid: parseInteger(value.gid, "runtime gid", 0),
     procStartTicks: parseNonEmptyString(value.procStartTicks, "runtime process start ticks"),
-    pgrp: parsePositiveInteger(value.pgrp, "runtime process group"),
+    pgrp: parseInteger(value.pgrp, "runtime process group", 2),
     state,
     cwd: parseNonEmptyString(value.cwd, "runtime cwd"),
     executablePath: parseNonEmptyString(value.executablePath, "runtime executable path"),
@@ -255,21 +212,17 @@ async function assertRegularFile(params: {
   return await assertContainedPath(params.root, params.pathName, params.label);
 }
 
-async function writeAtomicFile(pathName: string, contents: Buffer | string, mode: number) {
+async function writeAtomicFile(pathName: string, contents: Buffer | string) {
   const dirMode = (await fs.stat(path.dirname(pathName))).mode & 0o7777;
   await replaceFileAtomic({
     filePath: pathName,
     content: contents,
     dirMode,
-    mode,
+    mode: 0o600,
     tempPrefix: `${path.basename(pathName)}.qa-boundary`,
     syncParentDir: true,
     syncTempFile: true,
   });
-}
-
-async function readJsonFile(pathName: string) {
-  return JSON.parse(await fs.readFile(pathName, "utf8")) as unknown;
 }
 
 async function waitForJsonFile(params: {
@@ -284,7 +237,7 @@ async function waitForJsonFile(params: {
       throw new Error("process-boundary launcher exited before writing its identity");
     }
     try {
-      return await readJsonFile(params.pathName);
+      return JSON.parse(await fs.readFile(params.pathName, "utf8")) as unknown;
     } catch (error) {
       lastError = error;
     }
@@ -339,53 +292,8 @@ async function runBoundaryVerification(params: {
   return parseQaGatewayProcessRuntimeProof(JSON.parse(output) as unknown);
 }
 
-async function runBoundaryControl(params: {
-  launcherPath: string;
-  identityFilePath: string;
-  signal: "SIGCONT" | "SIGUSR2" | "SIGQUIT";
-}) {
-  await runBoundaryLauncherCommand({
-    args: ["--signal", params.signal, params.identityFilePath],
-    label: "signal",
-    launcherPath: params.launcherPath,
-    timeoutMs: PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
-  });
-}
-
-async function runBoundaryTermination(params: { launcherPath: string; identityFilePath: string }) {
-  await runBoundaryLauncherCommand({
-    args: ["--terminate", params.identityFilePath],
-    label: "termination",
-    launcherPath: params.launcherPath,
-    timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
-  });
-}
-
-async function runBoundaryUidTermination(launcherPath: string) {
-  await runBoundaryLauncherCommand({
-    args: ["--terminate-uid"],
-    label: "UID termination",
-    launcherPath,
-    timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
-  });
-}
-
 function commandLineBytes(executable: string, argv: readonly string[]) {
   return Buffer.from(`${[executable, ...argv].join("\0")}\0`);
-}
-
-async function copyBoundaryEvidenceFile(params: {
-  evidenceDir: string;
-  generation: string;
-  sourcePath: string;
-  targetName: string;
-}) {
-  const launchDir = path.join(params.evidenceDir, `launch-${params.generation}`);
-  await fs.mkdir(launchDir, { recursive: true, mode: 0o700 });
-  const targetPath = path.join(launchDir, params.targetName);
-  await fs.copyFile(params.sourcePath, targetPath, fsConstants.COPYFILE_EXCL);
-  await fs.chmod(targetPath, 0o600);
-  return path.relative(params.evidenceDir, targetPath);
 }
 
 export async function createQaGatewayProcessBoundaryController(params: {
@@ -431,7 +339,6 @@ export async function createQaGatewayProcessBoundaryController(params: {
         null,
         2,
       )}\n`,
-      0o600,
     );
   };
 
@@ -451,7 +358,6 @@ export async function createQaGatewayProcessBoundaryController(params: {
         kind: "qa-gateway-process-boundary-retain-credential-lease",
         recordedAt: new Date().toISOString(),
       })}\n`,
-      0o600,
     );
   };
 
@@ -462,7 +368,12 @@ export async function createQaGatewayProcessBoundaryController(params: {
   const terminateUidUntilQuiescent = async () => {
     for (;;) {
       try {
-        await runBoundaryUidTermination(params.launcherPath);
+        await runBoundaryLauncherCommand({
+          args: ["--terminate-uid"],
+          label: "UID termination",
+          launcherPath: params.launcherPath,
+          timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
+        });
         return;
       } catch {
         await sleep(PROCESS_BOUNDARY_TERMINATE_RETRY_INTERVAL_MS);
@@ -475,9 +386,11 @@ export async function createQaGatewayProcessBoundaryController(params: {
     let lastError: unknown;
     while (Date.now() <= deadline) {
       try {
-        await runBoundaryTermination({
+        await runBoundaryLauncherCommand({
+          args: ["--terminate", identityFilePath],
+          label: "termination",
           launcherPath: params.launcherPath,
-          identityFilePath,
+          timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
         });
         return undefined;
       } catch (error) {
@@ -521,7 +434,7 @@ export async function createQaGatewayProcessBoundaryController(params: {
     };
     const commandBytes = Buffer.from(`${JSON.stringify(command)}\n`);
     const commandSha256 = sha256(commandBytes);
-    await writeAtomicFile(commandFilePath, commandBytes, 0o600);
+    await writeAtomicFile(commandFilePath, commandBytes);
     await retainCredentialLease();
     return {
       command,
@@ -635,24 +548,26 @@ export async function createQaGatewayProcessBoundaryController(params: {
     }
     const preEntryCmdlineSha256 = runtimeProof.cmdlineSha256;
 
-    const evidenceCommandFile = await copyBoundaryEvidenceFile({
-      evidenceDir,
-      generation: handoff.generation,
-      sourcePath: acceptParams.prepared.commandFilePath,
-      targetName: "command.json",
-    });
-    const evidenceIdentityFile = await copyBoundaryEvidenceFile({
-      evidenceDir,
-      generation: handoff.generation,
-      sourcePath: acceptParams.prepared.identityFilePath,
-      targetName: "identity.json",
-    });
-    const evidenceSandboxFile = await copyBoundaryEvidenceFile({
-      evidenceDir,
-      generation: handoff.generation,
-      sourcePath: acceptParams.prepared.sandboxFilePath,
-      targetName: "sandbox.json",
-    });
+    const copyEvidenceFile = async (sourcePath: string, targetName: string) => {
+      const launchDir = path.join(evidenceDir, `launch-${handoff.generation}`);
+      await fs.mkdir(launchDir, { recursive: true, mode: 0o700 });
+      const targetPath = path.join(launchDir, targetName);
+      await fs.copyFile(sourcePath, targetPath, fsConstants.COPYFILE_EXCL);
+      await fs.chmod(targetPath, 0o600);
+      return path.relative(evidenceDir, targetPath);
+    };
+    const evidenceCommandFile = await copyEvidenceFile(
+      acceptParams.prepared.commandFilePath,
+      "command.json",
+    );
+    const evidenceIdentityFile = await copyEvidenceFile(
+      acceptParams.prepared.identityFilePath,
+      "identity.json",
+    );
+    const evidenceSandboxFile = await copyEvidenceFile(
+      acceptParams.prepared.sandboxFilePath,
+      "sandbox.json",
+    );
     launches.push({
       generation: handoff.generation,
       pid: handoff.pid,
@@ -716,10 +631,11 @@ export async function createQaGatewayProcessBoundaryController(params: {
     identity: QaGatewayVerifiedProcessIdentity,
     signalName: "SIGCONT" | "SIGUSR2" | "SIGQUIT",
   ) => {
-    await runBoundaryControl({
+    await runBoundaryLauncherCommand({
+      args: ["--signal", signalName, identity.identityFilePath],
+      label: "signal",
       launcherPath: params.launcherPath,
-      identityFilePath: identity.identityFilePath,
-      signal: signalName,
+      timeoutMs: PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
     });
   };
 
@@ -822,5 +738,3 @@ export async function shouldRetainQaGatewayCredentialLease(env: NodeJS.ProcessEn
     return true;
   }
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

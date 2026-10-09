@@ -70,7 +70,7 @@ pr_subcommand_classification() {
     ls | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
+    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-baseline-refresh | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -388,6 +388,9 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
         anchor_git_root=$(pr_git -C "$script_parent_dir" rev-parse --show-toplevel 2>/dev/null || true)
         if [ -n "$anchor_wrapper_revision" ] && [ -n "$anchor_git_root" ] &&
           anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor.XXXXXX" 2>/dev/null); then
+          # Hold the directory we created across exec, not an environment pathname.
+          # FD 9 is reserved for the supervisor; bootstrap children are awaited.
+          exec 9< "$anchor_exec_dir"
           anchor_extraction_valid=0
           # BSD tar can stop at the end marker before Git finishes writing padding,
           # causing SIGPIPE under pipefail. Require producer completion before reading.
@@ -420,13 +423,16 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
               rm -rf "$anchor_exec_dir"
               exit 1
             fi
-            # Not cleaned by trap: exec replaces this shell, and bash re-reads
-            # the script file during execution, so the copy must outlive the
-            # whole supervised run. OS tmp reaping owns this directory.
+            # Bash re-reads this copy during execution. Only the same-process
+            # supervisor may retire it after the entire operation has drained.
+            # Older anchors without that handoff retain OS temp-reaping behavior.
             echo "scripts/pr wrapper in this worktree $wrapper_route_reason; running wrapper code materialized from the refs/remotes/origin/main trust anchor at revision $(pr_git -C "$script_parent_dir" rev-parse --short "$anchor_commit")." >&2
-            OPENCLAW_PR_ANCHOR_REPO_ROOT="$canonical_repo_root" exec "$anchor_exec_dir/scripts/pr" "$@"
+            OPENCLAW_PR_ANCHOR_REPO_ROOT="$canonical_repo_root" \
+              OPENCLAW_PR_ANCHOR_CREATOR_PID="$$" OPENCLAW_PR_ANCHOR_FD=9 \
+              exec "$anchor_exec_dir/scripts/pr" "$@"
           fi
           rm -rf "$anchor_exec_dir"
+          exec 9<&-
         fi
         # HEAD blobs are authoritative here: the uncommitted-wrapper guard above
         # already exited for any staged or unstaged edit to these paths, so
@@ -461,7 +467,7 @@ readonly canonical_repo_root
 
 is_main_only_pr_command() {
   case "$1" in
-    prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
+    prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-baseline-refresh | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -475,7 +481,7 @@ is_supervised_pr_process() {
 # The supervisor changes cwd to the canonical repo. Resolve explicit body and
 # evidence paths relative to the operator's caller before crossing that
 # boundary; do not read them.
-if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ]; then
+if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ] || [ "${1-}" = prepare-baseline-refresh ]; then
   merge_cli_args=() merge_cli_body_next=false
   for merge_cli_arg in "$@"; do
     if [ "$merge_cli_body_next" = true ] && [ -n "$merge_cli_arg" ]; then
@@ -483,7 +489,7 @@ if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ]; then
     fi
     merge_cli_args+=("$merge_cli_arg")
     merge_cli_body_next=false
-    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ] || [ "$merge_cli_arg" = --admin-evidence ]; then merge_cli_body_next=true; fi
+    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ] || [ "$merge_cli_arg" = --admin-evidence ] || [ "$merge_cli_arg" = --resolutions ]; then merge_cli_body_next=true; fi
   done
   set -- "${merge_cli_args[@]}"
 fi
@@ -523,6 +529,7 @@ Usage:
   scripts/pr prepare-init <PR>
   scripts/pr prepare-correction-init <PR>
   scripts/pr prepare-correction-review-init <PR>
+  scripts/pr prepare-baseline-refresh <PR> --expected-head <SHA> --baseline <SHA> [--resolutions <file>]
   scripts/pr prepare-validate-commit <PR>
   scripts/pr prepare-gates <PR>
   scripts/pr prepare-push <PR> [--resume-crabbox-run <Actions run ID>]
@@ -542,14 +549,18 @@ Usage:
     Exact evidence is required; branch-caused failures, security checks, and enforced reviews remain blocking.
     This requires --confirmed-operator-admin and immediate squash without auto-merge.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> --auto-merge] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
     Defaults to the retained head; replacement requires an explicitly selected full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Standing landing authority covers
     a replacement repairing the same scope; new scope or another method needs authorization. Never rebases automatically.
     Ordinary recovery keeps prior evidence and requires the same method with immediate non-admin admission.
-    Paired admin flags permit same-head recovery only for the complete known prior-CI REST base-modified HTTP 405 rejection.
+    Paired admin flags permit an explicitly selected head after confirmed auto cancellation, including the retained SHA.
+    They also permit same-head recovery without --replacement-head for the complete known prior-CI REST base-modified HTTP 405 rejection.
     This reruns current admin admission and retains the original captures; other admin failures remain fenced.
+    --replacement-head <SHA> --auto-merge retires an unaccepted prior-CI REST admin intent fenced by a different
+    exact current head, then requests ordinary current-head auto-merge. It requires exact-head github_pending
+    preparation and all normal required-check and ClawSweeper gates; it never reuses prior admin evidence.
     --cancel-auto instead retires the exact accepted or uncertain non-queue auto request before head repair.
     Cancels a matching active request once, or records an already absent request without sending cancellation.
     Repeated cancellation reconciles only. Use its current outcome OID for later reviewed/prepared recovery.
@@ -679,7 +690,7 @@ main() {
             shift
             ;;
           --auto-merge)
-            [ "$cmd" = merge-run ] && [ "$auto_merge" = false ] || { usage; exit 2; }
+            [ "$auto_merge" = false ] || { usage; exit 2; }
             auto_merge=true
             shift
             ;;
@@ -712,8 +723,12 @@ main() {
       fi
       if [ -n "$admin_evidence" ] || [ "$confirmed_admin" = true ]; then
         [ -n "$admin_evidence" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge" = false ] &&
-          [ -z "$replacement_head$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
+          [ -z "$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
           [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" = squash ] || { usage; exit 2; }
+      fi
+      if [ "$cmd" = merge-recover ] && [ "$auto_merge" = true ]; then
+        [ -n "$replacement_head" ] && [ -z "$body_path$legacy_directory$refusal_directory$admin_evidence" ] &&
+          [ "$confirmed_admin" = false ] && [ "$cancel_auto" = false ] || { usage; exit 2; }
       fi
       [ -z "$legacy_directory" ] || [ -n "$replacement_head" ] || { usage; exit 2; }
       [ -z "$refusal_directory" ] || [ -z "$legacy_directory" ] || { usage; exit 2; }
@@ -730,7 +745,7 @@ main() {
     ci-dispatch)
       [ "$#" -eq 1 ] || { [ "$#" -eq 3 ] && [ "$2" = --backend ] && [ "$3" = crabbox ]; } || { usage; exit 2; }
       ;;
-    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-sync-head | prepare-run | merge-verify)
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-baseline-refresh | prepare-validate-commit | prepare-gates | prepare-sync-head | prepare-run | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }
       ;;
     *)
@@ -827,6 +842,9 @@ main() {
     prepare-correction-init)
       [ "$#" -eq 1 ] || { usage; exit 2; }
       prepare_init "$1" "${PR_OBSERVATION:-}" correction
+      ;;
+    prepare-baseline-refresh)
+      prepare_baseline_refresh "$@"
       ;;
     prepare-correction-review-init)
       [ "$#" -eq 1 ] || { usage; exit 2; }

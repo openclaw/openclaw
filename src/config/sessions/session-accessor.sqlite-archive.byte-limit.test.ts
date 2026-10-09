@@ -1,19 +1,19 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { encodeSessionArchiveContent } from "./archive-compression.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import { readTranscriptArchivePageInWorker } from "./session-accessor.sqlite-archive-read.js";
 import { readTranscriptArchiveRecords } from "./session-accessor.sqlite-archive-stream.js";
-import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -30,18 +30,15 @@ vi.mock("./session-accessor.sqlite-archive-stream.js", async (importOriginal) =>
   return { ...actual, MAX_TASK_ARCHIVE_RECORD_BYTES: 768 };
 });
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-archive-byte-limit-");
+
 describe("SQLite transcript archive byte limit", () => {
   let tempDir: string;
   let storePath: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-archive-byte-limit-"));
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it.each([

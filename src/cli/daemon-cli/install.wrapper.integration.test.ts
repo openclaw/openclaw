@@ -4,8 +4,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
-import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
-import { resolveLaunchAgentEnvWrapperPath } from "../../daemon/launchd-service-files.js";
+import * as runtimePaths from "../../daemon/runtime-paths.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceInstallArgs,
@@ -14,7 +13,8 @@ import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { addGatewayServiceCommands } from "./register-service-commands.js";
 
-const { defaultRuntime, runtimeErrors, resetRuntimeCapture } = createCliRuntimeCapture();
+const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
+  createCliRuntimeCapture();
 const service = vi.hoisted(() => ({
   label: "LaunchAgent",
   loadedText: "loaded",
@@ -31,6 +31,56 @@ vi.mock("../../runtime.js", () => ({ defaultRuntime }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let originalArgv: string[];
 let entrypoint: string;
+
+describe("registered gateway install runtime default", () => {
+  it("uses the running Bun on first install when Node is unavailable", async () => {
+    const execPath = Object.getOwnPropertyDescriptor(process, "execPath")!;
+    const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+    const bunPath = "/opt/app/runtime/bun";
+    Object.defineProperty(process, "execPath", { configurable: true, value: bunPath });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue(undefined);
+    vi.spyOn(runtimePaths, "resolveSystemNodeInfo").mockResolvedValue(null);
+    const supported = {
+      status: "supported" as const,
+      version: "1.4.2",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+    };
+    const probe = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue(supported);
+    try {
+      const program = new Command().name("openclaw");
+      addGatewayServiceCommands(program.command("gateway"));
+      await program.parseAsync(["gateway", "install", "--force", "--port", "29453", "--json"], {
+        from: "user",
+      });
+      expect(runtimeErrors).toEqual([]);
+      expect(service.install).toHaveBeenCalledOnce();
+      const [installed] = service.install.mock.calls[0]!;
+      expect(installed.runtimePinUpdate?.pin).toBeUndefined();
+      expect(installed.programArguments).toEqual([
+        bunPath,
+        "--no-install",
+        entrypoint,
+        "gateway",
+        "--port",
+        "29453",
+      ]);
+      expect(probe).toHaveBeenCalledWith(bunPath, undefined, expect.any(Object));
+      expect(JSON.parse(runtimeLogs.at(-1)!).warnings).toEqual([
+        "No supported Node runtime was found; using the running Bun for the service.",
+      ]);
+    } finally {
+      Object.defineProperty(process, "execPath", execPath);
+      if (bunVersion) {
+        Object.defineProperty(process.versions, "bun", bunVersion);
+      } else {
+        delete process.versions.bun;
+      }
+    }
+  });
+});
 
 beforeEach(async () => {
   originalArgv = process.argv;
@@ -75,55 +125,4 @@ afterEach(() => {
   vi.unstubAllEnvs();
   clearConfigCache();
   clearRuntimeConfigSnapshot();
-});
-
-describe("registered gateway install --force wrapper selection", () => {
-  it.each(["explicit", "persisted", "custom"] as const)(
-    "selects a runnable service command for a %s wrapper",
-    async (source) => {
-      const wrapper =
-        source === "custom"
-          ? path.join(process.env.HOME!, "custom-wrapper.sh")
-          : resolveLaunchAgentEnvWrapperPath(process.env, resolveLaunchAgentLabel(process.env));
-      await fs.mkdir(path.dirname(wrapper), { recursive: true });
-      await fs.writeFile(wrapper, '#!/bin/sh\nexec "$@"\n', { mode: 0o700 });
-      if (source === "persisted") {
-        vi.stubEnv("OPENCLAW_WRAPPER", undefined);
-        service.readCommand.mockResolvedValue({
-          programArguments: [wrapper, "gateway", "--port", "29453"],
-          environment: { OPENCLAW_WRAPPER: wrapper, WRAPPER_TEST_VALUE: "retained" },
-        });
-      }
-      const program = new Command().name("openclaw");
-      addGatewayServiceCommands(program.command("gateway"));
-      await program.parseAsync(
-        [
-          "gateway",
-          "install",
-          "--force",
-          "--runtime",
-          "node",
-          "--port",
-          "29453",
-          "--json",
-          ...(source === "persisted" ? [] : ["--wrapper", wrapper]),
-        ],
-        { from: "user" },
-      );
-      expect(runtimeErrors).toEqual([]);
-      expect(service.install).toHaveBeenCalledOnce();
-      const [installed] = service.install.mock.calls[0]!;
-      if (source === "custom") {
-        expect(installed.programArguments).toEqual([wrapper, "gateway", "--port", "29453"]);
-        expect(installed.environment?.OPENCLAW_WRAPPER).toBe(wrapper);
-      } else {
-        expect(installed.programArguments).toContain(entrypoint);
-        expect(installed.programArguments).not.toContain(wrapper);
-        expect(installed.environment?.OPENCLAW_WRAPPER).toBeUndefined();
-      }
-      if (source === "persisted") {
-        expect(installed.environment?.WRAPPER_TEST_VALUE).toBe("retained");
-      }
-    },
-  );
 });

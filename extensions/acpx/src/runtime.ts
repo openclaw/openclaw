@@ -52,7 +52,6 @@ import {
 import {
   cleanupOpenClawOwnedAcpxPendingLease,
   isOpenClawLeaseAwareAcpxProcessCommand,
-  type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 import { AcpxGenerationRegistry } from "./runtime-generations.js";
 import { AcpxRuntimeProbe } from "./runtime-probe.js";
@@ -89,9 +88,6 @@ type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
   openclawProcessLeaseStore?: AcpxProcessLeaseStore;
   pluginToolsMcpBridgeEnabled?: boolean;
   openclawToolsMcpBridgeEnabled?: boolean;
-};
-type AcpxRuntimeTestOptions = Record<string, unknown> & {
-  openclawProcessCleanup?: AcpxProcessCleanupDeps;
 };
 type OpenClawRuntimeTurnInput = Parameters<NonNullable<AcpRuntime["startTurn"]>>[0] &
   Pick<Parameters<BaseAcpxRuntime["startTurn"]>[0], "onPermissionRequest" | "assertActive">;
@@ -398,17 +394,14 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   private readonly pluginToolsMcpBridgeEnabled: boolean;
   private readonly openclawToolsMcpBridgeEnabled: boolean;
   private readonly managedToolsMcpBridgeEnabled: boolean;
-  private readonly processCleanupDeps: AcpxProcessCleanupDeps | undefined;
   private readonly wrapperRoot: string | undefined;
   private readonly gatewayInstanceId: string | undefined;
   private readonly processLeaseStore: AcpxProcessLeaseStore | undefined;
   private readonly launchLeaseScope = new AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>();
   private readonly cwd: string;
 
-  constructor(options: OpenClawAcpxRuntimeOptions, testOptions?: AcpxRuntimeTestOptions) {
+  constructor(options: OpenClawAcpxRuntimeOptions, testOptions?: Record<string, unknown>) {
     this.legacyBareSessionKeys = new Set(options.openclawLegacyBareSessionKeys);
-    const { openclawProcessCleanup, ...delegateTestOptions } = testOptions ?? {};
-    this.processCleanupDeps = openclawProcessCleanup;
     this.wrapperRoot = options.openclawWrapperRoot;
     this.gatewayInstanceId = options.openclawGatewayInstanceId;
     this.processLeaseStore = options.openclawProcessLeaseStore;
@@ -494,7 +487,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
             onExit: options.processLifecycle?.onExit,
           },
         },
-        delegateTestOptions as BaseAcpxRuntimeTestOptions,
+        testOptions as BaseAcpxRuntimeTestOptions,
       );
     this.delegate = createDelegate();
     this.generationRegistry = new AcpxGenerationRegistry(
@@ -766,7 +759,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         gatewayInstanceId: launch.gatewayInstanceId,
         wrapperRoot: launch.wrapperRoot,
         wrapperPath: extractGeneratedWrapperPath(leasedCommand),
-        deps: this.processCleanupDeps,
       });
     }
     return result;
@@ -852,11 +844,9 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     });
   }
 
-  async findSession(input: {
-    sessionKey: string;
-    agent: string;
-    agentId?: string;
-  }): Promise<OpenClawRuntimeHandle | undefined> {
+  async findSession(
+    input: Parameters<CompleteAcpRuntime["findSession"]>[0],
+  ): Promise<OpenClawRuntimeHandle | undefined> {
     const resource = assertAcpxSessionOwnerLocator(input, this.legacyBareSessionKeys);
     const generation = this.generationRegistry.currentGeneration(resource);
     return this.runInGeneration(input, { generation }, async () => {
@@ -865,6 +855,8 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         agent: input.agent,
       });
       this.generationRegistry.assertCurrentGeneration(generation);
+      // Returned handles keep their reset fence, including closed persisted history.
+      generation.admitted ||= Boolean(handle);
       return handle
         ? {
             ...handle,
@@ -1293,7 +1285,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           gatewayInstanceId: this.gatewayInstanceId,
           wrapperRoot: this.wrapperRoot,
           leaseStore: this.processLeaseStore,
-          deps: this.processCleanupDeps,
         }).catch((error: unknown) => async () => {
           throw error;
         });

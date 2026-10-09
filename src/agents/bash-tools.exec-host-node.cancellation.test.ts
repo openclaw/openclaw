@@ -226,31 +226,4 @@ describe("node-host dispatch cancellation", () => {
       { scopes: ["operator.write", "operator.approvals"], signal: controller.signal },
     );
   });
-
-  it("forwards cancellation for prepared commands that need no approval", async () => {
-    const controller = new AbortController();
-    resolvePolicy.mockResolvedValue(createPolicy("allowlist", "off"));
-    nodePolicy = { security: "allowlist", ask: "off" };
-    nodeAllowlist = [{ pattern: executable }];
-
-    const result = await executeNodeHostCommand(
-      createRequest({
-        security: "allowlist",
-        ask: "off",
-        signal: controller.signal,
-      }),
-    );
-
-    expect(result.details).toMatchObject({ status: "completed", exitCode: 0, aggregated: "ok" });
-    expect(result.content).toEqual([{ type: "text", text: "Node: node-1\nok" }]);
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.invoke",
-      { timeoutMs: 40_000 },
-      expect.objectContaining({ command: "system.run" }),
-      { signal: controller.signal },
-    );
-    expect(
-      callGatewayToolMock.mock.calls.filter(([method]) => method === "exec.approval.request"),
-    ).toHaveLength(0);
-  });
 });

@@ -53,7 +53,9 @@ export async function canRepairRunningGatewayDefinition(params: {
 /** One native writer retains Doctor custody through publication and recovery. */
 export async function installDoctorGatewayService(
   params: Omit<GatewayServiceInstallationRepair, "activeRoot"> & {
-    repair: { kind: "config" } | { kind: "definition" | "installation"; root: string };
+    repair:
+      | { kind: "config"; root?: string }
+      | { kind: "definition" | "installation"; root: string };
     args: GatewayServiceInstallArgs;
     runtime: RuntimeEnv;
   },
@@ -76,7 +78,7 @@ export async function installDoctorGatewayService(
         }
         await params.service.install({ ...params.args, assertCurrent, definitionTransaction });
       };
-      if (params.repair.kind === "definition") {
+      if (params.repair.kind !== "installation" && params.repair.root) {
         const { reconcileGatewayServiceDefinition } =
           await import("../daemon/service-reconciliation.js");
         await reconcileGatewayServiceDefinition({
@@ -92,13 +94,29 @@ export async function installDoctorGatewayService(
       }
     };
     if (params.repair.kind === "installation") {
-      await repairGatewayServiceInstallation({
+      const repair = {
         service: params.service,
         command: params.command,
         activeRoot: params.repair.root,
         maintenance: params.maintenance,
         env: params.args.env,
-        install,
+      };
+      await withGatewayServiceOperationLock(repair.env, async (assertNative) => {
+        const assertCurrent = () => {
+          assertNative();
+          repair.maintenance?.assertCurrent();
+        };
+        await assertGatewayServiceInstallationRepairAllowed(repair);
+        assertCurrent();
+        await install(assertCurrent);
+        // Standalone Windows reinstall can leave the old process alive after /Run.
+        if (process.platform === "win32" && !repair.maintenance) {
+          await repair.service.restart({
+            env: repair.env,
+            stdout: process.stdout,
+            assertCurrent,
+          });
+        }
       });
       note(
         "Gateway service installation reconciled with the active CLI.",
@@ -162,28 +180,6 @@ export async function assertGatewayServiceInstallationRepairAllowed(
       `Gateway service installation is controlled by another owner; automatic installation repair was skipped. Inspect it with \`${formatCliCommand("openclaw gateway status --deep", state.env)}\`.`,
     );
   }
-}
-
-async function repairGatewayServiceInstallation(
-  params: GatewayServiceInstallationRepair & {
-    env: NodeJS.ProcessEnv;
-    install: (assertCurrent: () => void) => Promise<void>;
-  },
-): Promise<void> {
-  await withGatewayServiceOperationLock(params.env, async (assertNative) => {
-    const assertCurrent = () => {
-      assertNative();
-      params.maintenance?.assertCurrent();
-    };
-    await assertGatewayServiceInstallationRepairAllowed(params);
-    assertCurrent();
-    await params.install(assertCurrent);
-    // Maintenance already stopped the old task. A standalone reinstall can leave
-    // an existing Scheduled Task process alive after /Run accepts its new script.
-    if (process.platform === "win32" && !params.maintenance) {
-      await params.service.restart({ env: params.env, stdout: process.stdout, assertCurrent });
-    }
-  });
 }
 
 const EXECSTART_REPAIR_CODES = new Set<string>([

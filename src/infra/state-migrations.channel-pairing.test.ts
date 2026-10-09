@@ -12,6 +12,7 @@ import {
   detectLegacyChannelPairingState,
   migrateLegacyChannelPairingState,
 } from "./state-migrations.channel-pairing.js";
+import { runLegacyStateMigrationSteps } from "./state-migrations.steps.js";
 
 const tempDirs = createTrackedTempDirs();
 const createdAt = "2026-01-01T00:00:00.000Z";
@@ -47,6 +48,64 @@ async function fixture(files: Record<string, unknown>, options: DetectionOptions
 }
 
 describe("legacy channel pairing state migration", () => {
+  it.each([
+    { removedMalformed: false, configuredMalformed: false },
+    { removedMalformed: true, configuredMalformed: false },
+    { removedMalformed: false, configuredMalformed: true },
+  ])(
+    "archives removed account state (malformed: $removedMalformed, configured malformed file: $configuredMalformed)",
+    async ({ removedMalformed, configuredMalformed }) => {
+      const filename = "custom-channel-removed-allowFrom.json";
+      const state = await fixture(
+        {
+          [filename]: ["former-user"],
+          ...(configuredMalformed ? { "custom-channel-active-allowFrom.json": null } : {}),
+        },
+        {
+          configuredChannelIds: ["custom-channel"],
+          resolveAccounts: () => ({ accountIds: { "custom-channel": ["active"] } }),
+        },
+      );
+      const source = path.join(state.sourceDir, filename);
+      const original = removedMalformed ? "{broken\n" : '["former-user"]\n';
+      fs.writeFileSync(source, original);
+      fs.writeFileSync(`${source}.migrated`, original);
+      const configuredSource = path.join(state.sourceDir, "custom-channel-active-allowFrom.json");
+      if (configuredMalformed) {
+        fs.writeFileSync(configuredSource, "{broken\n");
+      }
+      const laterRepair = vi.fn(() => ({ changes: ["Later repair completed"], warnings: [] }));
+      const result = await runLegacyStateMigrationSteps(
+        [
+          { id: "channel-pairing", run: state.migrate },
+          { id: "later-repair", run: laterRepair },
+        ].map((step) =>
+          Object.assign(step, {
+            phase: "final" as const,
+            source: [],
+            target: [],
+            requiredness: "required" as const,
+            reversibility: "checkpoint-required" as const,
+          }),
+        ),
+      );
+      expect(result.receipts.map((receipt) => receipt.outcome)).toEqual(
+        configuredMalformed ? ["refused", "refused"] : ["warning", "completed"],
+      );
+      expect(laterRepair).toHaveBeenCalledTimes(configuredMalformed ? 0 : 1);
+      const warnings = result.receipts[0]?.warnings.join("\n");
+      expect(warnings).toContain(source);
+      expect(warnings).toContain(`${source}.migrated.2`);
+      expect(fs.existsSync(source)).toBe(false);
+      expect(fs.readFileSync(`${source}.migrated`, "utf8")).toBe(original);
+      expect(fs.readFileSync(`${source}.migrated.2`, "utf8")).toBe(original);
+      if (configuredMalformed) {
+        expect(fs.readFileSync(configuredSource, "utf8")).toBe("{broken\n");
+      }
+      expect(readChannelPairingStateSnapshot("custom-channel", state.env).allowFrom).toEqual({});
+    },
+  );
+
   it("defers configured account discovery without resolving accounts", async () => {
     const resolveAccounts = vi.fn(() => ({ defaultAccountIds: { "custom-channel": "primary" } }));
     const { detected } = await fixture(
@@ -192,34 +251,47 @@ describe("legacy channel pairing state migration", () => {
     expect(readChannelPairingStateSnapshot("telegram", state.env).allowFrom).toEqual({});
   });
 
-  it.each([
+  it.each<{
+    filename: string;
+    accountIds: Record<string, string[]>;
+    configuredChannelIds: string[];
+    channels: string[];
+    reason: "unresolved" | "ambiguous";
+  }>([
     {
       filename: "telegram-ops..bot-allowFrom.json",
-      accountIds: ["ops_bot"],
+      accountIds: { telegram: ["ops_bot"] },
       configuredChannelIds: [],
       channels: ["telegram"],
       reason: "unresolved",
     },
     {
       filename: "telegram-DEFAULT-allowFrom.json",
-      accountIds: ["default"],
+      accountIds: { telegram: ["default"] },
       configuredChannelIds: [],
       channels: ["telegram"],
       reason: "unresolved",
     },
     {
       filename: "custom-channel-default-allowFrom.json",
-      accountIds: [],
+      accountIds: { telegram: [] },
       configuredChannelIds: ["custom-channel"],
       channels: ["custom-channel"],
       reason: "unresolved",
     },
     {
       filename: "telegram-business-allowFrom.json",
-      accountIds: ["business"],
+      accountIds: { telegram: ["business"] },
       configuredChannelIds: ["telegram-business"],
       channels: ["telegram", "telegram-business"],
       reason: "ambiguous",
+    },
+    {
+      filename: "telegram-business-ops..bot-allowFrom.json",
+      accountIds: { telegram: [], "telegram-business": ["ops_bot"] },
+      configuredChannelIds: ["telegram-business"],
+      channels: ["telegram", "telegram-business"],
+      reason: "unresolved",
     },
   ])(
     "preserves $reason account source $filename",
@@ -228,7 +300,7 @@ describe("legacy channel pairing state migration", () => {
         { [filename]: { version: 1, allowFrom: ["1003"] } },
         {
           configuredChannelIds,
-          resolveAccounts: () => ({ accountIds: { telegram: accountIds } }),
+          resolveAccounts: () => ({ accountIds }),
         },
       );
       expect(state.migrate()).toEqual({

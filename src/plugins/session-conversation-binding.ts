@@ -1,5 +1,13 @@
 import crypto from "node:crypto";
+import {
+  expectedCurrentSessionBinding,
+  type CurrentSessionBindingExpectation,
+} from "../infra/outbound/session-binding-native-selection.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+import type {
+  SessionBindingBindInput,
+  SessionBindingUnbindInput,
+} from "../infra/outbound/session-binding.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
@@ -29,67 +37,66 @@ export async function bindPluginSessionConversation(params: {
   if (!sessionKey) {
     throw new Error("session key is required for a plugin session binding");
   }
-  return await pluginSessionBindQueue.enqueue(sessionKey, async () =>
-    bindPluginSessionConversationExclusive({ ...params, sessionKey }),
-  );
-}
-
-async function bindPluginSessionConversationExclusive(
-  params: Parameters<typeof bindPluginSessionConversation>[0],
-): Promise<PluginConversationBinding> {
-  const sessionKey = params.sessionKey;
-  const conversation = {
-    channel: INTERNAL_MESSAGE_CHANNEL,
-    accountId: "default",
-    conversationId: sessionKey,
-  };
-  const bindingService = getSessionBindingService();
-  const previous = bindingService.resolveByConversation(conversation);
-  const bindingAttemptId = crypto.randomUUID();
-  const binding = await bindConversationNow({
-    identity: params,
-    conversation,
-    targetSessionKey: sessionKey,
-    summary: params.binding.summary,
-    detachHint: params.binding.detachHint,
-    data: params.binding.data,
-    bindingAttemptId,
-  });
-  try {
-    await params.afterBind?.();
-    return binding;
-  } catch (error) {
-    const current = bindingService.resolveByConversation(conversation);
-    if (current?.metadata?.bindingAttemptId !== bindingAttemptId) {
+  return await pluginSessionBindQueue.enqueue(sessionKey, async () => {
+    const operation = { ...params, sessionKey };
+    const conversation = {
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      accountId: "default",
+      conversationId: sessionKey,
+    };
+    const bindingService = getSessionBindingService();
+    const previous = await bindingService.resolveByConversationAsync(conversation);
+    const bindingAttemptId = crypto.randomUUID();
+    const binding = await bindConversationNow({
+      identity: operation,
+      conversation,
+      targetSessionKey: sessionKey,
+      summary: operation.binding.summary,
+      detachHint: operation.binding.detachHint,
+      data: operation.binding.data,
+      bindingAttemptId,
+      expectedBinding: previous,
+    });
+    try {
+      await operation.afterBind?.();
+      return binding;
+    } catch (error) {
+      const current = await bindingService.resolveByConversationAsync(conversation);
+      if (current?.metadata?.bindingAttemptId !== bindingAttemptId) {
+        throw error;
+      }
+      try {
+        const rollbackInput: SessionBindingUnbindInput & CurrentSessionBindingExpectation = {
+          [expectedCurrentSessionBinding]: current,
+          bindingId: current.bindingId,
+          reason: "plugin-session-bind-rollback",
+          scope: current.conversation,
+        };
+        await bindingService.unbind(rollbackInput);
+        if (previous && (previous.expiresAt === undefined || previous.expiresAt > Date.now())) {
+          const restoreInput: SessionBindingBindInput & CurrentSessionBindingExpectation = {
+            [expectedCurrentSessionBinding]: null,
+            targetSessionKey: previous.targetSessionKey,
+            targetKind: previous.targetKind,
+            conversation: previous.conversation,
+            placement: "current",
+            metadata: previous.metadata,
+            ...(previous.expiresAt === undefined
+              ? {}
+              : { ttlMs: Math.max(1, previous.expiresAt - Date.now()) }),
+          };
+          await bindingService.bind(restoreInput);
+        }
+      } catch (rollbackError) {
+        // The finalize failure is superseded by the rollback failure on the
+        // throw path; keep it observable for diagnosis.
+        log.warn("plugin session binding finalization failed before rollback", { error });
+        throw new Error(
+          "plugin session binding finalization failed and its previous binding could not be restored",
+          { cause: rollbackError },
+        );
+      }
       throw error;
     }
-    try {
-      await bindingService.unbind({
-        bindingId: current.bindingId,
-        reason: "plugin-session-bind-rollback",
-        scope: current.conversation,
-      });
-      if (previous && (previous.expiresAt === undefined || previous.expiresAt > Date.now())) {
-        await bindingService.bind({
-          targetSessionKey: previous.targetSessionKey,
-          targetKind: previous.targetKind,
-          conversation: previous.conversation,
-          placement: "current",
-          metadata: previous.metadata,
-          ...(previous.expiresAt === undefined
-            ? {}
-            : { ttlMs: Math.max(1, previous.expiresAt - Date.now()) }),
-        });
-      }
-    } catch (rollbackError) {
-      // The finalize failure is superseded by the rollback failure on the
-      // throw path; keep it observable for diagnosis.
-      log.warn("plugin session binding finalization failed before rollback", { error });
-      throw new Error(
-        "plugin session binding finalization failed and its previous binding could not be restored",
-        { cause: rollbackError },
-      );
-    }
-    throw error;
-  }
+  });
 }

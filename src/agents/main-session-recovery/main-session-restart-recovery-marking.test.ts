@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   admitReplyTurn,
@@ -9,6 +8,7 @@ import {
 } from "../../auto-reply/reply/reply-turn-admission.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -39,6 +39,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import {
   markRestartAbortedMainSessions,
@@ -46,14 +47,29 @@ import {
 } from "./main-session-restart-recovery-marking.js";
 import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
+
 it("keeps healthy stores recoverable when an earlier startup mark fails", async () => {
   await withOpenClawTestState({ label: "recovery-mark-failure" }, async (state) => {
-    const cfg = { agents: { entries: { main: { default: true }, worker: {} } } };
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          heartbeat: { agentId: "main" },
+          systemAgent: { agentId: "main" },
+        },
+        entries: { main: { workspace: state.statePath("workspace") }, worker: {} },
+      },
+      talk: { agentId: "main" },
+    };
     await state.writeConfig(cfg);
     for (const agentId of ["main", "worker"]) {
       const sessionKey = `agent:${agentId}:main`;
       const sessionId = `${agentId}-session`;
-      await replaceSessionEntry({ agentId, sessionKey }, { sessionId, updatedAt: 1 });
+      await replaceSessionEntry(
+        { agentId, sessionKey },
+        { sessionId, updatedAt: 1, restartRecoveryDeliveryRunId: `${agentId}-run` },
+      );
       await persistGatewaySessionLifecycleEvent({
         agentId,
         sessionKey,
@@ -65,7 +81,6 @@ it("keeps healthy stores recoverable when an earlier startup mark fails", async 
         },
       });
       expect(loadSessionEntry({ agentId, sessionKey })).toMatchObject({
-        status: "running",
         lifecycleRunId: `${agentId}-run`,
         abortedLastRun: false,
       });
@@ -123,7 +138,10 @@ it.each(["before", "after"] as const)(
       const sessionId = "owned-session";
       const runId = "owned-run";
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      await replaceSessionEntry({ sessionKey }, { sessionId, updatedAt: 1 });
+      await replaceSessionEntry(
+        { sessionKey },
+        { sessionId, updatedAt: 1, restartRecoveryDeliveryRunId: runId },
+      );
       await persistGatewaySessionLifecycleEvent({
         sessionKey,
         event: { ts: 1, sessionId, runId, data: { phase: "start", startedAt: 1 } },
@@ -178,7 +196,10 @@ it("recovers an orphan after its owner releases retained run metadata", async ()
     const sessionId = "retained-session";
     const runId = "retained-run";
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    await replaceSessionEntry({ sessionKey }, { sessionId, updatedAt: 1 });
+    await replaceSessionEntry(
+      { sessionKey },
+      { sessionId, updatedAt: 1, restartRecoveryDeliveryRunId: runId },
+    );
     await persistGatewaySessionLifecycleEvent({
       sessionKey,
       event: { ts: 1, sessionId, runId, data: { phase: "start", startedAt: 1 } },
@@ -209,11 +230,25 @@ it("recovers an orphan after its owner releases retained run metadata", async ()
 
 it("marks healthy startup orphans while leaving a refused secondary database untouched", async () => {
   await withOpenClawTestState({ label: "recovery-admission" }, async (state) => {
-    const cfg = { agents: { entries: { main: { default: true }, cleaner: {} } } };
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          heartbeat: { agentId: "main" },
+          systemAgent: { agentId: "main" },
+        },
+        entries: { main: { workspace: state.statePath("workspace") }, cleaner: {} },
+      },
+      talk: { agentId: "main" },
+    };
     for (const agentId of ["main", "cleaner"]) {
       await replaceSessionEntry(
         { agentId, sessionKey: `agent:${agentId}:main` },
-        { sessionId: `${agentId}-orphan`, status: "running", updatedAt: 1 },
+        {
+          sessionId: `${agentId}-orphan`,
+          restartRecoveryDeliveryRunId: `${agentId}-run`,
+          updatedAt: 1,
+        },
       );
     }
     const copyPath = openOpenClawAgentDatabase({ agentId: "cleaner" }).path;
@@ -241,7 +276,6 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
         await discoverRestartRecoveryStoreTargets({
           cfg,
           stateDir: state.stateDir,
-          statuses: ["running"],
         })
       ).map((target) => target.agentId),
     ).toEqual(["main"]);
@@ -250,7 +284,7 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
 });
 
 it("marks only the closing Gateway's exact active admissions", async () => {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-owner-"));
+  const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const resolveGatewayContext = () => undefined;
   const otherGatewayContext = () => undefined;
@@ -263,7 +297,7 @@ it("marks only the closing Gateway's exact active admissions", async () => {
       const sessionKey = `agent:main:${name}`;
       await replaceSessionEntry(
         { storePath, sessionKey },
-        { sessionId: name, status: "running", updatedAt: Date.now() },
+        { sessionId: name, updatedAt: Date.now() },
       );
       admissions.push(
         await beginSessionWorkAdmission({
@@ -288,15 +322,13 @@ it("marks only the closing Gateway's exact active admissions", async () => {
     ).toBeUndefined();
   } finally {
     admissions.forEach((admission) => admission.release());
-    closeOpenClawAgentDatabasesForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
   }
 });
 
 it.each(["release", "completed", "rotation"] as const)(
   "does not commit a restart mark when %s invalidates its owner after planning",
   async (change) => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-commit-"));
+    const stateDir = sessionDirs.make();
     const storePath = path.join(stateDir, "sessions.json");
     const sessionKey = "agent:main:closing";
     const sessionId = "closing";
@@ -305,10 +337,7 @@ it.each(["release", "completed", "rotation"] as const)(
     const apply = sessionAccessor.applySessionEntryReplacements;
     let restoreSpy = () => {};
     try {
-      await replaceSessionEntry(
-        { storePath, sessionKey },
-        { sessionId, status: "running", updatedAt: Date.now() },
-      );
+      await replaceSessionEntry({ storePath, sessionKey }, { sessionId, updatedAt: Date.now() });
       admission = await beginSessionWorkAdmission({
         scope: storePath,
         identities: [sessionKey, sessionId],
@@ -359,14 +388,12 @@ it.each(["release", "completed", "rotation"] as const)(
     } finally {
       restoreSpy();
       admission?.release();
-      closeOpenClawAgentDatabasesForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
     }
   },
 );
 
 it("does not adopt an ambient Gateway when moving an unbound reply owner", async () => {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-adoption-"));
+  const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:adopted";
   const sessionId = "adopted";
@@ -377,10 +404,7 @@ it("does not adopt an ambient Gateway when moving an unbound reply owner", async
     resetTriggered: false,
   });
   try {
-    await replaceSessionEntry(
-      { storePath, sessionKey },
-      { sessionId, status: "running", updatedAt: Date.now() },
-    );
+    await replaceSessionEntry({ storePath, sessionKey }, { sessionId, updatedAt: Date.now() });
     await withPluginRuntimeGatewayContextResolver(otherGatewayContext, async () => {
       const admission = await admitReplyTurn({
         sessionKey,
@@ -408,13 +432,11 @@ it("does not adopt an ambient Gateway when moving an unbound reply owner", async
     const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey] });
     operation.complete();
     await released;
-    closeOpenClawAgentDatabasesForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
   }
 });
 
 it("keeps another active session recoverable when one owner releases after batch planning", async () => {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-batch-"));
+  const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const resolveGatewayContext = () => undefined;
   const admissions: SessionWorkAdmissionLease[] = [];
@@ -473,13 +495,11 @@ it("keeps another active session recoverable when one owner releases after batch
       counts: { marked: 1, skipped: 1 },
       error: undefined,
       survivingAdmissionActive: true,
-      survivingStatus: "running",
+      survivingStatus: "interrupted",
       survivingRestartMarker: true,
     });
   } finally {
     restoreSpy();
     admissions.forEach((admission) => admission.release());
-    closeOpenClawAgentDatabasesForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
   }
 });

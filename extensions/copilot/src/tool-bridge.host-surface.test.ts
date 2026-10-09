@@ -27,7 +27,7 @@ describe("Copilot host-owned tool construction", () => {
       }
       return textToolResult("HOST_PINNED_READER");
     });
-    const createToolSurface = vi.fn(() => [reader]);
+    const createToolSurfaceAsync = vi.fn(async () => [reader]);
     const bindToolSurface = vi.fn(() => {
       throw new Error("Host-created tools must not be rebound");
     });
@@ -41,12 +41,12 @@ describe("Copilot host-owned tool construction", () => {
         toolsAllow: ["read"],
         hostCapabilities: {
           ...createCopilotTestHostCapabilities(),
-          createToolSurface,
+          createToolSurfaceAsync,
           bindToolSurface,
         },
       },
     });
-    expect(createToolSurface).toHaveBeenCalledExactlyOnceWith(
+    expect(createToolSurfaceAsync).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ skillsSnapshot, workspaceDir: "/workspace" }),
       { cwd: "/workspace" },
     );
@@ -54,6 +54,7 @@ describe("Copilot host-owned tool construction", () => {
     expect(bindToolSurface).not.toHaveBeenCalled();
     expect(bridge.sourceTools).toContain(reader);
     const sdkReader = bridge.promptToolPolicy.apply().tools.find((tool) => tool.name === "read");
+    expect(sdkReader).toMatchObject({ skipPermission: true, overridesBuiltInTool: true });
     expect(sdkReader?.handler).toBeTypeOf("function");
     const invocation = makeInvocation({ toolName: "read", toolCallId: "read-1", arguments: {} });
     const result = await sdkReader!.handler!({}, invocation);

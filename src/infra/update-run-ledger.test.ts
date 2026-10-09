@@ -4,6 +4,7 @@ import {
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
 } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -90,7 +91,7 @@ describe("update run ledger", () => {
       expect(retained.origin.candidateAdmission).toEqual(candidateAdmission);
       expect(listUpdateRuns({}, options)[0]?.admission).toEqual(admission);
       const report = renderUpdateRunReport(retained).markdown;
-      expect(report).toContain(`Admission: ${owner}`);
+      expect(report).toContain(`Update safety checks ran in the ${owner} updater`);
       expect(report).toContain(
         owner === "candidate" ? "config: warn" : "update-admission-unsupported-target",
       );
@@ -489,6 +490,41 @@ describe("update run ledger", () => {
     },
   );
 
+  it.each(["running", "terminal"] as const)(
+    "keeps phase capture synchronous and isolated for a %s row",
+    (state) => {
+      const options = isolatedOptions();
+      const created = createUpdateRun({ trigger: "cli", target: { kind: "git" } }, options);
+      const before =
+        state === "terminal"
+          ? finishUpdateRun(created.runId, { status: "failed", reason: "fixture" }, options)
+          : created;
+      let captured: UpdateRunRecord | undefined;
+      const result = recordUpdateRunPhase(
+        created.runId,
+        "staging",
+        { target: { sha: "abcdef1234567890" } },
+        options,
+        (record) => {
+          expect(record).toEqual(before);
+          captured = record;
+          record.target.kind = "package";
+          record.phase = "finished";
+        },
+      );
+      expect(captured).toBeDefined();
+      if (state === "terminal") {
+        expect(result).toEqual(before);
+      } else {
+        expect(result).toMatchObject({
+          phase: "staging",
+          target: { kind: "git", sha: "abcdef1234567890" },
+        });
+      }
+      expect(getUpdateRun(created.runId, options)).toEqual(result);
+    },
+  );
+
   it("keeps phase order and merges repeated steps while preserving terminal outcomes and later boot facts", () => {
     const options = isolatedOptions();
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -632,21 +668,26 @@ describe("update run ledger", () => {
         options,
       );
       clock.mockReturnValue(2_000);
-      finishUpdateRun(run.runId, { status }, options);
+      const nextAction = "Run openclaw update repair.";
+      finishUpdateRun(run.runId, { status, nextAction }, options);
       closeOpenClawStateDatabaseForTest();
 
       const persisted = getUpdateRun(run.runId, options);
+      const completion = { status: stepStatus, endedAtMs: 2_000 };
+      expect(persisted).toMatchObject({ phase: "finished", origin: { nextAction } });
+      expect(persisted?.steps.filter((step) => step.step === "requested")).toEqual([
+        { step: "requested", status: "completed", startedAtMs: 1_000, endedAtMs: 1_000 },
+      ]);
+      expect(finishUpdateRun(run.runId, { status, nextAction: "later" }, options)).toEqual(
+        persisted,
+      );
       expect(persisted?.steps.some((step) => step.status === "in_progress")).toBe(false);
       expect(persisted?.steps.find((step) => step.step === "openclaw doctor")).toEqual({
         step: "openclaw doctor",
-        status: stepStatus,
         startedAtMs: 1_000,
-        endedAtMs: 2_000,
+        ...completion,
       });
-      expect(persisted?.steps.find((step) => step.step === "validating")).toMatchObject({
-        status: stepStatus,
-        endedAtMs: 2_000,
-      });
+      expect(persisted?.steps.find((step) => step.step === "validating")).toMatchObject(completion);
       for (const step of recordedSteps) {
         expect(persisted?.steps.find((entry) => entry.step === step.step)).toEqual(step);
       }
@@ -878,7 +919,9 @@ describe("update run ledger", () => {
     }
   });
 
-  it("merges independent CLI and gateway process writes into the same WAL run", async () => {
+  it("merges independent CLI and gateway process writes into the same WAL run", async ({
+    signal,
+  }) => {
     const options = isolatedOptions();
     const run = createUpdateRun({ trigger: "cli" }, options);
     const database = openOpenClawStateDatabase(options);
@@ -928,22 +971,20 @@ describe("update run ledger", () => {
       );
       return { child, ready, written, exited };
     });
-    const deadline = setTimeout(() => {
-      for (const { child } of children) {
-        child.kill();
-      }
-    }, 20_000);
     try {
       const allWritten = Promise.all(children.map(({ written }) => written));
-      await Promise.race([Promise.all(children.map(({ ready }) => ready)), allWritten]);
+      await withinTest(
+        Promise.race([Promise.all(children.map(({ ready }) => ready)), allWritten]),
+        signal,
+      );
       for (const { child } of children) {
         child.send("start");
       }
-      await allWritten;
+      await withinTest(allWritten, signal);
       // Writes stay concurrent; handle retirement must not race another lifecycle writer.
       for (const { child, exited } of children) {
         child.send("close");
-        await exited;
+        await withinTest(exited, signal);
       }
       const persisted = getUpdateRun(run.runId, options);
       const expected = ["cli", "gateway"].flatMap((role) =>
@@ -970,7 +1011,6 @@ describe("update run ledger", () => {
       } satisfies Partial<UpdateRunRecord>);
       expect(persisted?.confirmedAtMs).toEqual(expect.any(Number));
     } finally {
-      clearTimeout(deadline);
       for (const { child } of children) {
         if (child.exitCode === null) {
           child.kill();

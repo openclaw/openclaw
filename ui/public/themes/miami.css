@@ -20,6 +20,7 @@
   --primary: #f472b6;
   --primary-hover: #f78fc5;
   --primary-foreground: #3c0a24;
+  --accent-foreground: #3c0a24;
 
   --destructive: #ef5d78;
   --destructive-hover: #e84763;
@@ -95,7 +96,9 @@
   --accent-subtle: rgba(176, 36, 111, 0.09);
   --accent-glow: rgba(176, 36, 111, 0.14);
   --primary: #b0246f;
+  --primary-hover: var(--accent-hover);
   --primary-foreground: #ffffff;
+  --accent-foreground: #ffffff;
 
   --destructive: #c22f4f;
   --destructive-hover: #ac2844;

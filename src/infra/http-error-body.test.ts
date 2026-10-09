@@ -10,45 +10,27 @@ vi.mock("../logging/subsystem.js", () => ({
 
 import { readResponseBodySnippet } from "./http-error-body.js";
 
-function bodyLessResponse(text: string): Response {
-  return {
-    body: null,
-    text: async () => text,
-  } as unknown as Response;
-}
-
 describe("readResponseBodySnippet", () => {
-  it("returns full text when under both limits (body-less path)", async () => {
-    const text = "short text";
-    const result = await readResponseBodySnippet(bodyLessResponse(text), {
+  it.each(["short text", null])("returns full text when under both limits: %s", async (text) => {
+    const result = await readResponseBodySnippet(new Response(text), {
       maxBytes: 1024,
       maxChars: 50,
     });
-    expect(result).toBe(text);
+    expect(result).toBe(text ?? "");
   });
 
   it("does not split multi-byte UTF-8 characters at the byte boundary", async () => {
     const text = "ab😀cd";
     // 2 ASCII bytes (ab) + cut before the 4-byte emoji
-    const result = await readResponseBodySnippet(bodyLessResponse(text), {
+    const result = await readResponseBodySnippet(new Response(text), {
       maxBytes: 3,
       maxChars: 100,
     });
     expect(result).toBe("ab");
   });
 
-  it("stream path drops partial UTF-8 characters at the byte boundary", async () => {
-    const response = new Response(new Blob([new TextEncoder().encode("ab😀cd")]).stream());
-    const result = await readResponseBodySnippet(response, {
-      maxBytes: 3,
-      maxChars: 100,
-    });
-
-    expect(result).toBe("ab");
-  });
-
-  it("returns empty string when maxBytes is 0 (body-less path)", async () => {
-    const result = await readResponseBodySnippet(bodyLessResponse("some text"), {
+  it("returns empty string when maxBytes is 0", async () => {
+    const result = await readResponseBodySnippet(new Response("some text"), {
       maxBytes: 0,
       maxChars: 100,
     });
@@ -57,23 +39,15 @@ describe("readResponseBodySnippet", () => {
 
   it.each([
     {
-      name: "body-less response under the byte limit",
-      response: () => bodyLessResponse("a" + "🦞".repeat(10)),
+      name: "response under the byte limit",
       maxBytes: 1024,
     },
     {
-      name: "body-less response truncated by the byte limit",
-      response: () => bodyLessResponse("a" + "🦞".repeat(10)),
+      name: "response truncated by the byte limit",
       maxBytes: 30,
     },
-    {
-      name: "streamed response",
-      response: () =>
-        new Response(new Blob([new TextEncoder().encode("a" + "🦞".repeat(10))]).stream()),
-      maxBytes: 1024,
-    },
-  ])("preserves surrogate pairs for $name", async ({ response, maxBytes }) => {
-    const result = await readResponseBodySnippet(response(), {
+  ])("preserves surrogate pairs for $name", async ({ maxBytes }) => {
+    const result = await readResponseBodySnippet(new Response("a" + "🦞".repeat(10)), {
       maxBytes,
       maxChars: 10,
     });
@@ -89,14 +63,12 @@ describe("readResponseBodySnippet error visibility", () => {
 
   it.each([
     {
-      name: "response.text() rejection",
-      response: () =>
-        ({
-          body: null,
-          text: async () => {
-            throw new Error("body already consumed");
-          },
-        }) as unknown as Response,
+      name: "body-less response read rejection",
+      response: () => {
+        const response = new Response(null);
+        vi.spyOn(response, "arrayBuffer").mockRejectedValue(new Error("body already consumed"));
+        return response;
+      },
       expectedError: "body already consumed",
     },
     {

@@ -17,33 +17,6 @@ export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined):
   return normalizeOptionalString(cfg?.models?.providers?.openai?.baseUrl) ?? OPENAI_API_BASE_URL;
 }
 
-function hasSupportedOpenAIResponsesTransport(
-  transport: unknown,
-): transport is "auto" | "sse" | "websocket" | "websocket-cached" {
-  return (
-    transport === "auto" ||
-    transport === "sse" ||
-    transport === "websocket" ||
-    transport === "websocket-cached"
-  );
-}
-
-function defaultOpenAIResponsesExtraParams(
-  extraParams: Record<string, unknown> | undefined,
-  options?: { transport?: "auto" | "sse" | "websocket" | "websocket-cached" },
-): Record<string, unknown> | undefined {
-  const hasSupportedTransport = hasSupportedOpenAIResponsesTransport(extraParams?.transport);
-  const defaultTransport = options?.transport ?? "auto";
-  if (hasSupportedTransport) {
-    return extraParams;
-  }
-
-  return {
-    ...extraParams,
-    transport: defaultTransport,
-  };
-}
-
 type OpenAIResponsesProviderHooks = Pick<
   ProviderPlugin,
   | "buildReplayPolicy"
@@ -76,7 +49,14 @@ export function buildOpenAIResponsesProviderHooks(options?: {
       (supportsPromptCacheKey ??
         (classifyOpenAIBaseUrl(baseUrl) === "platform" || isOpenAICodexBaseUrl(baseUrl))),
     buildReplayPolicy: buildOpenAIReplayPolicy,
-    prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
+    prepareExtraParams: ({ extraParams }) => {
+      const transport = extraParams?.transport;
+      return ["auto", "sse", "websocket", "websocket-cached"].some(
+        (candidate) => candidate === transport,
+      )
+        ? extraParams
+        : { ...extraParams, transport: options?.transport ?? "auto" };
+    },
     wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,
     wrapSimpleCompletionStreamFn: (ctx) =>
       ctx.auth?.mode === "oauth" && ctx.auth.authFlow === TOKEN_SHARING_AUTH_FLOW

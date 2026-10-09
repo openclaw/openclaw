@@ -24,6 +24,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   credential,
   measureLaunchTurn,
+  readLaunchToolNames,
   openSessionManager,
   placements,
   root,
@@ -146,6 +147,7 @@ describe("current attachments in an active remote placement", () => {
           });
         }),
         measureLaunchTurn,
+        readLaunchToolNames,
         stageAttachments: async (request) => {
           const service = createNodeWorkspaceTransferService({
             getOwner: () => ({
@@ -199,12 +201,14 @@ describe("current attachments in an active remote placement", () => {
                 : prompt.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
             );
             request.onDispatchReady?.();
-            const transcriptLeafId = openSessionManager().appendMessage({
+            const transcriptLeafId = await (
+              await openSessionManager()
+            ).appendMessageAsync({
               role: "assistant",
               content: [{ type: "text", text: "Read both" }],
               api: "openai-responses",
               provider: "openai",
-              model: "gpt-test",
+              model: "gpt-5.6-luna",
               usage: {
                 input: 1,
                 output: 1,
@@ -216,7 +220,7 @@ describe("current attachments in an active remote placement", () => {
               stopReason: "stop",
               timestamp: Date.now(),
             });
-            createWorkerSessionPlacementGate(placements).updateAckCursors({
+            await createWorkerSessionPlacementGate(placements).updateAckCursors({
               claim: request.turnClaim,
               transcriptSeq: 2,
               liveSeq: 1,
@@ -272,6 +276,8 @@ describe("current attachments in an active remote placement", () => {
             ...result,
             changed: true,
             verifyStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         }),
         syncWorkspace: vi.fn(),

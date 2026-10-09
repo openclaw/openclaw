@@ -1,4 +1,3 @@
-import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -7,8 +6,6 @@ import {
 import { USER_PROFILE_ID_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
-// Gateway WebSocket broadcaster.
-// Applies event scope guards and slow-consumer handling before sending frames.
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
@@ -20,12 +17,15 @@ import {
   type LiveTextPublication,
   type PendingLiveText,
 } from "./server-broadcast-live-text.js";
+import { createGatewayNarrationDelivery } from "./server-broadcast-narration.js";
 import {
   hasEventScope,
+  isPlainEventPayload,
   isSessionReadInvalidation,
   modelMetadataInvalidationFragment,
 } from "./server-broadcast-scopes.js";
 import type {
+  SessionEventProjection,
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
@@ -38,6 +38,7 @@ import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constan
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 // Opt-in scoped clients never receive session-bearing broadcasts without an
@@ -49,6 +50,7 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   "chat",
   "chat.side_result",
   "session.observer",
+  "session.narration",
   // Mirrors the raw agent tool event (full args/result snapshots) onto
   // session subscribers; omitting it here would hand scoped clients the
   // exact payload the registry gate suppresses on the `agent` event.
@@ -184,13 +186,6 @@ function frameWithSequence(
   return `{"type":"event","event":${base.eventJSON}${payload},"seq":${seq}${base.stateVersionFragment}${recipient}}`;
 }
 
-export type SessionEventProjection = {
-  payload: unknown;
-  /** Certifies a fresh, mutable payload envelope and row bytes for this publication. */
-  serializeSession?: () => string;
-  delivered?: () => void;
-};
-
 export function createGatewayBroadcaster(params: {
   clients: GatewayClientRegistry;
   // Reused arrays are immutable snapshots; the projection still checks each recipient's authority.
@@ -200,7 +195,11 @@ export function createGatewayBroadcaster(params: {
   prepareSessionEventProjection?: (
     event: string,
     payload: unknown,
-    scope: { sessionKeys: readonly string[]; agentId?: string },
+    scope: {
+      sessionKeys: readonly string[];
+      agentId?: string;
+      prepareSessionProjection?: GatewayBroadcastOpts["prepareSessionProjection"];
+    },
   ) => ((client: GatewayWsClient) => SessionEventProjection | undefined) | undefined;
   sessionMessageSubscribers?: SessionMessageSubscriberRegistry;
   canReceiveSessionEvent?: (
@@ -215,6 +214,10 @@ export function createGatewayBroadcaster(params: {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
   const delivery = createGatewayLiveTextDelivery(params);
+  const narration = createGatewayNarrationDelivery({
+    ...params,
+    send: (event, payload, connIds, opts) => broadcastInternal(event, payload, opts, connIds),
+  });
   const isCurrent = (predicate?: () => boolean) => {
     try {
       return predicate?.() !== false;
@@ -235,6 +238,9 @@ export function createGatewayBroadcaster(params: {
       publication?: LiveTextPublication;
     },
   ) => {
+    if (!retained) {
+      invalidateSharedReadResponses(broadcast, event);
+    }
     if (!retained && event === "sessions.changed") {
       // Delivery is queued here so process-local handlers run after websocket fanout returns.
       queuePluginSessionsChanged(payload);
@@ -275,7 +281,7 @@ export function createGatewayBroadcaster(params: {
     let outboundEventLogged = false;
     let lastFrameSequence = 0;
     let lastFrameRecipientProfileId: string | undefined;
-    let lastFrame: string | undefined;
+    let lastFrame: string | Buffer | undefined;
     let lastPayloadFragment: string | undefined;
     const frames: PreparedFrames = retained?.frames ?? {};
     // Private coalescers preserve inputs; identical pending histories can share this merge.
@@ -396,6 +402,18 @@ export function createGatewayBroadcaster(params: {
       }
       // Retirement releases progress without suppressing its captured abort terminal.
       if ((retained && !isCurrent(live?.isCurrent)) || (live?.coalesce && live.group.aborted)) {
+        continue;
+      }
+      // Narration consumes producer snapshots before the per-socket wire
+      // projection below removes cumulative text from foreground appends.
+      if (
+        (event === "session.narration" && !narration.isNarration(c.connId, sessionKeys)) ||
+        ((event === "chat" ||
+          event === "agent" ||
+          event === "session.tool" ||
+          event === "session.observer") &&
+          narration.consume(c, event, payload, sessionKeys, opts))
+      ) {
         continue;
       }
       if (!outboundEventLogged) {
@@ -545,30 +563,25 @@ export function createGatewayBroadcaster(params: {
         useDelta && projection
           ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
           : getFrameBase();
-      let frame: string;
+      let frame: string | Buffer;
       let delivered: (() => void) | undefined;
       try {
         if (!sessionProjectionPrepared) {
           // Headers precede source hooks and reads performed while preparing projection.
           getFrameFields();
-          let canSkipSourcePayload = false;
-          if (
+          const canSkipSourcePayload =
             !retained &&
             (event === "session.message" || event === "sessions.changed") &&
-            !isProxy(payload) &&
-            isRecord(payload)
-          ) {
-            // Classify without executing getters or Proxy traps.
-            const prototype = Object.getPrototypeOf(payload);
-            canSkipSourcePayload =
-              (prototype === null || prototype === Object.prototype) && !("toJSON" in payload);
-          }
+            isPlainEventPayload(payload);
           if (!canSkipSourcePayload) {
             getDeliveryFrameBase();
           }
           projectSession = params.prepareSessionEventProjection?.(event, payload, {
             sessionKeys,
             agentId,
+            ...(opts?.prepareSessionProjection
+              ? { prepareSessionProjection: opts.prepareSessionProjection }
+              : {}),
           });
           skipSourcePayload = canSkipSourcePayload && projectSession !== undefined;
           sessionProjectionPrepared = true;
@@ -623,6 +636,10 @@ export function createGatewayBroadcaster(params: {
         } else {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
           if (!presencePayload && !projectSession) {
+            // Share UTF-8 bytes too: ws otherwise encodes the same string for every socket.
+            if (!retained && (targetConnIds?.size ?? params.clients.size) > 1) {
+              frame = Buffer.from(frame);
+            }
             lastFrameSequence = nextSeq;
             lastFrameRecipientProfileId = recipientProfileId;
             lastPayloadFragment = payloadFragment;
@@ -664,7 +681,11 @@ export function createGatewayBroadcaster(params: {
       try {
         // Publish the baseline before send can reenter; failures retire this transport.
         delivered?.();
-        state.socket.send(frame, sent);
+        if (typeof frame === "string") {
+          state.socket.send(frame, sent);
+        } else {
+          state.socket.send(frame, { binary: false }, sent);
+        }
       } catch (err) {
         sent(err instanceof Error ? err : new Error(String(err)));
       }

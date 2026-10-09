@@ -1,7 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { extractText } from "../../ui/src/lib/chat/message-extract.ts";
 import { buildChatMarkdown } from "../../ui/src/pages/chat/export.ts";
@@ -33,11 +43,14 @@ import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-to
 import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
 import { createOrResumeClientVoiceSession } from "../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
+import * as lifecycleState from "./session-lifecycle-state.js";
+import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
 import {
   bindSessionRowProjection,
   getSessionRowProjection,
@@ -83,6 +96,9 @@ let releaseModel = createDeferred();
 let unsubscribe: (() => void) | undefined;
 let publications: Promise<void>[] = [];
 let publicationErrors: unknown[] = [];
+let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
+let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;
+let lifecyclePersistence: MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>;
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
@@ -91,6 +107,12 @@ afterAll(async () => {
   await harness.close();
 });
 beforeEach(async () => {
+  requestExecution = await observeGatewayRunExecution();
+  lifecycleWrites = createPreparedLifecycleWriteTracker();
+  const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
+  lifecyclePersistence = vi
+    .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
+    .mockImplementation((params) => lifecycleWrites.track(prepareLifecycle(params)));
   agentId = "main";
   sessionKey = canonicalKey = "agent:main:main";
   sessionId = randomUUID();
@@ -177,22 +199,36 @@ beforeEach(async () => {
 afterEach(async () => {
   releaseModel.resolve();
   try {
-    await waitForDispatchEnd();
-    if (voiceSessionId) {
-      await rpc("talk.client.close", { sessionKey, voiceSessionId });
+    try {
+      await waitForDispatchEnd();
+      if (voiceSessionId) {
+        await rpc("talk.client.close", { sessionKey, voiceSessionId });
+      }
+    } finally {
+      // The suite server can retain preparation after the direct request releases its session.
+      await requestExecution.waitForCompletion();
+      try {
+        await lifecycleWrites.drain();
+      } finally {
+        await drainPublications();
+      }
     }
-    await drainPublications();
   } finally {
-    unsubscribe?.();
-    getSessionRowProjection(context)?.dispose();
-    unsubscribe = undefined;
-    voiceSessionId = undefined;
-    clientVoiceSessionTesting.reset();
-    resetClientVoiceConfirmationStateForTest();
-    testState.sessionStorePath = undefined;
-    gatewayReplyMock.mockReset();
-    runEmbeddedAgent.mockReset();
-    clearConfigCache();
+    try {
+      await requestExecution.restore();
+    } finally {
+      lifecyclePersistence.mockRestore();
+      unsubscribe?.();
+      getSessionRowProjection(context)?.dispose();
+      unsubscribe = undefined;
+      voiceSessionId = undefined;
+      clientVoiceSessionTesting.reset();
+      resetClientVoiceConfirmationStateForTest();
+      testState.sessionStorePath = undefined;
+      gatewayReplyMock.mockReset();
+      runEmbeddedAgent.mockReset();
+      clearConfigCache();
+    }
   }
 });
 
@@ -248,7 +284,9 @@ function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer
   expect.soft(users.map(extractText), surface).toEqual([spoken]);
   const markdown = buildChatMarkdown(messages, "Voice test assistant");
   expect.soft(markdown, `${surface} Markdown`).toContain(spoken);
-  expect.soft(markdown?.match(/^## You(?: \(|$)/gm), `${surface} human headings`).toHaveLength(1);
+  expect
+    .soft(markdown?.match(/^## Message(?: \(|$)/gm), `${surface} input headings`)
+    .toHaveLength(1);
   expectNoGeneratedInput(messages, surface);
   expect
     .soft(
@@ -448,6 +486,10 @@ describe("Browser Talk consult input custody", () => {
         makeAgentAssistantMessage({ content: [{ type: "text", text: modelReply }] }),
       ];
       runEmbeddedAgent.mockImplementation(async (params) => {
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "start" },
+        });
         params.onExecutionPhase?.({ phase: "model_call_started" });
         const result = await completeModel(params);
         params.abortSignal?.throwIfAborted();

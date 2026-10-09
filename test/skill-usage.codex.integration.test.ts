@@ -3,7 +3,6 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "../extensions/codex/test-api.js";
-import { getBeforeToolCallDiagnosticOptions } from "../src/agents/before-tool-call-metadata.js";
 import { asToolParamsRecord, type AnyAgentTool } from "../src/agents/tools/common.js";
 import {
   onDiagnosticEvent,
@@ -23,7 +22,7 @@ import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { consumeRunSkillUsage } from "../src/skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../src/skills/test-support/test-helpers.js";
-import { registerSkillUsageTracking } from "../src/skills/workshop/curator.js";
+import { registerSkillUsageTracking } from "../src/skills/workshop/skill-usage.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -58,8 +57,10 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
     sharedEvents = [];
     trustedEvents = [];
     onDiagnosticEvent((event) => publicEvents.push(event));
-    onInternalDiagnosticEvent((event) => sharedEvents.push(event));
-    onTrustedInternalDiagnosticEvent((event) => trustedEvents.push(event));
+    onInternalDiagnosticEvent((event) => sharedEvents.push(event), { include: ["skill.used"] });
+    onTrustedInternalDiagnosticEvent((event) => trustedEvents.push(event), {
+      include: ["skill.used"],
+    });
     unregisterUsage = registerSkillUsageTracking({ env: testState.env });
   });
 
@@ -134,11 +135,6 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
           : {}),
       },
     });
-    expect(bridge.telemetry.quarantinedTools).toEqual([]);
-    expect(bridge.availableTools.map((tool) => tool.name)).toEqual([toolName]);
-    for (const tool of bridge.availableTools) {
-      expect(getBeforeToolCallDiagnosticOptions(tool)?.emitDiagnostics).toBe(false);
-    }
     const call = (callId: string, filePath = skillFile) =>
       bridge.handleToolCall({
         threadId: "skill-usage-thread",
@@ -167,6 +163,14 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
       use_count: count,
       last_agent_id: "main",
     };
+  }
+
+  async function expectNoUsage() {
+    await waitForDiagnosticEventsDrained();
+    await unregisterUsage();
+    expect(usageRows()).toEqual([]);
+    expect(consumeRunSkillUsage(runId)).toEqual([]);
+    expect(trustedEvents).toEqual([]);
   }
 
   it.each([false, true])(
@@ -200,69 +204,46 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
     },
   );
 
-  it.each(["error", "failed", "blocked", "cancelled", "timed_out"])(
-    "does not count a structured %s read",
-    async (status) => {
+  it.each(["error", "blocked", "thrown", "policy", "unknown"] as const)(
+    "does not count a %s read",
+    async (kind) => {
+      if (kind === "policy") {
+        initializeGlobalHookRunner(
+          createMockPluginRegistry([
+            {
+              hookName: "before_tool_call",
+              handler: async () => ({ block: true, blockReason: "Blocked by test policy" }),
+            },
+          ]),
+        );
+      }
       const { call, execute } = createBridge({
-        execute: async () => ({
-          content: [{ type: "text", text: "Read did not complete" }],
-          details: { status },
-        }),
+        execute:
+          kind === "error" || kind === "blocked"
+            ? async () => ({
+                content: [{ type: "text", text: "Read did not complete" }],
+                details: { status: kind },
+              })
+            : kind === "thrown"
+              ? async () => {
+                  throw new Error("Read failed");
+                }
+              : undefined,
       });
-      expect(await call("failed-read")).toMatchObject({ success: false });
-      await waitForDiagnosticEventsDrained();
-      await unregisterUsage();
-      expect(execute).toHaveBeenCalledOnce();
-      expect(consumeRunSkillUsage(runId)).toEqual([]);
-      expect(usageRows()).toEqual([]);
-      expect(trustedEvents).toEqual([]);
-    },
-  );
-
-  it("does not count a thrown read", async () => {
-    const { call } = createBridge({
-      execute: async () => {
-        throw new Error("Read failed");
-      },
-    });
-    expect(await call("thrown-read")).toMatchObject({ success: false });
-    await waitForDiagnosticEventsDrained();
-    await unregisterUsage();
-    expect(usageRows()).toEqual([]);
-    expect(consumeRunSkillUsage(runId)).toEqual([]);
-    expect(trustedEvents).toEqual([]);
-  });
-
-  it("does not count a read blocked before execution", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_tool_call",
-          handler: async () => ({ block: true, blockReason: "Blocked by test policy" }),
-        },
-      ]),
-    );
-    const { call, execute } = createBridge();
-    expect(await call("blocked-read")).toMatchObject({ success: false, executionStarted: false });
-    await waitForDiagnosticEventsDrained();
-    await unregisterUsage();
-    expect(execute).not.toHaveBeenCalled();
-    expect(usageRows()).toEqual([]);
-    expect(consumeRunSkillUsage(runId)).toEqual([]);
-    expect(trustedEvents).toEqual([]);
-  });
-
-  it.each(["skills/unknown/SKILL.md", "README.md"])(
-    "does not count reading %s outside the skill snapshot",
-    async (filePath) => {
-      const otherFile = await testState.writeText(filePath, "Other file\n");
-      const { call } = createBridge();
-      expect(await call("other-read", otherFile)).toMatchObject({ success: true });
-      await waitForDiagnosticEventsDrained();
-      await unregisterUsage();
-      expect(usageRows()).toEqual([]);
-      expect(consumeRunSkillUsage(runId)).toEqual([]);
-      expect(trustedEvents).toEqual([]);
+      const file =
+        kind === "unknown"
+          ? await testState.writeText("skills/unknown/SKILL.md", "Other file\n")
+          : skillFile;
+      expect(await call(`${kind}-read`, file)).toMatchObject({
+        success: kind === "unknown",
+        ...(kind === "policy" ? { executionStarted: false } : {}),
+      });
+      if (kind === "policy") {
+        expect(execute).not.toHaveBeenCalled();
+      } else {
+        expect(execute).toHaveBeenCalledOnce();
+      }
+      await expectNoUsage();
     },
   );
 

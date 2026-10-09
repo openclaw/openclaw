@@ -1,3 +1,4 @@
+import { SESSION_ROW_DETAIL_FIELDS } from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   isUiGlobalSessionKey,
@@ -103,6 +104,8 @@ type RowObservation = {
 };
 
 const donatedFields = ["derivedTitle", "lastMessagePreview", ...thinkingMetadataFields] as const;
+const enrichmentFields = ["derivedTitle", "lastMessagePreview", "activitySummary"] as const;
+const compactOmittedFields = [...enrichmentFields, ...SESSION_ROW_DETAIL_FIELDS];
 const identityFields = new Set(["key", "sessionId", "agentId"]);
 
 /** Field receipts follow row copies without retaining another store of row values. */
@@ -180,8 +183,8 @@ export function createSessionRowProvenance() {
       }
     }
     const fields = new Map<string, FieldObservation>();
-    // Only these optional fields are deliberately omitted by non-enriched reads.
-    for (const field of ["derivedTitle", "lastMessagePreview", "activitySummary"] as const) {
+    // Compact lists cannot clear details owned by full descriptors or history.
+    for (const field of row.rowMode === "compact" ? compactOmittedFields : enrichmentFields) {
       if (row[field] === undefined) {
         fields.set(field, { source: { revision: 0, updatedAt: null } });
       }
@@ -272,7 +275,6 @@ export function createSessionRowProvenance() {
     const offeredValues: Record<string, unknown> = offered;
     let next = base.key === current.key ? base : { ...base, key: current.key };
     let values: Record<string, unknown> = next;
-    let copied = next !== base;
     // Older donors often leave every receipt intact; copy only changed field metadata.
     let fields: Map<string, FieldObservation> | undefined;
     const keys = new Set([
@@ -305,10 +307,9 @@ export function createSessionRowProvenance() {
       ) {
         continue;
       }
-      if (!copied) {
+      if (next === base) {
         next = { ...base };
         values = next;
-        copied = true;
       }
       if (Object.hasOwn(source, field)) {
         values[field] = source[field];
@@ -318,8 +319,7 @@ export function createSessionRowProvenance() {
     }
     const nextMetadata = fields ? { ...baseMetadata, fields } : baseMetadata;
     if (next === current || isShallowEqualSessionRow(next, current)) {
-      observationsByRow.set(current, nextMetadata);
-      return current;
+      next = current;
     }
     observationsByRow.set(next, nextMetadata);
     return next;

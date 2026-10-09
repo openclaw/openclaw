@@ -9,11 +9,9 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
-import {
-  filterWorkspaceSkills,
-  loadVisibleSkills,
-  prepareWorkspaceSkills,
-} from "../loading/workspace-skill-loader.js";
+import { filterSkillEntries } from "../loading/workspace-skill-filter.js";
+import { loadVisibleSkills, prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type {
   SkillEligibilityContext,
   SkillCommandSpec,
@@ -22,7 +20,8 @@ import type {
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { sanitizeSkillCommandName, SKILL_COMMAND_MAX_LENGTH } from "./command-name.js";
-import { filterUserInvocableSkillEntries, isSkillPromptVisible } from "./skill-index.js";
+import { recordSkillCommandFileHost } from "./skill-command-provenance.js";
+import { isSkillPromptVisible, isSkillUserInvocable } from "./skill-index.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = createDedupeCache({ ttlMs: 0, maxSize: 1024 });
@@ -41,21 +40,17 @@ function logSkillCommandOnce(
 }
 
 function resolveUniqueSkillCommandName(base: string, used: Set<string>): string {
-  const normalizedBase = normalizeLowercaseStringOrEmpty(base);
-  if (!used.has(normalizedBase)) {
+  if (!used.has(base)) {
     return base;
   }
   for (let index = 2; index < 1000; index += 1) {
     const suffix = `_${index}`;
-    const maxBaseLength = Math.max(1, SKILL_COMMAND_MAX_LENGTH - suffix.length);
-    const trimmedBase = base.slice(0, maxBaseLength);
-    const candidate = `${trimmedBase}${suffix}`;
-    const candidateKey = normalizeLowercaseStringOrEmpty(candidate);
-    if (!used.has(candidateKey)) {
+    const candidate = `${base.slice(0, SKILL_COMMAND_MAX_LENGTH - suffix.length)}${suffix}`;
+    if (!used.has(candidate)) {
       return candidate;
     }
   }
-  return `${base.slice(0, Math.max(1, SKILL_COMMAND_MAX_LENGTH - 2))}_x`;
+  return `${base.slice(0, SKILL_COMMAND_MAX_LENGTH - 2)}_x`;
 }
 
 type WorkspaceSkillCommandOptions = {
@@ -97,7 +92,7 @@ export function buildWorkspaceSkillCommandSpecs(
 ): SkillCommandSpec[] {
   const loadOptions = { ...resolveCommandSkillLoadOptions(opts), gatewayOnly: opts?.gatewayOnly };
   const eligible = opts?.entries
-    ? filterWorkspaceSkills(opts.entries, loadOptions)
+    ? filterSkillEntries(opts.entries, loadOptions)
     : loadVisibleSkills(workspaceDir, loadOptions);
   return assembleWorkspaceSkillCommandSpecs(workspaceDir, eligible, opts);
 }
@@ -124,10 +119,11 @@ function assembleWorkspaceSkillCommandSpecs(
   eligible: SkillEntry[],
   opts?: WorkspaceSkillCommandOptions,
 ): SkillCommandSpec[] {
-  const userInvocable = filterUserInvocableSkillEntries(eligible);
+  const userInvocable = eligible.filter(isSkillUserInvocable);
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(normalizeLowercaseStringOrEmpty(reserved));
+    used.add(sanitizeSkillCommandName(reserved));
   }
 
   const specs: SkillCommandSpec[] = [];
@@ -153,7 +149,7 @@ function assembleWorkspaceSkillCommandSpecs(
         level,
       );
     }
-    used.add(normalizeLowercaseStringOrEmpty(unique));
+    used.add(unique);
     return unique;
   };
   for (const entry of userInvocable) {
@@ -202,7 +198,7 @@ function assembleWorkspaceSkillCommandSpecs(
           return { kind: "tool", toolName, argMode: "raw" } as const;
         })();
 
-    specs.push({
+    const spec: SkillCommandSpec = {
       name: unique,
       displayName: entry.skill.displayName ?? rawName,
       skillFile: canonicalizePath(entry.skill.filePath),
@@ -211,7 +207,12 @@ function assembleWorkspaceSkillCommandSpecs(
       modelVisible: isSkillPromptVisible(entry),
       skillSource: resolveSkillTelemetrySource(entry.skill),
       ...(dispatch ? { dispatch } : {}),
-    });
+    };
+    const fileHost = resolveSkillFileHost(entry.skill);
+    if (fileHost) {
+      recordSkillCommandFileHost(spec, fileHost);
+    }
+    specs.push(spec);
   }
 
   const bundleCommands = loadEnabledClaudeBundleCommands({

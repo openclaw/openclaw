@@ -12,10 +12,12 @@ import { resolvePluginDoctorContractArtifact } from "../../../plugins/doctor-con
 import { createInstalledPluginIndexScopeLookup } from "../../../plugins/installed-plugin-index-scope-lookup.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "../../../plugins/installed-plugin-index-store-path.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
+import { passesManifestOwnerBasePolicy } from "../../../plugins/manifest-owner-policy.js";
+import { isTrustedOfficialCatalogLookupDuplicate } from "../../../plugins/official-external-install-records.js";
 import {
-  isActivatedManifestOwner,
-  passesManifestOwnerBasePolicy,
-} from "../../../plugins/manifest-owner-policy.js";
+  getOfficialExternalPluginCatalogEntry,
+  resolveOfficialExternalPluginId,
+} from "../../../plugins/official-external-plugin-catalog.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
 import {
@@ -36,8 +38,10 @@ import {
 export type PluginMigrationInspection = {
   requiredPluginIds: readonly string[];
   inspectionRequiredPluginIds: readonly string[];
-  statelessPluginIds: readonly string[];
+  statelessPlugins: readonly { id: string; version?: string }[];
   runtimePluginAliases: readonly string[];
+  unavailablePluginIds?: readonly string[];
+  replacementPluginIds?: Readonly<Record<string, string>>;
 };
 
 export type PluginMigrationAvailability = PluginMigrationInspection & {
@@ -119,10 +123,12 @@ export async function inspectPluginMigrationAvailability(params: {
           }
           const requiredIds = new Set(requiredPluginIds);
           const inspectionRequiredIds = new Set(inspectionRequiredPluginIds);
-          const statelessPluginIds: string[] = [];
+          const statelessPlugins: { id: string; version?: string }[] = [];
+          const unavailablePluginIds: string[] = [];
           const normalizedConfig = normalizePluginsConfig(params.cfg.plugins);
-          const pending = [...selected].toSorted().flatMap((pluginId) => {
+          const pending = [...inspectedIds].toSorted().flatMap((pluginId) => {
             if (!passesManifestOwnerBasePolicy({ plugin: { id: pluginId }, normalizedConfig })) {
+              unavailablePluginIds.push(pluginId);
               return [];
             }
             const plugin = metadata.plugins.find((candidate) => candidate.id === pluginId);
@@ -133,6 +139,9 @@ export async function inspectPluginMigrationAvailability(params: {
                 isPayloadMissing(env, context.records[pluginId]?.installPath)) ||
               context.installedPluginIdsWithRepairablePackages.has(pluginId) ||
               context.configuredPluginIdsWithStaleDescriptors.has(pluginId);
+            if (unavailable || !plugin) {
+              unavailablePluginIds.push(pluginId);
+            }
             // A private rehearsal copy is already bound to an explicit local payload. The
             // updating parent does not own an install record for that copy, so waiting for
             // package convergence would hide its Doctor contract from the canary. Ordinary
@@ -143,15 +152,16 @@ export async function inspectPluginMigrationAvailability(params: {
                 rehearsalRoot !== undefined &&
                 isPathInside(rehearsalRoot, plugin.rootDir) &&
                 !unavailable);
-            if (
-              (availableWithoutPackageConvergence || (!params.deferInstallation && !unavailable)) &&
-              plugin &&
-              statelessCandidates.has(pluginId) &&
-              isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.cfg })
-            ) {
-              statelessPluginIds.push(pluginId);
+            const available =
+              availableWithoutPackageConvergence || (!params.deferInstallation && !unavailable);
+            if (available && plugin && statelessCandidates.has(pluginId)) {
+              // Installation-only confirmation reads metadata; it need not activate a channel.
+              statelessPlugins.push({
+                id: pluginId,
+                version: plugin.packageVersion ?? plugin.version,
+              });
             }
-            if (availableWithoutPackageConvergence || (!params.deferInstallation && !unavailable)) {
+            if (!selected.has(pluginId) || available) {
               return [];
             }
             return [
@@ -174,7 +184,26 @@ export async function inspectPluginMigrationAvailability(params: {
             ];
           });
           const lookup = createInstalledPluginIndexScopeLookup(metadata.index);
-          const statelessIds = new Set(statelessPluginIds);
+          const replacementPluginIds: Record<string, string> = {};
+          for (const pluginId of unavailablePluginIds) {
+            const entry = getOfficialExternalPluginCatalogEntry(pluginId);
+            const replacementPluginId = entry && resolveOfficialExternalPluginId(entry);
+            if (
+              replacementPluginId &&
+              metadata.plugins.some(
+                (plugin) =>
+                  plugin.id === replacementPluginId && plugin.trustedOfficialInstall === true,
+              ) &&
+              isTrustedOfficialCatalogLookupDuplicate({
+                pluginId,
+                replacementPluginId,
+                replacementRecord: context.records[replacementPluginId],
+              })
+            ) {
+              replacementPluginIds[pluginId] = replacementPluginId;
+            }
+          }
+          const statelessIds = new Set(statelessPlugins.map((plugin) => plugin.id));
           const runtimePluginAliases = collectConfiguredRuntimeIds(params.cfg).filter((runtime) => {
             if (
               selected.has(runtime) ||
@@ -192,8 +221,10 @@ export async function inspectPluginMigrationAvailability(params: {
             pending,
             requiredPluginIds: requiredPluginIds.toSorted(),
             inspectionRequiredPluginIds: inspectionRequiredPluginIds.toSorted(),
-            statelessPluginIds,
+            statelessPlugins,
             runtimePluginAliases,
+            // The updating parent still owns package availability until convergence resumes.
+            ...(!params.deferInstallation ? { unavailablePluginIds, replacementPluginIds } : {}),
           };
         },
         { config: params.cfg, env },

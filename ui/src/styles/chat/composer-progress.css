@@ -1,8 +1,4 @@
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .chat-main__conversation > .chat-thread-viewport {
-    padding-top: clamp(20px, 3vh, 28px);
-  }
-
   .sidebar-region__header > .chat-pane__header .chat-pane__nav-toggle {
     position: relative;
     display: inline-flex;
@@ -19,7 +15,7 @@
     border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
     border-radius: 50%;
     background: color-mix(in srgb, var(--panel) 90%, transparent);
-    box-shadow: 0 1px 3px color-mix(in srgb, black 8%, transparent);
+    box-shadow: var(--shadow-sm);
     corner-shape: round;
     line-height: 1;
   }
@@ -311,10 +307,7 @@
     justify-self: end;
   }
 
-  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail {
-    display: contents;
-  }
-
+  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail,
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-content {
     display: contents;
   }
@@ -564,14 +557,8 @@
   gap: 16px;
 }
 
-.session-progress-card--composer[open] .session-progress-card__summary-collapsed {
-  display: none;
-}
-
-.session-progress-card--composer[open] .session-progress-card__summary-indicator {
-  display: none;
-}
-
+.session-progress-card--composer[open] .session-progress-card__summary-collapsed,
+.session-progress-card--composer[open] .session-progress-card__summary-indicator,
 .session-progress-card--composer[open] .session-progress-card__summary-count--collapsed {
   display: none;
 }
@@ -693,10 +680,25 @@
 }
 
 .session-progress-card--composer .session-progress-card__heading-actions {
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.session-progress-card--composer .session-progress-card__heading-actions > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 400px) {
+  .session-progress-card--composer .session-progress-card__summary-title {
+    display: none;
+  }
 }
 
 .session-progress-card--composer .session-progress-card__step,

@@ -18,9 +18,14 @@ fails, the agent returns a concise visible failure instead. If the requester
 session is inactive or its active wake fails, OpenClaw sends an idempotent
 direct fallback with the generated images so the result is not lost.
 
+You can send a follow-up while the completion agent is still working. The new
+turn waits for the completion and its delivery to settle before starting.
+
 In WebChat and the macOS app, generated attachments stay on the completion
-reply instead of appearing again in a separate image-only message. Replaying
-a completed delivery keeps the same message and attachment identities.
+reply instead of appearing again in a separate image-only message. An interactive
+WebChat request keeps its completion in that session even when a previous channel
+conversation left an external delivery route there. Replaying a completed delivery
+keeps the same message and attachment identities.
 
 <Note>
 The tool only appears when at least one image-generation provider is
@@ -135,6 +140,10 @@ current session:
 ```text
 /tool image_generate action=status
 ```
+
+Task status and duplicate detection are scoped to the requesting chat, even
+when direct chats share the main session transcript. Completion returns to
+the peer who requested the image.
 
 ## Provider capabilities
 

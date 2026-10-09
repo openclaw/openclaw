@@ -1,13 +1,13 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { BrowserContextOptions, CDPSession, Page } from "playwright-core";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import type { PageState } from "./pw-session-contracts.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import {
   assertInteractionCurrent,
-  awaitActionWithAbort,
   type InteractionTargetOptions,
-  createAbortPromiseWithListener,
 } from "./pw-tools-core.interactions.navigation.js";
 
 type DeviceSize = { width: number; height: number };
@@ -71,7 +71,6 @@ export async function runPageEmulationTransition<T>(params: {
   const signal = params.signal
     ? AbortSignal.any([params.signal, interrupted.signal])
     : interrupted.signal;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
   const previous = emulation.transitionTail ?? Promise.resolve();
   const transition = previous
     .catch(() => {})
@@ -106,11 +105,9 @@ export async function runPageEmulationTransition<T>(params: {
       }
     });
   emulation.transitionTail = tail;
-  try {
-    return await awaitActionWithAbort(transition, abortPromise);
-  } finally {
-    cleanup();
-  }
+  return await racePromiseWithAbortSignal(transition, signal, ({ reason }) =>
+    toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
+  );
 }
 
 export async function setOfflineViaPlaywright(
@@ -217,57 +214,52 @@ export async function emulateMediaViaPlaywright(
   await page.emulateMedia({ colorScheme: opts.colorScheme });
 }
 
-export async function setLocaleViaPlaywright(
-  opts: InteractionTargetOptions & {
-    locale: string;
-  },
+async function setPageEmulationOverride(
+  opts: InteractionTargetOptions & { locale?: string; timezoneId?: string },
+  field: "locale" | "timezoneId",
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
   const pageState = ensurePageState(page);
-  const locale = normalizeOptionalString(opts.locale) ?? "";
-  if (!locale) {
-    throw new Error("locale is required");
+  const value = normalizeOptionalString(opts[field]) ?? "";
+  if (!value) {
+    throw new Error(`${field} is required`);
   }
   const session = await resolvePageEmulationSession(page, pageState);
   if (opts.assertCurrent) {
     await assertInteractionCurrent(opts);
   }
   try {
-    await session.send("Emulation.setLocaleOverride", { locale });
-  } catch (err) {
-    if (!String(err).includes("Another locale override is already in effect")) {
-      throw err;
+    if (field === "locale") {
+      await session.send("Emulation.setLocaleOverride", { locale: value });
+    } else {
+      await session.send("Emulation.setTimezoneOverride", { timezoneId: value });
     }
-  }
-}
-
-export async function setTimezoneViaPlaywright(
-  opts: InteractionTargetOptions & {
-    timezoneId: string;
-  },
-): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  const pageState = ensurePageState(page);
-  const timezoneId = normalizeOptionalString(opts.timezoneId) ?? "";
-  if (!timezoneId) {
-    throw new Error("timezoneId is required");
-  }
-  const session = await resolvePageEmulationSession(page, pageState);
-  if (opts.assertCurrent) {
-    await assertInteractionCurrent(opts);
-  }
-  try {
-    await session.send("Emulation.setTimezoneOverride", { timezoneId });
   } catch (err) {
     const msg = String(err);
-    if (msg.includes("Timezone override is already in effect")) {
+    const alreadyApplied =
+      field === "locale"
+        ? "Another locale override is already in effect"
+        : "Timezone override is already in effect";
+    if (msg.includes(alreadyApplied)) {
       return;
     }
-    if (msg.includes("Invalid timezone")) {
-      throw new Error(`Invalid timezone ID: ${timezoneId}`, { cause: err });
+    if (field === "timezoneId" && msg.includes("Invalid timezone")) {
+      throw new Error(`Invalid timezone ID: ${value}`, { cause: err });
     }
     throw err;
   }
+}
+
+export async function setLocaleViaPlaywright(
+  opts: InteractionTargetOptions & { locale: string },
+): Promise<void> {
+  await setPageEmulationOverride(opts, "locale");
+}
+
+export async function setTimezoneViaPlaywright(
+  opts: InteractionTargetOptions & { timezoneId: string },
+): Promise<void> {
+  await setPageEmulationOverride(opts, "timezoneId");
 }
 
 export async function setDeviceViaPlaywright(

@@ -46,6 +46,7 @@ vi.mock("../../../config/config.js", () => ({
 }));
 vi.mock("../../../config/io.js", () => ({ getRuntimeConfig: () => gatewayConfig }));
 vi.mock("../../../infra/system-presence.js", () => ({
+  commitPresence: vi.fn(),
   upsertPresence: upsertPresenceMock,
   listSystemPresence: vi.fn(() => []),
 }));
@@ -99,7 +100,8 @@ import { attachGatewayWsMessageHandler } from "./message-handler.js";
 const temporaryIdentityPaths: string[] = [];
 
 async function prepareSignedControlUiDevice(nonce: string) {
-  const { buildDeviceAuthPayload } = await import("../../device-auth.js");
+  const { buildDeviceAuthPayload } =
+    await import("../../../../packages/gateway-client/src/device-auth.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
     await import("../../../infra/device-identity.js");
   const identityPath = path.join(tmpdir(), `openclaw-build-admission-${randomUUID()}.sqlite`);

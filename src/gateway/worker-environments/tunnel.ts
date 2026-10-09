@@ -41,15 +41,6 @@ type WorkerTunnelManagerOptions = {
   desktopSessionRegistry?: DesktopSessionRegistry;
 };
 
-function validateStartRequest(request: WorkerTunnelStartRequest): void {
-  if (!request.environmentId.trim()) {
-    throw new Error("Worker tunnel environment id must be non-empty");
-  }
-  if (!Number.isSafeInteger(request.ownerEpoch) || request.ownerEpoch < 0) {
-    throw new Error("Worker tunnel owner epoch must be a non-negative safe integer");
-  }
-}
-
 /** Owns SSH workspace state for remote-exec environments and fences replacement epochs. */
 export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = {}) {
   const runner = options.runner ?? createWorkerSshRunner();
@@ -65,17 +56,16 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     entries.get(entry.environmentId) === entry && !entry.abortController.signal.aborted;
 
   const createHandle = (entry: TunnelEntry): WorkerWorkspaceTunnelHandle => {
-    const waitForPrepared = async (): Promise<PreparedWorkerSsh> => {
-      if (isCurrent(entry) && entry.status === "connected" && entry.prepared) {
-        return entry.prepared;
-      }
-      throw new WorkerTunnelOwnerDisconnectedError();
-    };
     const workspace = createWorkerWorkspaceActions({
       environmentId: entry.environmentId,
       sharedHost: entry.sharedHost,
       ownerSignal: entry.abortController.signal,
-      waitForPrepared,
+      waitForPrepared: async () => {
+        if (isCurrent(entry) && entry.status === "connected" && entry.prepared) {
+          return entry.prepared;
+        }
+        throw new WorkerTunnelOwnerDisconnectedError();
+      },
       runner,
       tasks: entry.workspaceTasks,
       bundleHash: entry.bundleHash,
@@ -111,7 +101,12 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
   };
 
   async function start(request: WorkerTunnelStartRequest): Promise<WorkerTunnelHandle> {
-    validateStartRequest(request);
+    if (!request.environmentId.trim()) {
+      throw new Error("Worker tunnel environment id must be non-empty");
+    }
+    if (!Number.isSafeInteger(request.ownerEpoch) || request.ownerEpoch < 0) {
+      throw new Error("Worker tunnel owner epoch must be a non-negative safe integer");
+    }
     request.authorize?.();
     const claimedEpoch = claimedOwnerEpochs.get(request.environmentId);
     if (claimedEpoch !== undefined && request.ownerEpoch < claimedEpoch) {

@@ -34,38 +34,16 @@ export function normalizeSlackApproverId(value: string | number): string | undef
   return target?.startsWith("team:") ? undefined : target;
 }
 
-function resolveSlackOwnerApprovers(cfg: OpenClawConfig): string[] {
-  const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
-  if (!Array.isArray(ownerAllowFrom) || ownerAllowFrom.length === 0) {
-    return [];
-  }
-  return resolveApprovalApprovers({
-    explicit: ownerAllowFrom,
-    normalizeApprover: normalizeSlackApproverId,
-  });
-}
 export function getSlackExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
   const account = resolveSlackAccount(params).config;
+  const ownerAllowFrom = params.cfg.commands?.ownerAllowFrom;
   return resolveApprovalApprovers({
-    explicit: account.execApprovals?.approvers ?? resolveSlackOwnerApprovers(params.cfg),
+    explicit:
+      account.execApprovals?.approvers ?? (Array.isArray(ownerAllowFrom) ? ownerAllowFrom : []),
     normalizeApprover: normalizeSlackApproverId,
-  });
-}
-
-function isSlackExecApprovalTargetRecipient(params: {
-  cfg: OpenClawConfig;
-  senderId?: string | null;
-  accountId?: string | null;
-}): boolean {
-  return isChannelExecApprovalTargetRecipient({
-    ...params,
-    channel: "slack",
-    normalizeSenderId: normalizeSlackApproverId,
-    matchTarget: ({ target, normalizedSenderId }) =>
-      normalizeSlackApproverId(target.to) === normalizedSenderId,
   });
 }
 
@@ -73,7 +51,14 @@ const slackExecApprovalProfile = createChannelExecApprovalProfile({
   resolveConfig: (params) => resolveSlackAccount(params).config.execApprovals,
   resolveApprovers: getSlackExecApprovalApprovers,
   normalizeSenderId: normalizeSlackApproverId,
-  isTargetRecipient: isSlackExecApprovalTargetRecipient,
+  isTargetRecipient: (params) =>
+    isChannelExecApprovalTargetRecipient({
+      ...params,
+      channel: "slack",
+      normalizeSenderId: normalizeSlackApproverId,
+      matchTarget: ({ target, normalizedSenderId }) =>
+        normalizeSlackApproverId(target.to) === normalizedSenderId,
+    }),
 });
 
 export const isSlackExecApprovalClientEnabled = slackExecApprovalProfile.isClientEnabled;

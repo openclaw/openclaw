@@ -78,8 +78,7 @@ type VerificationResult = {
 };
 
 function isJsonVerificationResponse(res: Response): boolean {
-  const contentType =
-    typeof res.headers?.get === "function" ? (res.headers.get("content-type") ?? "") : "";
+  const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.trim()) {
     return true;
   }
@@ -89,11 +88,9 @@ function isJsonVerificationResponse(res: Response): boolean {
   );
 }
 
-async function requestVerification(params: {
-  endpoint: string;
-  headers: Record<string, string>;
-  body: Record<string, unknown>;
-}): Promise<VerificationResult> {
+async function requestVerification(
+  params: ReturnType<typeof buildOpenAiVerificationProbeRequest>,
+): Promise<VerificationResult> {
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(
@@ -178,19 +175,6 @@ async function promptBaseUrlAndKey(params: {
     apiKey: normalizeOptionalProviderApiKey(apiKeyInput),
     resolvedApiKey: normalizeSecretInput(resolvedApiKey),
   };
-}
-
-type CustomApiRetryChoice = "baseUrl" | "model" | "both";
-
-async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<CustomApiRetryChoice> {
-  return await prompter.select({
-    message: t("wizard.customProvider.retryChoice"),
-    options: [
-      { value: "baseUrl", label: t("wizard.customProvider.changeBaseUrl") },
-      { value: "model", label: t("wizard.customProvider.changeModel") },
-      { value: "both", label: t("wizard.customProvider.changeBaseUrlAndModel") },
-    ],
-  });
 }
 
 async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
@@ -300,7 +284,14 @@ export async function promptCustomApiConfig(params: {
         );
       }
     }
-    const retryChoice = await promptCustomApiRetryChoice(prompter);
+    const retryChoice = await prompter.select<"baseUrl" | "model" | "both">({
+      message: t("wizard.customProvider.retryChoice"),
+      options: [
+        { value: "baseUrl", label: t("wizard.customProvider.changeBaseUrl") },
+        { value: "model", label: t("wizard.customProvider.changeModel") },
+        { value: "both", label: t("wizard.customProvider.changeBaseUrlAndModel") },
+      ],
+    });
     if (retryChoice === "baseUrl" || retryChoice === "both") {
       ({ baseUrl, apiKey, resolvedApiKey } = await promptBaseUrlAndKey({
         prompter,

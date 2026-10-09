@@ -158,16 +158,10 @@ export function formatModalSubmissionText(
   entry: DiscordModalEntry,
   interaction: ModalInteraction,
 ): string {
-  const lines: string[] = [`Form "${entry.title}" submitted.`];
-  for (const field of entry.fields) {
+  const title = `Form "${entry.title}" submitted.`;
+  const lines = entry.fields.flatMap((field) => {
     const values = resolveModalFieldValues(field, interaction);
-    if (values.length === 0) {
-      continue;
-    }
-    lines.push(`- ${field.label}: ${values.join(", ")}`);
-  }
-  if (lines.length === 1) {
-    lines.push("- (no values)");
-  }
-  return lines.join("\n");
+    return values.length > 0 ? [`- ${field.label}: ${values.join(", ")}`] : [];
+  });
+  return [title, ...(lines.length > 0 ? lines : ["- (no values)"])].join("\n");
 }

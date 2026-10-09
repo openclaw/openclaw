@@ -17,10 +17,48 @@ Use `Package Acceptance` when the question is "does this installable OpenClaw pa
 
 1. `resolve_package` checks out `workflow_ref`, resolves one package candidate, writes `.artifacts/docker-e2e-package/openclaw-current.tgz`, writes `.artifacts/docker-e2e-package/package-candidate.json`, uploads both as the `package-under-test` artifact, and prints the source, workflow ref, package ref, version, SHA-256, and profile in the GitHub step summary.
 2. `package_integrity` downloads the `package-under-test` artifact and enforces the public package tarball contract with `scripts/check-openclaw-package-tarball.mjs`.
-3. `npm_12_install_sh` installs that exact artifact through the public Linux installer under npm 12 in an isolated home/prefix, then verifies the CLI version and lifecycle-completion guard.
+3. `npm_12_install_sh` installs that exact artifact through the public Linux installer under npm 12 in an isolated home/prefix, then verifies the CLI version and lifecycle-completion guard and enforces the installed-package tree budget.
 4. `docker_acceptance` calls `openclaw-live-and-e2e-checks-reusable.yml` with the resolved package source SHA (falling back to `workflow_ref`) and `package_artifact_name=package-under-test`. The reusable workflow downloads that artifact, validates the tarball inventory, prepares package-digest Docker images when needed, and runs the selected Docker lanes against that package instead of packing the workflow checkout. When a profile selects multiple targeted `docker_lanes`, the reusable workflow prepares the package and shared images once, then fans those lanes out as parallel targeted Docker jobs with unique artifacts.
 5. `package_telegram` optionally calls `NPM Telegram Beta E2E`. It runs when `telegram_mode` is not `none` and installs the same `package-under-test` artifact when Package Acceptance resolved one; standalone Telegram dispatch can still install a published npm spec.
 6. `summary` fails the workflow if package resolution, integrity, npm 12 installer acceptance, Docker acceptance, or the optional Telegram lane failed. Selected lanes keep their first failure; callers cannot downgrade a failing test to a warning.
+
+### Installed package tree budget
+
+`scripts/check-openclaw-installed-package-budget.mts` measures the npm-installed
+package tree, including dependencies that the tarball check cannot see. It counts
+the root and every directory entry without following symlinks, and sums every
+regular file's size, including npm's hidden `node_modules/.package-lock.json`
+files, because published updaters charge those bytes too. Hardlinked paths count
+separately. The report lists the largest contributors by entry count and adds the
+totals to the GitHub step summary.
+
+Published 2026.9.3–2026.9.8 updaters freeze caps of **50,000 entries / 1 GiB**. The release budgets
+are **47,500 entries / 900 MiB**: the 2,500-entry reserve (5%) covers npm-version,
+hoisting, and per-platform optional-dependency variance and is larger than routine
+dependency bumps, so the check fails while every shipped updater can still install
+the candidate. Bytes are far from the cap but vary more with platform native
+prebuilds, so the byte budget keeps roughly 12% in reserve.
+
+Newer updaters allow **500,000 entries / 8 GiB** and continue candidate activation
+and publication with directory identity, version, and launcher checks if a scan
+reaches those resource limits, warning that full package contents are unverified.
+This does not change the release budgets or the already-installed drivers.
+Candidate admission under a supervisor version of 2026.9.8 or earlier refuses
+trees with more than 50,000 entries and gives a manual `npm i -g openclaw@latest`
+command (preserving the requested version or tag when specified); it cannot
+bypass the old driver's walk.
+
+To reproduce locally with a candidate tarball:
+
+```bash
+tmp="$(mktemp -d)"
+npm install -g --prefix "$tmp" ./openclaw.tgz
+node scripts/check-openclaw-installed-package-budget.mts "$tmp/lib/node_modules/openclaw"
+```
+
+On failure, reduce installed entries by trimming the largest dependencies or
+dist chunk and precompressed asset counts; reduce large files for a byte-budget
+failure. Do not raise the budgets: caps cannot change in already-shipped updaters.
 
 ### Candidate sources
 
@@ -58,9 +96,9 @@ versions and unsupported extended-stable correction versions fail before Docker.
 
 Docker seed CI resolves an exact published stable predecessor of the selected source package version before running `published-upgrade-survivor`. It uses the release baseline resolver and selected release context, so publishing `latest` never turns the first upgrade into an already-current operation. Missing predecessors fail before Docker starts; the separate already-current control remains unchanged.
 
-The `published-upgrade-survivor` Docker lane validates one published package baseline per scenario. In Package Acceptance, the resolved `package-under-test` tarball is always the candidate and `published_upgrade_survivor_baseline` selects the fallback published baseline, defaulting to `openclaw@latest`; failed-lane rerun commands preserve that baseline. Current source release checks set `published_upgrade_survivor_baselines=supported-lines` for `legacy-operator-state`: npm's current `latest`, the preceding stable version, `extended-stable` when that tag exists, and the documented oldest supported baseline `2026.6.34`. The resolver reads `npm view openclaw versions` and `npm view openclaw dist-tags` at run time, pins exact versions before fanout, and deduplicates overlapping lines. Normal current-source release checks retain `base` and add `legacy-operator-state` and `custom-plugin-siblings`; release soak selects `reported-issues`, including these and the existing issue-shaped fixtures. The sibling-source scenario uses baselines from 2026.9.4 onward and requires actual custom-plugin Doctor contract execution from the private update canary, plus intact source files and plugin loading after the update.
+The `published-upgrade-survivor` Docker lane validates one published package baseline per scenario. In Package Acceptance, the resolved `package-under-test` tarball is always the candidate and `published_upgrade_survivor_baseline` selects the fallback published baseline, defaulting to `openclaw@latest`; failed-lane rerun commands preserve that baseline. Current source release checks set `published_upgrade_survivor_baselines=supported-lines` for `legacy-operator-state`: npm's current `latest`, the preceding stable version, `extended-stable` when that tag exists, and the documented oldest supported baseline `2026.8.33`. The resolver reads `npm view openclaw versions` and `npm view openclaw dist-tags` at run time, pins exact versions before fanout, and deduplicates overlapping lines. Normal current-source release checks retain `base` and add `legacy-operator-state` and `custom-plugin-siblings`; release soak selects `reported-issues`, including these and the existing issue-shaped fixtures. The sibling-source scenario uses baselines from 2026.9.4 onward and requires actual custom-plugin Doctor contract execution from the private update canary, plus intact source files and plugin loading after the update.
 
-Before targeted Docker fanout, the trusted group planner installs each distinct published baseline in a throwaway npm prefix and checks `openclaw --version` plus `openclaw config set gateway.mode local` against synthetic isolated state. The config write loads the CLI setup path because version/help and config reads can use fast paths. An installed CLI that exits unsuccessfully is recorded as an **unusable published baseline**, with its skipped scenarios and captured error in the job summary and `upgrade-baseline-checks-*` artifact. Skipped scenarios are never counted as successful upgrades. Install errors, probe timeouts, and process-launch failures fail planning. Candidate installs and upgrades retain their existing failure gates.
+Before targeted Docker fanout, the trusted group planner installs each distinct published baseline in a throwaway npm prefix and checks `openclaw --version` plus `openclaw config set gateway.mode local` against synthetic isolated state. The config write loads the CLI setup path because version/help and config reads can use fast paths. An installed CLI that exits unsuccessfully is recorded as an **unusable published baseline**, with its skipped scenarios and captured error in the job summary and `upgrade-baseline-checks-*` artifact. Skipped scenarios are never counted as successful upgrades. Install errors, check timeouts, and process-launch failures fail planning. Candidate installs and upgrades retain their existing failure gates.
 
 When a prerelease registry is mounted, the baseline package install and the
 initial manual baseline Gateway start use the configured published upstream.
@@ -111,9 +149,9 @@ full Cartesian baseline/scenario matrix for deliberate manual proof. The
 selector provenance travels only as internal reusable-workflow metadata;
 there is no new manual-dispatch input.
 
-Expanded published-upgrade survivor and update-migration selections are split by baseline into groups of at most three scenarios, with at most 32 targeted Docker jobs active per matrix. Grouping shares the execution planner's baseline-compatibility policy, so every supported scenario runs exactly once without creating empty shards for old baselines. Each scenario owns a fresh container and the unchanged npm resource limit; package and image identities remain shared across the matrix. `Update Migration` runs weekly on Sunday at 03:17 UTC and on manual dispatch. It defaults to `supported-lines` with both `plugin-deps-cleanup` and `legacy-operator-state`, keeps the existing cleanup coverage, and forwards no provider secrets. The weekly run keeps cleanup on the candidate-relative predecessor and exercises native operator state on each supported baseline. A planning allowance of 12 minutes per scenario plus 30 minutes for shared package/image preparation and controls gives about 78 runner-minutes weekly with three distinct baselines, or 90 with four; actual timing artifacts determine the observed cost.
+Expanded published-upgrade survivor and update-migration selections use one job per supported baseline/scenario pair, with at most 32 targeted Docker jobs active per matrix. The planner admits existing groups containing `update-restart-auth`, `plugin-update`, and `root-managed-vps-upgrade` first so those long update jobs do not wait behind the expanded scenario matrix. Within each expanded upgrade family, exact baseline cohorts run newest first, putting the measured slower recent upgrades ahead of older baselines. Scenarios within a cohort and other groups retain their input order; unresolved baseline tags preserve caller order. Grouping shares the execution planner's baseline-compatibility policy, so every supported scenario runs exactly once without creating empty shards for old baselines. Each scenario owns a fresh container and the unchanged npm resource limit; package and image identities remain shared across the matrix. `Update Migration` runs weekly on Sunday at 03:17 UTC and on manual dispatch. It defaults to `supported-lines` with both `plugin-deps-cleanup` and `legacy-operator-state`, keeps the existing cleanup coverage, and forwards no provider secrets. The weekly run keeps cleanup on the candidate-relative predecessor and exercises native operator state on each supported baseline. A planning allowance of 12 minutes per scenario plus 30 minutes for shared package/image preparation and controls gives about 78 runner-minutes weekly with three distinct baselines, or 90 with four; actual timing artifacts determine the observed cost.
 
-Pass `baselines=all-since-2026.6.1` for exhaustive historical cleanup; `last-stable-4`, `release-history`, and exact historical versions remain explicit manual selections. Local aggregate runs can pass the resolved exact specs through `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS`, keep a single lane with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, or set `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` for the scenario matrix. Existing scenarios retain their baked `openclaw config set` recipes and summary records. The new operator-state scenario instead uses the baseline's own agent, exec-approvals, cron, and plugin CLIs, then verifies preserved state and a mock-provider turn after upgrade. Gateway probes include `/healthz`, `/readyz`, and RPC status. See [Testing updates and plugins](/help/testing-updates-plugins) for the preserved-state and successful-upgrade requirements.
+Pass `baselines=all-since-2026.6.1` for exhaustive historical cleanup; `last-stable-4`, `release-history`, and exact historical versions remain explicit manual selections. Local aggregate runs can pass the resolved exact specs through `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS`, keep a single lane with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, or set `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` for the scenario matrix. Existing scenarios retain their baked `openclaw config set` recipes and summary records. The new operator-state scenario instead uses the baseline's own agent, exec-approvals, cron, and plugin CLIs, then verifies preserved state and a mock-provider turn after upgrade. Gateway checks include `/healthz`, `/readyz`, and RPC status. See [Testing updates and plugins](/help/testing-updates-plugins) for the preserved-state and successful-upgrade requirements.
 
 All supported baseline rows require successful updates. Existing synthetic
 `base` and reported-issue fixtures retain their success assertions and run once

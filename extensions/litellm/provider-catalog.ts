@@ -1,4 +1,3 @@
-// Litellm provider module implements model/runtime integration.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildLitellmModelDefinition, LITELLM_BASE_URL } from "./onboard.js";
 

@@ -45,6 +45,9 @@ daemon. For install and product docs, see [lmstudio.ai](https://lmstudio.ai/).
 
     Choose `LM Studio`, then pick a model at the `Default model` prompt.
 
+    The server URL prompt also accepts host shorthand such as `localhost:1234`.
+    Invalid URLs stay in the prompt so you can correct them before model discovery.
+
     On a fresh guided setup, OpenClaw first queries `/api/v1/models` on the
     default or configured LM Studio host. An existing LLM is offered automatically
     only when LM Studio reports tool training and at least 16K of effective
@@ -122,6 +125,11 @@ model compat metadata. Some LM Studio builds advertise a binary UI option (`allo
 "on"]`) while rejecting those literal values on `/v1/chat/completions`; OpenClaw normalizes that
 binary shape to the six-level scale before sending requests, including for older saved config that
 still has `off`/`on` reasoning maps.
+
+For graded options, fresh discovery maps `max` (and Ultra's provider effort) to the highest
+advertised canonical effort, regardless of option order. For example, `off`, `low`, `medium`
+maps `max` to `medium`. Existing saved graded `reasoningEffortMap` values remain explicit
+configuration; rerun LM Studio setup to regenerate them from current server metadata.
 
 ### Explicit configuration
 

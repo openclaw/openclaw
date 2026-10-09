@@ -16,9 +16,12 @@ function createMockToolDefinitions(tools: unknown[] = []) {
 }
 
 export function mockCompactHooksTools(createTools: typeof createOpenClawCodingToolsInternal) {
+  // mock-isolation: Supply fixture tools without constructing the full runtime surface.
   vi.doMock("../agent-tools.js", () => ({
     createOpenClawCodingTools: createTools,
     createOpenClawCodingToolsInternal: createTools,
+    createOpenClawCodingToolsInternalAsync: async (...args: Parameters<typeof createTools>) =>
+      createTools(...args),
   }));
 
   vi.doMock("./tool-schema-runtime.js", () => ({
@@ -28,5 +31,27 @@ export function mockCompactHooksTools(createTools: typeof createOpenClawCodingTo
 
   vi.doMock("../agent-tool-definition-adapter.js", () => ({
     toToolDefinitions: vi.fn(createMockToolDefinitions),
+  }));
+}
+
+export function mockCompactHooksSkills(
+  resolveSkillsPrompt: typeof import("../../skills/loading/workspace-skill-prompt.js").resolveSkillsPrompt,
+) {
+  vi.doMock("../../skills/runtime/env-overrides.js", () => ({
+    applySkillEnvOverrides: vi.fn(() => () => {}),
+    applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
+  }));
+
+  vi.doMock("../../skills/loading/workspace-skill-loader.js", () => ({
+    prepareWorkspaceSkills: vi.fn<
+      typeof import("../../skills/loading/workspace-skill-loader.js").prepareWorkspaceSkills
+    >(async () => []),
+  }));
+
+  vi.doMock("../../skills/loading/workspace-skill-prompt.js", () => ({
+    buildSkillSnapshot: vi.fn<
+      typeof import("../../skills/loading/workspace-skill-prompt.js").buildSkillSnapshot
+    >(async () => ({ prompt: "", skills: [], resolvedSkills: [], discoverySkills: [] })),
+    resolveSkillsPrompt,
   }));
 }

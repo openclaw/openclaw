@@ -113,7 +113,6 @@ describe("createMSTeamsReplyDispatcher", () => {
       runtime: { error: vi.fn() } as never,
       log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
       app: { send: vi.fn(async () => ({})) } as never,
-      appId: "app",
       conversationRef: {
         conversation: { id: "conv", conversationType },
         user: { id: "user" },
@@ -684,7 +683,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       const latest = String(stream.update.mock.calls.at(-1)?.[0]);
       expect(latest.match(/Checking/g)).toHaveLength(1);
 
-      dispatcher.replyOptions.onReasoningEnd?.();
+      await dispatcher.replyOptions.onReasoningEnd?.();
       await dispatcher.replyOptions.onReasoningStream?.({
         text: "Next thought",
         isReasoningSnapshot,

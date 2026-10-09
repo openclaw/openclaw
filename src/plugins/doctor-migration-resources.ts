@@ -12,6 +12,10 @@ import type {
   PluginDoctorMigrationBackupWarning,
   PluginDoctorStateMigration,
 } from "./doctor-contract-module.js";
+import type { PluginStateRetentionContract } from "./doctor-retired-state.js";
+import type { PluginManifestRecord } from "./manifest-registry.types.js";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
+
 export type PluginDoctorMigrationResourceCollectionParams = {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -111,6 +115,35 @@ export async function preparePluginDoctorMigrationResources(
     ),
     assertCurrent,
   };
+}
+
+/** Inspect sources for selected trusted owners before the updater replaces the service. */
+export async function assertPluginStateRetention(
+  records: readonly PluginManifestRecord[],
+  params: { candidateRoot: string } & Parameters<
+    PluginStateRetentionContract["stateMigrations"][number]["assertSupportedState"]
+  >[0],
+): Promise<void> {
+  for (const record of records) {
+    const declared = record.doctorContract?.stateMigrations;
+    if (!Array.isArray(declared)) {
+      continue;
+    }
+    const retained =
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync<PluginStateRetentionContract>({
+        dirName: record.id,
+        artifactCandidates: ["state-retention-api.js"],
+        retainedAt: params.candidateRoot,
+      });
+    if (!retained || retained.packageName !== record.packageName) {
+      continue;
+    }
+    for (const migration of retained.stateMigrations) {
+      if (declared.some(({ id }) => id === migration.id)) {
+        await migration.assertSupportedState(params);
+      }
+    }
+  }
 }
 
 function isMigrationBackupResource(value: unknown): value is PluginDoctorMigrationBackupResource {

@@ -11,10 +11,11 @@ import {
   type SessionCreateParams,
 } from "./create.ts";
 import type { SessionPatch, SessionPatchOptions, SessionPatchResult } from "./patch.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 import { createSessionArchiveState, projectSessionArchiveFields } from "./session-archive-state.ts";
 import type {
   SessionCapability,
+  SessionConnectionScope,
   SessionCreateReconciliation,
   SessionRefreshOutcome,
   SessionResetOptions,
@@ -47,6 +48,11 @@ import {
 import { createSessionRowLocalPatch } from "./session-row-local-patch.ts";
 
 export function createSessionMutations(host: SessionMutationsHost) {
+  const reportError = (scope: SessionConnectionScope, error: unknown) => {
+    if (host.connection.isCurrent(scope)) {
+      host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+    }
+  };
   const modelOverrides = createSessionModelOverrides(host);
   const archiveState = createSessionArchiveState(
     host.publishedRow,
@@ -113,9 +119,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       const reconciliation = host.reconcileMutation(params.agentId);
       if (options.reconciliation === "background") {
         void reconciliation.catch((error: unknown) => {
-          if (host.connection.isCurrent(scope)) {
-            host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-          }
+          reportError(scope, error);
         });
       } else {
         await reconciliation;
@@ -127,9 +131,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result;
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      }
+      reportError(scope, error);
       return null;
     }
   };
@@ -155,6 +157,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     const patchSnapshot = host.snapshot();
     const pendingConversation =
       hasSettingsPatch ||
+      patchParams.label !== undefined ||
       patchParams.category !== undefined ||
       patchParams.pinned !== undefined ||
       patchParams.unread === false ||
@@ -509,9 +512,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       await requestSessionReset(scope.client, key, options);
       return host.connection.isCurrent(scope) ? "completed" : "uncertain";
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      }
+      reportError(scope, error);
       // Reset can commit before awaited lifecycle work rejects; never infer safe retry.
       return "uncertain";
     }
@@ -552,9 +553,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result.owner;
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      }
+      reportError(scope, error);
       return null;
     }
   };
@@ -586,11 +585,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
     patchMany,
     assignOwner,
     patchRowLocal,
-    /**
-     * Re-asserts in-flight row intents over Gateway events and list refreshes,
-     * which carry the pre-mutation value until the patch lands.
-     */
-    applyPendingRow,
+    /** Confirmed archive facts precede in-flight row intents on every presentation. */
+    applyRow: (row: GatewaySessionRow, sourceAgentId?: string | null) =>
+      applyPendingRow(archiveState.applyRow(row), sourceAgentId),
     observePendingFields(
       row: GatewaySessionRow,
       names: readonly string[],
@@ -604,20 +601,16 @@ export function createSessionMutations(host: SessionMutationsHost) {
         owner.observe(row, names, identity);
       }
     },
-    applyPendingRows(
+    applyRows(
       result: SessionsListResult | null,
       sourceAgentId?: string | null,
     ): SessionsListResult | null {
-      if (!result || !hasPendingRowPatches()) {
-        return result;
+      const archived = archiveState.apply(result);
+      if (!archived || !hasPendingRowPatches()) {
+        return archived;
       }
-      return projectSessionResultRows(
-        result,
-        result.sessions.map((row) => applyPendingRow(row, sourceAgentId)),
-      );
+      return mapSessionResultRows(archived, (row) => applyPendingRow(row, sourceAgentId));
     },
-    applyConfirmedArchives: archiveState.apply,
-    applyConfirmedArchiveRow: archiveState.applyRow,
     observeArchiveState: archiveState.observe,
     confirmArchiveState: archiveState.confirm,
     reset,

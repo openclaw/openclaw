@@ -30,16 +30,19 @@ it("delivers transferred history bytes as a JSON text frame", async () => {
     const handler = attachHandler.mock.calls[0]![0];
     const messages = [{ role: "assistant", content: "é🦞\nready" }];
     const received = once(peer, "message");
-    expect(
-      handler.send({
-        type: "res",
-        id: "history",
-        ok: true,
-        payload: { messages: new SerializedJsonArray(Buffer.from(JSON.stringify(messages))) },
-      }),
-    ).toEqual({ kind: "sent" });
+    const result = handler.send({
+      type: "res",
+      id: "history",
+      ok: true,
+      payload: { messages: new SerializedJsonArray(Buffer.from(JSON.stringify(messages))) },
+    });
     const [data, isBinary] = (await received) as [Buffer, boolean];
+    expect(result).toEqual({ kind: "sent", bytes: data.byteLength });
     expect(isBinary).toBe(false);
+    const plainReceived = once(peer, "message");
+    const plainResult = handler.send({ type: "res", id: "plain", ok: true, payload: "é🦞" });
+    const [plainData] = (await plainReceived) as [Buffer];
+    expect(plainResult).toEqual({ kind: "sent", bytes: plainData.byteLength });
     expect(JSON.parse(data.toString())).toEqual({
       type: "res",
       id: "history",

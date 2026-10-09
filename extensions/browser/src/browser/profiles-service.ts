@@ -56,7 +56,6 @@ type CreateProfileResult = BrowserCreateProfileResult & {
   transport: "cdp" | "chrome-mcp";
 };
 
-/** Create a profile service bound to one browser route context. */
 export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();
@@ -72,14 +71,10 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     }
 
     const state = ctx.state();
-    const resolvedProfiles = state.resolved.profiles;
-    if (getOwnBrowserProfile(resolvedProfiles, name)) {
-      throw new BrowserConflictError(`profile "${name}" already exists`);
-    }
-
-    const cfg = getRuntimeConfig();
-    const rawProfiles = cfg.browser?.profiles ?? {};
-    if (getOwnBrowserProfile(rawProfiles, name)) {
+    if (
+      getOwnBrowserProfile(state.resolved.profiles, name) ||
+      getOwnBrowserProfile(getRuntimeConfig().browser?.profiles, name)
+    ) {
       throw new BrowserConflictError(`profile "${name}" already exists`);
     }
 
@@ -113,11 +108,10 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       ...(normalizedUserDataDir ? { userDataDir: normalizedUserDataDir } : {}),
       ...(driver ? { driver } : {}),
     });
-    if (!profileConfig) {
-      throw new BrowserProfileNotFoundError(`profile "${name}" not found after creation`);
+    if (profileConfig) {
+      state.resolved.profiles[name] = profileConfig;
     }
-    state.resolved.profiles[name] = profileConfig;
-    const resolved = resolveProfile(state.resolved, name);
+    const resolved = profileConfig && resolveProfile(state.resolved, name);
     if (!resolved) {
       throw new BrowserProfileNotFoundError(`profile "${name}" not found after creation`);
     }

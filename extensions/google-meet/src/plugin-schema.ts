@@ -111,7 +111,7 @@ export const GoogleMeetToolSchema = Type.Object({
     }),
   ),
   message: Type.Optional(Type.String({ description: "Realtime instructions to speak now" })),
-  timeoutMs: optionalPositiveIntegerSchema({ description: "Probe timeout in milliseconds" }),
+  timeoutMs: optionalPositiveIntegerSchema({ description: "Check timeout in milliseconds" }),
   meeting: Type.Optional(Type.String({ description: "Meet URL, meeting code, or spaces/{id}" })),
   today: Type.Optional(
     Type.Boolean({

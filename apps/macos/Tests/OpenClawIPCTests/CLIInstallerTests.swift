@@ -479,22 +479,25 @@ struct CLIInstallerTests {
         ].joined(separator: ":"))
     }
 
-    @Test func `successful CLI setup starts the local gateway and waits for readiness`() async {
+    @Test(arguments: [false, true])
+    func `successful CLI setup starts the local gateway and waits for readiness`(pauseDuringReadiness: Bool) async {
         var didStart = false
         var didWait = false
+        var paused = false
 
         let activation = await CLIInstaller.activateLocalGateway(
             mode: .local,
-            paused: false,
+            paused: paused,
             start: { didStart = true },
             waitUntilReady: {
                 didWait = true
+                paused = pauseDuringReadiness
                 return true
             })
 
         #expect(didStart)
         #expect(didWait)
-        #expect(activation == .ready)
+        #expect(activation == (pauseDuringReadiness ? .deferred : .ready))
     }
 
     @Test func `paused CLI setup defers gateway activation`() async {

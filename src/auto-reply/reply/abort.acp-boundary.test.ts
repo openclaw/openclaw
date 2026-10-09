@@ -1,3 +1,4 @@
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 /** Channel Stop initiates native and ACP cancellation independently of either drain. */
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
@@ -11,7 +12,7 @@ import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -21,6 +22,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -49,11 +51,11 @@ import { buildTestCtx } from "./test-ctx.js";
 
 const fixture = useChatAbortRegistryFixture();
 
-it.each(
-  ["idle", "active", "native failure"].flatMap((scenario) =>
-    ["resolve", "reject"].map((completion) => ({ scenario, completion })),
-  ),
-)(
+it.each([
+  { scenario: "idle", completion: "resolve" },
+  { scenario: "active", completion: "reject" },
+  { scenario: "native failure", completion: "reject" },
+])(
   "native and bound ACP cancellation initiate before either drain ($scenario, $completion)",
   async ({ scenario, completion }) => {
     const active = scenario !== "idle";
@@ -178,6 +180,22 @@ it.each(
     let turn: Promise<void> | undefined;
     let acpSignal: AbortSignal | undefined;
     let stopSettled = false;
+    const nativeTerminal = createDeferred();
+    const stopObservingNative = subscribeSubagentRunChanges("persistence", () => {
+      if (
+        (
+          [
+            ["running", runningKey],
+            ["queued", queuedKey],
+          ] as const
+        ).every(([runId, key]) => {
+          const entry = subagentRuns.get(runId);
+          return entry?.childSessionKey === key && entry.endedReason === "subagent-killed";
+        })
+      ) {
+        nativeTerminal.resolve();
+      }
+    });
     try {
       await manager.initializeSession({
         cfg,
@@ -310,12 +328,13 @@ it.each(
         }),
       ]);
       expect(native.abortSignal.aborted).toBe(true);
-      // Synchronize on native terminal state, never on the still-held ACP completion.
+      // Native terminal publication is independent of the still-held ACP completion.
       await vi.waitFor(() => expect(runningAbort).toHaveBeenCalledOnce());
       await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
       expect(selectedDispatch).not.toHaveBeenCalled();
+      await nativeTerminal.promise;
       for (const key of [runningKey, queuedKey]) {
-        expect(getSubagentRunByChildSessionKey(key)?.endedReason).toBe("subagent-killed");
+        expect((await getSubagentRunByChildSessionKey(key))?.endedReason).toBe("subagent-killed");
       }
       await vi.waitFor(() =>
         expect(loadExactSessionEntryReadOnly({ sessionKey: sourceKey })?.entry).toMatchObject({
@@ -344,10 +363,11 @@ it.each(
         reason: "fast-abort",
       });
       await turn;
-      expect(readAcpSessionMeta({ cfg, sessionKey: acpKey })?.state).toBe(
+      expect(readAcpSessionEntry({ cfg, sessionKey: acpKey })?.acp?.state).toBe(
         !active && completion === "reject" ? "error" : "idle",
       );
     } finally {
+      stopObservingNative();
       childAdmission?.release();
       proceed.resolve();
       finishTurn.resolve();

@@ -86,6 +86,10 @@ wa-select.settings-select wa-option::part(checked-icon),
   font-weight: 650;
 }
 
+.picker-select__option .picker-select__label {
+  white-space: normal;
+}
+
 .picker-select__copy {
   display: grid;
   gap: 2px;
@@ -325,7 +329,7 @@ openclaw-select-picker {
   inset: 16px 0 0;
   max-width: none;
   max-height: none;
-  padding: 0 var(--space-3) calc(var(--space-2) + env(safe-area-inset-bottom, 0px));
+  padding: 0 var(--chat-mobile-edge-inset) calc(var(--space-2) + var(--shell-safe-area-bottom));
   border: 0;
   box-shadow: none;
   animation: picker-sheet-page-in 200ms var(--ease-out);

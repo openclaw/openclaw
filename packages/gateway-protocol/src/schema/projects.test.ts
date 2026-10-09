@@ -54,6 +54,7 @@ describe("project protocol schemas", () => {
             description: "Personal AI assistant",
             cloneUrl: "https://github.com/openclaw/openclaw.git",
             webUrl: "https://github.com/openclaw/openclaw",
+            defaultBranch: "main",
             private: false,
           },
         ],
@@ -81,6 +82,12 @@ describe("project protocol schemas", () => {
             source: "registered",
           },
         ],
+        defaultRepository: {
+          identity: "acme/private-repo",
+          url: "https://ghe.example.test/acme/private-repo.git",
+          ref: "main",
+          profileId: "example-azure",
+        },
         recents: [
           { kind: "project", projectId: "openclaw", displayName: "OpenClaw" },
           { kind: "folder", folder: "/repo/scratch", displayName: "scratch" },

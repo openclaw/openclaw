@@ -1,6 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Connection-failure hint classification shared by the login gate.
 import {
   ConnectErrorDetailCodes,
   readConnectPairingRequiredMessage,
@@ -59,15 +58,14 @@ export function readConnectionAuthReason(details: unknown): string | null {
 
 type AuthHintKind = "required" | "failed" | "trusted-proxy";
 
-type PairingHint =
-  | {
-      kind: "pairing-required";
-      requestId: string | null;
-    }
-  | {
-      kind: "scope-upgrade-pending" | "role-upgrade-pending" | "metadata-upgrade-pending";
-      requestId: string | null;
-    };
+type PairingHint = {
+  kind:
+    | "pairing-required"
+    | "scope-upgrade-pending"
+    | "role-upgrade-pending"
+    | "metadata-upgrade-pending";
+  requestId: string | null;
+};
 
 export function resolvePairingHint(
   connected: boolean,
@@ -98,8 +96,6 @@ export function resolvePairingHint(
 }
 
 /**
- * Return the connection auth hint to show, if any.
- *
  * Keep fallback string matching narrow so generic "connect failed" close reasons
  * do not get misclassified as token/password problems.
  */

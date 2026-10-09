@@ -69,21 +69,11 @@ export function stableComparableObject(value: unknown, pathValue: string[] = [])
       .toSorted(([a], [b]) => a.localeCompare(b))
       .map(([key, entry]) => [
         key,
-        shouldNormalizeDescriptionValue(pathValue, key, entry)
+        typeof entry === "string" &&
+        (key === "description" || pathValue.at(-1) === "description_localizations")
           ? normalizeDescriptionForComparison(entry)
           : stableComparableObject(entry, [...pathValue, key]),
       ]),
-  );
-}
-
-function shouldNormalizeDescriptionValue(
-  pathLocal: string[],
-  key: string,
-  entry: unknown,
-): entry is string {
-  return (
-    typeof entry === "string" &&
-    (key === "description" || pathLocal.at(-1) === "description_localizations")
   );
 }
 

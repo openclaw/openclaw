@@ -1,15 +1,18 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../../agents/tool-catalog.js";
 import { clearRuntimeConfigSnapshot } from "../../config/io.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
@@ -57,6 +60,9 @@ export type WorkerTurnLauncherOptions = Parameters<
 >[0];
 export type WorkerTurnEnvironmentService = WorkerTurnLauncherOptions["environments"];
 type WorkerTurnEnvironmentRecord = NonNullable<ReturnType<WorkerTurnEnvironmentService["get"]>>;
+const prepareGatewayTools: NonNullable<
+  WorkerTurnEnvironmentService["createGatewayTools"]
+> = async ({ prepareTools }) => prepareTools?.([]) ?? [];
 
 export const SESSION_ID = "session-worker-turn";
 export const SESSION_KEY = "agent:main:worker-turn";
@@ -65,6 +71,9 @@ export const OWNER_EPOCH = 3;
 const BUNDLE_HASH = "a".repeat(64);
 export const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
+
+export const readLaunchToolNames: WorkerTurnTunnelHandle["readLaunchToolNames"] = async () =>
+  CORE_WORKER_LAUNCH_TOOL_NAMES;
 
 export const measureLaunchTurn: WorkerTurnTunnelHandle["measureLaunchTurn"] = (plan, claim) =>
   measureNodeWorkerLaunchBytes("fixture-node", {
@@ -89,6 +98,7 @@ export function createWorkerTurnTunnel<
       resume: vi.fn(async () => {}),
     })),
     measureLaunchTurn,
+    readLaunchToolNames,
     syncWorkspace: vi.fn(async () => {
       throw new Error("unexpected workspace sync");
     }),
@@ -102,20 +112,23 @@ export const reconcileUnchangedLocalWorkspace: WorkerTurnTunnelHandle["reconcile
     if (request.source.kind !== "local") {
       throw new Error("expected a local workspace source");
     }
-    request.source.journal.commit(MANIFEST_REF);
+    await request.source.journal.commit(MANIFEST_REF);
     return {
       manifestRef: MANIFEST_REF,
       changed: false,
       verifyStable: async () => {},
       verifyLocalStable: async () => {},
+      publishStagedResult: async () => {},
+      discardPreparedStagedResult: async () => {},
     };
   };
 
-export function acknowledgeCompletedWorkerTurn(
+export async function acknowledgeCompletedWorkerTurn(
   claim: WorkerSessionTurnClaim,
-  transcriptLeafId: string,
-): SpawnResult {
-  createWorkerSessionPlacementGate(placements).updateAckCursors({
+  transcriptLeafId: string | undefined,
+): Promise<SpawnResult> {
+  const leafId = expectDefined(transcriptLeafId, "persisted worker transcript leaf");
+  await createWorkerSessionPlacementGate(placements).updateAckCursors({
     claim,
     transcriptSeq: 2,
     liveSeq: 1,
@@ -123,7 +136,7 @@ export function acknowledgeCompletedWorkerTurn(
   return {
     stdout: JSON.stringify({
       status: "completed",
-      transcriptLeafId,
+      transcriptLeafId: leafId,
       transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
     }),
     stderr: "",
@@ -171,7 +184,7 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     fallbackEntry: entry,
     skipMaintenance: true,
   });
-  SessionManager.open(sessionTarget);
+  await SessionManager.openAsync(sessionTarget);
   sessionFile = SESSION_KEY;
 }
 
@@ -198,6 +211,49 @@ export async function cleanupWorkerTurnLauncherTest(
 
 export function setWorkerTurnAdmissionCleanup(cleanup: () => void): void {
   cleanupAdmissionSink = cleanup;
+}
+
+export function abortWorkerTurnClaimWaitOnSignal(signal: AbortSignal) {
+  const waitForClaim = placements.waitForTurnClaimRelease;
+  vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) =>
+    waitForClaim(sessionId, {
+      ...options,
+      signal: options.signal ? AbortSignal.any([options.signal, signal]) : signal,
+    }),
+  );
+}
+
+export function createWorkerTurnSessionRuntimeLoader() {
+  const entry = {
+    sessionId: SESSION_ID,
+    updatedAt: 1,
+    worktree: { id: "workspace", branch: "fixture", repoRoot: root },
+  };
+  return async () => ({
+    managedWorktrees: {
+      findLiveByOwner: async () => ({
+        id: "workspace",
+        name: "fixture",
+        repoFingerprint: "fixture",
+        repoRoot: root,
+        path: root,
+        branch: "fixture",
+        baseRef: "main",
+        ownerKind: "session" as const,
+        ownerId: SESSION_KEY,
+        createdAt: 1,
+        lastActiveAt: 1,
+      }),
+    },
+    resolveGatewaySessionStoreTargetWithStore: () => ({
+      storePath: sessionTarget.storePath,
+      canonicalKey: SESSION_KEY,
+      storeKeys: [SESSION_KEY],
+      agentId: "main",
+      store: { [SESSION_KEY]: entry },
+    }),
+    resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+  });
 }
 
 export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof sessionTarget {
@@ -228,11 +284,15 @@ export function createWorkerSessionTurnPlacementProvider(
     resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     ...options,
+    environments: {
+      createGatewayTools: prepareGatewayTools,
+      ...options.environments,
+    },
   });
 }
 
-export function openSessionManager(): SessionManager {
-  return SessionManager.open(sessionTarget);
+export async function openSessionManager(): Promise<SessionManager> {
+  return await SessionManager.openAsync(sessionTarget);
 }
 
 export function readWorkerTurnTranscriptStorageRows() {
@@ -268,7 +328,7 @@ export async function dispatchInitialWorkerPlacement(params: {
     },
     { to: "active", patch: { activeOwnerEpoch: OWNER_EPOCH } },
   ] as const) {
-    placement = params.placements.transition({
+    placement = await params.placements.transition({
       sessionId: params.identity.sessionId,
       from: placement.state,
       expectedGeneration: placement.generation,
@@ -312,19 +372,19 @@ export async function seedReclaimedPlacement() {
   if (active?.state !== "active") {
     throw new Error("expected active placement to reclaim");
   }
-  const draining = placements.startDrain({
+  const draining = await placements.startDrain({
     sessionId: SESSION_ID,
     environmentId: active.environmentId,
     ownerEpoch: active.activeOwnerEpoch,
     expectedGeneration: active.generation,
   });
-  const reconciling = placements.startReconcile({
+  const reconciling = await placements.startReconcile({
     sessionId: SESSION_ID,
     environmentId: active.environmentId,
     ownerEpoch: active.activeOwnerEpoch,
     expectedGeneration: draining.generation,
   });
-  const reclaimed = placements.transition({
+  const reclaimed = await placements.transition({
     sessionId: SESSION_ID,
     from: "reconciling",
     to: "reclaimed",
@@ -352,6 +412,7 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
       protocolFeatures: [
         WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
         WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
       ],
       installKind: "bundle",
     },
@@ -433,6 +494,7 @@ export function unusedEnvironments(): WorkerTurnEnvironmentService {
   const unexpected = () => new Error("unexpected worker environment call");
   return {
     get: vi.fn(() => undefined),
+    createGatewayTools: prepareGatewayTools,
     resolveSshIdentity: vi.fn(async () => {
       throw unexpected();
     }),
@@ -459,10 +521,20 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     ...(executionIdentity
       ? { logging: { audit: { enabled: true, executionIdentity: true } } }
       : {}),
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "synthetic-worker-api-key",
+          models: [],
+        },
+      },
+    },
     agents: {
       defaults: {
+        userTimezone: "UTC",
         models: {
-          "openai/gpt-test": { agentRuntime: { id: "openclaw" } },
+          "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
         },
       },
     },
@@ -493,7 +565,7 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     timeoutMs: 5_000,
     runId,
     provider: "openai",
-    model: "gpt-test",
+    model: "gpt-5.6-luna",
     modelHasVision: true,
     config,
   };

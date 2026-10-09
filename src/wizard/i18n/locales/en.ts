@@ -33,7 +33,7 @@ export const en = {
       compatibilityOpenAiResponses: "OpenAI Responses-compatible",
       compatibilityOpenAiResponsesHint: "Uses /responses",
       compatibilityUnknown: "Unknown (detect automatically)",
-      compatibilityUnknownHint: "Probes OpenAI Chat, OpenAI Responses, then Anthropic endpoints",
+      compatibilityUnknownHint: "Checks OpenAI Chat, OpenAI Responses, then Anthropic endpoints",
       detectionFailed: "Could not detect endpoint type.",
       detectionFailedNote:
         "This endpoint did not respond to OpenAI Chat, OpenAI Responses, or Anthropic style requests.",
@@ -274,6 +274,50 @@ export const en = {
       validWebSocketUrl: "URL must start with ws:// or wss://",
       websocketUrl: "Gateway WebSocket URL",
     },
+    onboardingWelcome: {
+      nextStep: "Next step",
+      firstAction: "What would you like to do first?",
+      talkToAgent: "Talk to my agent",
+      meetAgent: "Meet your agent right here.",
+      connectWhatsApp: "Connect WhatsApp",
+      connectTelegram: "Connect Telegram",
+      allChannels: "See all channels",
+      readyWhenYouAre: "Ready when you are",
+      applyQuestion: "Should I set all of that up now?",
+      applyYes: "Yes — set it up",
+      inspectChanges: "What will you change?",
+      askBeforeWriting: "Ask before anything is written.",
+      hatchIntro: "Hi, I'm OpenClaw — let's hatch your agent.",
+      setupIntro: "Hi, I'm OpenClaw — let's get you set up.",
+      machineIntro:
+        "No menus here: tell me what you want and I'll do the configuring. I looked around this machine:",
+      verifiedAi:
+        "AI: {model} — already verified with a real reply; switching later is one sentence.",
+      verifiedSetupAi: "Setup AI: {model} — verified with a real reply.",
+      workspace: "Workspace: {workspace}",
+      localGateway: "Gateway: runs locally, private to this machine (token auth).",
+      applyPrompt: "Say **yes** and I'll set all of that up now.",
+      security:
+        "Heads up: your agent gets real access to this machine — https://docs.openclaw.ai/security",
+      afterSetup:
+        "Afterwards: `talk to agent` to meet your agent right here. Channels are optional: use `connect discord`, `connect slack`, `connect telegram`, `connect whatsapp` (or `channels` for the full list) if you want to chat from another service.",
+      setupModelNext:
+        "This model handles setup and utility tasks. Choose a primary model in Model Setup or run `openclaw onboard` before regular agent chat. You can continue setup here and connect channels when ready.",
+      inferenceReady: "Inference is ready.",
+      verifiedModel: "Verified model: {model}.",
+      verifiedSetupModel: "Verified setup model: {model}.",
+      notConfigured: "not configured",
+      gatewayRunning: "Gateway: running at {url}.",
+      gatewayUnavailable: "Gateway: not configured or reachable yet.",
+      optionalSetup:
+        "I can now finish your workspace, Gateway, channels, agents, plugins, and other optional setup.",
+      channelCommands:
+        "Connect how you want to talk: say `connect whatsapp`, `connect telegram`, `connect slack`, `connect discord` — or `channels` for the full list.",
+      readyNext:
+        "Say `talk to agent` to meet your agent right here, or `help` for everything I can do.",
+      readySetupNext:
+        "Your setup model stays available here. Choose a primary model in Model Setup or run `openclaw onboard` before opening regular agent chat.",
+    },
     guided: {
       laneQuestion: "How would you like to start?",
       laneSecurityLine:
@@ -300,6 +344,7 @@ export const en = {
       accessQuestion: "How should I set things up?",
       aiAccessTitle: "AI access",
       appliedTitle: "Inference ready",
+      localSetupTitle: "Local setup",
       alreadySetUp: "Everything's already set up here — your AI just passed a fresh check.",
       applyFailedFallback:
         "Something went wrong while applying setup: {detail}\nLet's finish together in chat instead.",
@@ -400,6 +445,7 @@ export const en = {
       quickstartOnlyLocal: "QuickStart only supports local gateways. Switching to Manual mode.",
       quickstartTitle: "QuickStart",
       quickstartAuthTokenDefault: "Gateway secret (generated)",
+      quickstartAuthKept: "existing configuration kept",
       quickstartDirectChannels: "Direct to chat channels.",
       quickstartGatewayAuth: "Gateway auth: {auth}",
       quickstartGatewayBind: "Gateway bind: {bind}",
@@ -420,7 +466,7 @@ export const en = {
       riskNotAccepted: "risk not accepted",
       searchTitle: "Search",
       setupMode: "Setup mode",
-      secretRefProbeFailed: "Could not resolve {field} SecretRef for setup probe.",
+      secretRefProbeFailed: "Could not resolve {field} SecretRef for setup check.",
       skillsTitle: "Skills",
       skipChannels: "Skipping channel setup.",
       skipSearch: "Skipping search setup.",
@@ -1139,6 +1185,7 @@ export const en = {
       dashboardCopyPaste: "Copy/paste this URL in a browser on this machine to control OpenClaw.",
       dashboardOpened: "Opened in your browser. Keep that tab to control OpenClaw.",
       dashboardOpenAnytime: "Open the dashboard anytime: {command}",
+      dashboardTitle: "Dashboard",
       dashboardReady: "Dashboard ready",
       dashboardWhenReady: "When you're ready: {command}",
       daemonRuntime: "Gateway service runtime",
@@ -1198,6 +1245,7 @@ export const en = {
       outroSeeded:
         "Onboarding complete. Web UI seeded in the background; open it anytime with the dashboard link above.",
       quickstartNodeRuntime: "QuickStart uses Node for the Gateway service (stable + supported).",
+      quickstartBunRuntime: "QuickStart uses Bun for the Gateway service.",
       reinstall: "Reinstall",
       rerunInstallDaemon: "Or rerun with: {command}",
       restart: "Restart",
@@ -1207,7 +1255,7 @@ export const en = {
       securityReminder:
         "Running agents on your computer is risky — harden your setup: https://docs.openclaw.ai/security",
       secretRefAuthFailed: "Could not resolve {field} SecretRef for setup auth.",
-      skipHealthNextTime: "Or skip this probe next time: {command}",
+      skipHealthNextTime: "Or skip this check next time: {command}",
       skipControlUi: "Skipping Control UI/TUI prompts.",
       startGatewayNow: "Start now: {command}",
       systemdInstallSkipped:

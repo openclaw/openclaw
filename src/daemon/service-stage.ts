@@ -1,9 +1,9 @@
 /** Native writer facts are evidence, never serialized lifecycle authority. */
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { z } from "zod";
 import { hasErrnoCode } from "../infra/errno.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
@@ -49,6 +49,19 @@ export type GatewayServiceDefinitionTransactionHooks = {
   taskPrepared: (expectedXml: string) => Promise<void>;
 };
 type GatewayServiceFileState = z.infer<typeof fileState>;
+
+/** Rename can change ctime; the staged inode and payload identify the publication. */
+export function matchesServiceFilePublication(
+  current: GatewayServiceFileState | null,
+  prepared: GatewayServiceFileState,
+): current is GatewayServiceFileState {
+  return (
+    current !== null &&
+    (["dev", "ino", "sha256", "mode", "size", "mtimeMs"] as const).every(
+      (key) => current[key] === prepared[key],
+    )
+  );
+}
 
 /** Keep the live file runnable until a complete replacement is ready. */
 export async function publishServiceFile(params: {
@@ -114,7 +127,7 @@ export async function readServiceFileState(file: string): Promise<GatewayService
     throw new Error("Managed service artifact changed during inspection.");
   }
   return {
-    sha256: createHash("sha256").update(contents).digest("hex"),
+    sha256: sha256Hex(contents),
     mode: opened.mode & 0o7777,
     dev: opened.dev,
     ino: opened.ino,

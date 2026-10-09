@@ -9,6 +9,7 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeScope } from "../config/sessions/session-accessor.types.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
@@ -33,15 +34,21 @@ class AgentRunSessionTargetResolutionError extends Error {
 }
 
 /** Resolves the active runtime target used by current run/session internals. */
-export async function resolveAgentRunSessionTarget(params: {
-  agentId?: string;
-  config?: OpenClawConfig;
-  missingSessionKey: "create" | "resolve-existing";
-  sessionId: string;
-  sessionFile?: string;
-  sessionKey?: string;
-  sessionTarget?: AgentRunSessionTarget;
-}): Promise<ResolvedAgentRunSessionTarget> {
+export async function resolveAgentRunSessionTarget(
+  params: {
+    agentId?: string;
+    config?: OpenClawConfig;
+    missingSessionKey: "create" | "resolve-existing";
+    sessionId: string;
+    sessionFile?: string;
+    sessionKey?: string;
+    sessionTarget?: AgentRunSessionTarget;
+  },
+  prepareTarget?: (scope: SessionTranscriptRuntimeScope) => Promise<{
+    target: SessionTranscriptRuntimeTarget;
+    assertCurrent: () => void;
+  }>,
+): Promise<ResolvedAgentRunSessionTarget> {
   const config = params.config ?? getRuntimeConfig();
   const sessionTarget = params.sessionTarget;
   const targetAgentId = normalizeOptionalString(sessionTarget?.agentId);
@@ -156,10 +163,12 @@ export async function resolveAgentRunSessionTarget(params: {
         })
       : resolveExistingSessionKeyForRequest({ cfg: config, sessionId })
     : undefined;
-  const lookupAgentId =
+  const fixedAgentId =
     (hasCompleteTypedTarget || trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??
     legacyMarker?.agentId ??
-    configuredStoreResolution?.agentId ??
+    configuredStoreResolution?.agentId;
+  const lookupAgentId =
+    fixedAgentId ??
     resolveSessionAgentId({
       agentId: targetAgentId ?? params.agentId,
       config,
@@ -186,13 +195,7 @@ export async function resolveAgentRunSessionTarget(params: {
     params.missingSessionKey === "create"
       ? toAgentStoreSessionKey({ agentId: lookupAgentId, requestKey: sessionId })
       : undefined;
-  const sessionKey =
-    targetSessionKey ??
-    suppliedSessionKey ??
-    compatibilitySessionKey ??
-    markerSessionKey ??
-    storedSessionKey ??
-    createdSessionKey;
+  const sessionKey = preliminarySessionKey ?? storedSessionKey ?? createdSessionKey;
   const suppliedKeyAgentId = parseAgentSessionKey(suppliedSessionKey)?.agentId;
   const targetKeyAgentId = parseAgentSessionKey(targetSessionKey)?.agentId;
   const candidateMarkerKey = targetSessionKey ?? suppliedSessionKey;
@@ -225,9 +228,7 @@ export async function resolveAgentRunSessionTarget(params: {
     throw new AgentRunSessionTargetResolutionError(sessionId);
   }
   const effectiveAgentId =
-    (hasCompleteTypedTarget || trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??
-    legacyMarker?.agentId ??
-    configuredStoreResolution?.agentId ??
+    fixedAgentId ??
     resolveSessionAgentId({
       agentId: targetAgentId ?? params.agentId,
       config,
@@ -238,16 +239,16 @@ export async function resolveAgentRunSessionTarget(params: {
     targetStorePath ??
     legacyMarker?.storePath ??
     resolveSessionStorePathCore(config.session?.store, { agentId: effectiveAgentId });
-  const target = await resolveSessionTranscriptRuntimeTarget({
+  const scope = {
     ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
     sessionId,
     sessionKey,
     storePath,
     ...(sessionTarget?.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
-  });
-  const { restoreSessionColdTranscript } =
-    await import("../config/sessions/session-cold-storage.js");
-  await restoreSessionColdTranscript(target);
+  };
+  const prepared = prepareTarget ? await prepareTarget(scope) : undefined;
+  const target = prepared?.target ?? (await resolveSessionTranscriptRuntimeTarget(scope));
+  prepared?.assertCurrent();
   return target;
 }
 

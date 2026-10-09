@@ -5,6 +5,7 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { drainProcessOutput } from "../process/output-drain.js";
 import workerDeployBrowserRuntime from "./worker-deploy-browser-runtime.js";
 import { runWorkerProcess } from "./worker-process.js";
+import { loadWorkerTurnRuntime } from "./worker.runtime.js";
 
 try {
   await assertSupportedRuntime();
@@ -13,6 +14,7 @@ try {
   const internalWorkerIpc = args.includes("--internal-worker-ipc");
   const internalWorkerPrewarm = args.includes("--internal-worker-prewarm");
   const managed = args.includes("--internal-worker-session");
+  const nativeInference = args.includes("--internal-worker-native-inference");
   if (
     new Set(args).size !== args.length ||
     args.some(
@@ -21,14 +23,17 @@ try {
           "--internal-worker-ipc",
           "--internal-worker-prewarm",
           "--internal-worker-session",
+          "--internal-worker-native-inference",
         ].includes(arg),
     ) ||
-    (internalWorkerPrewarm && args.length !== 1)
+    (internalWorkerPrewarm && args.length !== 1) ||
+    (nativeInference && !managed)
   ) {
     throw new Error("worker deploy entry received unsupported arguments");
   }
 
   if (internalWorkerPrewarm) {
+    await loadWorkerTurnRuntime();
     flushCompileCache();
   } else {
     await runWorkerProcess({

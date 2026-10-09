@@ -22,11 +22,11 @@ export {
   rollbackGatewayRestartSignalAdmission,
   scheduleGatewayRestart,
 } from "../../infra/restart.js";
+export { prepareGatewayRestartIntentConsumption } from "../../infra/restart-intent.js";
 export {
-  consumeGatewayRestartIntentPayloadSync,
-  consumeGatewayRestartIntentSync,
-} from "../../infra/restart-intent.js";
-export { writeGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
+  prepareGatewayRestartHandoffRuntime,
+  writeGatewayRestartHandoff,
+} from "../../infra/restart-handoff.js";
 export {
   cancelManagedServiceUpdateHandoff,
   claimManagedServiceUpdateHandoff,
@@ -45,11 +45,7 @@ export {
   writeRestartSentinelIfUnchanged,
 } from "../../infra/restart-sentinel.js";
 export { waitForGatewayHealthyRestart } from "../daemon-cli/restart-health.js";
-export {
-  detectGatewayRespawnSupervisor,
-  detectGatewayRespawnSupervisorIdentity,
-  detectRespawnSupervisor,
-} from "../../infra/supervisor-markers.js";
+export { detectGatewayRespawnSupervisorIdentity } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
 export {
   createGatewayActiveWorkSnapshot,
@@ -68,13 +64,4 @@ export {
 export { markGatewayDraining, resetAllLanes } from "../../process/command-queue.js";
 export { abortPendingChannelReloads } from "../../gateway/server-reload-generation.js";
 
-export async function stopGatewayManagedProviderLocalServices(): Promise<void> {
-  const { hasManagedProviderLocalServices } =
-    await import("../../agents/provider-runtime-lifecycle.js");
-  if (!hasManagedProviderLocalServices()) {
-    return;
-  }
-  const { stopManagedProviderLocalServices } =
-    await import("../../agents/provider-local-service.js");
-  await stopManagedProviderLocalServices();
-}
+export { stopActiveManagedProviderLocalServices } from "../../agents/provider-runtime-lifecycle.js";

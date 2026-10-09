@@ -28,9 +28,8 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { setChatError } from "./chat-history-state.ts";
-import type { ChatHost } from "./chat-send-contract.ts";
-import type { ChatSendSubmitOptions } from "./chat-send-submit.ts";
+import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";
+import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import { refreshChatSessionListForTarget } from "./chat-session.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
 
@@ -107,11 +106,7 @@ function goalOperationTarget(host: ChatHost) {
               saved.sessionKey === sessionKey &&
               saved.agentId === agentId &&
               saved.sessionId === sessionId
-            ? {
-                // SAFETY: The exact action schema and session ownership fields were checked above.
-                params: saved as GoalParams,
-                pending: false,
-              }
+            ? { params: saved, pending: false }
             : { retired: "invalid", pending: false };
       if (operation.retired) {
         storage?.setItem(storageKey, JSON.stringify(operation.retired));
@@ -336,10 +331,14 @@ async function runGoalOperation(
     if (!action) {
       return false;
     }
+    // A descriptor can expose Goal actions before history binds their recovery identity.
+    if (!sessionId || isInitialChatHistoryUnavailable(host)) {
+      return rejectGoalOperation(host, t("chat.thread.loading"));
+    }
     const identity = {
       sessionKey,
       ...(agentId ? { agentId } : {}),
-      ...(sessionId ? { sessionId } : {}),
+      sessionId,
       goalId: action.goalId,
       operationId: generateUUID(),
       issuedAtMs: Date.now(),

@@ -24,31 +24,14 @@ function formatRequestTime(value: string): string {
   return Number.isFinite(time) ? formatRelativeTimestamp(time) : value;
 }
 
-function filteredAccounts(props: ChannelsProps): ChannelsPairingAccount[] {
-  const accounts = props.channels.pairingSnapshot?.accounts ?? [];
-  return props.pairingChannelFilter
-    ? accounts.filter((account) => account.channel === props.pairingChannelFilter)
-    : accounts;
-}
-
-function filteredRequests(props: ChannelsProps): ChannelsPairingRequest[] {
-  return (props.channels.pairingSnapshot?.requests ?? []).filter((request) => {
-    if (props.pairingChannelFilter && request.channel !== props.pairingChannelFilter) {
-      return false;
-    }
-    if (props.pairingAccountFilter && request.accountId !== props.pairingAccountFilter) {
-      return false;
-    }
-    return true;
-  });
-}
-
 function renderFilters(props: ChannelsProps) {
   const accounts = props.channels.pairingSnapshot?.accounts ?? [];
   const channels = Array.from(
     new Map(accounts.map((account) => [account.channel, account.channelLabel])).entries(),
   ).toSorted((left, right) => left[1].localeCompare(right[1]));
-  const accountsForChannel = filteredAccounts(props);
+  const accountsForChannel = props.pairingChannelFilter
+    ? accounts.filter((account) => account.channel === props.pairingChannelFilter)
+    : accounts;
   return html`
     <div class="channels-pairing-filters">
       <label>
@@ -103,32 +86,26 @@ function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
           </span>
         </div>
         <div class="settings-row__control channels-pairing-request__actions">
-          <button
-            type="button"
-            class="btn btn--sm primary"
-            ?disabled=${busy || !props.canManagePairing}
-            aria-label=${t("channels.pairing.approveAria", {
-              sender: request.senderId,
-              channel: request.channelLabel,
-              account: accountName(request),
-            })}
-            @click=${() => props.onPairingApprove(request)}
-          >
-            ${thisRequestBusy ? t("common.loading") : t("channels.pairing.approve")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${busy || !props.canManagePairing}
-            aria-label=${t("channels.pairing.dismissAria", {
-              sender: request.senderId,
-              channel: request.channelLabel,
-              account: accountName(request),
-            })}
-            @click=${() => props.onPairingDismiss(request)}
-          >
-            ${t("channels.pairing.dismiss")}
-          </button>
+          ${(
+            [
+              ["approve", props.onPairingApprove],
+              ["dismiss", props.onPairingDismiss],
+            ] as const
+          ).map(
+            ([action, onClick]) => html`<button
+              type="button"
+              class=${action === "approve" ? "btn btn--sm primary" : "btn btn--sm"}
+              ?disabled=${busy || !props.canManagePairing}
+              aria-label=${t(`channels.pairing.${action}Aria`, {
+                sender: request.senderId,
+                channel: request.channelLabel,
+                account: accountName(request),
+              })}
+              @click=${() => onClick(request)}
+            >
+              ${t(action === "approve" && thisRequestBusy ? "common.loading" : `channels.pairing.${action}`)}
+            </button>`,
+          )}
         </div>
       </div>
       ${
@@ -154,7 +131,11 @@ function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
 export function renderChannelPairingQueue(props: ChannelsProps) {
   const snapshot = props.canManagePairing ? props.channels.pairingSnapshot : null;
   const accounts = snapshot?.accounts ?? [];
-  const requests = props.canManagePairing ? filteredRequests(props) : [];
+  const requests = (snapshot?.requests ?? []).filter(
+    (request) =>
+      (!props.pairingChannelFilter || request.channel === props.pairingChannelFilter) &&
+      (!props.pairingAccountFilter || request.accountId === props.pairingAccountFilter),
+  );
   const hasFilter = Boolean(props.pairingChannelFilter || props.pairingAccountFilter);
   const count = snapshot?.requests.length ?? 0;
   return html`
@@ -180,24 +161,18 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
               </div>
             `
           : html`
-              ${
-                props.channels.pairingError
-                  ? html`
-                      <div class="settings-row channels-pairing-feedback" role="alert">
-                        ${renderSettingsStatus({ kind: "danger", label: props.channels.pairingError })}
-                      </div>
-                    `
-                  : nothing
-              }
-              ${
-                props.pairingNotice
-                  ? html`
-                      <div class="settings-row channels-pairing-feedback" role="status">
-                        ${renderSettingsStatus({ kind: "ok", label: props.pairingNotice })}
-                      </div>
-                    `
-                  : nothing
-              }
+              ${(
+                [
+                  [props.channels.pairingError, "alert", "danger"],
+                  [props.pairingNotice, "status", "ok"],
+                ] as const
+              ).map(([label, role, kind]) =>
+                label
+                  ? html` <div class="settings-row channels-pairing-feedback" role=${role}>
+                      ${renderSettingsStatus({ kind, label })}
+                    </div>`
+                  : nothing,
+              )}
               ${snapshot ? renderFilters(props) : nothing}
               ${
                 props.channels.pairingLoading && !snapshot
@@ -287,9 +262,21 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
   const busy = props.channels.pairingBusyRequestId === request.requestId;
   const approving = prompt.kind === "approve";
   const ownerMissing = props.channels.pairingSnapshot?.commandOwnerConfigured === false;
-  const dialogTitle = approving
-    ? t("channels.pairing.approveDialogTitle")
-    : t("channels.pairing.dismissDialogTitle");
+  const dialogTitle = t(`channels.pairing.${prompt.kind}DialogTitle`);
+  const option = (field: "notify" | "bootstrapCommandOwner", label: string) => html`
+    <label class="channels-pairing-dialog__option">
+      <input
+        type="checkbox"
+        .checked=${prompt[field]}
+        @change=${(event: Event) =>
+          props.onPairingPromptChange({
+            [field]:
+              event.currentTarget instanceof HTMLInputElement ? event.currentTarget.checked : false,
+          })}
+      />
+      <span>${label}</span>
+    </label>
+  `;
   return html`
     <openclaw-modal-dialog label=${dialogTitle} @modal-cancel=${props.onPairingPromptCancel}>
       <div class="channels-pairing-dialog">
@@ -299,11 +286,7 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
           (${request.accountId})
         </div>
         <div class="callout ${approving ? "info" : "warn"}">
-          ${
-            approving
-              ? t("channels.pairing.approveExplanation")
-              : t("channels.pairing.dismissExplanation")
-          }
+          ${t(`channels.pairing.${prompt.kind}Explanation`)}
         </div>
         ${
           props.channels.pairingError
@@ -312,41 +295,13 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
         }
         ${
           approving && request.notifySupported
-            ? html`
-                <label class="channels-pairing-dialog__option">
-                  <input
-                    type="checkbox"
-                    .checked=${prompt.notify}
-                    @change=${(event: Event) =>
-                      props.onPairingPromptChange({
-                        notify:
-                          event.currentTarget instanceof HTMLInputElement
-                            ? event.currentTarget.checked
-                            : false,
-                      })}
-                  />
-                  <span>${t("channels.pairing.notifyRequester")}</span>
-                </label>
-              `
+            ? option("notify", t("channels.pairing.notifyRequester"))
             : nothing
         }
         ${
           approving && ownerMissing && props.canAdmin
             ? html`
-                <label class="channels-pairing-dialog__option">
-                  <input
-                    type="checkbox"
-                    .checked=${prompt.bootstrapCommandOwner}
-                    @change=${(event: Event) =>
-                      props.onPairingPromptChange({
-                        bootstrapCommandOwner:
-                          event.currentTarget instanceof HTMLInputElement
-                            ? event.currentTarget.checked
-                            : false,
-                      })}
-                  />
-                  <span>${t("channels.pairing.makeCommandOwner")}</span>
-                </label>
+                ${option("bootstrapCommandOwner", t("channels.pairing.makeCommandOwner"))}
                 <div class="settings-row__desc">${t("channels.pairing.commandOwnerHelp")}</div>
               `
             : nothing
@@ -363,7 +318,7 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
             ?disabled=${busy}
             @click=${props.onPairingPromptConfirm}
           >
-            ${approving ? t("channels.pairing.approve") : t("channels.pairing.dismiss")}
+            ${t(`channels.pairing.${prompt.kind}`)}
           </button>
           <button type="button" class="btn" ?disabled=${busy} @click=${props.onPairingPromptCancel}>
             ${t("common.cancel")}

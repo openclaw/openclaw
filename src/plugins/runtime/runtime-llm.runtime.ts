@@ -1,4 +1,4 @@
-import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
+import { asFiniteNumber, asNonNegativeFiniteNumber } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
@@ -21,6 +21,7 @@ import {
 } from "../../utils/usage-format.js";
 import { normalizePluginsConfig } from "../config-state.js";
 import { compileModelAllowlist, type CompiledModelAllowlist } from "../model-allowlist.js";
+import { normalizePluginPolicyId } from "../plugin-policy-id.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import {
   createLlmCompleteError as completionError,
@@ -190,22 +191,18 @@ function buildMessages(params: {
     );
 }
 
-function readFiniteNonNegativeNumber(value: unknown): number | undefined {
-  return asFiniteNumberInRange(value, { min: 0 });
-}
-
 function readExplicitCostUsd(raw: unknown): number | undefined {
   const cost = asOptionalRecord(raw)?.cost;
   if (typeof cost === "number") {
-    return readFiniteNonNegativeNumber(cost);
+    return asNonNegativeFiniteNumber(cost);
   }
   const record = asOptionalRecord(cost);
   if (!record) {
     return undefined;
   }
   return (
-    readFiniteNonNegativeNumber(record.totalUsd) ??
-    (hasRecordedUsageCost(record) ? readFiniteNonNegativeNumber(record.total) : undefined)
+    asNonNegativeFiniteNumber(record.totalUsd) ??
+    (hasRecordedUsageCost(record) ? asNonNegativeFiniteNumber(record.total) : undefined)
   );
 }
 
@@ -309,31 +306,6 @@ function buildPolicyFromEntry(entry: {
       formatKey: modelKey,
     }),
   };
-}
-
-function resolvePluginPolicyId(
-  authority: RuntimeLlmAuthority | undefined,
-  caller: LlmCompleteCaller,
-): string | undefined {
-  const authorityPluginId = normalizeOptionalString(authority?.pluginIdForPolicy);
-  if (authorityPluginId) {
-    return authorityPluginId;
-  }
-  if (caller.kind !== "plugin") {
-    return undefined;
-  }
-  return normalizeOptionalString(caller.id);
-}
-
-function resolvePluginLlmPolicy(
-  cfg: OpenClawConfig,
-  pluginId: string | undefined,
-): RuntimeLlmPolicy | undefined {
-  if (!pluginId) {
-    return undefined;
-  }
-  const entry = normalizePluginsConfig(cfg.plugins).entries[pluginId]?.llm;
-  return entry ? buildPolicyFromEntry(entry) : undefined;
 }
 
 function resolveAuthorityModelPolicy(
@@ -477,8 +449,13 @@ export function createRuntimeLlm(
         import("../../agents/simple-completion-runtime.js"),
         Promise.resolve(resolveRuntimeConfig(options)),
       ]);
-      const pluginPolicyId = resolvePluginPolicyId(options.authority, caller);
-      const pluginPolicy = resolvePluginLlmPolicy(cfg, pluginPolicyId);
+      const pluginPolicyId =
+        normalizeOptionalString(options.authority?.pluginIdForPolicy) ??
+        (caller.kind === "plugin" ? normalizeOptionalString(caller.id) : undefined);
+      const pluginLlmConfig = pluginPolicyId
+        ? normalizePluginsConfig(cfg.plugins).entries[normalizePluginPolicyId(pluginPolicyId)]?.llm
+        : undefined;
+      const pluginPolicy = pluginLlmConfig ? buildPolicyFromEntry(pluginLlmConfig) : undefined;
       const authorityPolicy = resolveAuthorityModelPolicy(options.authority);
       const preferredProfile = normalizeOptionalString(options.authority?.preferredProfile);
       const audit = {

@@ -1,7 +1,9 @@
 /** One address-to-place owner shared by the HTTP and Gateway surfaces. */
+import type { CityResponse } from "maxmind";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { GeolocationSettings } from "./config.js";
-import type { GeolocationCityRecord, GeolocationDatabase } from "./database-store.js";
+import type { GeolocationDatabase } from "./database-store.js";
 
 type GeolocationResult = {
   city?: string;
@@ -40,9 +42,7 @@ export function createGeolocationLookup(deps: {
       try {
         database = await deps.loadDatabase();
       } catch (error) {
-        deps.logger?.warn(
-          `geolocation: lookup unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        deps.logger?.warn(`geolocation: lookup unavailable: ${coerceErrorMessage(error)}`);
       }
     }
     // A first lookup may await a database download; retain the original caller's
@@ -61,9 +61,7 @@ export function createGeolocationLookup(deps: {
         const location = projectGeolocationRecord(database.lookup(ip));
         return { ip, status: location ? "found" : "not-found", ...location, attribution };
       } catch (error) {
-        deps.logger?.warn(
-          `geolocation: lookup unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        deps.logger?.warn(`geolocation: lookup unavailable: ${coerceErrorMessage(error)}`);
         return { ip, status: "unavailable", attribution };
       }
     };
@@ -83,9 +81,7 @@ function englishName(names: { readonly en?: string } | undefined): string | unde
  * Returns undefined when the database has no usable placement for the address,
  * so callers can distinguish "not found" from an empty-but-present answer.
  */
-function projectGeolocationRecord(
-  record: GeolocationCityRecord | null,
-): GeolocationResult | undefined {
+function projectGeolocationRecord(record: CityResponse | null): GeolocationResult | undefined {
   if (!record) {
     return undefined;
   }

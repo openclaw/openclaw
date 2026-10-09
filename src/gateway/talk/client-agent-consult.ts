@@ -10,6 +10,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import {
   GatewayDrainingError,
@@ -44,7 +45,6 @@ import type {
   TalkAgentConsultRequest,
   TalkAgentConsultSource,
   TalkRequesterFinalBinding,
-  TalkRequesterFinalRegistration,
 } from "./client-agent-consult.types.js";
 import {
   resolveTalkAgentConsultAuthority,
@@ -63,6 +63,8 @@ const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
     prepareAgentRunAdmission: admission.prepareAgentRunAdmission,
   };
 });
+
+type TalkRequesterFinalRegistration = ReturnType<typeof registerRequesterFinalAttachment>;
 
 function createTalkClientAgentRuntime(params: {
   config: OpenClawConfig;
@@ -140,8 +142,13 @@ function createTalkClientAgentRuntime(params: {
         }),
       });
     } finally {
-      runParams.abortSignal?.removeEventListener("abort", close);
-      close();
+      // Accepted terminal writes commit under this admission; abort still closes it immediately.
+      try {
+        await drainAgentRunTerminalWrites(operationalRunInstance);
+      } finally {
+        runParams.abortSignal?.removeEventListener("abort", close);
+        close();
+      }
     }
   };
   Object.defineProperty(agentRuntime, "runEmbeddedAgent", {
@@ -529,7 +536,9 @@ export function createTalkClientAgentConsultRunner(params: {
       runTarget: {
         runId: identity.runId,
         signal: ownerSignal,
-        isCurrent: (sessionId) => isOwnerCurrent(owner, sessionId),
+        isCurrent: (sessionId) =>
+          isOwnerCurrent(owner, sessionId) &&
+          completionClaim.resolveCurrentRegistration() !== undefined,
       },
       getToolAuthorityOverlay: () => {
         if (!isOwnerCurrent(owner, identity.sessionId)) {
@@ -539,16 +548,23 @@ export function createTalkClientAgentConsultRunner(params: {
         if (!registration) {
           throw new Error("The active Talk consult backend is no longer current");
         }
-        const overlay = prepareTalkClientControlAuthority({
+        return prepareTalkClientControlAuthority({
           config: params.config,
           sessionTarget: params.sessionTarget,
           authority,
           source: registration.toolAuthority.source,
           agentRuntime: getAgentRuntime(),
         });
-        const projected = registration.toolAuthority.project(overlay);
+      },
+      prepareToolAuthorityOverlay: async (overlay) => {
+        const registration = completionClaim.resolveCurrentRegistration();
+        if (!registration) {
+          throw new Error("The active Talk consult backend is no longer current");
+        }
+        const projected = await registration.toolAuthority.projectAsync(overlay);
         if (
           !projected ||
+          !isOwnerCurrent(owner, identity.sessionId) ||
           completionClaim.resolveCurrentRegistration()?.toolAuthority !== registration.toolAuthority
         ) {
           throw new Error("The active Talk consult caller authority no longer matches");
@@ -562,7 +578,6 @@ export function createTalkClientAgentConsultRunner(params: {
             confirmationRetryContext = grant.retryContext;
           }
         }
-        return overlay;
       },
       text: prompt,
       getSteeringContext: () => confirmationRetryContext,

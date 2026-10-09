@@ -19,6 +19,7 @@ import {
   type CodexUnifiedComputerUseRuntime,
 } from "./computer-use-unified.js";
 import {
+  resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
   resolveMacOSDesktopCodexAppPathCandidates,
   type MacOSDesktopCodexAppPathCandidate,
 } from "./desktop-app-paths.js";
@@ -351,4 +352,21 @@ export async function resolveClientManagedBundledMarketplacePath(
   }
   const managedPath = resolveCodexManagedBundledMarketplacePath(codexHome);
   return existsSync(managedPath) ? managedPath : undefined;
+}
+
+export function resolveBundledComputerUseMarketplacePath(params: {
+  defaultBundledMarketplacePath?: string;
+  defaultBundledMarketplacePathCandidates?: readonly string[];
+}): string | undefined {
+  if (params.defaultBundledMarketplacePath) {
+    return existsSync(params.defaultBundledMarketplacePath)
+      ? params.defaultBundledMarketplacePath
+      : undefined;
+  }
+  if (!params.defaultBundledMarketplacePathCandidates) {
+    return undefined;
+  }
+  return resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath({
+    candidates: params.defaultBundledMarketplacePathCandidates,
+  });
 }

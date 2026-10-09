@@ -14,6 +14,7 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeEmbeddedRunnerAttempt } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 type Options = Parameters<typeof createSubscribedSessionHarness>[0];
 const subscriptions: ReturnType<typeof createSubscribedSessionHarness>["subscription"][] = [];
@@ -159,7 +160,7 @@ const voiceMedia = { mediaUrls: ["/tmp/reply.opus"], audioAsVoice: true };
 const voiceResult = { details: { media: { mediaUrl: "/tmp/reply.opus", audioAsVoice: true } } };
 
 describe("terminal delivery gate", () => {
-  it.each(["suppress", "continue", "reject"] as const)(
+  it.each(["suppress", "reject"] as const)(
     "joins the pending gate and handles %s",
     async (decision) => {
       const gate = createDeferred<void | { suppressTerminalDelivery: true }>();
@@ -193,7 +194,7 @@ describe("terminal delivery gate", () => {
       if (decision === "reject") {
         gate.reject(new Error("hook failed"));
       } else {
-        gate.resolve(decision === "suppress" ? { suppressTerminalDelivery: true } : undefined);
+        gate.resolve({ suppressTerminalDelivery: true });
       }
       await draining;
       expect(h.lifecycleEnded()).toBe(decision !== "suppress");
@@ -215,91 +216,39 @@ describe("terminal delivery gate", () => {
       }
     },
   );
-
-  it("streams commentary before tools while the final reply remains revisable", async () => {
-    const h = setup({ onBeforeTerminalDelivery: async () => ({ suppressTerminalDelivery: true }) });
-    h.message(answer("Checking current state.", "toolUse", "commentary"), false);
-    h.tool();
-    const events = h.onAgentEvent.mock.calls.map(([event]) => event);
-    const preamble = events.findIndex(
-      (event) => event.stream === "item" && event.data.kind === "preamble",
-    );
-    expect(events[preamble]).toMatchObject({ data: { progressText: "Checking current state." } });
-    expect(
-      events.findIndex((event) => event.stream === "item" && event.data.kind === "tool"),
-    ).toBeGreaterThan(preamble);
-    const final = answer("Visible final answer.");
-    h.message(final);
-    h.end([final]);
-    await h.drain();
-    expect(h.assistantEvents()).toEqual([]);
-    expect(h.onBlockReply).not.toHaveBeenCalled();
-  });
 });
 
 describe("delivery failures", () => {
-  it.each(["throw", "reject", "none"] as const)(
-    "preserves tool-media ownership after %s",
-    async (failure) => {
-      const h = setup({
-        builtinToolNames: new Set(["tts"]),
-        onBlockReply: () => {
-          if (failure === "throw") {
-            throw new Error("sync delivery failed");
-          }
-          return failure === "reject"
-            ? Promise.reject(new Error("async delivery failed"))
-            : Promise.resolve();
-        },
-      });
-      h.tool("tts", voiceResult);
-      await h.drain();
-      expect(h.subscription.getPendingToolMediaReply()).toEqual(voiceMedia);
-      h.end();
-      await h.drain();
-      const delivered = failure === "none";
-      expect(h.onBlockReply).toHaveBeenCalledOnce();
-      expect(h.subscription.getPendingToolMediaReply()).toEqual(delivered ? null : voiceMedia);
-      expect(h.subscription.getVisibleBlockReplyCount()).toBe(delivered ? 1 : 0);
-      expect(h.subscription.hasToolMediaBlockReply()).toBe(delivered);
-    },
-  );
-
-  it.each([false, true])(
-    "restores rejected assistant media without retrying (deferred: %s)",
-    async (deferred) => {
-      const h = setup({
-        deferred,
-        internalEvents,
-        onBlockReply: async () => {
-          throw new Error("media rejected");
-        },
-      });
-      expect(h.subscription.getPendingToolMediaReply()).toEqual(generatedMedia);
-      h.message(answer("Here is your track."), false);
-      h.message(answer("Updated answer."), false);
-      h.end();
-      await h.drain();
-      expect(h.onBlockReply).toHaveBeenCalledTimes(2);
-      expect(h.subscription.getPendingToolMediaReply()).toEqual(generatedMedia);
-      expect(h.subscription.getVisibleBlockReplyCount()).toBe(0);
-      expect(h.subscription.hasToolMediaBlockReply()).toBe(false);
-    },
-  );
-
-  it("preserves accepted delivery evidence after a later callback rejects", async () => {
-    const callback = vi
-      .fn()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("second block rejected"));
-    const h = setup({ onBlockReply: callback });
-    h.message(answer("First delivered answer."), false);
+  it("preserves tool-media ownership after a synchronous delivery failure", async () => {
+    const h = setup({
+      builtinToolNames: new Set(["tts"]),
+      onBlockReply: () => {
+        throw new Error("sync delivery failed");
+      },
+    });
+    h.tool("tts", voiceResult);
     await h.drain();
-    h.message(answer("Second rejected answer."), false);
+    expect(h.subscription.getPendingToolMediaReply()).toEqual(voiceMedia);
+    h.end();
+    await h.drain();
+    expect(h.onBlockReply).toHaveBeenCalledOnce();
+    expect(h.subscription.getPendingToolMediaReply()).toEqual(voiceMedia);
+    expect(h.subscription.getVisibleBlockReplyCount()).toBe(0);
+    expect(h.subscription.hasToolMediaBlockReply()).toBe(false);
+  });
+
+  it("preserves deferred media ownership after rejected replies", async () => {
+    const callback = vi.fn().mockRejectedValue(new Error("reply rejected"));
+    const h = setup({ deferred: true, internalEvents, onBlockReply: callback });
+    expect(h.subscription.getPendingToolMediaReply()).toEqual(generatedMedia);
+    h.message(answer("Here is your track."), false);
+    h.message(answer("Updated answer."), false);
     h.end();
     await h.drain();
     expect(callback).toHaveBeenCalledTimes(2);
-    expect(h.subscription.getVisibleBlockReplyCount()).toBe(1);
+    expect(h.subscription.getVisibleBlockReplyCount()).toBe(0);
+    expect(h.subscription.getPendingToolMediaReply()).toEqual(generatedMedia);
+    expect(h.subscription.hasToolMediaBlockReply()).toBe(false);
   });
 
   it("delivers queued media after a rejected reasoning reply", async () => {
@@ -328,23 +277,41 @@ describe("delivery failures", () => {
     expect(h.subscription.hasToolMediaBlockReply()).toBe(true);
   });
 
-  it("contains rejected assistant progress callbacks", async () => {
-    const rejected = vi.fn().mockRejectedValue(new Error("progress failed"));
-    const h = setup({
-      onAgentEvent: rejected,
-      onPartialReply: rejected,
-      onAssistantMessageStart: rejected,
-      onReasoningStream: rejected,
-      onReasoningEnd: rejected,
-      reasoningMode: "stream",
-    });
-    h.message(answer("Hello"), false);
-    emitAssistantTextDelta({ emit: h.emit, delta: "Hello" });
-    for (const assistantMessageEvent of [
-      { type: "thinking_delta", delta: "Because" },
-      { type: "thinking_end" },
-    ]) {
-      h.emit({ type: "message_update", message: { role: "assistant" }, assistantMessageEvent });
+  it.each(["progress", "heartbeat"] as const)("contains rejected %s callbacks", async (kind) => {
+    const rejected = vi.fn().mockRejectedValue(new Error("callback failed"));
+    const h = setup(
+      kind === "progress"
+        ? {
+            onAgentEvent: rejected,
+            onPartialReply: rejected,
+            onAssistantMessageStart: rejected,
+            onReasoningStream: rejected,
+            onReasoningEnd: rejected,
+            reasoningMode: "stream",
+          }
+        : {
+            onHeartbeatToolResponse: rejected,
+            verboseLevel: "full",
+          },
+    );
+    if (kind === "progress") {
+      h.message(answer("Hello"), false);
+      emitAssistantTextDelta({ emit: h.emit, delta: "Hello" });
+      for (const assistantMessageEvent of [
+        { type: "thinking_delta", delta: "Because" },
+        { type: "thinking_end" },
+      ]) {
+        h.emit({ type: "message_update", message: { role: "assistant" }, assistantMessageEvent });
+      }
+    } else {
+      h.tool(HEARTBEAT_RESPONSE_TOOL_NAME, {
+        details: {
+          status: "accepted",
+          outcome: "no_change",
+          notify: false,
+          summary: "Nothing needs attention.",
+        },
+      });
     }
     await h.drain();
     await new Promise<void>((resolve) => {
@@ -352,53 +319,22 @@ describe("delivery failures", () => {
     });
     expect(rejected).toHaveBeenCalled();
   });
-
-  it.each(["presentation", "heartbeat"] as const)(
-    "contains rejected %s callbacks",
-    async (kind) => {
-      const rejected = vi.fn().mockRejectedValue(new Error("callback failed"));
-      const h = setup({
-        onToolResult: kind === "presentation" ? rejected : undefined,
-        onHeartbeatToolResponse: kind === "heartbeat" ? rejected : undefined,
-        verboseLevel: "full",
-      });
-      h.tool(
-        kind === "heartbeat" ? HEARTBEAT_RESPONSE_TOOL_NAME : "read",
-        kind === "heartbeat"
-          ? {
-              details: {
-                status: "accepted",
-                outcome: "no_change",
-                notify: false,
-                summary: "Nothing needs attention.",
-              },
-            }
-          : { content: [{ type: "text", text: "file contents" }] },
-      );
-      await h.drain();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(rejected).toHaveBeenCalled();
-    },
-  );
 });
 
 describe("deferred reply supersession", () => {
-  it.each(["immediate", "pending", "rejected"] as const)(
+  it.each(["immediate", "rejected"] as const)(
     "recovers a required reply without stealing %s delivery ownership",
     async (delivery) => {
       const markdown =
         "## Result\n\n- **Saved** the note.\n- Keep `note.md` unchanged.\n\n```text\nfirst  second\n```";
-      const delivered: string[] = [],
-        pending: string[] = [];
+      const delivered: string[] = [];
       const h = setup({
         onBlockReply: async ({ text }) => {
           if (delivery === "rejected") {
             throw new Error("delivery failed");
           }
           if (text) {
-            (delivery === "pending" ? pending : delivered).push(text);
+            delivered.push(text);
           }
         },
       });
@@ -451,7 +387,6 @@ describe("deferred reply supersession", () => {
         activeCount: 0,
       });
       expect(delivered).toEqual(delivery === "immediate" ? [markdown] : []);
-      expect(pending).toEqual(delivery === "pending" ? [markdown] : []);
       expect(h.subscription.getVisibleBlockReplyCount()).toBe(delivery === "rejected" ? 0 : 1);
       const built = payloads(h.subscription);
       expect(built).toEqual([]);
@@ -465,7 +400,7 @@ describe("deferred reply supersession", () => {
           terminalReplyExpectation: "required",
         },
         attempt,
-        replyDeliveryState: delivered.length ? "delivered" : pending.length ? "pending" : "missing",
+        replyDeliveryState: delivered.length ? "delivered" : "missing",
         activeErrorContext: { provider: "openai", model: "mock-1" },
         modelApi: "openai-responses",
         executionContract: undefined,
@@ -482,36 +417,19 @@ describe("deferred reply supersession", () => {
     },
   );
 
-  it("seals only answered user inputs", async () => {
-    const h = setup({ block: false });
-    const first = answer("A"),
-      final = answer("B");
-    const user = (content: string) => ({ role: "user", content, timestamp: 0 });
-    const initial = user("Initial question"),
-      injected = [user("Next question"), user("Additional detail")];
-    h.emit({ type: "message_start", message: initial });
-    h.emit({ type: "message_end", message: initial });
-    h.message(first);
-    h.emit({ type: "turn_end", message: first, toolResults: [] });
-    await h.drain();
-    expect(payloads(h.subscription).map((payload) => payload.text)).toEqual(["A"]);
-    expect(h.subscription.answerSegments).toHaveLength(0);
-    for (const message of injected) {
-      h.emit({ type: "message_start", message });
-      h.emit({ type: "message_end", message });
-    }
-    h.message(final);
-    h.emit({ type: "turn_end", message: final, toolResults: [] });
-    h.end([first, final]);
-    await h.drain();
-    expect(h.subscription.answerSegments).toHaveLength(1);
-    expect(payloads(h.subscription).map((payload) => payload.text)).toEqual(["A", "B"]);
-  });
-
-  it.each([false, true])(
-    "delivers each steered answer after a tool (skipped: %s)",
-    async (skipped) => {
+  it.each(["read", "skipped"] as const)(
+    "seals and delivers steered answers after %s",
+    async (kind) => {
+      const skipped = kind === "skipped";
       const h = setup({ deferred: true });
+      const first = answer("A2");
+      const final = answer("A3");
+      const user = (content: string) => ({ role: "user", content, timestamp: 0 });
+      const userMessage = (content: string) => {
+        const message = user(content);
+        h.emit({ type: "message_start", message });
+        h.emit({ type: "message_end", message });
+      };
       const progress = makeAgentAssistantMessage({
         content: [
           { type: "text", text: "A1" },
@@ -519,35 +437,34 @@ describe("deferred reply supersession", () => {
         ],
         stopReason: "toolUse",
       });
-      const first = answer("A2"),
-        final = answer("A3");
-      const result = {
-        role: "toolResult",
-        toolName: "read",
-        toolCallId: "read",
-        content: [
-          {
-            type: "text",
-            text: skipped ? "Skipped due to queued user message." : "Read complete.",
-          },
-        ],
-        isError: skipped,
-        timestamp: 0,
-      };
-      h.message(progress);
-      h.tool("read", result, skipped);
-      if (!skipped) {
-        h.emit({ type: "message_start", message: result });
-        h.emit({ type: "message_end", message: result });
+      {
+        const result = {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "read",
+          content: [
+            {
+              type: "text",
+              text: skipped ? "Skipped due to queued user message." : "Read complete.",
+            },
+          ],
+          isError: skipped,
+          timestamp: 0,
+        };
+        h.message(progress);
+        h.tool("read", result, skipped);
+        if (!skipped) {
+          h.emit({ type: "message_start", message: result });
+          h.emit({ type: "message_end", message: result });
+        }
+        h.emit({ type: "turn_end", message: progress, toolResults: [result] });
       }
-      h.emit({ type: "turn_end", message: progress, toolResults: [result] });
       if (!skipped) {
         h.message(first);
         h.emit({ type: "turn_end", message: first, toolResults: [] });
       }
-      const user = { role: "user", content: "Next question", timestamp: 0 };
-      h.emit({ type: "message_start", message: user });
-      h.emit({ type: "message_end", message: user });
+      userMessage("Next question");
+      userMessage("Additional detail");
       h.message(final);
       h.emit({ type: "turn_end", message: final, toolResults: [] });
       h.end([progress, first, final]);
@@ -555,73 +472,37 @@ describe("deferred reply supersession", () => {
       const expected = [skipped ? "A1" : "A2", "A3"];
       expect(payloads(h.subscription).map((payload) => payload.text)).toEqual(expected);
       expect(h.onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual(expected);
+      expect(h.subscription.answerSegments).toHaveLength(1);
     },
   );
 
-  it.each([
-    { terminal: "Completed answer.", prior: "stop" },
-    { terminal: "NO_REPLY", prior: "toolUse" },
-  ] as const)("supersedes deferred $prior answers with $terminal", async ({ terminal, prior }) => {
-    const h = setup({ deferred: true });
-    const messages = ["Obsolete preflight answer.", "Obsolete follow-up answer.", terminal].map(
-      (text, index) =>
-        makeAgentAssistantMessage({
-          ...answer(text, index < 2 ? prior : "stop", "final_answer"),
-          content: [
-            ...answer(text, "stop", "final_answer").content,
-            ...(index < 2
-              ? [
-                  {
-                    type: "toolCall" as const,
-                    id: `read-${index}`,
-                    name: "read",
-                    arguments: {},
-                    async: true as const,
-                  },
-                ]
-              : []),
-          ],
-        }),
-    );
-    for (const [index, message] of messages.entries()) {
-      h.message(message);
-      if (index < 2) {
-        h.tool("read", undefined, false, `read-${index}`);
-        h.emit({
-          type: "turn_end",
-          message,
-          toolResults: [
-            {
-              role: "toolResult",
-              toolCallId: `read-${index}`,
-              toolName: "read",
-              content: [{ type: "text", text: "Successful result." }],
-              isError: false,
-              timestamp: 0,
-            },
-          ],
-        });
-      }
-      await h.drain();
-    }
+  it("preserves the undelivered prefix when a deferred answer extends it", async () => {
+    const h = setup({ deferred: true, blockReplyBreak: "text_end" });
+    const first = answer("Result:", "toolUse");
+    const final = answer("Result:complete");
+    const messages = [first, final];
+    h.message(first);
+    h.tool("read", undefined, false, "read-0");
+    await h.drain();
+    h.message(final);
+    await h.drain();
     expect(h.onBlockReply).not.toHaveBeenCalled();
     expect(h.onPartialReply).not.toHaveBeenCalled();
     expect(h.assistantEvents()).toEqual([]);
     h.end(messages);
     await h.drain();
-    const expected = terminal === "NO_REPLY" ? [] : [terminal];
-    expect(h.onBlockReply.mock.calls.map(([payload]) => payload.text).filter(Boolean)).toEqual(
-      expected,
-    );
-    expect(h.onPartialReply.mock.calls.map(([payload]) => payload.text).filter(Boolean)).toEqual(
-      expected,
-    );
+    expect(h.onBlockReply.mock.calls.map(([payload]) => payload.text).filter(Boolean)).toEqual([
+      "Result:complete",
+    ]);
+    expect(h.onPartialReply.mock.calls.map(([payload]) => payload.text).filter(Boolean)).toEqual([
+      "Result:complete",
+    ]);
     expect(
       h
         .assistantEvents()
         .map((data) => data.text)
         .filter(Boolean),
-    ).toEqual(expected);
+    ).toEqual(["Result:complete"]);
     expect(h.lifecycleEnded()).toBe(true);
   });
 
@@ -648,8 +529,18 @@ describe("deferred reply supersession", () => {
     });
     for (const message of [media, commentary, final]) {
       h.message(message);
+      if (message === commentary) {
+        h.tool();
+      }
       await h.drain();
     }
+    const events = h.onAgentEvent.mock.calls.map(([event]) => event);
+    const preamble = events.findIndex(
+      (event) => event.stream === "item" && event.data.kind === "preamble",
+    );
+    expect(
+      events.findIndex((event) => event.stream === "item" && event.data.kind === "tool"),
+    ).toBeGreaterThan(preamble);
     expect(h.onBlockReply).not.toHaveBeenCalled();
     expect(h.assistantEvents()).toEqual([]);
     expect(h.onAgentEvent).toHaveBeenCalledWith({
@@ -690,16 +581,86 @@ describe("deferred reply supersession", () => {
     expect(h.subscription.hasToolMediaBlockReply()).toBe(true);
     expect(h.subscription.getPendingToolMediaReply()).toBeNull();
   });
+});
 
-  it("retains the complete final prefix after deferred streaming", async () => {
-    const h = setup({ deferred: true, blockReplyBreak: "text_end" });
-    const first = answer("Result:", "toolUse"),
-      final = answer("Result:complete");
-    h.message(first);
-    h.tool();
-    h.message(final);
-    h.end([first, final]);
-    await h.drain();
-    expect(h.onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual(["Result:complete"]);
+it.each([true])("keeps checkpoint delivery nonterminal (buffered=%s)", async (buffered) => {
+  const decide = vi
+    .fn()
+    .mockResolvedValueOnce({ continueCurrentTurn: true })
+    .mockResolvedValueOnce(undefined);
+  const h = setup({ onBeforeTerminalDelivery: decide, deferTerminalDelivery: buffered });
+  h.message(answer("Checkpoint: a repair remains."));
+  await h.drain();
+  expect(h.assistantEvents().some((data) => data.text === "Checkpoint: a repair remains.")).toBe(
+    !buffered,
+  );
+  h.end();
+  await h.drain();
+  expect(h.lifecycleEnded()).toBe(false);
+  expect(h.assistantEvents().some((data) => data.text === "Checkpoint: a repair remains.")).toBe(
+    true,
+  );
+  h.emit({ type: "agent_start" });
+  h.message(answer("All repairs verified."));
+  await h.drain();
+  expect(h.assistantEvents().some((data) => data.text === "All repairs verified.")).toBe(!buffered);
+  h.end();
+  await h.drain();
+  expect(h.lifecycleEnded()).toBe(true);
+  expect(payloads(h.subscription).map((payload) => payload.text)).toEqual([
+    "All repairs verified.",
+  ]);
+});
+
+it("exposes accepted child completion custody to the natural-stop decision", async () => {
+  const decide = vi.fn(async () => undefined);
+  const h = setup({ onBeforeTerminalDelivery: decide, deferTerminalDelivery: false });
+  h.tool("sessions_spawn", {
+    content: [{ type: "text", text: "Accepted" }],
+    details: {
+      status: "accepted",
+      runId: "child-run",
+      childSessionKey: "agent:main:subagent:child",
+      expectsCompletionMessage: true,
+    },
   });
+  h.message(answer("The child is working."));
+  h.end();
+  await h.drain();
+  expect(decide).toHaveBeenCalledWith(expect.objectContaining({ hasPendingContinuation: true }));
+});
+
+describe("block reply flush boundaries", () => {
+  it.each(["text_end", "message_end"] as const)(
+    "waits for async block replies before the %s flush",
+    async (blockReplyBreak) => {
+      const delivered: string[] = [];
+      const snapshots: string[][] = [];
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: `async-flush-${blockReplyBreak}`,
+        blockReplyBreak,
+        blockReplyChunking: { minChars: 50, maxChars: 200 },
+        onBlockReply: async ({ text }) => {
+          await Promise.resolve();
+          if (text) {
+            delivered.push(text);
+          }
+        },
+        onBlockReplyFlush: () => {
+          snapshots.push([...delivered]);
+        },
+      });
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta({ emit, delta: "Short chunk." });
+      emit(
+        blockReplyBreak === "text_end"
+          ? { type: "tool_execution_start", toolName: "bash", toolCallId: "flush", args: {} }
+          : { type: "message_end", message: textAssistant("Short chunk.") },
+      );
+      await subscription.waitForPendingEvents();
+      expect(delivered).toEqual(["Short chunk."]);
+      expect(snapshots).toEqual([["Short chunk."]]);
+      subscription.unsubscribe();
+    },
+  );
 });

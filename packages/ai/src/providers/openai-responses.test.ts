@@ -56,6 +56,65 @@ describe("OpenAI Responses provider", () => {
     configureAiTransportHost({});
   });
 
+  it.each([
+    {
+      label: "raw schema",
+      responseFormat: { type: "object", properties: { answer: { type: "string" } } },
+      expected: {
+        type: "json_schema",
+        name: "openclaw_response",
+        schema: { type: "object", properties: { answer: { type: "string" } } },
+      },
+    },
+    {
+      label: "nested schema",
+      responseFormat: {
+        type: "json_schema",
+        json_schema: { name: "answer", schema: { type: "object" }, strict: false },
+      },
+      expected: {
+        type: "json_schema",
+        name: "answer",
+        schema: { type: "object" },
+        strict: false,
+      },
+    },
+    {
+      label: "native schema",
+      responseFormat: {
+        type: "json_schema",
+        name: "answer",
+        schema: { type: "object" },
+        strict: null,
+      },
+      expected: {
+        type: "json_schema",
+        name: "answer",
+        schema: { type: "object" },
+        strict: null,
+      },
+    },
+    {
+      label: "JSON object",
+      responseFormat: { type: "json_object" },
+      expected: { type: "json_object" },
+    },
+    {
+      label: "text",
+      responseFormat: { type: "text" },
+      expected: { type: "text" },
+    },
+  ])(
+    "projects $label output constraints in provider and transport requests",
+    async ({ responseFormat, expected }) => {
+      const options = { apiKey: "test", responseFormat };
+      const transportParams = buildOpenAIResponsesParams(model(), context, options);
+      await streamSimpleOpenAIResponses(model(), context, options).result();
+      expect(transportParams.text?.format).toEqual(expected);
+      expect(openAiMockState.params[0]).toMatchObject({ text: { format: expected } });
+    },
+  );
+
   it.each(["none", "short", "long"] as const)(
     "identifies OpenCode conversations with %s cache retention",
     async (cacheRetention) => {
@@ -217,6 +276,10 @@ describe("OpenAI Responses provider", () => {
   });
 
   it.each([
+    { id: "gpt-6.1-sol", reasoningEffort: undefined, expectedEffort: undefined },
+    { id: "gpt-6.1-sol", reasoningEffort: "none", expectedEffort: undefined },
+    { id: "gpt-6.1-sol", reasoningEffort: "minimal", expectedEffort: "low" },
+    { id: "gpt-6.1-sol", reasoningEffort: "max", expectedEffort: "max" },
     { id: "gpt-6-astra", reasoningEffort: undefined, expectedEffort: undefined },
     { id: "gpt-6-astra", reasoningEffort: "minimal", expectedEffort: "low" },
     { id: "gpt-6-astra", reasoningEffort: "xhigh", expectedEffort: "xhigh" },

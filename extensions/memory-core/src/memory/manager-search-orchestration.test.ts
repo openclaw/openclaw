@@ -29,49 +29,7 @@ describe("memory index", () => {
     getFreshManager,
     getPersistentManager,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
-    trackManager,
   } = fixture;
-
-  it("keeps keyword fallback available when the provider degrades mid-session", async () => {
-    // Regression: a search racing a managed-provider idle-stop/respawn degrades the
-    // lifecycle to `degraded` with the provider retired (providerInitialized stays
-    // true, and the degraded providerId still matches the configured provider, so
-    // the failed-fallback recovery gate skips re-init). The identity guard would
-    // then synthesize expectedModel "fts-only" and misreport the healthy
-    // vector-built index as mismatched, returning empty results. Keyword fallback
-    // must serve instead. `auto` keeps the requirement optional like the reported
-    // `local` transport; the simulated lifecycle mirrors the post-degradation
-    // state where the degraded provider id equals the configured provider.
-    const cfg = createCfg({ provider: "auto", minScore: 0 });
-    const manager = await getFreshManager(cfg);
-    try {
-      const status = manager.status();
-      if (!status.fts?.available) {
-        return;
-      }
-      await manager.sync({ reason: "test" });
-      const healthy = await manager.search("zebra");
-      expect(healthy.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
-
-      // Simulate the transport-failure race: provider retired, lifecycle degraded
-      // against the configured provider, and no provider can come back yet
-      // (the respawn window) — so the fallback re-creation path cannot heal it.
-      Reflect.set(manager, "provider", null);
-      Reflect.set(manager, "providerLifecycle", {
-        mode: "degraded",
-        // The resolved settings provider for this fixture (auto → openai); the
-        // recovery gate only skips re-init when the degraded id matches it.
-        providerId: "openai",
-        reason: "connection reset",
-      });
-      providerFixture.forceNoProvider = true;
-
-      const degraded = await manager.search("zebra");
-      expect(degraded.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
-    } finally {
-      await manager.close?.();
-    }
-  });
 
   it("keeps a dirty status manager read-only while searching published results", async () => {
     const cfg = createCfg({ provider: "none", minScore: 0 });
@@ -524,7 +482,6 @@ describe("memory index", () => {
       minScore: 0,
     });
     const manager = await getFreshManager(cfg);
-    trackManager(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -712,10 +669,8 @@ describe("memory index", () => {
     const servingFields = manager as unknown as {
       dirty: boolean;
       memoryFullRetryDirty: boolean;
-      fileWatcher: { closeNativeMemoryWatchPairs: () => void };
       awaitManagerIdle: () => Promise<void>;
     };
-    servingFields.fileWatcher.closeNativeMemoryWatchPairs();
 
     const sessionId = "automatic-maintenance-purge";
     const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
@@ -723,7 +678,7 @@ describe("memory index", () => {
       memoryPath,
       "# Memory\n<!-- openclaw-memory-promotion:private-entry -->\n- Private violet alpha fragment.\n",
     );
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: [
         {

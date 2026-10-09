@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -10,8 +8,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { digestClawValue } from "./digest.js";
 import {
   toPackageRefExtensionSqlParams,
+  toPackageRefSqlFields,
   type PersistedClawPackageRef,
 } from "./package-extension-provenance.js";
 
@@ -33,7 +33,7 @@ export function digestClawPackageRef(ref: PersistedClawPackageRef): string {
     installedAtMs: ref.installedAtMs,
     updatedAtMs: ref.updatedAtMs,
   };
-  return `sha256:${createHash("sha256").update(stableStringify(persisted)).digest("hex")}`;
+  return digestClawValue(persisted);
 }
 
 export function replaceClawPackageRefExpected(
@@ -54,24 +54,7 @@ export function replaceClawPackageRefExpected(
         db,
         kysely
           .deleteFrom("claw_package_refs")
-          .where((eb) =>
-            eb.and({
-              agent_id: expected.agentId,
-              package_kind: expected.kind,
-              package_source: expected.source,
-              package_ref: expected.ref,
-              package_version: expected.version,
-              package_integrity: expected.integrity,
-              schema_version: expected.schemaVersion,
-              claw_name: expected.clawName,
-              package_status: expected.status,
-              relationship: expected.relationship,
-              origin: expected.origin,
-              independent_owner: expected.independentOwner ? 1 : 0,
-              installed_at_ms: expected.installedAtMs,
-              updated_at_ms: expected.updatedAtMs,
-            }),
-          )
+          .where((eb) => eb.and(toPackageRefSqlFields(expected)))
           .where("extension_id", "is", extension.extension_id)
           .where("extension_format", "is", extension.extension_format)
           .where("extension_detected_format", "is", extension.extension_detected_format)
@@ -107,21 +90,8 @@ export function replaceClawPackageRefExpected(
       executeSqliteQuerySync(
         db,
         kysely.insertInto("claw_package_refs").values({
-          agent_id: replacement.agentId,
-          package_kind: replacement.kind,
-          package_source: replacement.source,
-          package_ref: replacement.ref,
-          package_version: replacement.version,
-          package_integrity: replacement.integrity,
-          schema_version: replacement.schemaVersion,
-          claw_name: replacement.clawName,
-          package_status: replacement.status,
-          relationship: replacement.relationship,
-          origin: replacement.origin,
-          independent_owner: replacement.independentOwner ? 1 : 0,
+          ...toPackageRefSqlFields(replacement),
           ...toPackageRefExtensionSqlParams(replacement.extension),
-          installed_at_ms: replacement.installedAtMs,
-          updated_at_ms: replacement.updatedAtMs,
         }),
       );
     }

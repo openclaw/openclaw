@@ -1,18 +1,14 @@
 import type { Tokenizer } from "@huggingface/tokenizers";
 import type { InferenceSession } from "onnxruntime-node";
+import type { WorkerReply, WorkerRequest } from "../protocol.js";
 
-export type ClassificationInput = {
-  text: string;
+type WorkerClassificationInput = Extract<WorkerRequest, { kind: "classify" }>["inputs"][number];
+export type ClassificationInput = Omit<WorkerClassificationInput, "labels" | "descriptions"> & {
   labels: readonly string[];
-  task: string;
-  instructions?: string;
   descriptions?: Readonly<Record<string, string>>;
 };
 
-export type ClassificationResult = {
-  logits: number[];
-  inputTokens: number;
-};
+export type ClassificationResult = Extract<WorkerReply, { kind: "results" }>["results"][number];
 
 export type ModelContext = {
   session: Pick<InferenceSession, "run">;

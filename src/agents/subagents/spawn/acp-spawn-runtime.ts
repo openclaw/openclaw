@@ -6,9 +6,8 @@ import {
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
+import type { AcpInitializeSessionInput } from "../../../acp/control-plane/manager.types.js";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isMissingPathError } from "../../../infra/errors.js";
@@ -23,7 +22,6 @@ import {
   resolveThinkingDefault,
 } from "../../model-selection.js";
 import type { PreparedSpawnThreadBinding } from "../../spawn-plan.js";
-import { persistAcpSpawnSessionFileBestEffort } from "./acp-spawn-requester.js";
 import { buildSpawnThreadBinding } from "./spawn-thread-binding.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
@@ -57,9 +55,8 @@ type AcpSpawnInitializedSession = Awaited<
 
 export type AcpSpawnInitializedRuntime = {
   initialized: AcpSpawnInitializedSession;
-  sessionId?: string;
-  sessionEntry: SessionEntry | undefined;
-  storePath: string;
+  sessionId: string;
+  sessionEntry: SessionEntry;
 };
 
 type AcpSpawnRuntimeOptions = {
@@ -146,45 +143,27 @@ export async function initializeAcpSpawnRuntime(params: {
   assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
-  targetAgentId: string;
+  ownerAgentId: string;
+  runtimeAgentId: string;
   runtimeMode: AcpRuntimeSessionMode;
   backendId?: string;
   resumeSessionId?: string;
+  revalidateResume?: AcpInitializeSessionInput["revalidateResume"];
   runtimeOptions?: AcpSpawnRuntimeOptions;
   modelExplicit?: boolean;
   thinkingExplicit?: boolean;
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   params.assertActive?.();
-  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
-    agentId: params.targetAgentId,
-  });
-  let sessionEntry = loadSessionEntry({
-    storePath,
-    sessionKey: params.sessionKey,
-    agentId: params.targetAgentId,
-    clone: false,
-  });
-  const sessionId = sessionEntry?.sessionId;
-  if (sessionId) {
-    sessionEntry = await persistAcpSpawnSessionFileBestEffort({
-      sessionId,
-      sessionKey: params.sessionKey,
-      storePath,
-      sessionEntry,
-      agentId: params.targetAgentId,
-      stage: "spawn",
-    });
-  }
-
   const initialized = await getAcpSessionManager().initializeSession({
     assertActive: params.assertActive,
     cfg: params.cfg,
     sessionKey: params.sessionKey,
-    agentId: params.targetAgentId,
-    agent: params.targetAgentId,
+    agentId: params.ownerAgentId,
+    agent: params.runtimeAgentId,
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
+    revalidateResume: params.revalidateResume,
     runtimeOptions: params.runtimeOptions,
     modelExplicit: params.modelExplicit,
     thinkingExplicit: params.thinkingExplicit,
@@ -194,9 +173,8 @@ export async function initializeAcpSpawnRuntime(params: {
 
   return {
     initialized,
-    sessionId,
-    sessionEntry,
-    storePath,
+    sessionId: initialized.sessionEntry.sessionId,
+    sessionEntry: initialized.sessionEntry,
   };
 }
 
@@ -231,21 +209,6 @@ export async function bindPreparedAcpThread(params: {
         ? `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`
         : `Failed to bind the current ${params.preparedBinding.channel} conversation for this ACP session.`,
     );
-  }
-
-  if (params.initializedRuntime.sessionId && params.preparedBinding.placement === "child") {
-    const boundThreadId = normalizeOptionalString(binding.conversation.conversationId);
-    if (boundThreadId) {
-      await persistAcpSpawnSessionFileBestEffort({
-        sessionId: params.initializedRuntime.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.initializedRuntime.storePath,
-        sessionEntry: params.initializedRuntime.sessionEntry,
-        agentId: params.targetAgentId,
-        threadId: boundThreadId,
-        stage: "thread-bind",
-      });
-    }
   }
 
   return binding;

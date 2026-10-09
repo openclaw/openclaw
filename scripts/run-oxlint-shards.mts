@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
@@ -12,6 +13,7 @@ import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import {
   CI_PARALLEL_MIN_MEMORY_BYTES,
   isConstrainedCiCheckHost,
+  resolveCheckMemoryCapacityBytes,
   resolveLocalCheckEnv,
 } from "./lib/local-check-runtime.mts";
 import {
@@ -21,7 +23,10 @@ import {
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
-import { shouldPrepareExtensionPackageBoundaryArtifacts } from "./run-oxlint.mts";
+import {
+  shouldPrepareExtensionPackageBoundaryArtifacts,
+  shouldPrepareOxlintArtifacts,
+} from "./run-oxlint.mts";
 
 const DEFAULT_EXTENSION_CHUNK_SIZE = 8;
 const LARGE_CI_EXTENSION_CHUNK_SIZE = 16;
@@ -59,7 +64,11 @@ type RunnerOptions = {
   extraArgs: string[];
   runner: string;
 };
-type ShardRunnerOptions = RunnerOptions & { shard: OxlintShard; onCompleted?: () => void };
+type ShardRunnerOptions = RunnerOptions & {
+  shard: OxlintShard;
+  onCompleted?: () => void;
+  ownsArtifacts?: boolean;
+};
 type ShardBatchOptions = RunnerOptions & {
   concurrency: number;
   entries: OxlintShard[];
@@ -131,6 +140,43 @@ export function createOxlintFileScope(files: readonly string[], cwd = process.cw
   };
 }
 
+/** Package roots narrow reported targets after their canonical stripe and chunk ownership. */
+export function createOxlintExtensionRootScope(roots: readonly string[], cwd = process.cwd()) {
+  const available = new Set(
+    listOxlintRootEntries(EXTENSIONS_DIR, { cwd, readDir: fs.readdirSync }).dirs,
+  );
+  if (
+    roots.length === 0 ||
+    new Set(roots).size !== roots.length ||
+    !roots.every(
+      (root) => /^extensions\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(root) && available.has(root),
+    )
+  ) {
+    throw new Error("Oxlint extension selection requires unique, present canonical package roots");
+  }
+  const selected = new Set(roots);
+  return {
+    roots: [...selected].toSorted((left, right) => left.localeCompare(right)),
+    selectShards(shards: readonly OxlintShard[]) {
+      return shards.flatMap((shard) => {
+        if (!shard.name.startsWith("extensions:")) {
+          throw new Error("Oxlint extension roots require canonical extension-only chunks");
+        }
+        const targets = shard.args.slice(2).filter((target) => selected.has(target));
+        return targets.length
+          ? [
+              {
+                ...shard,
+                args: [...shard.args.slice(0, 2), ...targets],
+                canonicalTargets: shard.canonicalTargets ?? shard.args.slice(2),
+              },
+            ]
+          : [];
+      });
+    },
+  };
+}
+
 export function createOxlintShards({
   cwd = process.cwd(),
   env = process.env,
@@ -141,7 +187,7 @@ export function createOxlintShards({
   splitExtensions = false,
 }: PlatformShardOptions = {}) {
   const constrainedSerial =
-    hostResources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES &&
+    resolveCheckMemoryCapacityBytes(hostResources) < CI_PARALLEL_MIN_MEMORY_BYTES &&
     shouldRunOxlintShardsSerial({ env, platform, hostResources });
   const coreGroups =
     splitCore || constrainedSerial ? createCoreOxlintShards({ cwd, readDir }) : [CORE_SHARD];
@@ -270,7 +316,7 @@ export function shouldRunOxlintShardsSerial({
     return isConstrainedCiCheckHost(resources);
   }
   return (
-    resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
+    resolveCheckMemoryCapacityBytes(resources) < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
     resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS
   );
 }
@@ -320,7 +366,8 @@ export async function main(
   const shardArgs = parseShardRunnerArgs(extraArgs);
   const env = resolveLocalCheckEnv(runtimeEnv);
   const hostResources = resolveHostResources();
-  const splitExtensions = shardArgs.extensionStripe !== undefined;
+  const splitExtensions =
+    shardArgs.extensionStripe !== undefined || shardArgs.extensionRoots !== undefined;
   const shards = createOxlintShards({
     cwd: process.cwd(),
     env,
@@ -335,9 +382,11 @@ export async function main(
     }),
     shardArgs.extensionStripe,
   );
-  const selectedShards = shardArgs.files
-    ? createOxlintFileScope(shardArgs.files).selectShards(stripedShards)
-    : stripedShards;
+  const selectedShards = shardArgs.extensionRoots
+    ? createOxlintExtensionRootScope(shardArgs.extensionRoots).selectShards(stripedShards)
+    : shardArgs.files
+      ? createOxlintFileScope(shardArgs.files).selectShards(stripedShards)
+      : stripedShards;
 
   const needsArtifacts = shouldPrepareExtensionPackageBoundaryArtifactsForShards(
     selectedShards,
@@ -346,6 +395,14 @@ export async function main(
   const evidenceId = env.OPENCLAW_CI_STATIC_EVIDENCE === "1" ? randomUUID() : undefined;
   let completed = 0;
   const run = async () => {
+    // Children skip preparation; generate shared types once before any core stripe starts.
+    if (
+      selectedShards.some((shard) =>
+        shouldPrepareOxlintArtifacts([...shard.args, ...shardArgs.oxlintArgs]),
+      )
+    ) {
+      await ensureKyselyTypes(process.cwd(), false, { allowPartialCheckout: true });
+    }
     if (needsArtifacts) {
       const code = await runManagedCommand({
         bin: process.execPath,
@@ -384,7 +441,9 @@ export async function main(
     completed = results.completed;
     return results.statuses.find((status) => status !== 0) ?? 0;
   };
-  const status = needsArtifacts ? await withDistArtifactOwnership(process.cwd(), run) : await run();
+  // One batch owner lets lint children overlap without exposing their transient
+  // configuration files to a concurrent compiler's input snapshot.
+  const status = await withDistArtifactOwnership(process.cwd(), run);
   if (evidenceId && completed === selectedShards.length && !isParentTerminationRequested()) {
     console.log(
       `[ci-static:oxlint:completion] ${JSON.stringify({
@@ -426,6 +485,7 @@ export function parseShardRunnerArgs(args: string[]) {
   let extensionStripe: ShardStripe | undefined;
   let splitCore = false;
   let files: string[] | undefined;
+  let extensionRoots: string[] | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -442,6 +502,19 @@ export function parseShardRunnerArgs(args: string[]) {
         throw new Error("--files-json requires a nonempty JSON string array");
       }
       files = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--extension-roots-json") {
+      const value: unknown = JSON.parse(args[index + 1] ?? "null");
+      if (
+        !Array.isArray(value) ||
+        value.length === 0 ||
+        !value.every((root) => typeof root === "string")
+      ) {
+        throw new Error("--extension-roots-json requires a nonempty JSON string array");
+      }
+      extensionRoots = value;
       index += 1;
       continue;
     }
@@ -485,6 +558,9 @@ export function parseShardRunnerArgs(args: string[]) {
   if (coreStripe && !splitCore) {
     throw new Error("--core-stripe requires --split-core");
   }
+  if (extensionRoots && (files || only.size !== 1 || !only.has("extensions"))) {
+    throw new Error("--extension-roots-json requires --only=extensions without --files-json");
+  }
   return {
     coreStripe,
     extensionStripe,
@@ -492,6 +568,7 @@ export function parseShardRunnerArgs(args: string[]) {
     oxlintArgs,
     splitCore,
     ...(files ? { files } : {}),
+    ...(extensionRoots ? { extensionRoots } : {}),
   };
 }
 
@@ -672,6 +749,7 @@ async function runShards({
         extraArgs,
         runner,
         shard,
+        ownsArtifacts: true,
         onCompleted: () => {
           completed++;
         },
@@ -682,7 +760,14 @@ async function runShards({
   return { statuses: results.filter((status) => status !== undefined), completed };
 }
 
-export async function runShard({ env, extraArgs, runner, shard, onCompleted }: ShardRunnerOptions) {
+export async function runShard({
+  env,
+  extraArgs,
+  runner,
+  shard,
+  onCompleted,
+  ownsArtifacts,
+}: ShardRunnerOptions) {
   console.error(`[oxlint:${shard.name}] starting`);
   const startedAt = Date.now();
   const heartbeatMs = resolveShardHeartbeatMs(env);
@@ -692,7 +777,7 @@ export async function runShard({ env, extraArgs, runner, shard, onCompleted }: S
   // errors to the private artifact entry without catching or reporting them here.
   const args =
     runner === path.resolve("scripts", "run-oxlint.mts")
-      ? shouldPrepareExtensionPackageBoundaryArtifactsForShards([shard], extraArgs)
+      ? ownsArtifacts || shouldPrepareExtensionPackageBoundaryArtifactsForShards([shard], extraArgs)
         ? distArtifactEntryArgs(runner, [...shard.args, ...extraArgs])
         : [
             "--import",

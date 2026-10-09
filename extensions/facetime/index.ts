@@ -82,6 +82,12 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
         runCommandWithTimeout: api.runtime.system.runCommandWithTimeout,
       });
     };
+    const stopRuntime = () =>
+      stopRetainedRuntime(runtimePromise, (stopped) => {
+        if (runtimePromise === stopped) {
+          runtimePromise = undefined;
+        }
+      });
 
     api.registerTool(() => createFaceTimeCallTool({ ensureRuntime, getStatus }), {
       name: "facetime_call",
@@ -105,13 +111,7 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
           api.logger.warn(`[facetime] startup skipped: ${formatErrorMessage(error)}`);
         }
       },
-      async stop() {
-        await stopRetainedRuntime(runtimePromise, (stopped) => {
-          if (runtimePromise === stopped) {
-            runtimePromise = undefined;
-          }
-        });
-      },
+      stop: stopRuntime,
     });
 
     const registerGateway = (
@@ -180,14 +180,7 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
       }
       uninstalling = true;
       try {
-        const current = runtimePromise;
-        if (current) {
-          await stopRetainedRuntime(current, (stopped) => {
-            if (runtimePromise === stopped) {
-              runtimePromise = undefined;
-            }
-          });
-        }
+        await stopRuntime();
         await uninstallFaceTimeDriver({
           pluginRoot,
           runCommandWithTimeout: api.runtime.system.runCommandWithTimeout,

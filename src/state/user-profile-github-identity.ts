@@ -25,6 +25,7 @@ import {
 } from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import {
+  selectProfileDisplayEntries,
   selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
   setUserProfileEmailBinding,
@@ -33,7 +34,9 @@ import {
 import { UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   CachedGitHubIdentity,
+  CachedGitHubIdentityBinding,
   StoredGitHubIdentity,
+  ProfileDisplayRow,
   UserProfileGitHubAttribution,
   UserProfileGitHubAttributionRead,
 } from "./user-profiles.types.js";
@@ -68,28 +71,12 @@ function readGitHubColumns(db: DatabaseSync) {
   return columns;
 }
 
-function parseStoredGitHubIdentity(row: {
-  subject: string | null | undefined;
-  canonical_login: string | null | undefined;
-}): StoredGitHubIdentity | null {
-  const accountId = Number(row.subject);
-  const login = row.canonical_login ? normalizeGitHubLogin(row.canonical_login) : undefined;
-  return login && Number.isSafeInteger(accountId) && accountId > 0 ? { accountId, login } : null;
-}
-
-function toPublicGitHubIdentity(identity: StoredGitHubIdentity): UserProfileGitHubIdentity {
-  return {
-    login: identity.login,
-    profileUrl: `https://github.com/${identity.login}`,
-    avatarUrl: `https://avatars.githubusercontent.com/u/${identity.accountId}?v=4`,
-  };
-}
-
 export function selectStoredGitHubIdentities(
   db: DatabaseSync,
   profileIds?: readonly string[],
+  accountIds?: readonly number[],
 ): Map<string, { accounts: StoredGitHubIdentity[]; primary: StoredGitHubIdentity | undefined }> {
-  if (profileIds?.length === 0) {
+  if (profileIds?.length === 0 || accountIds?.length === 0) {
     return new Map();
   }
   const columns = readGitHubColumns(db);
@@ -112,21 +99,27 @@ export function selectStoredGitHubIdentities(
   if (profileIds) {
     query = query.where("profile_id", "in", [...profileIds]);
   }
+  if (accountIds) {
+    query = query
+      .where("subject", "in", accountIds.map(String))
+      .where("user_profiles.merged_into", "is", null);
+  }
   const rows = executeSqliteQuerySync(db, query).rows;
   const profiles = new Map<
     string,
     { accounts: StoredGitHubIdentity[]; primaryId: number | null }
   >();
   for (const row of rows) {
-    const identity = parseStoredGitHubIdentity(row);
-    if (!identity) {
+    const accountId = Number(row.subject);
+    const login = row.canonical_login ? normalizeGitHubLogin(row.canonical_login) : undefined;
+    if (!login || !Number.isSafeInteger(accountId) || accountId <= 0) {
       continue;
     }
     const profile = profiles.get(row.profile_id) ?? {
       accounts: [],
       primaryId: row.primary_github_account_id ?? null,
     };
-    profile.accounts.push(identity);
+    profile.accounts.push({ accountId, login });
     profiles.set(row.profile_id, profile);
   }
   return new Map(
@@ -144,29 +137,68 @@ export function selectStoredGitHubIdentities(
   );
 }
 
+export function selectProfileAccessEntries(
+  db: DatabaseSync,
+  profileIds?: string[],
+): Array<[string, ProfileDisplayRow]> {
+  const rows = selectProfileDisplayEntries(db, profileIds);
+  if (rows.length === 0) {
+    return rows;
+  }
+  const identities = selectStoredGitHubIdentities(db, profileIds);
+  return rows.map(([id, row]) => {
+    const identity = identities.get(id);
+    const accounts = identity?.accounts;
+    return [
+      id,
+      accounts?.length
+        ? {
+            ...row,
+            githubAccountIds: accounts.map(({ accountId }) => accountId),
+            githubLogin: identity?.primary?.login ?? null,
+          }
+        : row,
+    ];
+  });
+}
+
 function resolveCachedGitHubIdentityInDatabase(
   db: DatabaseSync,
-  params: { accountId: number; email: string },
+  binding: CachedGitHubIdentityBinding,
 ): CachedGitHubIdentity | undefined {
-  const email = params.email.trim().toLowerCase();
   if (
-    !email ||
-    !Number.isSafeInteger(params.accountId) ||
-    params.accountId <= 0 ||
     !tableExists(db, "user_profiles") ||
-    !tableExists(db, "user_profile_emails") ||
     !tableExists(db, "user_profile_identities") ||
     !readGitHubColumns(db).verifiedLogin
   ) {
     return undefined;
   }
-  const alias = selectUserProfileEmailAlias(db, email);
+  const login = "login" in binding ? normalizeGitHubLogin(binding.login)?.toLowerCase() : undefined;
+  const accountBinding = "email" in binding ? binding : undefined;
+  const email = accountBinding?.email.trim().toLowerCase();
+  const alias = login
+    ? selectGitHubProfileAlias(db, {
+        kind: "github-login",
+        subject: githubAuthenticationSubject(login),
+      })
+    : email &&
+        accountBinding &&
+        Number.isSafeInteger(accountBinding.accountId) &&
+        accountBinding.accountId > 0 &&
+        tableExists(db, "user_profile_emails")
+      ? selectGitHubProfileAlias(db, { kind: "email", email })
+      : undefined;
   const profile = alias ? selectResolvedUserProfileMetadataById(db, alias.profile_id) : undefined;
-  if (!profile) {
-    return undefined;
-  }
-  const identity = selectStoredGitHubIdentities(db, [profile.id]).get(profile.id);
-  return identity?.accounts.some((account) => account.accountId === params.accountId)
+  const accounts = profile
+    ? selectStoredGitHubIdentities(db, [profile.id]).get(profile.id)?.accounts
+    : undefined;
+  // A login alias stays reusable only while its profile's verified account still holds that login.
+  return profile &&
+    accounts?.some((account) =>
+      login
+        ? account.login.toLowerCase() === login
+        : account.accountId === accountBinding?.accountId,
+    )
     ? { profileId: profile.id, updatedAt: profile.updated_at }
     : undefined;
 }
@@ -184,11 +216,17 @@ export function selectUserProfileGitHubIdentities(
   db: DatabaseSync,
   profileIds?: readonly string[],
 ): Map<string, UserProfileGitHubIdentity> {
-  return new Map(
-    [...selectStoredGitHubIdentities(db, profileIds)].flatMap(([profileId, { primary }]) =>
-      primary ? [[profileId, toPublicGitHubIdentity(primary)] as const] : [],
-    ),
-  );
+  const identities = new Map<string, UserProfileGitHubIdentity>();
+  for (const [profileId, { primary }] of selectStoredGitHubIdentities(db, profileIds)) {
+    if (primary) {
+      identities.set(profileId, {
+        login: primary.login,
+        profileUrl: `https://github.com/${primary.login}`,
+        avatarUrl: `https://avatars.githubusercontent.com/u/${primary.accountId}?v=4`,
+      });
+    }
+  }
+  return identities;
 }
 
 /** Resolves current verified identities and public-credit preferences without initializing storage. */
@@ -334,9 +372,94 @@ export function prepareUserProfileGitHubMerge(
   );
 }
 
+type GitHubProfileAlias =
+  | { kind: "email"; email: string }
+  | { kind: "github-login"; subject: string };
+
+function selectGitHubProfileAlias(db: DatabaseSync, alias: GitHubProfileAlias) {
+  return alias.kind === "email"
+    ? selectUserProfileEmailAlias(db, alias.email)
+    : executeSqliteQueryTakeFirstSync(
+        db,
+        userProfilesDb(db)
+          .selectFrom("user_profile_identities")
+          .select("profile_id")
+          .where("provider", "=", GITHUB_PROVIDER)
+          .where("subject", "=", alias.subject)
+          .where("canonical_login", "is", null),
+      );
+}
+
+function readGitHubIdentityBinding(db: DatabaseSync, alias: GitHubProfileAlias, accountId: number) {
+  const kysely = userProfilesDb(db);
+  const subject = String(accountId);
+  const existing = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("user_profile_identities")
+      .leftJoin("user_profiles", "user_profiles.id", "user_profile_identities.profile_id")
+      .select(["profile_id", "canonical_login", "primary_github_account_id"])
+      .where("provider", "=", GITHUB_PROVIDER)
+      .where("subject", "=", subject)
+      .where("canonical_login", "is not", null),
+  );
+  const aliasIdentity = selectGitHubProfileAlias(db, alias);
+  const aliasProfileId = aliasIdentity
+    ? selectResolvedUserProfileMetadataById(db, aliasIdentity.profile_id)?.id
+    : undefined;
+  const aliasGitHubIdentity = aliasProfileId
+    ? selectStoredGitHubIdentities(db, [aliasProfileId]).get(aliasProfileId)
+    : undefined;
+  const existingProfileId = existing
+    ? selectResolvedUserProfileMetadataById(db, existing.profile_id)?.id
+    : undefined;
+  return { existing, aliasIdentity, aliasProfileId, aliasGitHubIdentity, existingProfileId };
+}
+
+function assertCompatibleGitHubEmailBinding(
+  binding: ReturnType<typeof readGitHubIdentityBinding>,
+  accountId: number,
+) {
+  const { existingProfileId, aliasProfileId, aliasGitHubIdentity } = binding;
+  if (
+    [
+      binding.aliasIdentity?.profile_id,
+      binding.existing?.profile_id,
+      aliasProfileId,
+      existingProfileId,
+    ].includes(GATEWAY_OWNER_PROFILE_ID)
+  ) {
+    throw new UserProfileOwnerError("merge");
+  }
+  if (
+    (existingProfileId && existingProfileId !== aliasProfileId) ||
+    (aliasGitHubIdentity &&
+      !aliasGitHubIdentity.accounts.some((account) => account.accountId === accountId))
+  ) {
+    throw new Error(
+      "GitHub identity requires explicit linking to this email; ask an administrator to use users.linkEmail",
+    );
+  }
+}
+
+/** The email owner checks the same conflicts even when optional GitHub metadata is unavailable. */
+export function assertGitHubEmailIdentityBinding(
+  db: DatabaseSync,
+  email: string,
+  accountId: number,
+) {
+  if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+    throw new TypeError("GitHub account id must be a positive safe integer");
+  }
+  assertCompatibleGitHubEmailBinding(
+    readGitHubIdentityBinding(db, { kind: "email", email }, accountId),
+    accountId,
+  );
+}
+
 export function applyVerifiedGitHubIdentity(params: {
   db: DatabaseSync;
-  alias: { kind: "email"; email: string } | { kind: "github-login"; subject: string };
+  alias: GitHubProfileAlias;
   identity: { accountId: number; login: string };
   preserveEmailProfile?: boolean;
   createProfile: () => string;
@@ -354,48 +477,11 @@ export function applyVerifiedGitHubIdentity(params: {
   const kysely = userProfilesDb(db);
   const subject = String(params.identity.accountId);
   const now = Date.now();
-  const existing = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("user_profile_identities")
-      .leftJoin("user_profiles", "user_profiles.id", "user_profile_identities.profile_id")
-      .select(["profile_id", "canonical_login", "primary_github_account_id"])
-      .where("provider", "=", GITHUB_PROVIDER)
-      .where("subject", "=", subject)
-      .where("canonical_login", "is not", null),
-  );
-  const aliasIdentity =
-    params.alias.kind === "email"
-      ? selectUserProfileEmailAlias(db, params.alias.email)
-      : executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("user_profile_identities")
-            .select("profile_id")
-            .where("provider", "=", GITHUB_PROVIDER)
-            .where("subject", "=", params.alias.subject)
-            .where("canonical_login", "is", null),
-        );
-  const aliasProfileId = aliasIdentity
-    ? selectResolvedUserProfileMetadataById(db, aliasIdentity.profile_id)?.id
-    : undefined;
-  const aliasGitHubIdentity = aliasProfileId
-    ? selectStoredGitHubIdentities(db, [aliasProfileId]).get(aliasProfileId)
-    : undefined;
-  const existingProfileId = existing
-    ? selectResolvedUserProfileMetadataById(db, existing.profile_id)?.id
-    : undefined;
-  if (
-    params.preserveEmailProfile &&
-    ((existingProfileId && existingProfileId !== aliasProfileId) ||
-      (aliasGitHubIdentity &&
-        !aliasGitHubIdentity.accounts.some(
-          (account) => account.accountId === params.identity.accountId,
-        )))
-  ) {
-    throw new Error(
-      "GitHub identity requires explicit linking to this email; ask an administrator to use users.linkEmail",
-    );
+  const bindingFacts = readGitHubIdentityBinding(db, params.alias, params.identity.accountId);
+  const { existing, aliasIdentity, aliasProfileId, aliasGitHubIdentity, existingProfileId } =
+    bindingFacts;
+  if (params.preserveEmailProfile) {
+    assertCompatibleGitHubEmailBinding(bindingFacts, params.identity.accountId);
   }
   const reusableAliasProfileId =
     aliasProfileId &&

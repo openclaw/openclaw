@@ -3,7 +3,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import { createMsFormatter } from "../../lib/format.ts";
@@ -26,21 +25,17 @@ function pct(part: number, total: number): number {
   return total > 0 ? (part / total) * 100 : 0;
 }
 
-/** Normalize a log timestamp to milliseconds (handles seconds vs ms). */
-function normalizeLogTimestamp(ts: number): number {
-  return ts < 1e12 ? ts * 1000 : ts;
-}
-
 function isLogInRange(log: SessionLogEntry, rangeStart: number, rangeEnd: number): boolean {
   // Keep undated entries visible; interval totals count dated entries separately.
   if (!(log.timestamp > 0)) {
     return true;
   }
-  const ts = normalizeLogTimestamp(log.timestamp);
+  // Log timestamps can be seconds or milliseconds.
+  const timestamp = log.timestamp;
+  const ts = timestamp < 1e12 ? timestamp * 1000 : timestamp;
   return ts >= Math.min(rangeStart, rangeEnd) && ts <= Math.max(rangeStart, rangeEnd);
 }
 
-/** Aggregate usage stats from time series points within a timestamp range. */
 function computeFilteredUsage(
   baseUsage: NonNullable<UsageSessionEntry["usage"]>,
   points: TimeSeriesPoint[],
@@ -95,10 +90,7 @@ export function renderSessionDetailPanel(
 
   const hasRange = timeSeriesCursorStart !== null && timeSeriesCursorEnd !== null;
   const filteredUsage =
-    timeSeriesCursorStart !== null &&
-    timeSeriesCursorEnd !== null &&
-    detail.timeSeries?.points &&
-    usage
+    hasRange && detail.timeSeries?.points && usage
       ? computeFilteredUsage(
           usage,
           detail.timeSeries.points,
@@ -175,40 +167,9 @@ export function renderSessionDetailPanel(
               : null
             : undefined,
         )}
-        <div class="session-detail-row">
-          ${renderTimeSeriesCompact(
-            detail.timeSeries,
-            detail.timeSeriesLoading,
-            detail.timeSeriesStatus,
-            detail.timeSeriesMode,
-            callbacks.onTimeSeriesModeChange,
-            detail.timeSeriesBreakdownMode,
-            callbacks.onTimeSeriesBreakdownChange,
-            range.startDate,
-            range.endDate,
-            range.selectedDays,
-            range.timeZone,
-            timeSeriesCursorStart,
-            timeSeriesCursorEnd,
-            callbacks.onTimeSeriesCursorRangeChange,
-          )}
-        </div>
+        <div class="session-detail-row">${renderTimeSeriesCompact(detail, callbacks, range)}</div>
         <div class="session-detail-bottom">
-          ${renderSessionLogsCompact(
-            detail.sessionLogs,
-            detail.sessionLogsLoading,
-            detail.sessionLogsStatus,
-            detail.sessionLogsExpanded,
-            callbacks.onToggleSessionLogsExpanded,
-            detail.logFilters,
-            callbacks.onLogFilterRolesChange,
-            callbacks.onLogFilterToolsChange,
-            callbacks.onLogFilterHasToolsChange,
-            callbacks.onLogFilterQueryChange,
-            callbacks.onLogFilterClear,
-            hasRange ? timeSeriesCursorStart : null,
-            hasRange ? timeSeriesCursorEnd : null,
-          )}
+          ${renderSessionLogsCompact(detail, callbacks)}
           ${renderContextPanel(detail.context, usage, contextExpanded, callbacks.onToggleContextExpanded)}
         </div>
       </div>
@@ -387,53 +348,40 @@ function renderContextPanel(
   `;
 }
 
+function selectedLogFilterValues(event: Event): string[] {
+  const selected = (event.target as HTMLSelectElement).selectedOptions;
+  return Array.from(selected, (option) => option.value);
+}
+
 function renderSessionLogsCompact(
-  logs: SessionLogEntry[] | null,
-  loading: boolean,
-  status: PanelRefreshStatus,
-  expandedAll: boolean,
-  onToggleExpandedAll: () => void,
-  filters: {
-    roles: SessionLogRole[];
-    tools: string[];
-    hasTools: boolean;
-    query: string;
-  },
-  onFilterRolesChange: (next: SessionLogRole[]) => void,
-  onFilterToolsChange: (next: string[]) => void,
-  onFilterHasToolsChange: (next: boolean) => void,
-  onFilterQueryChange: (next: string) => void,
-  onFilterClear: () => void,
-  cursorStart?: number | null,
-  cursorEnd?: number | null,
+  detail: UsageProps["detail"],
+  callbacks: UsageProps["callbacks"]["details"],
 ) {
-  if ((loading || status.awaitingGateway) && !status.hasLoaded) {
-    return html`
-      <div class="session-logs-compact">
-        <div class="session-logs-header">${t("usage.details.conversation")}</div>
-        <div class="usage-empty-block">${t("usage.loading.badge")}</div>
-      </div>
-    `;
-  }
-  const refreshStatus = renderUsageRefreshStatus(
-    status,
-    "usage.details.conversation",
-    "conversation",
-  );
-  if (status.error && !status.hasLoaded) {
-    return html`
-      <div class="session-logs-compact">
-        <div class="session-logs-header">${t("usage.details.conversation")}</div>
-        ${refreshStatus}
-      </div>
-    `;
-  }
-  if (!logs || logs.length === 0) {
+  const {
+    sessionLogs: logs,
+    sessionLogsLoading: loading,
+    sessionLogsStatus: status,
+    sessionLogsExpanded: expandedAll,
+    logFilters: filters,
+    timeSeriesCursorStart: cursorStart,
+    timeSeriesCursorEnd: cursorEnd,
+  } = detail;
+  const initialLoading = (loading || status.awaitingGateway) && !status.hasLoaded;
+  const initialError = status.error && !status.hasLoaded;
+  const refreshStatus = initialLoading
+    ? nothing
+    : renderUsageRefreshStatus(status, "usage.details.conversation", "conversation");
+  if (initialLoading || initialError || !logs?.length) {
+    const message = initialLoading ? "usage.loading.badge" : "usage.details.noMessages";
     return html`
       <div class="session-logs-compact">
         <div class="session-logs-header">${t("usage.details.conversation")}</div>
         ${refreshStatus}
-        <div class="usage-empty-block">${t("usage.details.noMessages")}</div>
+        ${
+          initialLoading || !initialError
+            ? html`<div class="usage-empty-block">${t(message)}</div>`
+            : nothing
+        }
       </div>
     `;
   }
@@ -478,7 +426,7 @@ function renderSessionLogsCompact(
             (${displayedCount} ${normalizeLowercaseStringOrEmpty(t("usage.overview.messages"))})
           </span>
         </span>
-        <button class="btn btn--sm" @click=${onToggleExpandedAll}>
+        <button class="btn btn--sm" @click=${callbacks.onToggleSessionLogsExpanded}>
           ${expandedAll ? t("usage.details.collapseAll") : t("usage.details.expandAll")}
         </button>
       </div>
@@ -489,11 +437,7 @@ function renderSessionLogsCompact(
           size="4"
           aria-label=${t("usage.details.filterByRole")}
           @change=${(event: Event) =>
-            onFilterRolesChange(
-              Array.from((event.target as HTMLSelectElement).selectedOptions).map(
-                (option) => option.value as SessionLogRole,
-              ),
-            )}
+            callbacks.onLogFilterRolesChange(selectedLogFilterValues(event) as SessionLogRole[])}
         >
           ${(
             [
@@ -513,12 +457,7 @@ function renderSessionLogsCompact(
           multiple
           size="4"
           aria-label=${t("usage.details.filterByTool")}
-          @change=${(event: Event) =>
-            onFilterToolsChange(
-              Array.from((event.target as HTMLSelectElement).selectedOptions).map(
-                (option) => option.value,
-              ),
-            )}
+          @change=${(event: Event) => callbacks.onLogFilterToolsChange(selectedLogFilterValues(event))}
         >
           ${toolOptions.map(
             (tool) =>
@@ -530,7 +469,7 @@ function renderSessionLogsCompact(
             type="checkbox"
             .checked=${filters.hasTools}
             @change=${(event: Event) =>
-              onFilterHasToolsChange((event.target as HTMLInputElement).checked)}
+              callbacks.onLogFilterHasToolsChange((event.target as HTMLInputElement).checked)}
           />
           ${t("usage.details.hasTools")}
         </label>
@@ -539,9 +478,11 @@ function renderSessionLogsCompact(
           placeholder=${t("usage.details.searchConversation")}
           aria-label=${t("usage.details.searchConversation")}
           .value=${filters.query}
-          @input=${(event: Event) => onFilterQueryChange((event.target as HTMLInputElement).value)}
+          @input=${(event: Event) => callbacks.onLogFilterQueryChange((event.target as HTMLInputElement).value)}
         />
-        <button class="btn btn--sm" @click=${onFilterClear}>${t("usage.filters.clear")}</button>
+        <button class="btn btn--sm" @click=${callbacks.onLogFilterClear}>
+          ${t("usage.filters.clear")}
+        </button>
       </div>
       <div class="session-logs-list">
         ${filteredEntries.map((entry) => {

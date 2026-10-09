@@ -17,7 +17,6 @@ import { linkReaderErrorMessage } from "./link-reader-error.ts";
 import { LinkReaderImages } from "./link-reader-images.ts";
 import {
   renderLinkReaderPanelContent,
-  renderReaderButton,
   readerIcon,
   linkReaderViewStyles,
   linkReaderPanelLayout,
@@ -37,6 +36,7 @@ import {
   type PanelHostedTab,
   type PanelHostedTabsElement,
 } from "./panel-hosted-tabs.ts";
+import { renderPanelIconButton } from "./panel-icon-button.ts";
 import { renderPanelTabStrip } from "./panel-tab-strip.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 
@@ -73,12 +73,13 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
     return this.activeId;
   }
   get hostedActions() {
-    return renderReaderButton(
-      t("linkReader.newTab"),
-      icons.plus,
-      () => this.createTab(),
-      this.tabs.length >= TAB_LIMIT || !this.available || !this.readers.length,
-    );
+    return renderPanelIconButton({
+      className: "rail-header__action bp-icon",
+      label: t("linkReader.newTab"),
+      icon: icons.plus,
+      onClick: () => this.createTab(),
+      disabled: this.tabs.length >= TAB_LIMIT || !this.available || !this.readers.length,
+    });
   }
   async closeHostedTab(id: string): Promise<void> {
     this.closeTab(id);
@@ -102,7 +103,6 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
     // Embedded geometry belongs to the region, never the standalone dock store.
     isFullscreen: () => this.embedded,
   });
-  private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   static override styles = linkReaderViewStyles;
 
   private get activeTab(): ReaderTab | undefined {
@@ -119,7 +119,7 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
   override connectedCallback(): void {
     super.connectedCallback();
     if (!this.embedded) {
-      window.addEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      window.addEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       this.dockLayout.setSuppressed(this.suppressed);
     }
   }
@@ -128,14 +128,14 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
     this.tabs = [];
     this.activeId = null;
     this.returnFocus = null;
-    window.removeEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    window.removeEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     super.disconnectedCallback();
   }
   override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("embedded")) {
-      window.removeEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      window.removeEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       if (!this.embedded && this.isConnected) {
-        window.addEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+        window.addEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       }
     }
     if (changed.has("sessionKey") && changed.get("sessionKey") !== undefined) {
@@ -360,7 +360,7 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
     this.scrollContent = true;
     this.requestUpdate();
   }
-  handleToggleRequest(event: Event): void {
+  readonly handleToggleRequest = (event: Event): void => {
     const payload: unknown = event instanceof CustomEvent ? event.detail : undefined;
     const detail = isRecord(payload) ? payload : null;
     if (detail?.open === false) {
@@ -418,7 +418,7 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
     } else {
       this.requestUpdate();
     }
-  }
+  };
   private closePanel(): void {
     this.abortRequest();
     if (!this.embedded) {
@@ -565,14 +565,10 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
           ? nothing
           : html`<header class="rail-header bp-header lr-tab-header">
               ${renderPanelTabStrip({
-                tabs: this.tabs.map((item) => ({
-                  id: item.id,
+                tabs: this.hostedTabs.map((item) => ({
+                  ...item,
                   domId: item.id + "-label",
-                  label: tabLabel(item),
-                  title: tabTarget(item)?.href,
-                  icon: readerIcon(tabTarget(item)?.reader.icon),
-                  className: item.view.status === "loading" ? "is-connecting" : "",
-                  closeLabel: t("linkReader.closeTab", { title: tabLabel(item) }),
+                  closeLabel: t("linkReader.closeTab", { title: item.label }),
                 })),
                 activeId: this.activeId,
                 ariaControls: "link-reader-tab-panel",
@@ -582,28 +578,31 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
                 newLabel: t("linkReader.newTab"),
                 newDisabled: this.tabs.length >= TAB_LIMIT,
               })}
-              ${this.embedded ? nothing : renderReaderButton(t("linkReader.close"), icons.x, () => this.closePanel())}
+              ${this.embedded ? nothing : renderPanelIconButton({ className: "rail-header__action bp-icon", label: t("linkReader.close"), icon: icons.x, onClick: () => this.closePanel() })}
             </header>`
       }
       <form class="lr-toolbar" @submit=${(event: Event) => this.commitUrl(event)}>
-        ${renderReaderButton(
-          t("linkReader.back"),
-          icons.chevronLeft,
-          () => this.goHistory(-1),
-          tab.index <= 0,
-        )}
-        ${renderReaderButton(
-          t("linkReader.forward"),
-          icons.chevronRight,
-          () => this.goHistory(1),
-          tab.index >= tab.history.length - 1,
-        )}
-        ${renderReaderButton(
-          t("linkReader.refresh"),
-          icons.refresh,
-          () => this.refresh(),
-          !target || !this.available || !this.client || tab.view.status === "loading",
-        )}
+        ${renderPanelIconButton({
+          className: "rail-header__action bp-icon",
+          label: t("linkReader.back"),
+          icon: icons.chevronLeft,
+          onClick: () => this.goHistory(-1),
+          disabled: tab.index <= 0,
+        })}
+        ${renderPanelIconButton({
+          className: "rail-header__action bp-icon",
+          label: t("linkReader.forward"),
+          icon: icons.chevronRight,
+          onClick: () => this.goHistory(1),
+          disabled: tab.index >= tab.history.length - 1,
+        })}
+        ${renderPanelIconButton({
+          className: "rail-header__action bp-icon",
+          label: t("linkReader.refresh"),
+          icon: icons.refresh,
+          onClick: () => this.refresh(),
+          disabled: !target || !this.available || !this.client || tab.view.status === "loading",
+        })}
         <input
           class="lr-url"
           type="text"

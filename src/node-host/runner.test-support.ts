@@ -65,7 +65,7 @@ const mocks = vi.hoisted(() => ({
     invoke: vi.fn(async () => {}),
     handleInput: vi.fn(),
     cancel: vi.fn(),
-    cancelAll: vi.fn(),
+    cancelAll: vi.fn(async () => {}),
     tryPauseForUpdate: vi.fn(async () => true),
     resumeAfterUpdate: vi.fn(),
     updateGatewayConnection: vi.fn(),
@@ -215,6 +215,7 @@ vi.mock("./runtime.js", async (importOriginal) => {
         },
         workerHostingEnabled: mocks.fakeRuntimeWorkerHosting,
         preparedWorkspacesEnabled: false,
+        nativeInferenceEnabled: false,
         workerHostingDisabledReason: mocks.fakeRuntimeWorkerHostingDisabledReason,
         initialInventory: { skills: [], pluginTools: [] },
         start: (params) => {

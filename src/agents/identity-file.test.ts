@@ -1,11 +1,8 @@
-/**
- * Regression coverage for IDENTITY.md parsing and merging.
- * Ensures placeholders are ignored and rich identity fields stay stable.
- */
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   loadAgentIdentityFromFile,
   loadAgentIdentityFromWorkspace,
@@ -14,23 +11,21 @@ import {
 } from "./identity-file.js";
 
 const TEST_MAX_IDENTITY_FILE_BYTES = 4 * 1024 * 1024;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function parseIdentityFromContent(
   content: string,
 ): Promise<import("./identity-file.js").AgentIdentityFile | null> {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-identity-parse-"));
+  const tempDir = tempDirs.make("openclaw-identity-parse-");
   const filePath = path.join(tempDir, "IDENTITY.md");
   fs.writeFileSync(filePath, content, "utf-8");
-  try {
-    return await loadAgentIdentityFromFile(filePath);
-  } finally {
-    fs.rmSync(tempDir, { force: true, recursive: true });
-  }
+  return await loadAgentIdentityFromFile(filePath);
 }
 
 describe("parseIdentityMarkdown", () => {
-  it("ignores identity template placeholders", async () => {
-    const content = `
+  it.each([
+    {
+      content: `
 # IDENTITY.md - Who Am I?
 
 - **Name:** *(pick something you like)*
@@ -38,58 +33,54 @@ describe("parseIdentityMarkdown", () => {
 - **Vibe:** *(how do you come across? sharp? warm? chaotic? calm?)*
 - **Emoji:** *(your signature - pick one that feels right)*
 - **Avatar:** *(workspace-relative path, http(s) URL, or data URI)*
-    `;
-    const parsed = await parseIdentityFromContent(content);
-    expect(parsed).toBeNull();
-  });
-
-  it("parses explicit identity values", async () => {
-    const content = `
+    `,
+      expected: null,
+    },
+    {
+      content: `
 - **Name:** Samantha
 - **Creature:** Robot
 - **Vibe:** Warm
 - **Emoji:** :robot:
 - **Avatar:** avatars/openclaw.png
-`;
-    const parsed = await parseIdentityFromContent(content);
-    expect(parsed).toEqual({
-      name: "Samantha",
-      creature: "Robot",
-      vibe: "Warm",
-      emoji: ":robot:",
-      avatar: "avatars/openclaw.png",
-    });
-  });
-
-  it("strips markdown code spans from values and labels", async () => {
-    const content = [
-      "- **Name:** `Samantha`",
-      "- `Creature`: Robot",
-      "- **`Avatar`**: `avatars/openclaw.png`",
-    ].join("\n");
-    const parsed = await parseIdentityFromContent(content);
-    expect(parsed).toEqual({
-      name: "Samantha",
-      creature: "Robot",
-      avatar: "avatars/openclaw.png",
-    });
-  });
-
-  it("still treats code-span-wrapped template placeholders as placeholders", async () => {
-    const content = "- **Avatar:** `(workspace-relative path, http(s) URL, or data URI)`";
-    const parsed = await parseIdentityFromContent(content);
-    expect(parsed).toBeNull();
-  });
-
-  it("ignores an italic not-set placeholder", async () => {
-    const parsed = await parseIdentityFromContent("- **Avatar:** *(not set yet)*");
-    expect(parsed).toBeNull();
-  });
+`,
+      expected: {
+        name: "Samantha",
+        creature: "Robot",
+        vibe: "Warm",
+        emoji: ":robot:",
+        avatar: "avatars/openclaw.png",
+      },
+    },
+    {
+      content: [
+        "- **Name:** `Samantha`",
+        "- `Creature`: Robot",
+        "- **`Avatar`**: `avatars/openclaw.png`",
+      ].join("\n"),
+      expected: {
+        name: "Samantha",
+        creature: "Robot",
+        avatar: "avatars/openclaw.png",
+      },
+    },
+    {
+      content: "- **Avatar:** `(workspace-relative path, http(s) URL, or data URI)`",
+      expected: null,
+    },
+    { content: "- **Avatar:** *(not set yet)*", expected: null },
+  ])(
+    "parses decorated identity values and ignores placeholders: $content",
+    async ({ content, expected }) => {
+      expect(await parseIdentityFromContent(content)).toEqual(expected);
+    },
+  );
 });
 
 describe("mergeIdentityMarkdownContent", () => {
-  it("updates writable fields without clobbering richer identity sections", () => {
-    const content = `
+  it.each([
+    {
+      content: `
 # IDENTITY.md - Agent Identity
 
 - **Name:** C-3PO
@@ -100,116 +91,92 @@ describe("mergeIdentityMarkdownContent", () => {
 ## Role
 
 Fluent in over six million error messages.
-`;
-
-    const merged = mergeIdentityMarkdownContent(content, {
-      name: "Patch Agent",
-      emoji: "🦀",
-      avatar: "avatars/patch.png",
-    });
-
-    expect(merged).toContain("- Name: Patch Agent");
-    expect(merged).toContain("- **Creature:** Flustered Protocol Droid");
-    expect(merged).toContain("- **Vibe:** Anxious, detail-obsessed");
-    expect(merged).toContain("- Emoji: 🦀");
-    expect(merged).toContain("- Avatar: avatars/patch.png");
-    expect(merged).toContain("## Role");
-    expect(merged).toContain("Fluent in over six million error messages.");
-  });
-
-  it("replaces duplicate writable lines with one normalized entry", () => {
-    const merged = mergeIdentityMarkdownContent(
-      `
-- Name: Old Name
-- Name: Older Name
-- Emoji: 🙂
 `,
-      { name: "New Name", emoji: "🦀" },
-    );
+      identity: {
+        name: "Patch Agent",
+        emoji: "🦀",
+        avatar: "avatars/patch.png",
+      },
+      expected: `
+# IDENTITY.md - Agent Identity
 
-    expect(merged.match(/Name:/g)).toHaveLength(1);
-    expect(merged).toContain("- Name: New Name");
-    expect(merged).toContain("- Emoji: 🦀");
-  });
+- Name: Patch Agent
+- **Creature:** Flustered Protocol Droid
+- **Vibe:** Anxious, detail-obsessed
+- Emoji: 🦀
+- Avatar: avatars/patch.png
 
-  it("updates code-span-wrapped writable labels instead of inserting duplicates", () => {
-    const merged = mergeIdentityMarkdownContent("- **`Name`**: Old Name\n", {
-      name: "New Name",
-    });
+## Role
 
-    expect(merged).toBe("- Name: New Name\n");
-  });
+Fluent in over six million error messages.
+`,
+    },
+    {
+      content: "\n- Name: Old Name\n- Name: Older Name\n- Emoji: 🙂\n",
+      identity: { name: "New Name", emoji: "🦀" },
+      expected: "\n- Name: New Name\n- Emoji: 🦀\n",
+    },
+    {
+      content: "- **`Name`**: Old Name\n",
+      identity: { name: "New Name" },
+      expected: "- Name: New Name\n",
+    },
+  ])(
+    "normalizes writable fields and preserves rich content: $content",
+    ({ content, identity, expected }) => {
+      expect(mergeIdentityMarkdownContent(content, identity)).toBe(expected);
+    },
+  );
 });
 
 describe("loadAgentIdentityFromWorkspace", () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-identity-"));
+    tempDir = tempDirs.make("openclaw-identity-");
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    fs.rmSync(tempDir, { force: true, recursive: true });
   });
 
-  it("loads identity values from IDENTITY.md", () => {
-    fs.writeFileSync(
-      path.join(tempDir, "IDENTITY.md"),
-      ["- **Name:** Test Agent", "- **Emoji:** 🤖"].join("\n"),
-      "utf-8",
-    );
+  it.each([false, true])(
+    "loads workspace and explicit identity files (symlink: %s)",
+    async (symlink) => {
+      if (symlink && process.platform === "win32") {
+        return;
+      }
+      const identityPath = path.join(tempDir, "IDENTITY.md");
+      const targetPath = symlink ? path.join(tempDir, "REAL_IDENTITY.md") : identityPath;
+      const expected = { name: symlink ? "Linked Agent" : "Test Agent", emoji: "🤖" };
+      fs.writeFileSync(targetPath, `- **Name:** ${expected.name}\n- **Emoji:** 🤖`);
+      if (symlink) {
+        fs.symlinkSync(targetPath, identityPath);
+      }
+      expect(loadAgentIdentityFromWorkspace(tempDir)).toEqual(expected);
+      await expect(loadAgentIdentityFromFile(identityPath)).resolves.toEqual(expected);
+    },
+  );
 
-    expect(loadAgentIdentityFromWorkspace(tempDir)).toEqual({
-      name: "Test Agent",
-      emoji: "🤖",
-    });
-  });
-
-  it("loads identity values from a symlinked IDENTITY.md", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const targetPath = path.join(tempDir, "REAL_IDENTITY.md");
-    fs.writeFileSync(targetPath, "- **Name:** Linked Agent", "utf-8");
-    fs.symlinkSync(targetPath, path.join(tempDir, "IDENTITY.md"));
-
-    expect(loadAgentIdentityFromWorkspace(tempDir)).toEqual({ name: "Linked Agent" });
-  });
-
-  it("loads an explicit identity file through a symlink", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const targetPath = path.join(tempDir, "REAL_IDENTITY.md");
-    const identityPath = path.join(tempDir, "identity-link.md");
-    fs.writeFileSync(targetPath, "- **Name:** Linked Agent", "utf-8");
-    fs.symlinkSync(targetPath, identityPath);
-
-    await expect(loadAgentIdentityFromFile(identityPath)).resolves.toEqual({
-      name: "Linked Agent",
-    });
-  });
-
-  it("does not infer an overflow from a missing path containing exceeds", async () => {
-    const identityPath = path.join(tempDir, "identity-exceeds-limit.md");
-
-    await expect(loadAgentIdentityFromFile(identityPath)).resolves.toBeNull();
-  });
-
-  it("treats workspace overflow as absent while explicit file reads report it", async () => {
-    fs.writeFileSync(
-      path.join(tempDir, "IDENTITY.md"),
-      "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1),
-      "utf-8",
-    );
-
-    expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
-    expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toBeNull();
-    await expect(loadAgentIdentityFromFile(path.join(tempDir, "IDENTITY.md"))).rejects.toThrow(
-      `exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`,
-    );
-  });
+  it.each(["missing", "oversized"])(
+    "classifies %s identity reads without matching error text",
+    async (kind) => {
+      const identityPath = path.join(
+        tempDir,
+        kind === "missing" ? "identity-exceeds-limit.md" : "IDENTITY.md",
+      );
+      if (kind === "missing") {
+        await expect(loadAgentIdentityFromFile(identityPath)).resolves.toBeNull();
+      } else {
+        fs.writeFileSync(identityPath, "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1));
+        expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
+        expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toBeNull();
+        await expect(loadAgentIdentityFromFile(identityPath)).rejects.toThrow(
+          `exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`,
+        );
+      }
+    },
+  );
 
   it("coalesces admission and retains unchanged parsed values without main-thread file reads", async () => {
     const filePath = path.join(tempDir, "IDENTITY.md");
@@ -240,37 +207,37 @@ describe("loadAgentIdentityFromWorkspace", () => {
     }
   });
 
-  it("refreshes after same-size replacement, deletion, and recreation", async () => {
-    const filePath = path.join(tempDir, "IDENTITY.md");
-    const modified = new Date("2024-01-01T00:00:00Z");
-    fs.writeFileSync(filePath, "- Name: First\n");
-    fs.utimesSync(filePath, modified, modified);
-    const first = await loadAgentIdentityFromWorkspaceAsync(tempDir);
-    fs.writeFileSync(`${filePath}.next`, "- Name: Other\n");
-    fs.utimesSync(`${filePath}.next`, modified, modified);
-    fs.renameSync(`${filePath}.next`, filePath);
-    expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toEqual({ name: "Other" });
-    fs.unlinkSync(filePath);
-    expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toBeNull();
-    fs.writeFileSync(filePath, "- Name: First\n");
-    const recreated = await loadAgentIdentityFromWorkspaceAsync(tempDir);
-    expect(recreated).toEqual(first);
-    expect(recreated).not.toBe(first);
-  });
-
-  it("follows a retargeted identity symlink on the next read", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const identityPath = path.join(tempDir, "IDENTITY.md");
-    const firstPath = path.join(tempDir, "FIRST.md");
-    const otherPath = path.join(tempDir, "OTHER.md");
-    fs.writeFileSync(firstPath, "- Name: First\n");
-    fs.writeFileSync(otherPath, "- Name: Other\n");
-    fs.symlinkSync(firstPath, identityPath);
-    expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toEqual({ name: "First" });
-    fs.unlinkSync(identityPath);
-    fs.symlinkSync(otherPath, identityPath);
-    expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toEqual({ name: "Other" });
-  });
+  it.each([false, true])(
+    "refreshes after replacement, deletion, and recreation (symlink: %s)",
+    async (symlink) => {
+      if (symlink && process.platform === "win32") {
+        return;
+      }
+      const filePath = path.join(tempDir, "IDENTITY.md");
+      const firstPath = symlink ? path.join(tempDir, "FIRST.md") : filePath;
+      const modified = new Date("2024-01-01T00:00:00Z");
+      fs.writeFileSync(firstPath, "- Name: First\n");
+      fs.utimesSync(firstPath, modified, modified);
+      if (symlink) {
+        fs.symlinkSync(firstPath, filePath);
+      }
+      const first = await loadAgentIdentityFromWorkspaceAsync(tempDir);
+      expect(first).toEqual({ name: "First" });
+      fs.writeFileSync(`${filePath}.next`, "- Name: Other\n");
+      fs.utimesSync(`${filePath}.next`, modified, modified);
+      if (symlink) {
+        fs.unlinkSync(filePath);
+        fs.symlinkSync(`${filePath}.next`, filePath);
+      } else {
+        fs.renameSync(`${filePath}.next`, filePath);
+      }
+      expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toEqual({ name: "Other" });
+      fs.unlinkSync(filePath);
+      expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toBeNull();
+      fs.writeFileSync(filePath, "- Name: First\n");
+      const recreated = await loadAgentIdentityFromWorkspaceAsync(tempDir);
+      expect(recreated).toEqual(first);
+      expect(recreated).not.toBe(first);
+    },
+  );
 });

@@ -359,8 +359,9 @@ export async function modelsAccountsLoginCommand(
   }
 }
 
-export async function modelsAccountsUseCommand(
-  options: ModelsAccountsOptions & { authProfileId: string },
+export async function modelsAccountsUpdateDefaultCommand(
+  options: ModelsAccountsOptions &
+    ({ action: "use"; authProfileId: string } | { action: "clear-default"; provider: string }),
   runtime: RuntimeEnv,
 ): Promise<void> {
   await withModelsAccountsGateway(
@@ -369,42 +370,25 @@ export async function modelsAccountsUseCommand(
     runtime,
     async ({ client, signal, profile }) => {
       const profileId = profile.id;
-      const result = await client.request<UsersSelectModelAccountResult>(
-        "users.selectModelAccount",
-        { profileId, authProfileId: options.authProfileId },
+      const result = await client.request<
+        UsersSelectModelAccountResult | UsersUnlinkAuthProfileResult
+      >(
+        options.action === "use" ? "users.selectModelAccount" : "users.unlinkAuthProfile",
+        {
+          profileId,
+          ...(options.action === "use"
+            ? { authProfileId: options.authProfileId }
+            : { provider: options.provider }),
+        },
         { signal },
       );
       if (options.json) {
         writeRuntimeJson(runtime, { profileId, ...result });
       } else {
         runtime.log(
-          `Selected ${sanitizeTerminalText(options.authProfileId)}. ${SESSION_DEFAULT_NOTE}`,
-        );
-      }
-    },
-  );
-}
-
-export async function modelsAccountsClearDefaultCommand(
-  options: ModelsAccountsOptions & { provider: string },
-  runtime: RuntimeEnv,
-): Promise<void> {
-  await withModelsAccountsGateway(
-    options,
-    "write",
-    runtime,
-    async ({ client, signal, profile }) => {
-      const profileId = profile.id;
-      const result = await client.request<UsersUnlinkAuthProfileResult>(
-        "users.unlinkAuthProfile",
-        { profileId, provider: options.provider },
-        { signal },
-      );
-      if (options.json) {
-        writeRuntimeJson(runtime, { profileId, ...result });
-      } else {
-        runtime.log(
-          `Cleared the ${sanitizeTerminalText(options.provider)} new-session default. Saved credentials and existing session accounts are unchanged.`,
+          options.action === "use"
+            ? `Selected ${sanitizeTerminalText(options.authProfileId)}. ${SESSION_DEFAULT_NOTE}`
+            : `Cleared the ${sanitizeTerminalText(options.provider)} new-session default. Saved credentials and existing session accounts are unchanged.`,
         );
       }
     },

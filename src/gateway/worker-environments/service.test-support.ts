@@ -34,6 +34,7 @@ import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js"
 import {
   attachWorkerTurnExecutionIdentityStore,
   bindWorkerTurnOwner,
+  bindWorkerTurnCapabilities,
   getWorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
@@ -233,7 +234,7 @@ export function createService(
       | "executeInference"
       | "inferenceStore"
       | "closeNodeBootstrapArtifacts"
-      | "executeSessionTool"
+      | "createGatewayTools"
       | "executeComputer"
       | "providerCallTimeoutMs"
       | "projectNamespace"
@@ -319,23 +320,33 @@ export async function seedBootstrapping(
   install?: WorkerInstallationArtifact["install"],
   sharedHost = false,
 ) {
-  const intent = await testState.store.createIntent({
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { ...(install ? { install } : {}), settings: { region: "test" } },
-    provisionOperationId: `provision:${environmentId}`,
-  });
-  const provisioning = await testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
+  const provisioning = await seedProvisioning(environmentId, {
+    ...(install ? { install } : {}),
+    settings: { region: "test" },
   });
   return testState.store.transition({
     environmentId,
     from: provisioning.state,
     to: "bootstrapping",
     patch: { leaseId: `lease:${environmentId}`, sshEndpoint: SSH_ENDPOINT, sharedHost },
+  });
+}
+
+async function seedProvisioning(
+  environmentId: string,
+  profileSnapshot: Parameters<WorkerEnvironmentStore["createIntent"]>[0]["profileSnapshot"],
+) {
+  const intent = await testState.store.createIntent({
+    environmentId,
+    providerId: "fake",
+    profileId: "development",
+    profileSnapshot,
+    provisionOperationId: `provision:${environmentId}`,
+  });
+  return testState.store.transition({
+    environmentId,
+    from: intent.state,
+    to: "provisioning",
   });
 }
 
@@ -357,17 +368,8 @@ export async function seedReadyDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
 ) {
-  const intent = await testState.store.createIntent({
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { settings: { region: "test", desktop: true } },
-    provisionOperationId: `provision:${environmentId}`,
-  });
-  const provisioning = await testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
+  const provisioning = await seedProvisioning(environmentId, {
+    settings: { region: "test", desktop: true },
   });
   const bootstrapping = await testState.store.transition({
     environmentId,
@@ -391,17 +393,8 @@ export async function seedReadyNodeDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
 ) {
-  const intent = await testState.store.createIntent({
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { settings: { region: "test", desktop: true } },
-    provisionOperationId: `provision:${environmentId}`,
-  });
-  const provisioning = await testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
+  const provisioning = await seedProvisioning(environmentId, {
+    settings: { region: "test", desktop: true },
   });
   return testState.store.transition({
     environmentId,
@@ -675,8 +668,8 @@ export async function bindPlacementHarness(
     getExecutionIdentityCapability: (current: WorkerSessionTurnClaim) =>
       getWorkerTurnExecutionIdentityCapability(executionStore, current),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
-    updateAckCursors: vi.fn(),
-    prepareWorkspaceResultOwnerRevocation: vi.fn(),
+    updateAckCursors: vi.fn(async () => {}),
+    prepareWorkspaceResultOwnerRevocation: vi.fn(async () => {}),
     registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
   const instance = createOperationalRunInstanceRef(claim.runId);
@@ -714,5 +707,13 @@ export async function bindPlacementHarness(
     },
   );
   const workerService = createService(createProvider(), { ...serviceOptions, placementStore });
-  return { identity, placementStore, workerService, source, releaseSource };
+  return {
+    identity,
+    placementStore,
+    workerService,
+    source,
+    releaseSource,
+    bindToolSurface: (surface: Parameters<typeof bindWorkerTurnCapabilities>[2]["toolSurface"]) =>
+      bindWorkerTurnCapabilities(executionStore, claim, { toolSurface: surface }),
+  };
 }

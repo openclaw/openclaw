@@ -13,6 +13,7 @@ import type {
   SessionsCatalogListResult,
   ToolsInvokeResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { assertGatewayAgentsAdmitted } from "../../test/helpers/gateway-agent-admission.js";
 import {
   verifyCodexNativeSubagentBridgeProbe,
   withCodexNativeThreadReader,
@@ -32,6 +33,7 @@ import {
   formatAssistantTextPreview,
   createCodexHarnessEventCapture,
   readCodexNativeUsageSnapshots,
+  readCodexHarnessSessionId,
   CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
   type CapturedAgentEvent,
   type CodexNativeUsageSnapshot,
@@ -421,23 +423,6 @@ async function assertCodexHarnessSessionSelection(params: {
   expect(row?.thinkingLevel).toBe(
     params.preserveNativeTurnSettings ? undefined : CODEX_HARNESS_THINKING,
   );
-}
-
-async function readCodexHarnessSessionId(params: {
-  client: GatewayClient;
-  sessionKey: string;
-}): Promise<string> {
-  // The live reset proof must distinguish logical generation rollover from
-  // physical session-id rotation, so read the persisted row through Gateway.
-  const result: {
-    sessions?: Array<{ key?: string; sessionId?: string }>;
-  } = await params.client.request("sessions.list", {
-    includeGlobal: true,
-    limit: 200,
-  });
-  const sessionId = result.sessions?.find((entry) => entry.key === params.sessionKey)?.sessionId;
-  expect(sessionId, `expected sessionId for ${params.sessionKey}`).toBeTypeOf("string");
-  return sessionId as string;
 }
 
 async function readCodexHarnessSessionUsageFreshness(params: {
@@ -1966,6 +1951,7 @@ describeLive("gateway live (Codex harness)", () => {
         if (!firstClient || !secondClient) {
           throw new Error("missing paired steering clients");
         }
+        await assertGatewayAgentsAdmitted(firstClient, ["dev"]);
         logCodexLiveStep("cross-device-steering-clients-connected");
         for (const mode of ["explicit", "inherited"] as const) {
           const sessionKey = `agent:dev:live-codex-steering-${mode}`;
@@ -2192,7 +2178,7 @@ describeLive("gateway live (Codex harness)", () => {
         });
         const connect = async () => {
           await instance.startGateway();
-          return await connectTestGatewayClient({
+          client = await connectTestGatewayClient({
             url: instance.url,
             token,
             deviceIdentity,
@@ -2202,6 +2188,8 @@ describeLive("gateway live (Codex harness)", () => {
             caps: CODEX_HARNESS_CLIENT_CAPS,
             onEvent,
           });
+          await assertGatewayAgentsAdmitted(client, ["dev"]);
+          return client;
         };
         client = await connect();
         const catalog = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
@@ -2383,7 +2371,8 @@ describeLive("gateway live (Codex harness)", () => {
         if (CODEX_HARNESS_SUBAGENT_PROBE) {
           // This reader supports the fixture's local stdio launch, not an
           // arbitrary custom binary or proxy that could select another home.
-          expect(instance.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim() ?? "").toBe("");
+          // Docker lanes pin the plain PATH `codex` CLI, which shares the fixture home.
+          expect(["", "codex"]).toContain(instance.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim() ?? "");
           expect(nativeProbeArgs.slice(0, 3)).toEqual(["app-server", "--listen", "stdio://"]);
           expect(
             nativeProbeArgs.slice(3).every((arg, index) => index % 2 === 1 || arg === "-c"),
@@ -2422,6 +2411,7 @@ describeLive("gateway live (Codex harness)", () => {
         });
         activeApprovalClient = client;
         logCodexLiveStep("client-connected");
+        await assertGatewayAgentsAdmitted(client, ["dev"]);
         const activeClient = client;
 
         const maxAttempts = CODEX_HARNESS_SUBAGENT_PROBE ? 1 : 2;
@@ -2837,6 +2827,7 @@ describeLive("gateway live (Codex harness)", () => {
               onEvent: captureGatewayEvent,
             });
             activeApprovalClient = client;
+            await assertGatewayAgentsAdmitted(client, ["dev"]);
             await assertCodexHarnessSessionSelection({
               client,
               modelKey,

@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { Bot } from "grammy";
 import type { ChatFullInfo, Message, Update } from "grammy/types";
@@ -11,7 +12,6 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   apiCalls,
@@ -19,6 +19,7 @@ import {
   chat,
   commandMessage,
   createBot,
+  deliverTelegramUpdate,
   from,
   groupChat,
   harness,
@@ -29,12 +30,13 @@ import { telegramPlugin } from "./channel.js";
 
 const transcribe = harness.transcribeFirstAudio;
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let updateId = 7000;
 let storePath: string;
 
 beforeEach(() => {
-  storePath = path.join(tempDirs.make("telegram-body-admission-"), "sessions.json");
+  const storeDir = harness.state.path("telegram-body-admission");
+  mkdirSync(storeDir);
+  storePath = path.join(storeDir, "sessions.json");
   conversationRuntime.testing.resetSessionBindingAdaptersForTests();
 });
 afterEach(() => {
@@ -71,13 +73,7 @@ function textMessage(text: string, group = true) {
 }
 
 async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
-  // Preserve Telegram's JSON shape without imposing a webhook deadline on admission.
-  const request = new Request("http://localhost/telegram", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ update_id: ++updateId, message }),
-  });
-  await bot.handleUpdate(await request.json());
+  await deliverTelegramUpdate(bot, { update_id: ++updateId, message });
 }
 
 describe("Telegram admitted model input", () => {

@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { createServer, type RequestListener, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import * as gatewayService from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
@@ -91,28 +92,133 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
-  it.each([
-    { readyzStatus: 200, replaced: false },
-    { readyzStatus: 503, replaced: false },
-    { readyzStatus: 200, replaced: true },
-  ])(
-    "observes foreground identity and HTTP once (HTTP $readyzStatus, replaced=$replaced)",
-    async ({ readyzStatus, replaced }) => {
-      const service = makeGatewayService({ status: "stopped" });
-      vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
+  it.each(["timeout", "legacy-timeout", "transient-timeout", "negative", "mixed"])(
+    "records collection warnings without accepting definitive channel failures (%s)",
+    async (kind) => {
+      mockProcessPlatform("linux");
+      const service = makeGatewayService({ status: "running", pid: 8000 });
       vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
       inspectPortUsage.mockImplementation(async (port) => ({
         port,
         status: "busy",
-        listeners: [{ pid: 8000 }],
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
         hints: [],
       }));
-      let bootId = "foreground-boot";
+      let probes = 0;
       callGateway.mockImplementation((opts) =>
         gatewayHealthResponse({
-          server: { version: "2026.9.5", buildId: "installed-build", bootId },
+          server: { version: "2026.9.8", buildId: "candidate", bootId: "candidate-boot" },
+          health: {
+            channels: {
+              telegram: {
+                probe:
+                  kind === "transient-timeout" && probes++ > 0
+                    ? { ok: true }
+                    : {
+                        ...(kind === "timeout" ? {} : { ok: false }),
+                        ...(kind === "negative" ? {} : { timedOut: true }),
+                        error: "health collection timed out after 7000ms",
+                      },
+              },
+              ...(kind === "mixed"
+                ? { discord: { probe: { ok: false, error: "invalid credentials" } } }
+                : {}),
+            },
+          },
         })(opts),
       );
+      const result: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
+      const onVerified = vi.fn();
+      const verification = await verifyUpdatedGateway({
+        result,
+        opts: { json: true, run: { runId: "collection-timeout", env: {} } },
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: await listen(),
+        expectedVersion: "2026.9.8",
+        expectedBuildId: "candidate",
+        requireRunningService: true,
+        settle: { probes: 2 },
+        onVerified,
+      });
+      const failed = kind === "negative" || kind === "mixed";
+      expect(verification.ok).toBe(!failed);
+      expect(onVerified).toHaveBeenCalledTimes(failed ? 0 : 1);
+      expect(result.steps[0]?.exitCode).toBe(failed ? 1 : 0);
+      if (failed) {
+        expect(result.steps[0]?.failureFacts).toContainEqual(
+          expect.objectContaining({ code: "channel-errors" }),
+        );
+      } else {
+        expect(recordUpdateRunVerification).toHaveBeenCalledWith(
+          "collection-timeout",
+          expect.objectContaining({
+            serviceRunning: true,
+            versionMatch: true,
+            readyz: true,
+            settled: true,
+          }),
+          expect.anything(),
+        );
+      }
+      if (kind !== "negative") {
+        expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+          "telegram: health collection timed out after 7000ms",
+        );
+        expect(result.steps[0]?.warnings?.join("\n")).toContain(
+          "telegram: health collection timed out after 7000ms",
+        );
+        expect(recordUpdateRunStep).toHaveBeenCalledWith(
+          "collection-timeout",
+          expect.objectContaining({ step: "warning:gateway verification", status: "completed" }),
+          expect.anything(),
+        );
+      }
+    },
+  );
+
+  it.each<{
+    readyzStatus: number;
+    replaced: boolean;
+    slowInspection?: "command" | "runtime" | "listener";
+  }>([
+    { readyzStatus: 200, replaced: false },
+    { readyzStatus: 503, replaced: false },
+    { readyzStatus: 200, replaced: true },
+    { readyzStatus: 200, replaced: false, slowInspection: "command" },
+    { readyzStatus: 200, replaced: false, slowInspection: "runtime" },
+    { readyzStatus: 200, replaced: false, slowInspection: "listener" },
+  ])(
+    "observes foreground identity and HTTP once (HTTP $readyzStatus, replaced=$replaced, slow=$slowInspection)",
+    async ({ readyzStatus, replaced, slowInspection }) => {
+      const service = makeGatewayService({ status: "stopped" });
+      const inspect = (phase: typeof slowInspection) => {
+        if (slowInspection === phase) {
+          monotonicClock.nowMs += 3_300;
+        }
+      };
+      vi.mocked(service.readCommand).mockImplementation(async () => {
+        inspect("command");
+        return null;
+      });
+      vi.mocked(service.readRuntime).mockImplementation(async () => {
+        inspect("runtime");
+        return { status: "unknown" };
+      });
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      inspectPortUsage.mockImplementation(async (port) => {
+        inspect("listener");
+        return { port, status: "busy", listeners: [{ pid: 8000 }], hints: [] };
+      });
+      let bootId = "foreground-boot";
+      callGateway.mockImplementation((opts) => {
+        const responseMs = 5;
+        if ((opts.timeoutMs ?? responseMs) < responseMs) {
+          throw new Error("Gateway health response exceeded its remaining allowance");
+        }
+        return gatewayHealthResponse({
+          server: { version: "2026.9.5", buildId: "installed-build", bootId },
+        })(opts);
+      });
       const requests: string[] = [];
       const gatewayPort = await listen((req, res) => {
         requests.push(req.url ?? "");
@@ -137,6 +243,7 @@ describe("update readiness generation", () => {
         expectedVersion: "2026.9.5",
         expectedBuildId: "installed-build",
         waitForStartup: false,
+        timeoutMs: 30_000,
         signal: controller.signal,
       });
       pendingVerification = verification;
@@ -144,7 +251,10 @@ describe("update readiness generation", () => {
       expect(requests.toSorted()).toEqual(["/healthz", "/readyz"]);
       expect(callGateway).toHaveBeenCalledTimes(3);
       expect(sleep).not.toHaveBeenCalled();
-      expect(monotonicClock.nowMs).toBe(0);
+      expect(monotonicClock.nowMs).toBe(slowInspection ? 9_900 : 0);
+      for (const [params] of callGateway.mock.calls) {
+        expect(params.timeoutMs).toBe(3_000);
+      }
       expect(result).toMatchObject({ status: "error", reason: "doctor-failed" });
       expect(result.verification?.serviceRunning).toBeUndefined();
       expect(result.verification?.readyz).toBe(readyzStatus === 200);
@@ -583,7 +693,7 @@ describe("update readiness generation", () => {
       });
       expect(result).toMatchObject(
         startup === "stable"
-          ? { stopReason: "gateway-readiness-pending" }
+          ? { stopReason: "still-starting" }
           : { ok: false, summary: "generation-changed" },
       );
       if (startup !== "stable") {
@@ -651,6 +761,65 @@ describe("update readiness generation", () => {
       expect(monotonicClock.nowMs).toBe(pending ? 65_500 : 95_500);
       expect(callGateway).toHaveBeenCalledTimes(pending ? 0 : 14);
       expect(runUpdatedInstallGatewayCommand).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    { timeout: undefined, readyAtMs: 44 * 60_000, expected: "ok" },
+    {
+      timeout: undefined,
+      readyAtMs: resolveGatewayStartupTiming("win32").deadlineMs + 60_000,
+      expected: "readiness-pending",
+    },
+    { timeout: "60", readyAtMs: 44 * 60_000, expected: "readiness-pending" },
+  ])(
+    "preserves Windows cold startup and an explicit update timeout ($timeout, ready at $readyAtMs)",
+    async ({ timeout, readyAtMs, expected }) => {
+      const budgetMs =
+        timeout === undefined
+          ? resolveGatewayStartupTiming("win32").deadlineMs
+          : Number(timeout) * 1_000;
+      mockProcessPlatform("win32");
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: monotonicClock.nowMs < readyAtMs ? "free" : "busy",
+        listeners: monotonicClock.nowMs < readyAtMs ? [] : [{ pid: 8000 }],
+        hints: [],
+      }));
+      sleep.mockImplementation(async (delayMs) => {
+        // Advance the cold-loading interval without thousands of identical probes.
+        monotonicClock.nowMs +=
+          monotonicClock.nowMs === 0 ? Math.min(readyAtMs, budgetMs) : delayMs;
+      });
+      callGateway.mockImplementation(
+        gatewayHealthResponse({ server: { version: "2026.9.4", bootId: "windows-cold-boot" } }),
+      );
+      const gatewayPort = await listen();
+      const outcome = await maybeRestartService({
+        shouldRestart: true,
+        result: {
+          status: "ok",
+          mode: "npm",
+          steps: [],
+          durationMs: 0,
+          after: { version: "2026.9.4" },
+        },
+        opts: { json: true, timeout },
+        refreshServiceEnv: false,
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort,
+        requireRunningServiceAfterRestart: true,
+        timeoutMs: timeout === undefined ? 30 * 60_000 : 60_000,
+      });
+
+      expect(outcome).toBe(expected);
+      expect(runUpdatedInstallGatewayCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ timeoutMs: budgetMs }),
+        "restart",
+      );
+      expect(monotonicClock.nowMs).toBe(Math.min(readyAtMs, budgetMs) + 5_500);
     },
   );
 

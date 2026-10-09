@@ -1,4 +1,4 @@
-import { LitElement, html, nothing, type PropertyValues } from "lit";
+import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import "../styles/option-card.css";
@@ -47,11 +47,19 @@ class OptionCard extends LitElement {
     this.focusPreselection = Boolean(this.selectedValue);
   }
 
-  override updated(_changedProperties: PropertyValues): void {
+  override updated(): void {
     if (!this.focusPreselection || this.props?.disabled) {
       return;
     }
     this.focusPreselection = false;
+    const activeElement = this.ownerDocument.activeElement;
+    if (
+      activeElement &&
+      activeElement !== this.ownerDocument.body &&
+      !this.contains(activeElement)
+    ) {
+      return;
+    }
     const selected = [...this.querySelectorAll<HTMLButtonElement>(".option-card__choice")].find(
       (button) => button.dataset.optionValue === this.selectedValue,
     );
