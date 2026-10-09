@@ -205,14 +205,13 @@ export function changesSessionRowDependents(before: Row["storedEntry"], after: R
 }
 
 /** Mark resident logical owners without changing stored entries, relatives, or backfill. */
-export function markAutomation(
+export function markPresentation(
   rows: Iterable<Row>,
   agentId: string | undefined,
   dirty: Set<string>,
 ) {
   for (const row of rows) {
     if (!agentId || row.agentId === agentId) {
-      invalidateDatabaseFacts(row);
       dirty.add(identity(row));
     }
   }

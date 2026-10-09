@@ -53,7 +53,11 @@ export function setSessionActivitySummaryState(
   } else {
     return false;
   }
-  sessionChanges.emit({ sessionKey: target.key, agentId: target.agentId });
+  sessionChanges.emit({
+    sessionKey: target.key,
+    agentId: target.agentId,
+    scope: "activity-summary",
+  });
   return true;
 }
 
